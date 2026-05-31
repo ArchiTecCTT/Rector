@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rector — Local MVP</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>Rector <span class="badge">local MVP</span></h1>
+    <div class="header-controls">
+      <button id="setup-btn" class="btn btn-ghost">Setup Checklist</button>
+    </div>
+  </header>
+
+  <main class="app-main">
+    <section class="create-panel">
+      <h2>Create Task</h2>
+      <form id="create-form">
+        <textarea id="task-desc" placeholder="Describe what Rector should build..." rows="3" required></textarea>
+        <button type="submit" class="btn btn-primary">Create Task</button>
+      </form>
+    </section>
+
+    <section class="kanban">
+      <div class="kanban-col" data-state="1_INTAKE">
+        <h3>1 Intake</h3>
+        <div class="cards"></div>
+      </div>
+      <div class="kanban-col" data-state="2_ARCHITECTURAL_PLAN">
+        <h3>2 Plan</h3>
+        <div class="cards"></div>
+      </div>
+      <div class="kanban-col" data-state="3_SLM_EXECUTION_FANOUT">
+        <h3>3 Execution</h3>
+        <div class="cards"></div>
+      </div>
+      <div class="kanban-col" data-state="4_SANDBOX_VALIDATION">
+        <h3>4 Validation</h3>
+        <div class="cards"></div>
+      </div>
+      <div class="kanban-col" data-state="5_HEALING_LOOP">
+        <h3>5 Healing</h3>
+        <div class="cards"></div>
+      </div>
+      <div class="kanban-col" data-state="6_FINAL_SYNTHESIS">
+        <h3>6 Synthesis</h3>
+        <div class="cards"></div>
+      </div>
+      <div class="kanban-col" data-state="7_HUMAN_HANDOFF">
+        <h3>7 Handoff</h3>
+        <div class="cards"></div>
+      </div>
+      <div class="kanban-col" data-state="PAUSED">
+        <h3>⏸ Paused</h3>
+        <div class="cards"></div>
+      </div>
+      <div class="kanban-col" data-state="ABORTED">
+        <h3>✕ Aborted</h3>
+        <div class="cards"></div>
+      </div>
+    </section>
+
+    <section id="detail-panel" class="detail-panel hidden">
+      <h2>Task Detail</h2>
+      <div id="detail-content"></div>
+      <div class="controls">
+        <button id="retry-btn" class="btn btn-secondary">Retry</button>
+        <button id="pause-btn" class="btn btn-secondary">Pause</button>
+        <button id="approve-btn" class="btn btn-primary">Approve</button>
+        <button id="abort-btn" class="btn btn-danger">Abort</button>
+        <button id="advance-btn" class="btn btn-ghost">⟳ Step Forward</button>
+      </div>
+    </section>
+  </main>
+
+  <aside id="telemetry-panel" class="telemetry-panel">
+    <h2>Telemetry</h2>
+    <div id="telemetry-metrics"></div>
+  </aside>
+
+  <dialog id="setup-modal">
+    <form method="dialog">
+      <h2>Setup Checklist</h2>
+      <div id="setup-list"></div>
+      <button value="close" class="btn btn-primary">Close</button>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

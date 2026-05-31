@@ -1,0 +1,200 @@
+:root {
+  --bg: #0f1115;
+  --surface: #1a1d24;
+  --border: #2a2e3a;
+  --text: #e6e8ec;
+  --muted: #9aa0ad;
+  --accent: #6ea8ff;
+  --success: #7ee787;
+  --warn: #ffd966;
+  --danger: #ff8a8a;
+  --radius: 8px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.app-header h1 { margin: 0; font-size: 18px; }
+.badge {
+  font-size: 11px;
+  background: var(--accent);
+  color: #000;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  margin-left: 8px;
+}
+
+.app-main {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  padding: 16px;
+}
+
+.create-panel {
+  grid-column: 1 / -1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+textarea {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.kanban {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  grid-column: 1;
+}
+
+.kanban-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  min-height: 180px;
+}
+.kanban-col h3 {
+  margin: 0 0 10px 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.card {
+  background: #242833;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.card:hover { border-color: var(--accent); }
+.card h4 { margin: 0 0 6px 0; font-size: 13px; font-weight: 500; word-break: break-word; }
+.card .meta { color: var(--muted); font-size: 11px; }
+
+.detail-panel {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  position: sticky;
+  top: 10px;
+  max-height: calc(100vh - 20px);
+  overflow-y: auto;
+}
+.hidden { display: none; }
+
+.subtask-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.status-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #2a2e3a;
+}
+.status-badge.completed { background: #1f4037; color: var(--success); }
+.status-badge.failed { background: #3f1f1f; color: var(--danger); }
+
+.event-item {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.telemetry-panel {
+  grid-column: 2;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+.telemetry-panel h2 { margin: 0 0 10px 0; font-size: 14px; }
+.metric { display: flex; justify-content: space-between; padding: 4px 0; }
+.metric-value { color: var(--accent); font-variant-numeric: tabular-nums; }
+
+.btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); }
+.btn-primary { background: var(--accent); color: #000; border-color: var(--accent); }
+.btn-danger { background: var(--danger); color: #000; border-color: var(--danger); }
+.btn-ghost { background: transparent; }
+
+#setup-modal {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  background: var(--surface);
+  color: var(--text);
+  max-width: 520px;
+}
+.setup-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.setup-item .key {
+  font-family: monospace;
+  color: var(--accent);
+}
+.setup-item .value { color: var(--muted); }
+.setup-item .required {
+  font-size: 10px;
+  background: var(--warn);
+  color: #000;
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-left: 6px;
+}
