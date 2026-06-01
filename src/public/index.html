@@ -12,19 +12,15 @@
     <main class="l-page">
       <!-- Top bar -->
       <header class="topbar">
-        <a class="brand" href="#" aria-label="Rector home">
+        <a class="brand" href="#" aria-label="Ornyx home">
           <span class="brand__slash" aria-hidden="true"></span>
-          RECTOR
+          ORNYX
         </a>
         <nav class="nav" aria-label="Primary">
           <a href="#thesis">Thesis</a>
           <a href="#blueprint">Architecture</a>
           <a href="#console">Control Center</a>
           <a href="#economics">Economics</a>
-          <button class="nav__menu" id="setup-btn" type="button" aria-label="Open setup checklist">
-            Setup
-            <i data-lucide="sliders"></i>
-          </button>
         </nav>
       </header>
 
@@ -36,7 +32,7 @@
         <div class="hero__row">
           <div>
             <span class="pill">
-              STEALTH MODE · MMXXVI
+              EDITION 0.0.1 · MMXXVI
               <svg class="pill__arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M5 12h14" />
                 <path d="m13 5 7 7-7 7" />
@@ -391,7 +387,7 @@
         <div class="foot__col foot__brand">
           <a class="brand" href="#">
             <span class="brand__slash" aria-hidden="true"></span>
-            RECTOR
+            ORNYX
           </a>
           <p>The industrialization of autonomous labor. High-throughput software development as a utility.</p>
         </div>
@@ -405,7 +401,7 @@
           </ul>
         </div>
         <div class="foot__col">
-          <h4>Stealth Spec</h4>
+          <h4>System Spec</h4>
           <ul>
             <li><a href="https://lucide.dev/" target="_blank" rel="noopener">Lucide Icons</a></li>
             <li><a href="https://github.com" target="_blank" rel="noopener">GitHub Ingest</a></li>
@@ -417,7 +413,7 @@
           <h4>Studio</h4>
           <ul>
             <li>Ornyx Tech MMXXVI</li>
-            <li>stealth@rector.ornyx.net</li>
+            <li>hello@rector.ornyx.net</li>
             <li>Oslo · Trondheim · Oslofjord</li>
           </ul>
         </div>
@@ -425,66 +421,9 @@
 
       <div class="foot__legal page" style="padding-left: 0; padding-right: 0;">
         <span>© ORNYX TECHNOLOGIES MMXXVI</span>
-        <span>STEALTH EDITION · LINEN SYSTEM v1.0</span>
+        <span>EDITION 0.0.1 · LINEN SYSTEM v1.0</span>
       </div>
     </main>
-
-    <!-- Settings/Setup Modal Dialog -->
-    <dialog id="setup-modal">
-      <form method="dialog">
-        <h2 class="t-headline-md font-narrow uppercase-label" style="margin-bottom: 12px;">Stealth Node Setup</h2>
-        <p class="t-body-sm stone-text" style="margin-bottom: 18px;">
-          Configuration checklist of the symbolic infrastructure and environment keys that anchor the Rector State Machine.
-        </p>
-        
-        <div id="setup-list" class="l-stack" style="margin-bottom: 24px;">
-          <div class="setup-item">
-            <span>
-              <span class="key">CONFLUENT_KAFKA_BOOTSTRAP</span><span class="required">required</span>
-              <br><small class="value">pkc-ld7z1.us-east-1.confluent.cloud:9092</small>
-            </span>
-            <small>Kafka Cluster Endpoint</small>
-          </div>
-          <div class="setup-item">
-            <span>
-              <span class="key">MONGODB_URI</span><span class="required">required</span>
-              <br><small class="value">mongodb+srv://rector-prod-cluster...</small>
-            </span>
-            <small>JSON State Machine database</small>
-          </div>
-          <div class="setup-item">
-            <span>
-              <span class="key">TOGETHER_API_KEY</span><span class="required">required</span>
-              <br><small class="value">tg_9c878...e983 (Prefix Caching Active)</small>
-            </span>
-            <small>Together AI compute token</small>
-          </div>
-          <div class="setup-item">
-            <span>
-              <span class="key">DEPOT_TOKEN</span>
-              <br><small class="value">depot_d9f1092a83...</small>
-            </span>
-            <small>Ephemeral sandbox runtime engine</small>
-          </div>
-          <div class="setup-item">
-            <span>
-              <span class="key">SENTRY_DSN</span>
-              <br><small class="value">https://sentry.io/398018...</small>
-            </span>
-            <small>Trace capture for Healing Loops</small>
-          </div>
-          <div class="setup-item">
-            <span>
-              <span class="key">LINEAR_API_KEY</span>
-              <br><small class="value">lin_api_823a0dfa8b9...</small>
-            </span>
-            <small>GitHub issue tracker intake sync</small>
-          </div>
-        </div>
-
-        <button value="close" class="btn btn--primary w-100">Dismiss Spec</button>
-      </form>
-    </dialog>
 
     <script src="app.js"></script>
     <script>
