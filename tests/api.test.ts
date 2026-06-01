@@ -206,7 +206,7 @@ describe("API", () => {
     const html = await res.text();
     expect(res.status).toBe(200);
     expect(html).toContain("Rector");
-    expect(html).toContain("kanban");
+    expect(html).toContain("blueprint");
   });
 
   it("scenario endpoint seeds a task", async () => {

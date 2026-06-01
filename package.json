@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "build:site": "node scripts/build-site.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },
+
   "dependencies": {
     "express": "^4.21.0",
     "zod": "^3.23.8"

@@ -1,93 +1,496 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Rector — Local MVP</title>
-  <link rel="stylesheet" href="styles.css" />
-</head>
-<body>
-  <header class="app-header">
-    <h1>Rector <span class="badge">local MVP</span></h1>
-    <div class="header-controls">
-      <button id="setup-btn" class="btn btn-ghost">Setup Checklist</button>
-    </div>
-  </header>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rector — The Industrialization of Autonomous AI</title>
+    <meta name="description" content="A neuro-symbolic multi-agent orchestration framework that shifts AI automation from artisanal craft to deterministic, economic assembly lines." />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://unpkg.com/lucide@latest"></script>
+  </head>
+  <body>
+    <main class="l-page">
+      <!-- Top bar -->
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="Rector home">
+          <span class="brand__slash" aria-hidden="true"></span>
+          RECTOR
+        </a>
+        <nav class="nav" aria-label="Primary">
+          <a href="#thesis">Thesis</a>
+          <a href="#blueprint">Architecture</a>
+          <a href="#console">Control Center</a>
+          <a href="#economics">Economics</a>
+          <button class="nav__menu" id="setup-btn" type="button" aria-label="Open setup checklist">
+            Setup
+            <i data-lucide="sliders"></i>
+          </button>
+        </nav>
+      </header>
 
-  <main class="app-main">
-    <section class="create-panel">
-      <h2>Create Task</h2>
-      <form id="create-form">
-        <textarea id="task-desc" placeholder="Describe what Rector should build..." rows="3" required></textarea>
-        <button type="submit" class="btn btn-primary">Create Task</button>
+      <hr class="l-rule" />
+
+      <!-- Hero Section -->
+      <section class="hero">
+        <h1 class="hero__display">RECTOR</h1>
+        <div class="hero__row">
+          <div>
+            <span class="pill">
+              STEALTH MODE · MMXXVI
+              <svg class="pill__arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M5 12h14" />
+                <path d="m13 5 7 7-7 7" />
+              </svg>
+            </span>
+          </div>
+          <div class="hero__center">
+            <h2 class="hero__subtitle">THE INDUSTRIALIZATION OF AUTONOMOUS AI</h2>
+            <p class="hero__lede">
+              Intelligence should be probabilistic. Execution must be deterministic. Rector is a neuro-symbolic orchestration framework that replaces chaotic agent loops with rigid, SLA-backed cognitive assembly lines.
+            </p>
+          </div>
+          <div class="hero__meta">
+            <div class="hero__meta-text">
+              ORNYX TECHNOLOGIES<br />
+              DETERMINISTIC COMPUTE<br />
+              EDITION 0.0.1
+            </div>
+            <div class="hero__seal" aria-hidden="true">
+              <div class="hero__seal-mark"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <hr class="l-rule" />
+
+      <!-- Section: Thesis -->
+      <section class="section section--tight" id="thesis">
+        <div class="section__head">
+          <span class="eyebrow"><i data-lucide="binary"></i> Market Thesis</span>
+          <h2>The Artisanal AI Crisis</h2>
+          <span class="eyebrow" style="justify-self: end;">01 / 04</span>
+        </div>
+
+        <div class="l-grid grid-thesis">
+          <div class="card card-thesis">
+            <h3 class="t-headline-sm uppercase-label">The Status Quo: Unbounded Bleed</h3>
+            <p class="t-body">
+              Current AI agents (built on ReAct loops) act like artisanal craftsmen. They are given total freedom to figure out how to solve a prompt. Because LLMs are probabilistic, this architecture leads to infinite loops, API hallucinations, and silent failures. Enterprises cannot deploy probabilistic execution; they require SLA-backed reliability.
+            </p>
+            <p class="t-body-sm stone-text">
+              Furthermore, using a 120-billion parameter frontier model to parse a JSON file or fix a syntax error is the equivalent of hiring a neurosurgeon to sweep the floor. It destroys the ROI of automation.
+            </p>
+          </div>
+
+          <div class="card card--paper card-thesis">
+            <h3 class="t-headline-sm uppercase-label">The Core Insight: Neuro-Symbolic Assembly</h3>
+            <p class="t-body ink-text">
+              The solution is not a smarter LLM. The solution is a system architecture that removes the LLM's ability to make routing mistakes in the first place.
+            </p>
+            <p class="t-body">
+              Rector shifts AI from artisanal craft to an industrial assembly line. We build programmatically deterministic guardrails, separating planning (probabilistic frontier intelligence) from doing (cheap, high-speed specialized local models running inside isolated sandboxes).
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <hr class="l-rule" />
+
+      <!-- Section: Blueprint -->
+      <section class="section" id="blueprint">
+        <div class="section__head">
+          <span class="eyebrow"><i data-lucide="layers"></i> Architecture Blueprint</span>
+          <h2>Six Structural Pillars</h2>
+          <span class="eyebrow" style="justify-self: end;">02 / 04</span>
+        </div>
+
+        <div class="l-grid grid-pillars">
+          <div class="card pillar-card">
+            <div class="pillar-num">01</div>
+            <h3 class="card__title">The Nervous System</h3>
+            <p class="t-body-sm">
+              Deterministic backend controlling task states without relying on LLMs for control flow. Built on a Confluent Kafka event bus and MongoDB state transition store.
+            </p>
+            <span class="t-mono uppercase-label">Kafka · MongoDB · Doppler</span>
+          </div>
+
+          <div class="card pillar-card">
+            <div class="pillar-num">02</div>
+            <h3 class="card__title">Thalamus Router</h3>
+            <p class="t-body-sm">
+              A pure functional state transition machine. It acts as the factory floor manager, breaking task specifications into micro-events and routing them rigidly.
+            </p>
+            <span class="t-mono uppercase-label">NodeJS · DigitalOcean</span>
+          </div>
+
+          <div class="card pillar-card">
+            <div class="pillar-num">03</div>
+            <h3 class="card__title">Deterministic Sandboxes</h3>
+            <p class="t-body-sm">
+              AI-generated outputs are spun up in isolated, programmatic sandboxes executing Vitest/Pytest runtimes to ensure rigorous code validation.
+            </p>
+            <span class="t-mono uppercase-label">Depot CLI · AST Injection</span>
+          </div>
+
+          <div class="card pillar-card">
+            <div class="pillar-num">04</div>
+            <h3 class="card__title">Self-Healing Loops</h3>
+            <p class="t-body-sm">
+              If a validation run fails, the programmatic router intercepts the stack trace, matches AST snippets, and routes the bug back to SLMs for localized patching.
+            </p>
+            <span class="t-mono uppercase-label">Sentry APM · Healing Loop</span>
+          </div>
+
+          <div class="card pillar-card">
+            <div class="pillar-num">05</div>
+            <h3 class="card__title">The Assembly Line</h3>
+            <p class="t-body-sm">
+              90% of structural tasks are parallelized concurrently across high-speed Small Language Models (SLMs), utilizing Together AI prefix KV-caching.
+            </p>
+            <span class="t-mono uppercase-label">Together AI · Qwen Coder</span>
+          </div>
+
+          <div class="card pillar-card">
+            <div class="pillar-num">06</div>
+            <h3 class="card__title">Prefrontal Cortex</h3>
+            <p class="t-body-sm">
+              Elite frontier models (Claude 3.5, GPT-4o) are strictly quarantined to high-level system architectural planning and final synthesis reviews.
+            </p>
+            <span class="t-mono uppercase-label">AWS Bedrock · Azure OpenAI</span>
+          </div>
+        </div>
+      </section>
+
+      <hr class="l-rule" />
+
+      <!-- Section: Console / Sandbox Simulator -->
+      <section class="section" id="console">
+        <div class="section__head">
+          <span class="eyebrow"><i data-lucide="play-circle"></i> Live Sandbox</span>
+          <h2>The Assembly Line Control Center</h2>
+          <span class="eyebrow" style="justify-self: end;">03 / 04</span>
+        </div>
+
+        <div class="l-grid grid-console">
+          <!-- Left Control Panel -->
+          <div class="card console-control">
+            <span class="card__eyebrow">Task Ingest System</span>
+            <h3 class="t-headline-md font-narrow">Trigger Autonomous Action</h3>
+            <p class="t-body-sm stone-text">
+              Select a cognitive scenario below to seed the deterministic assembly line. Watch the states transition dynamically and inspect the local healing sandboxes.
+            </p>
+
+            <div class="scenario-buttons">
+              <button class="btn btn--primary w-100" id="btn-seed-happy" type="button">
+                Seed Happy Path Scenario
+                <i data-lucide="arrow-right" class="btn__arrow"></i>
+              </button>
+              <button class="btn btn--ghost w-100" id="btn-seed-healing" type="button">
+                Seed Self-Healing Scenario
+                <i data-lucide="refresh-cw" class="btn__arrow"></i>
+              </button>
+            </div>
+
+            <form id="custom-task-form" class="l-stack" style="margin-top: 16px;">
+              <div class="field">
+                <span class="field__label">Define Custom Objective</span>
+                <textarea class="field__input" id="custom-task-desc" rows="3" placeholder="Describe the software engineering goal Rector should achieve..." required></textarea>
+              </div>
+              <button class="btn btn--primary" type="submit">Ingest Custom Task</button>
+            </form>
+          </div>
+
+          <!-- Central Simulator Panel -->
+          <div class="card card--paper console-workspace">
+            <div class="console-workspace-header">
+              <ul class="tabs" role="tablist">
+                <li class="tabs__item tabs__item--active" id="tab-visual" role="tab">Visual Pipeline</li>
+                <li class="tabs__item" id="tab-logs" role="tab">Sandbox Logs</li>
+              </ul>
+              <div class="live-indicator">
+                <span class="dot"></span>
+                <span class="t-mono uppercase-label">Factory Active</span>
+              </div>
+            </div>
+
+            <!-- Tab Content: Visual Flow -->
+            <div id="content-visual" class="tab-content">
+              <div class="pipeline-flow">
+                <!-- States -->
+                <div class="pipeline-step" data-state="1_INTAKE">
+                  <div class="step-num">1</div>
+                  <div class="step-label">Intake</div>
+                </div>
+                <div class="pipeline-connector"></div>
+                <div class="pipeline-step" data-state="2_ARCHITECTURAL_PLAN">
+                  <div class="step-num">2</div>
+                  <div class="step-label">Plan</div>
+                </div>
+                <div class="pipeline-connector"></div>
+                <div class="pipeline-step" data-state="3_SLM_EXECUTION_FANOUT">
+                  <div class="step-num">3</div>
+                  <div class="step-label">Execution</div>
+                </div>
+                <div class="pipeline-connector"></div>
+                <div class="pipeline-step" data-state="4_SANDBOX_VALIDATION">
+                  <div class="step-num">4</div>
+                  <div class="step-label">Validate</div>
+                </div>
+                <div class="pipeline-connector"></div>
+                <div class="pipeline-step" data-state="5_HEALING_LOOP">
+                  <div class="step-num">5</div>
+                  <div class="step-label">Healing</div>
+                </div>
+                <div class="pipeline-connector"></div>
+                <div class="pipeline-step" data-state="6_FINAL_SYNTHESIS">
+                  <div class="step-num">6</div>
+                  <div class="step-label">Synthesis</div>
+                </div>
+                <div class="pipeline-connector"></div>
+                <div class="pipeline-step" data-state="7_HUMAN_HANDOFF">
+                  <div class="step-num">7</div>
+                  <div class="step-label">Handoff</div>
+                </div>
+              </div>
+
+              <!-- Active Task Status Panel -->
+              <div class="active-task-panel card" style="background: transparent; border-style: dashed; margin-top: 24px;">
+                <div class="l-stack">
+                  <div class="l-row justify-between">
+                    <span class="t-mono" id="sim-task-id">TASK: IDLE</span>
+                    <span class="pill" id="sim-task-state-badge">NO EVENT</span>
+                  </div>
+                  <h4 class="t-headline-sm font-narrow" id="sim-task-desc">No active task. Seed a scenario to watch the execution engine spin.</h4>
+                  <div class="subtask-progress-container hidden" id="subtask-progress-box">
+                    <span class="t-label uppercase-label">Assembly Line Progress:</span>
+                    <div id="sim-subtasks-list" class="l-stack" style="margin-top: 8px;"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Flow Control Controls -->
+              <div class="controls-panel l-row justify-between" style="margin-top: 18px;">
+                <div class="l-row">
+                  <button class="btn btn--primary" id="btn-play-sim" disabled>
+                    <i data-lucide="play"></i> Auto-Play
+                  </button>
+                  <button class="btn btn--ghost" id="btn-step-sim" disabled>
+                    <i data-lucide="skip-forward"></i> Step Forward
+                  </button>
+                </div>
+                <button class="btn btn--ghost" id="btn-reset-sim" disabled>
+                  Reset Factory
+                </button>
+              </div>
+            </div>
+
+            <!-- Tab Content: Logs Terminal -->
+            <div id="content-logs" class="tab-content hidden">
+              <div class="terminal-logs" id="terminal-logs-box">
+                <div class="log-line system-line">[SYSTEM] Rector factory engine initialized. Waiting for task ingestion event...</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <hr class="l-rule" />
+
+      <!-- Section: Economics -->
+      <section class="section" id="economics">
+        <div class="section__head">
+          <span class="eyebrow"><i data-lucide="line-chart"></i> Cognitive Arbitrage</span>
+          <h2>The Economics of Autonomous Labor</h2>
+          <span class="eyebrow" style="justify-self: end;">04 / 04</span>
+        </div>
+
+        <div class="l-grid grid-economics">
+          <!-- Left side: Real-time dynamic stats -->
+          <div class="stats-samplers l-stack">
+            <div class="stat">
+              <p class="stat__value" id="stat-invocations">0</p>
+              <p class="stat__caption">Simulated Model Invocations</p>
+            </div>
+            <div class="stat">
+              <p class="stat__value" id="stat-hits">0%</p>
+              <p class="stat__caption">KV-Cache Prefix Hit Rate</p>
+            </div>
+            <div class="stat">
+              <p class="stat__value" id="stat-cost">$0.0000</p>
+              <p class="stat__caption">Calculated Compute Cost</p>
+            </div>
+            <div class="stat">
+              <p class="stat__value" id="stat-savings">0%</p>
+              <p class="stat__caption">Compute Cost Reduction</p>
+            </div>
+          </div>
+
+          <!-- Right side: ROI Calculator & Math -->
+          <div class="card economics-math card--paper">
+            <span class="card__eyebrow">Interactive Profit Model</span>
+            <h3 class="t-headline-md font-narrow">Calculate Your Arbitrage</h3>
+            <p class="t-body-sm stone-text">
+              Traditional agents run every step on frontier models. Rector routes 90% of the cognitive workload to specialized SLMs, saving enterprise teams thousands.
+            </p>
+
+            <div class="calculator-inputs l-stack" style="margin: 20px 0;">
+              <div class="field">
+                <span class="field__label">Estimated Monthly Tasks</span>
+                <input class="field__input" type="number" id="calc-tasks" value="250" min="10" max="10000" />
+              </div>
+              <div class="field">
+                <span class="field__label">Average Codebase Size (Files)</span>
+                <select class="field__input" id="calc-size">
+                  <option value="small">Small Codebase (1-100 files)</option>
+                  <option value="medium" selected>Medium Codebase (101-500 files)</option>
+                  <option value="large">Large Codebase (501+ files)</option>
+                </select>
+              </div>
+
+              <div class="checks-group l-stack" style="margin-top: 8px;">
+                <label class="check">
+                  <input class="check__input" type="checkbox" id="check-caching" checked />
+                  <span class="check__box">
+                    <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 6 5 9 10 3" /></svg>
+                  </span>
+                  <span class="check__label">Enable Prefix KV-Caching (Save 40%)</span>
+                </label>
+                <label class="check">
+                  <input class="check__input" type="checkbox" id="check-healing" checked />
+                  <span class="check__box">
+                    <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 6 5 9 10 3" /></svg>
+                  </span>
+                  <span class="check__label">Dynamic Sandbox Healing Integration</span>
+                </label>
+              </div>
+            </div>
+
+            <hr class="l-rule" />
+
+            <div class="calculator-results l-stack" style="margin-top: 18px;">
+              <div class="l-row justify-between">
+                <span>Traditional Model Cost:</span>
+                <span class="t-mono font-narrow" id="cost-artisanal" style="text-decoration: line-through;">$1,850.00</span>
+              </div>
+              <div class="l-row justify-between ink-text">
+                <strong>Rector Assembly Cost:</strong>
+                <strong class="t-mono font-narrow text-signal" id="cost-rector">$92.50</strong>
+              </div>
+              <div class="l-row justify-between text-headline-sm ink-text" style="border-top: var(--rule-hairline); padding-top: 12px; margin-top: 8px;">
+                <strong>Estimated Net Savings:</strong>
+                <strong class="t-mono font-narrow text-signal" id="cost-savings">$1,757.50</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Footer -->
+      <footer class="foot">
+        <div class="foot__col foot__brand">
+          <a class="brand" href="#">
+            <span class="brand__slash" aria-hidden="true"></span>
+            RECTOR
+          </a>
+          <p>The industrialization of autonomous labor. High-throughput software development as a utility.</p>
+        </div>
+        <div class="foot__col">
+          <h4>Architecture</h4>
+          <ul>
+            <li><a href="#thesis">Thesis</a></li>
+            <li><a href="#blueprint">Event Router</a></li>
+            <li><a href="#console">Sandboxes</a></li>
+            <li><a href="#economics">Arbitrage</a></li>
+          </ul>
+        </div>
+        <div class="foot__col">
+          <h4>Stealth Spec</h4>
+          <ul>
+            <li><a href="https://lucide.dev/" target="_blank" rel="noopener">Lucide Icons</a></li>
+            <li><a href="https://github.com" target="_blank" rel="noopener">GitHub Ingest</a></li>
+            <li><a href="https://confluent.io" target="_blank" rel="noopener">Confluent Cloud</a></li>
+            <li><a href="https://together.ai" target="_blank" rel="noopener">Together AI</a></li>
+          </ul>
+        </div>
+        <div class="foot__col">
+          <h4>Studio</h4>
+          <ul>
+            <li>Ornyx Tech MMXXVI</li>
+            <li>stealth@rector.ornyx.net</li>
+            <li>Oslo · Trondheim · Oslofjord</li>
+          </ul>
+        </div>
+      </footer>
+
+      <div class="foot__legal page" style="padding-left: 0; padding-right: 0;">
+        <span>© ORNYX TECHNOLOGIES MMXXVI</span>
+        <span>STEALTH EDITION · LINEN SYSTEM v1.0</span>
+      </div>
+    </main>
+
+    <!-- Settings/Setup Modal Dialog -->
+    <dialog id="setup-modal">
+      <form method="dialog">
+        <h2 class="t-headline-md font-narrow uppercase-label" style="margin-bottom: 12px;">Stealth Node Setup</h2>
+        <p class="t-body-sm stone-text" style="margin-bottom: 18px;">
+          Configuration checklist of the symbolic infrastructure and environment keys that anchor the Rector State Machine.
+        </p>
+        
+        <div id="setup-list" class="l-stack" style="margin-bottom: 24px;">
+          <div class="setup-item">
+            <span>
+              <span class="key">CONFLUENT_KAFKA_BOOTSTRAP</span><span class="required">required</span>
+              <br><small class="value">pkc-ld7z1.us-east-1.confluent.cloud:9092</small>
+            </span>
+            <small>Kafka Cluster Endpoint</small>
+          </div>
+          <div class="setup-item">
+            <span>
+              <span class="key">MONGODB_URI</span><span class="required">required</span>
+              <br><small class="value">mongodb+srv://rector-prod-cluster...</small>
+            </span>
+            <small>JSON State Machine database</small>
+          </div>
+          <div class="setup-item">
+            <span>
+              <span class="key">TOGETHER_API_KEY</span><span class="required">required</span>
+              <br><small class="value">tg_9c878...e983 (Prefix Caching Active)</small>
+            </span>
+            <small>Together AI compute token</small>
+          </div>
+          <div class="setup-item">
+            <span>
+              <span class="key">DEPOT_TOKEN</span>
+              <br><small class="value">depot_d9f1092a83...</small>
+            </span>
+            <small>Ephemeral sandbox runtime engine</small>
+          </div>
+          <div class="setup-item">
+            <span>
+              <span class="key">SENTRY_DSN</span>
+              <br><small class="value">https://sentry.io/398018...</small>
+            </span>
+            <small>Trace capture for Healing Loops</small>
+          </div>
+          <div class="setup-item">
+            <span>
+              <span class="key">LINEAR_API_KEY</span>
+              <br><small class="value">lin_api_823a0dfa8b9...</small>
+            </span>
+            <small>GitHub issue tracker intake sync</small>
+          </div>
+        </div>
+
+        <button value="close" class="btn btn--primary w-100">Dismiss Spec</button>
       </form>
-    </section>
+    </dialog>
 
-    <section class="kanban">
-      <div class="kanban-col" data-state="1_INTAKE">
-        <h3>1 Intake</h3>
-        <div class="cards"></div>
-      </div>
-      <div class="kanban-col" data-state="2_ARCHITECTURAL_PLAN">
-        <h3>2 Plan</h3>
-        <div class="cards"></div>
-      </div>
-      <div class="kanban-col" data-state="3_SLM_EXECUTION_FANOUT">
-        <h3>3 Execution</h3>
-        <div class="cards"></div>
-      </div>
-      <div class="kanban-col" data-state="4_SANDBOX_VALIDATION">
-        <h3>4 Validation</h3>
-        <div class="cards"></div>
-      </div>
-      <div class="kanban-col" data-state="5_HEALING_LOOP">
-        <h3>5 Healing</h3>
-        <div class="cards"></div>
-      </div>
-      <div class="kanban-col" data-state="6_FINAL_SYNTHESIS">
-        <h3>6 Synthesis</h3>
-        <div class="cards"></div>
-      </div>
-      <div class="kanban-col" data-state="7_HUMAN_HANDOFF">
-        <h3>7 Handoff</h3>
-        <div class="cards"></div>
-      </div>
-      <div class="kanban-col" data-state="PAUSED">
-        <h3>⏸ Paused</h3>
-        <div class="cards"></div>
-      </div>
-      <div class="kanban-col" data-state="ABORTED">
-        <h3>✕ Aborted</h3>
-        <div class="cards"></div>
-      </div>
-    </section>
-
-    <section id="detail-panel" class="detail-panel hidden">
-      <h2>Task Detail</h2>
-      <div id="detail-content"></div>
-      <div class="controls">
-        <button id="retry-btn" class="btn btn-secondary">Retry</button>
-        <button id="pause-btn" class="btn btn-secondary">Pause</button>
-        <button id="approve-btn" class="btn btn-primary">Approve</button>
-        <button id="abort-btn" class="btn btn-danger">Abort</button>
-        <button id="advance-btn" class="btn btn-ghost">⟳ Step Forward</button>
-      </div>
-    </section>
-  </main>
-
-  <aside id="telemetry-panel" class="telemetry-panel">
-    <h2>Telemetry</h2>
-    <div id="telemetry-metrics"></div>
-  </aside>
-
-  <dialog id="setup-modal">
-    <form method="dialog">
-      <h2>Setup Checklist</h2>
-      <div id="setup-list"></div>
-      <button value="close" class="btn btn-primary">Close</button>
-    </form>
-  </dialog>
-
-  <script src="app.js"></script>
-</body>
+    <script src="app.js"></script>
+    <script>
+      if (window.lucide) {
+        lucide.createIcons();
+      }
+    </script>
+  </body>
 </html>
