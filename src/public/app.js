@@ -85,7 +85,7 @@ const SCENARIOS = {
     logs: [
       { state: "1_INTAKE", text: "[INTAKE] Ingested retry loop failure issue. Chromadb sync triggered for thalamus router...", type: "system" },
       { state: "1_INTAKE", text: "[INTAKE] Chunked 34 records. Derived 12.4KB dense context markdown vector. Completed: 11ms", type: "success" },
-      { state: "2_ARCHURAL_PLAN", text: "[PLAN] Requesting spec from Flagship (Claude 3.5 Sonnet)...", type: "system" },
+      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Requesting spec from Flagship (Claude 3.5 Sonnet)...", type: "system" },
       { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Subtasks specified: 2 SLMs allocated concurrently for editing and testing. Prefix written.", type: "success" },
       { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] Together AI workers (Qwen 2.5 Coder 7B) active concurrently...", type: "system" },
       { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-1] Refactored thalamus/router.ts file. Prefix Cache HIT: 89%", type: "success" },
@@ -417,9 +417,15 @@ function executeStep() {
     // Pipeline finished
     clearInterval(simInterval);
     simInterval = null;
-    document.getElementById("btn-play-sim").innerHTML = '<i data-lucide="play"></i> Auto-Play';
-    document.getElementById("btn-play-sim").disabled = true;
-    document.getElementById("btn-step-sim").disabled = true;
+    const playSimButton = document.getElementById("btn-play-sim");
+    if (playSimButton) {
+      playSimButton.innerHTML = '<i data-lucide="play"></i> Auto-Play';
+      playSimButton.disabled = true;
+    }
+    const stepSimButton = document.getElementById("btn-step-sim");
+    if (stepSimButton) {
+      stepSimButton.disabled = true;
+    }
     logWrite("[SYSTEM] Assembly line pipeline processing finalized deterministically.", "success");
     if (window.lucide) lucide.createIcons();
     return;

@@ -56,7 +56,7 @@ export class TaskManager {
 
     // Validate before saving
     TaskSchema.parse(task);
-    this.tasks.save(task);
+    void this.tasks.save(task);
     return task;
   }
 

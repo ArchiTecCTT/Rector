@@ -130,7 +130,7 @@ export function runSandboxValidation(task: Task, deps: WorkerDependencies): Task
     },
   };
 
-  recordEvent(updated, "validation.passed", { passed: validation.passed, errors: validation.errors }, deps);
+  recordEvent(updated, validation.passed ? "validation.passed" : "validation.failed", { passed: validation.passed, errors: validation.errors }, deps);
 
   if (validation.passed) {
     recordEvent(updated, "task.state_transition", { from: task.state, to: "6_FINAL_SYNTHESIS" }, deps);
