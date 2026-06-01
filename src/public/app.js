@@ -417,15 +417,6 @@ function executeStep() {
     // Pipeline finished
     clearInterval(simInterval);
     simInterval = null;
-    const playSimButton = document.getElementById("btn-play-sim");
-    if (playSimButton) {
-      playSimButton.innerHTML = '<i data-lucide="play"></i> Auto-Play';
-      playSimButton.disabled = true;
-    }
-    const stepSimButton = document.getElementById("btn-step-sim");
-    if (stepSimButton) {
-      stepSimButton.disabled = true;
-    }
     logWrite("[SYSTEM] Assembly line pipeline processing finalized deterministically.", "success");
     if (window.lucide) lucide.createIcons();
     return;
