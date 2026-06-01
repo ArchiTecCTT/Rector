@@ -29,32 +29,11 @@
       <!-- Hero Section -->
       <section class="hero">
         <h1 class="hero__display">RECTOR</h1>
-        <div class="hero__row">
-          <div>
-            <span class="pill">
-              EDITION 0.0.1 · MMXXVI
-              <svg class="pill__arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M5 12h14" />
-                <path d="m13 5 7 7-7 7" />
-              </svg>
-            </span>
-          </div>
-          <div class="hero__center">
-            <h2 class="hero__subtitle">THE INDUSTRIALIZATION OF AUTONOMOUS AI</h2>
-            <p class="hero__lede">
-              Intelligence should be probabilistic. Execution must be deterministic. Rector is a neuro-symbolic orchestration framework that replaces chaotic agent loops with rigid, SLA-backed cognitive assembly lines.
-            </p>
-          </div>
-          <div class="hero__meta">
-            <div class="hero__meta-text">
-              ORNYX TECHNOLOGIES<br />
-              DETERMINISTIC COMPUTE<br />
-              EDITION 0.0.1
-            </div>
-            <div class="hero__seal" aria-hidden="true">
-              <div class="hero__seal-mark"></div>
-            </div>
-          </div>
+        <div class="hero__content">
+          <h2 class="hero__subtitle">THE INDUSTRIALIZATION OF AUTONOMOUS AI</h2>
+          <p class="hero__lede">
+            Intelligence should be probabilistic. Execution must be deterministic. Rector is a neuro-symbolic orchestration framework that replaces chaotic agent loops with rigid, SLA-backed cognitive assembly lines.
+          </p>
         </div>
       </section>
 
@@ -69,7 +48,7 @@
         </div>
 
         <div class="l-grid grid-thesis">
-          <div class="card card-thesis">
+          <div class="card card-thesis scroll-animate">
             <h3 class="t-headline-sm uppercase-label">The Status Quo: Unbounded Bleed</h3>
             <p class="t-body">
               Current AI agents (built on ReAct loops) act like artisanal craftsmen. They are given total freedom to figure out how to solve a prompt. Because LLMs are probabilistic, this architecture leads to infinite loops, API hallucinations, and silent failures. Enterprises cannot deploy probabilistic execution; they require SLA-backed reliability.
@@ -79,7 +58,7 @@
             </p>
           </div>
 
-          <div class="card card--paper card-thesis">
+          <div class="card card--paper card-thesis scroll-animate">
             <h3 class="t-headline-sm uppercase-label">The Core Insight: Neuro-Symbolic Assembly</h3>
             <p class="t-body ink-text">
               The solution is not a smarter LLM. The solution is a system architecture that removes the LLM's ability to make routing mistakes in the first place.
@@ -102,7 +81,7 @@
         </div>
 
         <div class="l-grid grid-pillars">
-          <div class="card pillar-card">
+          <div class="card pillar-card scroll-animate">
             <div class="pillar-num">01</div>
             <h3 class="card__title">The Nervous System</h3>
             <p class="t-body-sm">
@@ -111,7 +90,7 @@
             <span class="t-mono uppercase-label">Kafka · MongoDB · Doppler</span>
           </div>
 
-          <div class="card pillar-card">
+          <div class="card pillar-card scroll-animate">
             <div class="pillar-num">02</div>
             <h3 class="card__title">Thalamus Router</h3>
             <p class="t-body-sm">
@@ -120,7 +99,7 @@
             <span class="t-mono uppercase-label">NodeJS · DigitalOcean</span>
           </div>
 
-          <div class="card pillar-card">
+          <div class="card pillar-card scroll-animate">
             <div class="pillar-num">03</div>
             <h3 class="card__title">Deterministic Sandboxes</h3>
             <p class="t-body-sm">
@@ -129,7 +108,7 @@
             <span class="t-mono uppercase-label">Depot CLI · AST Injection</span>
           </div>
 
-          <div class="card pillar-card">
+          <div class="card pillar-card scroll-animate">
             <div class="pillar-num">04</div>
             <h3 class="card__title">Self-Healing Loops</h3>
             <p class="t-body-sm">
@@ -138,7 +117,7 @@
             <span class="t-mono uppercase-label">Sentry APM · Healing Loop</span>
           </div>
 
-          <div class="card pillar-card">
+          <div class="card pillar-card scroll-animate">
             <div class="pillar-num">05</div>
             <h3 class="card__title">The Assembly Line</h3>
             <p class="t-body-sm">
@@ -147,7 +126,7 @@
             <span class="t-mono uppercase-label">Together AI · Qwen Coder</span>
           </div>
 
-          <div class="card pillar-card">
+          <div class="card pillar-card scroll-animate">
             <div class="pillar-num">06</div>
             <h3 class="card__title">Prefrontal Cortex</h3>
             <p class="t-body-sm">
@@ -170,7 +149,7 @@
 
         <div class="l-grid grid-console">
           <!-- Left Control Panel -->
-          <div class="card console-control">
+          <div class="card console-control scroll-animate">
             <span class="card__eyebrow">Task Ingest System</span>
             <h3 class="t-headline-md font-narrow">Trigger Autonomous Action</h3>
             <p class="t-body-sm stone-text">
@@ -198,7 +177,7 @@
           </div>
 
           <!-- Central Simulator Panel -->
-          <div class="card card--paper console-workspace">
+          <div class="card card--paper console-workspace scroll-animate">
             <div class="console-workspace-header">
               <ul class="tabs" role="tablist">
                 <li class="tabs__item tabs__item--active" id="tab-visual" role="tab">Visual Pipeline</li>
@@ -304,26 +283,26 @@
         <div class="l-grid grid-economics">
           <!-- Left side: Real-time dynamic stats -->
           <div class="stats-samplers l-stack">
-            <div class="stat">
+            <div class="stat scroll-animate">
               <p class="stat__value" id="stat-invocations">0</p>
               <p class="stat__caption">Simulated Model Invocations</p>
             </div>
-            <div class="stat">
+            <div class="stat scroll-animate">
               <p class="stat__value" id="stat-hits">0%</p>
               <p class="stat__caption">KV-Cache Prefix Hit Rate</p>
             </div>
-            <div class="stat">
+            <div class="stat scroll-animate">
               <p class="stat__value" id="stat-cost">$0.0000</p>
               <p class="stat__caption">Calculated Compute Cost</p>
             </div>
-            <div class="stat">
+            <div class="stat scroll-animate">
               <p class="stat__value" id="stat-savings">0%</p>
               <p class="stat__caption">Compute Cost Reduction</p>
             </div>
           </div>
 
           <!-- Right side: ROI Calculator & Math -->
-          <div class="card economics-math card--paper">
+          <div class="card economics-math card--paper scroll-animate">
             <span class="card__eyebrow">Interactive Profit Model</span>
             <h3 class="t-headline-md font-narrow">Calculate Your Arbitrage</h3>
             <p class="t-body-sm stone-text">

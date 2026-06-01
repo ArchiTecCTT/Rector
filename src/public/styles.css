@@ -86,36 +86,58 @@ body {
 
 /* --- Hero Layout --- */
 .hero {
-  padding: 56px 0 72px;
+  padding: 80px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
 }
 
 .hero__display {
   font-family: var(--font-display);
   font-weight: 700;
   color: var(--color-ink);
-  font-size: clamp(58px, 10.8vw, 158px);
-  line-height: 0.86;
-  letter-spacing: -0.015em;
-  margin: 0 0 32px;
+  font-size: clamp(58px, 12vw, 158px);
+  line-height: 0.82;
+  margin: 0;
+  
+  /* Elegant light load animation */
+  opacity: 0;
+  transform: translateY(12px);
+  letter-spacing: 0.05em;
+  animation: reveal-rector 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-.hero__row {
-  display: grid;
-  grid-template-columns: 0.8fr 1.4fr 0.8fr;
-  gap: var(--gutter);
-  align-items: start;
+@keyframes reveal-rector {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    letter-spacing: -0.015em;
+  }
 }
 
-.hero__center {
+.hero__content {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
+  max-width: 60ch;
+  
+  /* Gentle fade-in for subtitle and lede */
+  opacity: 0;
+  transform: translateY(8px);
+  animation: reveal-content 1s cubic-bezier(0.16, 1, 0.3, 1) 0.2s forwards;
+}
+
+@keyframes reveal-content {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .hero__subtitle {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: clamp(20px, 2.5vw, 32px);
+  font-size: clamp(24px, 3.8vw, 42px);
   line-height: 1.0;
   color: var(--color-ink);
   margin: 0;
@@ -123,53 +145,10 @@ body {
 
 .hero__lede {
   font-family: var(--font-body);
-  font-size: 15px;
+  font-size: 17px;
   line-height: 1.6;
   color: var(--color-graphite);
   margin: 0;
-  max-width: 46ch;
-}
-
-.hero__meta {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.hero__meta-text {
-  font-family: var(--font-body);
-  font-size: var(--text-label-sm);
-  text-transform: uppercase;
-  letter-spacing: var(--track-label);
-  color: var(--color-stone);
-  line-height: 1.6;
-}
-
-.hero__seal {
-  width: 56px;
-  height: 56px;
-  border: 1px solid var(--color-hairline);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  background: var(--color-neutral);
-}
-
-.hero__seal-mark {
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--color-hairline);
-  position: relative;
-}
-
-.hero__seal-mark::after {
-  content: "";
-  position: absolute;
-  inset: 5px;
-  border-top: 1px solid var(--color-ink);
-  border-left: 1px solid var(--color-ink);
 }
 
 /* --- Layout Grids --- */
@@ -604,10 +583,6 @@ body {
 
 /* --- Responsiveness Adjustments --- */
 @media (max-width: 900px) {
-  .hero__row {
-    grid-template-columns: 1fr;
-    gap: 32px;
-  }
   .grid-thesis,
   .grid-pillars,
   .grid-console,
@@ -622,3 +597,36 @@ body {
     margin-bottom: 24px;
   }
 }
+
+/* --- Scroll-Driven Light Animations --- */
+.scroll-animate {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), 
+              transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
+}
+
+.scroll-animate.in-view {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Stagger delays for consecutive elements in grids */
+.grid-thesis > .scroll-animate:nth-child(1) { transition-delay: 0ms; }
+.grid-thesis > .scroll-animate:nth-child(2) { transition-delay: 120ms; }
+
+.grid-pillars > .scroll-animate:nth-child(1) { transition-delay: 0ms; }
+.grid-pillars > .scroll-animate:nth-child(2) { transition-delay: 80ms; }
+.grid-pillars > .scroll-animate:nth-child(3) { transition-delay: 160ms; }
+.grid-pillars > .scroll-animate:nth-child(4) { transition-delay: 0ms; }
+.grid-pillars > .scroll-animate:nth-child(5) { transition-delay: 80ms; }
+.grid-pillars > .scroll-animate:nth-child(6) { transition-delay: 160ms; }
+
+.stats-samplers > .scroll-animate:nth-child(1) { transition-delay: 0ms; }
+.stats-samplers > .scroll-animate:nth-child(2) { transition-delay: 80ms; }
+.stats-samplers > .scroll-animate:nth-child(3) { transition-delay: 160ms; }
+.stats-samplers > .scroll-animate:nth-child(4) { transition-delay: 240ms; }
+
+.grid-console > .scroll-animate:nth-child(1) { transition-delay: 0ms; }
+.grid-console > .scroll-animate:nth-child(2) { transition-delay: 120ms; }

@@ -542,6 +542,36 @@ function bindSimulatorEvents() {
 }
 
 // ============================================================
+// Scroll-Driven Light Animations Observer
+// ============================================================
+
+function initScrollAnimations() {
+  const elements = document.querySelectorAll(".scroll-animate");
+  if (elements.length === 0) return;
+
+  const observerOptions = {
+    root: null,
+    rootMargin: "-6% 0px -6% 0px", // Trigger slightly inside target thresholds
+    threshold: 0.05
+  };
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add("in-view");
+      } else {
+        // Reverse animation when leaving viewport frame
+        entry.target.classList.remove("in-view");
+      }
+    });
+  }, observerOptions);
+
+  elements.forEach(el => {
+    observer.observe(el);
+  });
+}
+
+// ============================================================
 // Initialization Entry Point
 // ============================================================
 
@@ -550,6 +580,7 @@ function init() {
   bindCalculatorEvents();
   bindTabs();
   bindSimulatorEvents();
+  initScrollAnimations();
 }
 
 // Run when DOM elements are fully structured
