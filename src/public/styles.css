@@ -297,6 +297,12 @@ body {
   overflow-x: auto;
   border-bottom: var(--rule-hairline);
   margin-bottom: 12px;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+}
+
+.pipeline-flow::-webkit-scrollbar {
+  display: none; /* Chrome, Safari and Opera */
 }
 
 .pipeline-step {

@@ -83,9 +83,9 @@ const SCENARIOS = {
       { title: "Verify final synthesis & Linear webhook handshake", status: "completed", type: "flagship" }
     ],
     logs: [
-      { state: "1_INTAKE", text: "[INTAKE] Ingested retry loop failure issue. Chromadb sync triggered for thalamus module...", type: "system" },
+      { state: "1_INTAKE", text: "[INTAKE] Ingested retry loop failure issue. Chromadb sync triggered for thalamus router...", type: "system" },
       { state: "1_INTAKE", text: "[INTAKE] Chunked 34 records. Derived 12.4KB dense context markdown vector. Completed: 11ms", type: "success" },
-      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Requesting spec from Flagship (Claude 3.5 Sonnet)...", type: "system" },
+      { state: "2_ARCHURAL_PLAN", text: "[PLAN] Requesting spec from Flagship (Claude 3.5 Sonnet)...", type: "system" },
       { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Subtasks specified: 2 SLMs allocated concurrently for editing and testing. Prefix written.", type: "success" },
       { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] Together AI workers (Qwen 2.5 Coder 7B) active concurrently...", type: "system" },
       { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-1] Refactored thalamus/router.ts file. Prefix Cache HIT: 89%", type: "success" },
@@ -101,6 +101,80 @@ const SCENARIOS = {
       { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Frontier Flagship reviewing task correctness, changes diff, and sandbox history...", type: "system" },
       { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Synthesis approved. Ready to deploy code utilities.", type: "success" },
       { state: "7_HUMAN_HANDOFF", text: "[HANDOFF] PR #105 compiled. Linear notification updated. State Machine finished deterministically.", type: "success" }
+    ]
+  },
+  migration: {
+    id: "REC-4091-MIGR",
+    description: "Automate Next.js Page Router codebase migration to the v15 App Router architecture",
+    states: [
+      { state: "1_INTAKE", statusText: "DISTILLING VECTOR CONTEXT" },
+      { state: "2_ARCHITECTURAL_PLAN", statusText: "FLAGSHIP PLAN GENERATION" },
+      { state: "3_SLM_EXECUTION_FANOUT", statusText: "SLM WORKER EXECUTION" },
+      { state: "4_SANDBOX_VALIDATION", statusText: "SANDBOX TEST RUN" },
+      { state: "6_FINAL_SYNTHESIS", statusText: "FINAL ARCHITECTURE SYNTHESIS" },
+      { state: "7_HUMAN_HANDOFF", statusText: "COMPLETED & HANDED OFF" }
+    ],
+    subtasks: [
+      { title: "Analyze pages directory structures and page dependency trees", status: "completed", type: "intake" },
+      { title: "Formulate Page Router to App Router mapping plans", status: "completed", type: "plan" },
+      { title: "Convert legacy pages/index.tsx to app/page.tsx Server Component", status: "completed", type: "slm" },
+      { title: "Convert pages/about.tsx to app/about/page.tsx Server Component", status: "completed", type: "slm" },
+      { title: "Migrate legacy layouts to nested layout.tsx routing wrappers", status: "completed", type: "slm" },
+      { title: "Execute 'next build' and page routing tests inside Depot sandbox", status: "completed", type: "sandbox" },
+      { title: "Verify NextJS routing bundle outputs and publish PR branch", status: "completed", type: "flagship" }
+    ],
+    logs: [
+      { state: "1_INTAKE", text: "[INTAKE] Next.js Page Router codebase migration target detected. Querying file structures...", type: "system" },
+      { state: "1_INTAKE", text: "[INTAKE] Distilled 42 legacy routes into a clean structural page mapping document. Chromadb lookup: 21ms", type: "success" },
+      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Initializing Flagship Model (Claude 3.5 Sonnet) to construct translation schema...", type: "system" },
+      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] NextJS conversion blueprint generated. Storing layout prefixes inside Together AI cache...", type: "success" },
+      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] Launching concurrent specialized code rewriting models (Qwen 2.5 Coder 7B)...", type: "system" },
+      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-1] Migrated index.tsx home routing. Together AI Prefix Cache HIT: 93%", type: "success" },
+      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-2] Refactored about.tsx and layouts into modern layouts wrappers. Time: 155ms", type: "success" },
+      { state: "3_SLM_EXECUTION_FANOUT", text: "[Worker-3] Wrote Vitest routing integrity tests.", type: "success" },
+      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Spinning up isolated Depot container loaded with Next v15 developer environment...", type: "system" },
+      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Executing 'npm run build' compiler page-generation verification specs...", type: "system" },
+      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] NextJS: all page route chunks generated successfully. Bundle sizes checked. Exit code: 0", type: "success" },
+      { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Initiating Flagship Model logic checks for App Router optimization and hydration rules...", type: "system" },
+      { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Server Component boundaries validated. Ready to ship optimal NextJS layout utilities.", type: "success" },
+      { state: "7_HUMAN_HANDOFF", text: "[HANDOFF] PR #106 published. Migrated NextJS layout codebase successfully. Tasks complete.", type: "success" }
+    ]
+  },
+  stripe: {
+    id: "REC-7801-STRIPE",
+    description: "Implement secure Stripe checkout webhook signature verification and checkout session endpoints",
+    states: [
+      { state: "1_INTAKE", statusText: "DISTILLING VECTOR CONTEXT" },
+      { state: "2_ARCHITECTURAL_PLAN", statusText: "FLAGSHIP PLAN GENERATION" },
+      { state: "3_SLM_EXECUTION_FANOUT", statusText: "SLM WORKER EXECUTION" },
+      { state: "4_SANDBOX_VALIDATION", statusText: "SANDBOX TEST RUN" },
+      { state: "6_FINAL_SYNTHESIS", statusText: "FINAL ARCHITECTURE SYNTHESIS" },
+      { state: "7_HUMAN_HANDOFF", statusText: "COMPLETED & HANDED OFF" }
+    ],
+    subtasks: [
+      { title: "Retrieve Stripe subscription API specs and DB schemas", status: "completed", type: "intake" },
+      { title: "Formulate webhook endpoint signature checking plans", status: "completed", type: "plan" },
+      { title: "Implement signature checking stripe.ts verification helpers", status: "completed", type: "slm" },
+      { title: "Implement invoice.created webhook controller adapters", status: "completed", type: "slm" },
+      { title: "Write mock Stripe request webhook payload signing test specs", status: "completed", type: "slm" },
+      { title: "Execute billing integration tests using stripe-mock services", status: "completed", type: "sandbox" },
+      { title: "Synthesize payment gateways status and publish PR branch", status: "completed", type: "flagship" }
+    ],
+    logs: [
+      { state: "1_INTAKE", text: "[INTAKE] Stripe billing integration target specs received. Analyzing webhook verification limits...", type: "system" },
+      { state: "1_INTAKE", text: "[INTAKE] Index matching: invoice, checkout, subscription entities synced: 8ms", type: "success" },
+      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Dispatching Frontier Model to layout secure payload signature inspection methods...", type: "system" },
+      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Security specifications outlined. Together AI prefix cache schemas committed.", type: "success" },
+      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] Deploying concurrent specialized code writing models (Qwen 2.5 Coder 7B)...", type: "system" },
+      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-1] Wrote stripe.ts billing logic helper. Together AI Prefix Cache HIT: 92%", type: "success" },
+      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-2] Restructured user invoice database adapter models. Time: 140ms", type: "success" },
+      { state: "3_SLM_EXECUTION_FANOUT", text: "[Worker-3] Wrote checkout mock request payloads specs.", type: "success" },
+      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Initializing isolated Depot container sandbox with Stripe-mock servers gateway fixtures...", type: "system" },
+      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Triggering webhook mock payloads verification requests and inspecting DB transitions...", type: "system" },
+      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Checkout verification succeeded. Subscriptions updated. Tests: 18/18 passed. Exit code: 0", type: "success" },
+      { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Flagship Architect auditing signature validations and rate limits error handlers...", type: "system" },
+      { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Security checks approved. Creating billing integration pull request...", type: "success" },
+      { state: "7_HUMAN_HANDOFF", text: "[HANDOFF] PR #107 compiled. Billing integration live. State machine execution completed successfully.", type: "success" }
     ]
   }
 };
@@ -249,10 +323,8 @@ function resetSimulator() {
   document.getElementById("sim-subtasks-list").innerHTML = "";
 
   // Reset controls
-  document.getElementById("btn-play-sim").disabled = true;
-  document.getElementById("btn-play-sim").innerHTML = '<i data-lucide="play"></i> Auto-Play';
-  document.getElementById("btn-step-sim").disabled = true;
-  document.getElementById("btn-reset-sim").disabled = true;
+  const resetBtn = document.getElementById("btn-reset-sim");
+  if (resetBtn) resetBtn.disabled = true;
 
   // Clear Logs
   const logsBox = document.getElementById("terminal-logs-box");
@@ -284,9 +356,8 @@ function initScenario(type) {
   document.getElementById("subtask-progress-box").classList.remove("hidden");
 
   // Enable control buttons
-  document.getElementById("btn-play-sim").disabled = false;
-  document.getElementById("btn-step-sim").disabled = false;
-  document.getElementById("btn-reset-sim").disabled = false;
+  const resetBtnEl = document.getElementById("btn-reset-sim");
+  if (resetBtnEl) resetBtnEl.disabled = false;
 
   // Write initial log
   logWrite(`[SYSTEM] Task ingested into queue. Triggering Thalamus event router. ID: ${currentTask.id}`, "system");
@@ -474,69 +545,51 @@ function setSubtaskBadge(index, status) {
   }
 }
 
+function startAutoPlay() {
+  if (simInterval) clearInterval(simInterval);
+  simInterval = setInterval(() => {
+    executeStep();
+  }, 2200);
+}
+
 function bindSimulatorEvents() {
   const seedHappyBtn = document.getElementById("btn-seed-happy");
   const seedHealingBtn = document.getElementById("btn-seed-healing");
-  const playBtn = document.getElementById("btn-play-sim");
-  const stepBtn = document.getElementById("btn-step-sim");
+  const seedMigrationBtn = document.getElementById("btn-seed-migration");
+  const seedStripeBtn = document.getElementById("btn-seed-stripe");
   const resetBtn = document.getElementById("btn-reset-sim");
-  const customForm = document.getElementById("custom-task-form");
 
   if (seedHappyBtn) {
     seedHappyBtn.addEventListener("click", () => {
       initScenario("happy");
+      startAutoPlay();
     });
   }
 
   if (seedHealingBtn) {
     seedHealingBtn.addEventListener("click", () => {
       initScenario("healing");
+      startAutoPlay();
     });
   }
 
-  if (customForm) {
-    customForm.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const desc = document.getElementById("custom-task-desc").value.trim();
-      if (!desc) return;
-
-      // Seed a custom happy scenario using this desc
-      initScenario("happy");
-      currentTask.description = desc;
-      document.getElementById("sim-task-desc").innerText = desc;
-      document.getElementById("custom-task-desc").value = "";
-
-      logWrite(`[SYSTEM] Custom prompt ingested. Rerouting assembly line tasks...`, "system");
+  if (seedMigrationBtn) {
+    seedMigrationBtn.addEventListener("click", () => {
+      initScenario("migration");
+      startAutoPlay();
     });
   }
 
-  if (stepBtn) {
-    stepBtn.addEventListener("click", () => {
-      executeStep();
+  if (seedStripeBtn) {
+    seedStripeBtn.addEventListener("click", () => {
+      initScenario("stripe");
+      startAutoPlay();
     });
   }
 
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
       resetSimulator();
-    });
-  }
-
-  if (playBtn) {
-    playBtn.addEventListener("click", () => {
-      if (simInterval) {
-        // Pause
-        clearInterval(simInterval);
-        simInterval = null;
-        playBtn.innerHTML = '<i data-lucide="play"></i> Auto-Play';
-      } else {
-        // Play
-        playBtn.innerHTML = '<i data-lucide="pause"></i> Pause';
-        simInterval = setInterval(() => {
-          executeStep();
-        }, 2200);
-      }
-      if (window.lucide) lucide.createIcons();
     });
   }
 }
