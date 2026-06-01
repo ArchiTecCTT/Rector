@@ -607,15 +607,12 @@ body {
 /* --- Scroll-Driven Light Animations --- */
 .scroll-animate {
   opacity: 0;
-  transform: translateY(24px);
-  transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), 
-              transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
-  will-change: transform, opacity;
+  transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity;
 }
 
 .scroll-animate.in-view {
   opacity: 1;
-  transform: translateY(0);
 }
 
 /* Stagger delays for consecutive elements in grids */
@@ -636,3 +633,66 @@ body {
 
 .grid-console > .scroll-animate:nth-child(1) { transition-delay: 0ms; }
 .grid-console > .scroll-animate:nth-child(2) { transition-delay: 120ms; }
+
+/* --- Hover Micro-Animations --- */
+.card {
+  transition: border-color var(--dur-base) var(--ease-out), 
+              background-color var(--dur-base) var(--ease-out);
+}
+
+.card:hover {
+  border-color: var(--color-ink);
+}
+
+.card--paper {
+  transition: border-color var(--dur-base) var(--ease-out), 
+              background-color var(--dur-base) var(--ease-out);
+}
+
+.card--paper:hover {
+  background-color: var(--color-surface);
+  border-color: var(--color-ink);
+}
+
+.pillar-card {
+  transition: border-color var(--dur-base) var(--ease-out), 
+              background-color var(--dur-base) var(--ease-out),
+              transform var(--dur-base) var(--ease-out);
+}
+
+.pillar-card:hover {
+  border-color: var(--color-signal) !important;
+  transform: translateY(-2px);
+}
+
+.btn__arrow,
+.pill__arrow {
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.btn:hover .btn__arrow,
+.pill:hover .pill__arrow {
+  transform: translateX(4px);
+}
+
+.pipeline-step {
+  cursor: pointer;
+  transition: opacity var(--dur-base) var(--ease-out), 
+              transform var(--dur-base) var(--ease-out);
+}
+
+.pipeline-step:hover {
+  opacity: 0.9;
+  transform: scale(1.05);
+}
+
+.nav a {
+  transition: color var(--dur-fast) var(--ease-out), 
+              border-bottom-color var(--dur-fast) var(--ease-out);
+  border-bottom: 1px solid transparent;
+}
+
+.nav a:hover {
+  color: var(--color-signal);
+  border-bottom-color: var(--color-signal);
+}
