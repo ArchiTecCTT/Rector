@@ -5,6 +5,7 @@ import { TaskManager } from "../thalamus/router";
 import { getSetupChecklist } from "../setupChecklist";
 import { STATES } from "../domain/states";
 import { buildContextPack, createContextMaterial, type ContextPack } from "../orchestration/contextBuilder";
+import { arbitratePlanWithCrucible } from "../orchestration/crucible";
 import { createFakePlan } from "../orchestration/planner";
 import { transitionRun } from "../orchestration/runStateMachine";
 import { reviewPlanWithSkeptic } from "../orchestration/skeptic";
@@ -401,6 +402,7 @@ async function createFakeChatRun(
   const traceId = `trace-${crypto.randomUUID()}`;
   const plannerOutput = createFakePlan({ triage, contextPack, messageContent: prompt });
   const skepticReview = reviewPlanWithSkeptic(plannerOutput, contextPack);
+  const crucibleDecision = arbitratePlanWithCrucible({ plannerOutput, skepticReview });
 
   const run = await store.createRun({
     conversationId,
@@ -464,6 +466,7 @@ async function createFakeChatRun(
         ...(phase === "CONTEXT_BUILDING" ? { contextPack } : {}),
         ...(phase === "PLANNING" ? { plannerOutput } : {}),
         ...(phase === "SKEPTIC_REVIEW" ? { skepticReview } : {}),
+        ...(phase === "CRUCIBLE" ? { crucibleDecision } : {}),
       },
     });
     current = result.run;

@@ -92,8 +92,15 @@
 
 - **Source:** Chunk 10 implementation.
 - **Severity:** Medium product limitation.
-- **Status:** Open until Crucible/provider-backed review chunks.
+- **Status:** Open until provider-backed review chunks.
 - **Plan:** Current skeptic review deterministically checks validation coverage, dangling dependencies, approval gates, empty-task clarification, absent context references, and low-risk underestimates. It does not perform semantic plan critique, real filesystem/API existence checks, exploit analysis, or multi-reviewer consensus yet.
+
+### Crucible arbitration is deterministic and does not repair plans
+
+- **Source:** Chunk 11 implementation.
+- **Severity:** Medium product limitation.
+- **Status:** Open until planner revision/healing/provider-backed arbitration chunks.
+- **Plan:** Current Crucible accepts sound plans, blocks blocker findings, requests targeted revisions, and escalates after two rounds. It does not mutate plans, invoke alternate reviewers, run external validation, or automatically produce revised planner output yet.
 
 ## Closed / Mitigated
 

@@ -131,6 +131,11 @@ describe("chat API vertical shell", () => {
     const skepticEvent = (sent.data as any).events.find((event: any) => event.phase === "SKEPTIC_REVIEW");
     expect(skepticEvent?.payload?.skepticReview?.verdict).toBeDefined();
     expect(skepticEvent?.payload?.skepticReview?.findings).toEqual(expect.any(Array));
+
+    const crucibleEvent = (sent.data as any).events.find((event: any) => event.phase === "CRUCIBLE");
+    expect(crucibleEvent?.payload?.crucibleDecision?.verdict).toBeDefined();
+    expect(crucibleEvent?.payload?.crucibleDecision?.round).toBe(1);
+    expect(crucibleEvent?.payload?.crucibleDecision?.maxRounds).toBe(2);
   });
 
   it("returns run events", async () => {

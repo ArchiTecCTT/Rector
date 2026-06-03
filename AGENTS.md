@@ -72,6 +72,10 @@ Current test baseline after Chunk 10:
 - `npm test`: 13 files / 130 tests passing
 - `npm run build`: passing
 
+## Active Development Goal
+
+User approved continuing Alpha Build development through the final roadmap chunk. Optimize for fast, responsive, light system design; credits are available but local/provider-free mode must remain default. Every new feature must be extensively tested. If unsure about architecture/library choices, use web_search and choose the most logical option, not merely the most token-cheap option. At end, run multiple `google-vertex/gemini-3.5-flash` review agents over the full worktree to document only valid bugs/vulnerabilities/issues, including undocumented ones; reviewers must validate findings with code/tests where possible. Keep `docs/plans/concerns-and-vulnerabilities.md` complete.
+
 ## Next Chunks Needed for v0.1.0-alpha
 
 Minimum release-critical chunks still needed:
