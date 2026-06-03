@@ -6,6 +6,7 @@ import type { PlannerOutput } from "./planner";
 import type { SkepticReview } from "./skeptic";
 import type { TriageResult } from "./triage";
 import type { HealingLoopResult, HealingLoopStatus } from "./validationHealing";
+import type { ObservabilitySummary } from "../observability";
 
 export type BrainstemSynthesisStatus = HealingLoopStatus | "SKIPPED" | "BLOCKED";
 
@@ -19,6 +20,7 @@ export interface BrainstemSynthesisInput {
   compiledDag?: CompiledDag;
   executionResult?: DagExecutionResult;
   validationHealingResult?: HealingLoopResult;
+  observabilitySummary?: ObservabilitySummary;
 }
 
 export interface BrainstemSynthesis {
@@ -27,17 +29,22 @@ export interface BrainstemSynthesis {
   traceId: string;
   evidence: string[];
   providerCalls: 0;
+  observability?: ObservabilitySummary;
   response: string;
 }
 
 export function synthesizeChatBrainstemResponse(input: BrainstemSynthesisInput): BrainstemSynthesis {
   const status = synthesisStatus(input);
   const evidence = synthesisEvidence(input);
+  const observed = input.observabilitySummary
+    ? `Observed: ${input.observabilitySummary.spanCount} spans, ${input.observabilitySummary.durationMs}ms, provider calls: ${input.observabilitySummary.modelCallCount}, provider cost: $${input.observabilitySummary.estimatedCostUsd}.`
+    : "Observed: pending.";
   const response = [
     `Status: ${status}.`,
     `Route: ${input.triage.route}.`,
     `Trace: ${input.traceId}.`,
     `Evidence: ${evidence.join("; ")}.`,
+    observed,
     "Local mode: provider calls: 0, API keys: not required.",
   ].join(" ");
 
@@ -47,6 +54,7 @@ export function synthesizeChatBrainstemResponse(input: BrainstemSynthesisInput):
     traceId: input.traceId,
     evidence,
     providerCalls: 0,
+    observability: input.observabilitySummary,
     response,
   };
 }

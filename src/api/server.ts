@@ -14,6 +14,12 @@ import { reviewPlanWithSkeptic } from "../orchestration/skeptic";
 import { synthesizeChatBrainstemResponse, type BrainstemSynthesis } from "../orchestration/synthesizer";
 import { triageUserMessage, type TriageResult } from "../orchestration/triage";
 import { validateAndHealExecution, type HealingLoopResult } from "../orchestration/validationHealing";
+import {
+  createInMemoryObservabilityTrace,
+  type InMemoryObservabilityTrace,
+  type ObservabilitySpan,
+  type ObservabilitySummary,
+} from "../observability";
 import { redactSecrets, redactString } from "../security/redaction";
 import { InMemoryRectorStore } from "../store/inMemoryRectorStore";
 import type { Run, RunEvent } from "../store/schemas";
@@ -106,28 +112,32 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         status: "created",
         redactionState,
       });
-      const triage = triageUserMessage(redactedContent);
-      const contextMaterial = await createContextMaterial(rectorStore, {
-        kind: "chat-user-message",
-        content: redactedContent,
-        summary: "Latest user message content",
-        retentionPolicy: conversation.retentionPolicy,
-        piiState: redactionState,
+      const observability = createInMemoryObservabilityTrace({ provider: "local" });
+      const triage = await observability.recordSpan("TRIAGE", () => triageUserMessage(redactedContent));
+      const contextPack = await observability.recordSpan("CONTEXT_BUILDING", async () => {
+        const contextMaterial = await createContextMaterial(rectorStore, {
+          kind: "chat-user-message",
+          content: redactedContent,
+          summary: "Latest user message content",
+          retentionPolicy: conversation.retentionPolicy,
+          piiState: redactionState,
+        });
+        return buildContextPack(rectorStore, {
+          conversation,
+          messages: await rectorStore.listMessages(conversation.id),
+          userMessage,
+          triage,
+          materials: [contextMaterial],
+        });
       });
-      const contextPack = await buildContextPack(rectorStore, {
-        conversation,
-        messages: await rectorStore.listMessages(conversation.id),
-        userMessage,
-        triage,
-        materials: [contextMaterial],
-      });
-      const { run, synthesis } = await createFakeChatRun(
+      const { run, synthesis, observabilitySummary } = await createFakeChatRun(
         rectorStore,
         conversation.id,
         userMessage.id,
         redactedContent,
         triage,
         contextPack,
+        observability,
         securityOptions.orchestration
       );
       const assistantMessage = await rectorStore.createMessage({
@@ -147,6 +157,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         assistantMessage,
         run: completedRun ?? run,
         events,
+        observability: observabilitySummary,
       });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
@@ -414,12 +425,19 @@ async function createFakeChatRun(
   prompt: string,
   triage: TriageResult,
   contextPack: ContextPack,
+  observability: InMemoryObservabilityTrace,
   options: { executorOptions?: ExecutorSimulatorOptions; maxHealingAttempts?: number } = {}
-): Promise<{ run: Run; synthesis: BrainstemSynthesis }> {
-  const traceId = `trace-${crypto.randomUUID()}`;
-  const plannerOutput = createFakePlan({ triage, contextPack, messageContent: prompt });
-  const skepticReview = reviewPlanWithSkeptic(plannerOutput, contextPack);
-  const crucibleDecision = arbitratePlanWithCrucible({ plannerOutput, skepticReview });
+): Promise<{ run: Run; synthesis: BrainstemSynthesis; observabilitySummary: ObservabilitySummary }> {
+  const traceId = observability.traceId;
+  const plannerOutput = await observability.recordSpan("PLANNING", () =>
+    createFakePlan({ triage, contextPack, messageContent: prompt })
+  );
+  const skepticReview = await observability.recordSpan("SKEPTIC_REVIEW", () =>
+    reviewPlanWithSkeptic(plannerOutput, contextPack)
+  );
+  const crucibleDecision = await observability.recordSpan("CRUCIBLE", () =>
+    arbitratePlanWithCrucible({ plannerOutput, skepticReview })
+  );
 
   const run = await store.createRun({
     conversationId,
@@ -457,47 +475,56 @@ async function createFakeChatRun(
       complexity: triage.complexity,
       riskFlags: triage.riskFlags,
     },
+    observability: phaseObservabilityPayload(observability, "CHAT_RECEIVED"),
   }));
 
-  const compiledDag: CompiledDag | undefined =
+  const compiledDag: CompiledDag | undefined = await observability.recordSpan("DAG_COMPILATION", () =>
     crucibleDecision.verdict === "ACCEPTED"
       ? compileAcceptedPlanToDag({
           runId: run.id,
           crucibleDecision,
           budgetPolicy: run.budget,
         })
-      : undefined;
+      : undefined
+  );
 
   const dagCompilationPayload = compiledDag
     ? { compiledDag }
     : { skippedReason: `Crucible verdict ${crucibleDecision.verdict} is not ACCEPTED` };
-  const executionResult = compiledDag ? await executeCompiledDag(compiledDag, options.executorOptions) : undefined;
+  const executionResult = await observability.recordSpan("EXECUTING", () =>
+    compiledDag ? executeCompiledDag(compiledDag, options.executorOptions) : undefined
+  );
   const executionPayload = executionResult
     ? { executionResult }
     : { skippedReason: "Execution skipped because no compiled DAG exists" };
-  const validationHealingResult: HealingLoopResult | undefined =
+  const validationHealingResult: HealingLoopResult | undefined = await observability.recordSpan("VALIDATING", () =>
     compiledDag && executionResult
-      ? await validateAndHealExecution({
+      ? validateAndHealExecution({
           compiledDag,
           executionResult,
           executorOptions: options.executorOptions,
           maxHealingAttempts: options.maxHealingAttempts,
         })
-      : undefined;
+      : undefined
+  );
   const validationPayload = validationHealingResult
     ? { validationHealingResult }
     : { skippedReason: "Execution skipped or missing; validation and healing skipped" };
-  const synthesis = synthesizeChatBrainstemResponse({
-    traceId,
-    triage,
-    contextPack,
-    plannerOutput,
-    skepticReview,
-    crucibleDecision,
-    compiledDag,
-    executionResult,
-    validationHealingResult,
-  });
+  const synthesis = await observability.recordSpan("SYNTHESIZING", () =>
+    synthesizeChatBrainstemResponse({
+      traceId,
+      triage,
+      contextPack,
+      plannerOutput,
+      skepticReview,
+      crucibleDecision,
+      compiledDag,
+      executionResult,
+      validationHealingResult,
+      observabilitySummary: observability.getSummary(),
+    })
+  );
+  await observability.recordSpan("DONE", () => undefined);
 
   const phases = [
     "TRIAGE",
@@ -528,6 +555,7 @@ async function createFakeChatRun(
         ...(phase === "EXECUTING" ? executionPayload : {}),
         ...(phase === "VALIDATING" ? validationPayload : {}),
         ...(phase === "SYNTHESIZING" ? { synthesis } : {}),
+        observability: phaseObservabilityPayload(observability, phase),
       },
       ...(phase === "VALIDATING" && validationHealingResult
         ? {
@@ -539,7 +567,18 @@ async function createFakeChatRun(
     current = result.run;
   }
 
-  return { run: current, synthesis };
+  return { run: current, synthesis, observabilitySummary: observability.getSummary() };
+}
+
+function phaseObservabilityPayload(
+  observability: InMemoryObservabilityTrace,
+  phase: string
+): { traceId: string; span?: ObservabilitySpan; summary: ObservabilitySummary } {
+  return {
+    traceId: observability.traceId,
+    span: observability.getLastSpanForPhase(phase),
+    summary: observability.getSummary(),
+  };
 }
 
 function runEvent(

@@ -123,6 +123,13 @@
 - **Status:** Open until real executor/healing chunks.
 - **Plan:** The alpha healing loop is deterministic, bounded, provider-free, shell-free, and safe for local simulation. It heals only transient/timeout simulator failures by re-running the DAG with adjusted simulator options. Real execution needs node-level replay, artifact isolation/rollback, durable attempt records, richer failure taxonomy, human decision UX for permission/destructive actions, and real timeout/root-cause diagnostics.
 
+### Observability baseline is in-memory/no-op only
+
+- **Source:** Chunk 16 implementation.
+- **Severity:** Low for local alpha, Medium for production operations.
+- **Status:** Open until durable telemetry/provider integrations.
+- **Plan:** Current traces, spans, latency, and cost/model-call counters are process-local and reset on restart. Sentry/PostHog/OpenTelemetry adapters are explicit no-ops with no network calls. Production/provider chunks must add durable/exportable traces, bounded retention, redaction review for telemetry payloads, real token/model/cost metering at provider call boundaries, sampling, and SDK-backed adapters.
+
 ## Closed / Mitigated
 
 ### Fake orchestrator returned placeholder assistant text
