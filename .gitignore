@@ -9,3 +9,4 @@ coverage/
 .DS_Store
 reviews/
 test_debug.mjs
+progress.md
