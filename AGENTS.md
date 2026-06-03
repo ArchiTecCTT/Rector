@@ -53,7 +53,7 @@ npm run build
 
 ## Current Implemented Chunks
 
-Completed through Chunk 10:
+Completed through Chunk 25:
 
 0. Source-of-truth docs and stale doc quarantine
 1. Open-source foundation and Apache-2.0 setup
@@ -66,10 +66,25 @@ Completed through Chunk 10:
 8. Triage and context builder
 9. Planner schema and fake planner
 10. Skeptic review
+11. Crucible arbitration
+12. DAG compiler
+13. Executor simulator
+14. Validation and healing loop
+15. End-to-end chat brainstem test
+16. Observability baseline
+17. Provider adapter layer phase 1
+18. Provider adapter layer phase 2
+19. Memory, search, and truth library
+20. Public extension contracts
+21. Retool operator console API
+22. Safe code execution
+23. External workflow integrations
+24. Deployment prototype
+25. Contributor issue breakdown
 
-Current test baseline after Chunk 10:
+Current test baseline after Chunk 25:
 
-- `npm test`: 13 files / 130 tests passing
+- `npm test`: 27 files / 272 tests passing
 - `npm run build`: passing
 
 ## Active Development Goal
@@ -78,22 +93,13 @@ User approved continuing Alpha Build development through the final roadmap chunk
 
 ## Next Chunks Needed for v0.1.0-alpha
 
-Minimum release-critical chunks still needed:
+Roadmap chunks 0–25 are implemented. Remaining pre-release hardening items:
 
-11. Crucible arbitration
-12. DAG compiler
-13. Executor simulator
-14. Validation and healing loop
-15. End-to-end chat brainstem test
-16. Observability baseline
-
-Additional release-prep items:
-
-- clean local UI demo
-- CI
+- final multi-agent bug/vulnerability audit
 - dependency audit triage
+- clean local UI demo polish
+- CI workflow enforcement
 - screenshots/GIF
-- docs for strangers
 - release tag
 
 ## Release Path
