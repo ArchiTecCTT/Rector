@@ -293,6 +293,98 @@ function bindTabs() {
 }
 
 // ============================================================
+// Chat API Shell
+// ============================================================
+
+let rectorChatConversationId = null;
+
+async function chatApi(path, options = {}) {
+  const res = await fetch(`${API}${path}`, {
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    ...options,
+  });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!res.ok) {
+    throw new Error(data.error || `Request failed: ${res.status}`);
+  }
+  return data;
+}
+
+function appendChatLine(targetId, text, type = "system") {
+  const box = document.getElementById(targetId);
+  if (!box) return;
+  const line = document.createElement("div");
+  line.className = `log-line ${type}-line`;
+  line.innerText = text;
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+
+async function ensureChatConversation() {
+  if (rectorChatConversationId) return rectorChatConversationId;
+  const conversation = await chatApi("/chat/conversations", {
+    method: "POST",
+    body: JSON.stringify({ title: "Rector chat shell", workspaceId: "browser" }),
+  });
+  rectorChatConversationId = conversation.id;
+  const label = document.getElementById("rector-chat-conversation");
+  if (label) label.innerText = `CONVERSATION: ${conversation.id}`;
+  return rectorChatConversationId;
+}
+
+function bindChatShell() {
+  const form = document.getElementById("rector-chat-form");
+  const input = document.getElementById("rector-chat-input");
+  const status = document.getElementById("rector-chat-run-status");
+  const submit = document.getElementById("rector-chat-submit");
+
+  if (!form || !input) return;
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const content = input.value.trim();
+    if (!content) return;
+
+    if (submit) submit.disabled = true;
+    if (status) {
+      status.innerText = "SENDING";
+      status.className = "pill text-signal";
+    }
+    appendChatLine("rector-chat-messages", `[USER] ${content}`, "system");
+
+    try {
+      const conversationId = await ensureChatConversation();
+      const result = await chatApi(`/chat/conversations/${conversationId}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ content }),
+      });
+
+      input.value = "";
+      appendChatLine("rector-chat-messages", `[ASSISTANT] ${result.assistantMessage.content}`, "success");
+      if (status) {
+        status.innerText = `${result.run.status.toUpperCase()} · ${result.run.phase}`;
+        status.className = "pill text-signal";
+      }
+
+      const eventsBox = document.getElementById("rector-chat-events");
+      if (eventsBox) eventsBox.innerHTML = "";
+      result.events.forEach((event) => {
+        appendChatLine("rector-chat-events", `[${event.type}] ${event.phase} · ${event.runId}`, event.type === "RUN_COMPLETED" ? "success" : "system");
+      });
+    } catch (err) {
+      appendChatLine("rector-chat-messages", `[ERROR] ${err.message}`, "error");
+      if (status) {
+        status.innerText = "ERROR";
+        status.className = "pill";
+      }
+    } finally {
+      if (submit) submit.disabled = false;
+    }
+  });
+}
+
+// ============================================================
 // Interactive State Machine Simulator Engine
 // ============================================================
 
@@ -629,6 +721,7 @@ function init() {
   bindSetupModal();
   bindCalculatorEvents();
   bindTabs();
+  bindChatShell();
   bindSimulatorEvents();
   initScrollAnimations();
 }

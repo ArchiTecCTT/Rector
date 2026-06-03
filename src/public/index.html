@@ -39,6 +39,50 @@
 
       <hr class="l-rule" />
 
+      <!-- Section: Chat Shell -->
+      <section class="section" id="chat" data-chat-shell>
+        <div class="section__head">
+          <span class="eyebrow"><i data-lucide="message-square"></i> Chat API Shell</span>
+          <h2>Chat with Rector</h2>
+          <span class="eyebrow" style="justify-self: end;">LOCAL TRACE</span>
+        </div>
+
+        <div class="l-grid grid-console">
+          <div class="card card--paper scroll-animate">
+            <span class="card__eyebrow">Conversation</span>
+            <h3 class="t-headline-md font-narrow">Prompt-first control surface</h3>
+            <p class="t-body-sm stone-text">
+              Send a message to create a local conversation, hidden run, assistant placeholder, and run event trace. No provider calls are made in this shell.
+            </p>
+            <form id="rector-chat-form" class="l-stack" style="margin-top: 18px;">
+              <label class="field">
+                <span class="field__label">Message</span>
+                <textarea class="field__input" id="rector-chat-input" rows="4" placeholder="Ask Rector to inspect this vertical slice..." required></textarea>
+              </label>
+              <button class="btn btn--primary" id="rector-chat-submit" type="submit">
+                Send message
+                <i data-lucide="arrow-right" class="btn__arrow"></i>
+              </button>
+            </form>
+          </div>
+
+          <div class="card console-workspace scroll-animate">
+            <div class="console-workspace-header">
+              <span class="t-mono uppercase-label" id="rector-chat-conversation">CONVERSATION: idle</span>
+              <span class="pill" id="rector-chat-run-status">NO RUN</span>
+            </div>
+            <div class="terminal-logs" id="rector-chat-messages" aria-live="polite">
+              <div class="log-line system-line">[CHAT] Ready. Send a message to create a fake run trace.</div>
+            </div>
+            <div class="terminal-logs" id="rector-chat-events" aria-live="polite" style="margin-top: 12px; min-height: 120px;">
+              <div class="log-line system-line">[TRACE] Waiting for run events...</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <hr class="l-rule" />
+
       <!-- Section: Thesis -->
       <section class="section section--tight" id="thesis">
         <div class="section__head">
