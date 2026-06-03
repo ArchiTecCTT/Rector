@@ -9,6 +9,10 @@
     "./extensions": {
       "types": "./dist/extensions/index.d.ts",
       "import": "./dist/extensions/index.js"
+    },
+    "./sandbox": {
+      "types": "./dist/sandbox/index.d.ts",
+      "import": "./dist/sandbox/index.js"
     }
   },
   "scripts": {
