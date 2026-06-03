@@ -13,6 +13,14 @@
     "./sandbox": {
       "types": "./dist/sandbox/index.d.ts",
       "import": "./dist/sandbox/index.js"
+    },
+    "./workflows": {
+      "types": "./dist/workflows/index.d.ts",
+      "import": "./dist/workflows/index.js"
+    },
+    "./deployment": {
+      "types": "./dist/deployment/index.d.ts",
+      "import": "./dist/deployment/index.js"
     }
   },
   "scripts": {

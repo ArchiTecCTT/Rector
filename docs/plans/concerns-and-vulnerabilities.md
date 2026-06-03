@@ -179,6 +179,27 @@
 - **Status:** Open until real sandbox isolation and approval UX exist.
 - **Plan:** Current safe code execution adds typed sandbox contracts, a hardened local allowlist, patch artifacts, file-write approval metadata, and E2B/Depot no-network stubs. It intentionally does not run arbitrary shell, apply patches, isolate processes, enforce OS/container controls, or call cloud sandboxes. Production execution still needs real sandbox isolation, filesystem/network policy enforcement, durable audit logs, patch application/rollback, human approval UX, timeout/cancellation controls, and live E2B/Depot adapters behind explicit budget/env/user approval gates.
 
+### External workflow integrations are contract/stub-only and network-disabled
+
+- **Source:** Chunk 23 implementation.
+- **Severity:** Low for local alpha, Medium for production/operator workflows.
+- **Status:** Open until workflow approvals, durable audit logging, and live integration hardening exist.
+- **Plan:** Current Linear and Make integrations provide typed payload schemas, config validation, request builders, and default network-disabled invocation gates. Requestly and BrowserStack are docs-only plan stubs with zero network calls. Note that Linear's integration maps escalation `labels` directly to `labelIds`, which are provider-specific UUIDs rather than human-readable text display labels; string display label resolution is deferred to a future iteration. Production use still needs explicit user/operator approval UX, authentication/RBAC for workflow actions, durable audit logs, webhook signature verification, retry/backoff/idempotency, provider error normalization, rate limiting, secret management, and live-provider CI isolated from local contributor tests.
+
+### Deployment prototype is config/docs only and not production hosting
+
+- **Source:** Chunk 24 implementation.
+- **Severity:** Low for local alpha, High if treated as production deployment readiness.
+- **Status:** Open until hosted alpha hardening exists.
+- **Plan:** Current deployment support validates/redacts env config, documents Heroku/Cloudflare shapes, and installs graceful HTTP shutdown. It does not provision infrastructure, connect MongoDB/Redis/Chroma, configure real Sentry/PostHog SDKs, define release pipelines, add auth/RBAC, run migrations, enforce TLS/origin policy, or provide production health checks/rollback. Before any hosted/shared deployment, add secret management, durable adapters, CI/CD, infrastructure-as-code, migration/backup policy, runtime health checks, telemetry SDK wiring, and security review.
+
+### Contributor issue drafts can drift from the roadmap
+
+- **Source:** Chunk 25 implementation.
+- **Severity:** Low for local alpha, Medium for contributor coordination if stale.
+- **Status:** Open until issue catalog generation is integrated into release/CI workflow.
+- **Plan:** The issue catalog and generated Markdown drafts are deterministic and checked by `node scripts/generate-roadmap-issues.js --check`, but they are not automatically derived from the roadmap text and do not sync to GitHub or Linear. When roadmap chunks change, maintainers must update `docs/issues/roadmap-issues.json`, regenerate docs, and run the check command. A future release workflow can add CI enforcement or a one-way issue creation tool behind explicit maintainer approval.
+
 ## Closed / Mitigated
 
 ### Fake orchestrator returned placeholder assistant text

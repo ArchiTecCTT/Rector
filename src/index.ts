@@ -1,9 +1,11 @@
 import { createApp } from "./api/server";
 import { TaskManager } from "./thalamus/router";
 import { LocalTelemetry } from "./adapters/providers";
+import { createGracefulShutdownHandler, parseDeploymentEnvironment } from "./deployment";
 import http from "node:http";
 
-const PORT = Number(process.env.PORT ?? 3000);
+const deploymentConfig = parseDeploymentEnvironment();
+const PORT = deploymentConfig.port;
 
 const telemetry = new LocalTelemetry();
 const manager = new TaskManager({
@@ -19,4 +21,7 @@ server.listen({ port: PORT }, () => {
   console.log(`Rector MVP running on http://localhost:${PORT}`);
 });
 
-export { app, manager, telemetry };
+const gracefulShutdown = createGracefulShutdownHandler({ server });
+gracefulShutdown.install();
+
+export { app, deploymentConfig, gracefulShutdown, manager, telemetry };
