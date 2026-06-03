@@ -98,6 +98,8 @@ Output / Human Handoff
 | **Observability** | Middleware.io, DataDog, Sentry, PostHog |
 | **Frontend** | Bubble.io |
 
+*Note: The listed providers above represent the target production integration and adapter landscape. For local development and testing, Rector runs entirely using built-in, in-memory fake adapters, requiring no external provider API keys or active accounts.*
+
 ---
 
 ## Quick Start
@@ -121,6 +123,8 @@ open http://localhost:3000
 ```
 
 Local mode runs with in-memory adapters. Set real provider credentials in `.env` to activate live integrations.
+
+For a provider-free setup path, see [`docs/getting-started/provider-free-quickstart.md`](docs/getting-started/provider-free-quickstart.md).
 
 ---
 
@@ -154,6 +158,15 @@ npm test
 ```
 
 Tests cover: state transitions, schemas, event bus, repository immutability, happy path, healing loop, abort path, and API controls.
+
+---
+
+## Contributing and Security
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — local setup, chunk workflow, adapter notes, and DCO sign-off.
+- [`SECURITY.md`](SECURITY.md) — responsible disclosure and agentic/sandbox safety examples.
+- [`TRADEMARKS.md`](TRADEMARKS.md) — Rector name/logo usage policy.
+- [`docs/contributing/adapters.md`](docs/contributing/adapters.md) — adapter contribution guide skeleton.
 
 ---
 

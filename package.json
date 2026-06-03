@@ -1,7 +1,9 @@
 {
-  "name": "rector-local-mvp",
+  "name": "rector",
   "version": "0.1.0",
-  "private": true,
+  "description": "Chat-first AI engineering orchestration.",
+  "private": false,
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
