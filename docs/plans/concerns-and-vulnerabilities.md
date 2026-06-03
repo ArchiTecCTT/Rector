@@ -130,6 +130,20 @@
 - **Status:** Open until durable telemetry/provider integrations.
 - **Plan:** Current traces, spans, latency, and cost/model-call counters are process-local and reset on restart. Sentry/PostHog/OpenTelemetry adapters are explicit no-ops with no network calls. Production/provider chunks must add durable/exportable traces, bounded retention, redaction review for telemetry payloads, real token/model/cost metering at provider call boundaries, sampling, and SDK-backed adapters.
 
+### Provider adapter layer Phase 1 is not live-provider production ready
+
+- **Source:** Chunk 17 implementation.
+- **Severity:** Medium product/prod limitation.
+- **Status:** Open until later provider/runtime hardening chunks.
+- **Plan:** Phase 1 defines LLM contracts, deterministic fake local provider, router, budget gate, and a Together AI request/config adapter with network calls disabled by default. Token/cost estimates are approximate, Together live calls require explicit opt-in and mocked tests, provider selection is heuristic, and chat brainstem wiring still defaults to fake/local. Before production/provider-backed flows, add exact provider pricing metadata, robust response/error taxonomy, retry/backoff policy, redaction at provider payload boundaries, streaming/tool-call handling, durable usage accounting, and broader adapter contract tests.
+
+### Budget approval is hard-blocked until approval UX exists (NEEDS_DECISION)
+
+- **Source:** Chunk 17 polish review.
+- **Severity:** Medium product limitation.
+- **Status:** Open / NEEDS_DECISION.
+- **Plan:** While budget limits are correctly evaluated at the provider call boundary, any request exceeding budget or requiring manual human approval is hard-blocked because the corresponding approval interactive UX (user-in-the-loop permissioning) does not yet exist. This needs a product/architecture decision on how human approval responses are solicited, formatted, and injected back into the execution flow.
+
 ## Closed / Mitigated
 
 ### Fake orchestrator returned placeholder assistant text
