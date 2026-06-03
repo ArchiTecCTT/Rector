@@ -165,6 +165,20 @@
 - **Status:** Open until extension runtime/security hardening.
 - **Plan:** Current public extension contracts define typed schemas, manifests, API version compatibility, and no-network sample interfaces only. Rector does not yet load third-party packages, verify signatures, isolate extension code, enforce runtime permissions beyond schema-level `networkAccess: false`/`networkCalls: 0`, or provide a durable extension registry. Production extension support must add explicit permission grants, sandboxing/isolation, provenance/signing, version negotiation, revocation, audit logging, and network/file-system policy enforcement before accepting untrusted extensions.
 
+### Operator console API is local-only and unauthenticated
+
+- **Source:** Chunk 21 implementation.
+- **Severity:** Low for local alpha, High if exposed beyond localhost/trusted dev networks.
+- **Status:** Open until production operator access controls and real control-plane semantics exist.
+- **Plan:** Current `/api/operator/*` endpoints are explicitly marked `localOnly: true` / `auth: local-only-no-auth`, use the in-memory store, expose run/event/cost/artifact metadata for optional Retool consumption, keep retry/abort/approval decisions as non-mutating placeholders, and stub Linear issue creation with zero network calls. Before any hosted or shared deployment, add authentication, authorization/RBAC, CSRF/origin hardening, audit logs, durable persistence, real approval/retry/abort semantics, artifact access controls, and a real Linear adapter behind explicit env/budget gates.
+
+### Safe code execution is contract-only and not an isolation boundary
+
+- **Source:** Chunk 22 implementation.
+- **Severity:** Low for local deterministic alpha, High if mistaken for production sandboxing.
+- **Status:** Open until real sandbox isolation and approval UX exist.
+- **Plan:** Current safe code execution adds typed sandbox contracts, a hardened local allowlist, patch artifacts, file-write approval metadata, and E2B/Depot no-network stubs. It intentionally does not run arbitrary shell, apply patches, isolate processes, enforce OS/container controls, or call cloud sandboxes. Production execution still needs real sandbox isolation, filesystem/network policy enforcement, durable audit logs, patch application/rollback, human approval UX, timeout/cancellation controls, and live E2B/Depot adapters behind explicit budget/env/user approval gates.
+
 ## Closed / Mitigated
 
 ### Fake orchestrator returned placeholder assistant text
