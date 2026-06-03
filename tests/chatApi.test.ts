@@ -95,6 +95,32 @@ describe("chat API vertical shell", () => {
     expect((fetched.data as any).messages.map((m: any) => m.role)).toEqual(["user", "assistant"]);
   });
 
+  it("sets chat run route and context events from triage", async () => {
+    const created = await api("/api/chat/conversations", {
+      method: "POST",
+      body: JSON.stringify({ title: "Triage route" }),
+    });
+    const conversationId = (created.data as any).id;
+
+    const sent = await api(`/api/chat/conversations/${conversationId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ content: "Fix the TypeScript bug in src/api/server.ts and update tests." }),
+    });
+
+    expect(sent.status).toBe(201);
+    expect((sent.data as any).run.route).toBe("CODE_EDIT");
+    expect((sent.data as any).run.complexity).toBe("medium");
+
+    const triageEvent = (sent.data as any).events.find(
+      (event: any) => event.phase === "TRIAGE" && event.payload?.triage?.route === "CODE_EDIT"
+    );
+    expect(triageEvent).toBeDefined();
+
+    const contextEvent = (sent.data as any).events.find((event: any) => event.phase === "CONTEXT_BUILDING");
+    expect(contextEvent?.payload?.contextPack?.conversationRef?.id).toBe(conversationId);
+    expect(contextEvent?.payload?.contextPack?.messageRefs?.length).toBeGreaterThanOrEqual(1);
+  });
+
   it("returns run events", async () => {
     const created = await api("/api/chat/conversations", {
       method: "POST",

@@ -67,6 +67,20 @@
 - **Status:** Mitigated locally via opportunistic expiry cleanup in middleware.
 - **Plan:** The current rate limiter uses an in-memory `Map` with opportunistic cleaning of expired buckets on each request. While this prevents unbounded memory growth locally, a production-grade deployment with multiple API instances requires a distributed rate limiter (e.g. Redis, Memcached, or Cloudflare KV/Durable Objects) to enforce rate limits consistently across instances and prevent local `Map` memory overhead under high concurrency.
 
+### Triage and context builder are deterministic placeholders
+
+- **Source:** Chunk 8 implementation.
+- **Severity:** Medium product limitation.
+- **Status:** Open until planner/provider orchestration chunks replace or augment the baseline.
+- **Plan:** Current routing uses local keyword heuristics and placeholder provider/tool/doc/memory inventories. It is safe for the no-provider chat shell, but production routing should add learned/LLM-assisted classification, confidence calibration, workspace-aware tool/provider inventory, and retrieval-backed docs/memory selection.
+
+### Oversized context artifacts are in-memory only
+
+- **Source:** Chunk 8 implementation.
+- **Severity:** Low for local-MVP, Medium for longer sessions or restart durability.
+- **Status:** Open until durable artifact storage chunk.
+- **Plan:** Context packs omit raw oversized content and reference artifact handles, but artifact records are still stored only in `InMemoryRectorStore` metadata and reset on restart. Current in-memory artifacts keep raw oversized content in `artifact.metadata.content`; durable stores must separate blob content from metadata and define retention, access controls, redaction, and encryption before production use.
+
 ## Closed / Mitigated
 
 ### Non-atomic run update then event append

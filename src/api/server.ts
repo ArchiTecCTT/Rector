@@ -4,7 +4,9 @@ import path from "node:path";
 import { TaskManager } from "../thalamus/router";
 import { getSetupChecklist } from "../setupChecklist";
 import { STATES } from "../domain/states";
+import { buildContextPack, createContextMaterial, type ContextPack } from "../orchestration/contextBuilder";
 import { transitionRun } from "../orchestration/runStateMachine";
+import { triageUserMessage, type TriageResult } from "../orchestration/triage";
 import { redactSecrets, redactString } from "../security/redaction";
 import { InMemoryRectorStore } from "../store/inMemoryRectorStore";
 import type { Run, RunEvent } from "../store/schemas";
@@ -93,7 +95,22 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         status: "created",
         redactionState,
       });
-      const run = await createFakeChatRun(rectorStore, conversation.id, userMessage.id, redactedContent);
+      const triage = triageUserMessage(redactedContent);
+      const contextMaterial = await createContextMaterial(rectorStore, {
+        kind: "chat-user-message",
+        content: redactedContent,
+        summary: "Latest user message content",
+        retentionPolicy: conversation.retentionPolicy,
+        piiState: redactionState,
+      });
+      const contextPack = await buildContextPack(rectorStore, {
+        conversation,
+        messages: await rectorStore.listMessages(conversation.id),
+        userMessage,
+        triage,
+        materials: [contextMaterial],
+      });
+      const run = await createFakeChatRun(rectorStore, conversation.id, userMessage.id, redactedContent, triage, contextPack);
       const assistantMessage = await rectorStore.createMessage({
         conversationId: conversation.id,
         role: "assistant",
@@ -375,7 +392,9 @@ async function createFakeChatRun(
   store: InMemoryRectorStore,
   conversationId: string,
   userMessageId: string,
-  prompt: string
+  prompt: string,
+  triage: TriageResult,
+  contextPack: ContextPack
 ): Promise<Run> {
   const traceId = `trace-${crypto.randomUUID()}`;
   const run = await store.createRun({
@@ -383,8 +402,8 @@ async function createFakeChatRun(
     userMessageId,
     status: "running",
     phase: "CHAT_RECEIVED",
-    route: "fake-orchestrator",
-    complexity: "shell",
+    route: triage.route,
+    complexity: triage.complexity,
     budget: {
       maxUsd: 0,
       maxInputTokens: 0,
@@ -408,6 +427,12 @@ async function createFakeChatRun(
   await store.appendEvent(runEvent(run, "RUN_CREATED", "CHAT_RECEIVED", {
     source: "chat-api",
     promptPreview: prompt.slice(0, 120),
+    triage: {
+      route: triage.route,
+      confidence: triage.confidence,
+      complexity: triage.complexity,
+      riskFlags: triage.riskFlags,
+    },
   }));
 
   const phases = [
@@ -430,6 +455,8 @@ async function createFakeChatRun(
       payload: {
         source: "fake-orchestrator",
         note: phase === "DONE" ? "Shell run completed" : "Shell run advanced",
+        ...(phase === "TRIAGE" ? { triage } : {}),
+        ...(phase === "CONTEXT_BUILDING" ? { contextPack } : {}),
       },
     });
     current = result.run;
