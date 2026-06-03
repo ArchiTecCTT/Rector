@@ -25,12 +25,12 @@
 - **Status:** Open.
 - **Plan:** Add streaming/SSE in a future chat UX chunk after state/events stabilize.
 
-### Fake orchestrator returns placeholder assistant text
+### Chat synthesis is deterministic trace summary, not semantic answer generation
 
-- **Source:** Chunk 6 worker.
-- **Severity:** Expected until cognitive modules/provider chunks.
-- **Status:** Open.
-- **Plan:** Replace with triage/context/planner/DAG/healing flow in chunks 8-15.
+- **Source:** Chunk 15 implementation.
+- **Severity:** Medium product limitation.
+- **Status:** Open until provider-backed/local-model synthesis chunks.
+- **Plan:** Current final assistant response summarizes local trace evidence from triage/context/planning/review/arbitration/DAG/execution/validation/healing without provider calls. It is safe and testable for alpha brainstem proof, but it does not yet generate rich task-specific prose, cite real external sources, or explain code changes from actual filesystem execution.
 
 ### Store list ordering relies on insertion order
 
@@ -124,6 +124,13 @@
 - **Plan:** The alpha healing loop is deterministic, bounded, provider-free, shell-free, and safe for local simulation. It heals only transient/timeout simulator failures by re-running the DAG with adjusted simulator options. Real execution needs node-level replay, artifact isolation/rollback, durable attempt records, richer failure taxonomy, human decision UX for permission/destructive actions, and real timeout/root-cause diagnostics.
 
 ## Closed / Mitigated
+
+### Fake orchestrator returned placeholder assistant text
+
+- **Source:** Chunk 6 worker; replaced during Chunk 15.
+- **Severity:** Expected until brainstem integration.
+- **Fix:** Added deterministic synthesis from trace outcomes and wired chat responses to status/route/trace evidence instead of receipt-only placeholder text.
+- **Status:** Closed for local alpha brainstem; richer semantic synthesis remains tracked as an open product limitation.
 
 ### Non-atomic run update then event append
 

@@ -7,12 +7,13 @@ import { STATES } from "../domain/states";
 import { buildContextPack, createContextMaterial, type ContextPack } from "../orchestration/contextBuilder";
 import { arbitratePlanWithCrucible } from "../orchestration/crucible";
 import { compileAcceptedPlanToDag, type CompiledDag } from "../orchestration/dagCompiler";
-import { executeCompiledDag } from "../orchestration/executorSimulator";
+import { executeCompiledDag, type ExecutorSimulatorOptions } from "../orchestration/executorSimulator";
 import { createFakePlan } from "../orchestration/planner";
 import { transitionRun } from "../orchestration/runStateMachine";
 import { reviewPlanWithSkeptic } from "../orchestration/skeptic";
+import { synthesizeChatBrainstemResponse, type BrainstemSynthesis } from "../orchestration/synthesizer";
 import { triageUserMessage, type TriageResult } from "../orchestration/triage";
-import { validateAndHealExecution } from "../orchestration/validationHealing";
+import { validateAndHealExecution, type HealingLoopResult } from "../orchestration/validationHealing";
 import { redactSecrets, redactString } from "../security/redaction";
 import { InMemoryRectorStore } from "../store/inMemoryRectorStore";
 import type { Run, RunEvent } from "../store/schemas";
@@ -22,6 +23,10 @@ export interface ApiSecurityOptions {
   rateLimit?: {
     windowMs?: number;
     maxRequests?: number;
+  };
+  orchestration?: {
+    executorOptions?: ExecutorSimulatorOptions;
+    maxHealingAttempts?: number;
   };
 }
 
@@ -116,11 +121,19 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         triage,
         materials: [contextMaterial],
       });
-      const run = await createFakeChatRun(rectorStore, conversation.id, userMessage.id, redactedContent, triage, contextPack);
+      const { run, synthesis } = await createFakeChatRun(
+        rectorStore,
+        conversation.id,
+        userMessage.id,
+        redactedContent,
+        triage,
+        contextPack,
+        securityOptions.orchestration
+      );
       const assistantMessage = await rectorStore.createMessage({
         conversationId: conversation.id,
         role: "assistant",
-        content: `Rector received: ${redactedContent}. This shell created a local run trace without provider calls.`,
+        content: synthesis.response,
         status: "completed",
         runId: run.id,
         redactionState,
@@ -400,8 +413,9 @@ async function createFakeChatRun(
   userMessageId: string,
   prompt: string,
   triage: TriageResult,
-  contextPack: ContextPack
-): Promise<Run> {
+  contextPack: ContextPack,
+  options: { executorOptions?: ExecutorSimulatorOptions; maxHealingAttempts?: number } = {}
+): Promise<{ run: Run; synthesis: BrainstemSynthesis }> {
   const traceId = `trace-${crypto.randomUUID()}`;
   const plannerOutput = createFakePlan({ triage, contextPack, messageContent: prompt });
   const skepticReview = reviewPlanWithSkeptic(plannerOutput, contextPack);
@@ -420,7 +434,7 @@ async function createFakeChatRun(
       maxOutputTokens: 0,
       maxModelCalls: 0,
       maxRuntimeMs: 1000,
-      maxHealingAttempts: 0,
+      maxHealingAttempts: options.maxHealingAttempts ?? 2,
       allowedProviders: [],
       approvalRequiredAboveUsd: 0,
     },
@@ -457,13 +471,33 @@ async function createFakeChatRun(
   const dagCompilationPayload = compiledDag
     ? { compiledDag }
     : { skippedReason: `Crucible verdict ${crucibleDecision.verdict} is not ACCEPTED` };
-  const executionResult = compiledDag ? await executeCompiledDag(compiledDag) : undefined;
+  const executionResult = compiledDag ? await executeCompiledDag(compiledDag, options.executorOptions) : undefined;
   const executionPayload = executionResult
     ? { executionResult }
     : { skippedReason: "Execution skipped because no compiled DAG exists" };
-  const validationPayload = compiledDag && executionResult
-    ? { validationHealingResult: await validateAndHealExecution({ compiledDag, executionResult }) }
+  const validationHealingResult: HealingLoopResult | undefined =
+    compiledDag && executionResult
+      ? await validateAndHealExecution({
+          compiledDag,
+          executionResult,
+          executorOptions: options.executorOptions,
+          maxHealingAttempts: options.maxHealingAttempts,
+        })
+      : undefined;
+  const validationPayload = validationHealingResult
+    ? { validationHealingResult }
     : { skippedReason: "Execution skipped or missing; validation and healing skipped" };
+  const synthesis = synthesizeChatBrainstemResponse({
+    traceId,
+    triage,
+    contextPack,
+    plannerOutput,
+    skepticReview,
+    crucibleDecision,
+    compiledDag,
+    executionResult,
+    validationHealingResult,
+  });
 
   const phases = [
     "TRIAGE",
@@ -484,7 +518,7 @@ async function createFakeChatRun(
       traceId,
       payload: {
         source: "fake-orchestrator",
-        note: phase === "DONE" ? "Shell run completed" : "Shell run advanced",
+        note: phase === "DONE" ? "Local brainstem run completed" : "Local brainstem run advanced",
         ...(phase === "TRIAGE" ? { triage } : {}),
         ...(phase === "CONTEXT_BUILDING" ? { contextPack } : {}),
         ...(phase === "PLANNING" ? { plannerOutput } : {}),
@@ -493,12 +527,19 @@ async function createFakeChatRun(
         ...(phase === "DAG_COMPILATION" ? dagCompilationPayload : {}),
         ...(phase === "EXECUTING" ? executionPayload : {}),
         ...(phase === "VALIDATING" ? validationPayload : {}),
+        ...(phase === "SYNTHESIZING" ? { synthesis } : {}),
       },
+      ...(phase === "VALIDATING" && validationHealingResult
+        ? {
+            validationAttempts: validationHealingResult.attempts + 1,
+            healingAttempts: validationHealingResult.attempts,
+          }
+        : {}),
     });
     current = result.run;
   }
 
-  return current;
+  return { run: current, synthesis };
 }
 
 function runEvent(

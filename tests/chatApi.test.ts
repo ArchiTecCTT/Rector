@@ -83,7 +83,9 @@ describe("chat API vertical shell", () => {
     expect(sent.status).toBe(201);
     expect((sent.data as any).userMessage.role).toBe("user");
     expect((sent.data as any).assistantMessage.role).toBe("assistant");
-    expect((sent.data as any).assistantMessage.content).toContain("Rector received");
+    expect((sent.data as any).assistantMessage.content).toContain("Status:");
+    expect((sent.data as any).assistantMessage.content).toContain("Trace:");
+    expect((sent.data as any).assistantMessage.content).toContain("provider calls: 0");
     expect((sent.data as any).run.id).toMatch(/^run-/);
     expect((sent.data as any).run.status).toBe("completed");
     const eventTypes = (sent.data as any).events.map((e: any) => e.type);
