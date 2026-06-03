@@ -1,3 +1,8 @@
+> [!WARNING]
+> STALE / QUARANTINED DOC: This cloud-heavy implementation-plan document is preserved for historical research only.
+> Do not use it as the active implementation plan for Rector 0.1.0.
+> Current source of truth: `docs/architecture/rector-0.1.0-architecture.md` and `docs/plans/rector-master-roadmap.md`.
+
 # Phase 1: Backend Orchestration & The Nervous System
 
 This phase establishes the foundational deterministic backend. We must build the Thalamus Router, event bus, and state machine before any AI is connected.

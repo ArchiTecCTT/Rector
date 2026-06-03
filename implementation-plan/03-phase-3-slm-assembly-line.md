@@ -1,3 +1,8 @@
+> [!WARNING]
+> STALE / QUARANTINED DOC: This cloud-heavy implementation-plan document is preserved for historical research only.
+> Do not use it as the active implementation plan for Rector 0.1.0.
+> Current source of truth: `docs/architecture/rector-0.1.0-architecture.md` and `docs/plans/rector-master-roadmap.md`.
+
 # Phase 3: The SLM Assembly Line
 
 This is the high-volume, low-cost execution layer. We rely on Automatic Prefix Caching (APC) and highly specialized small models to do the heavy lifting of triage, coding, and formatting.

@@ -1,3 +1,8 @@
+> [!WARNING]
+> STALE / QUARANTINED DOC: This local-first MVP, specification, and diagrams document is preserved for historical/reference context only.
+> Do not use it as the active implementation plan for Rector 0.1.0.
+> Current source of truth: `docs/architecture/rector-0.1.0-architecture.md` and `docs/plans/rector-master-roadmap.md`.
+
 # Rector System Specification & Architectural Diagrams (Rector-Specs-1)
 
 This document contains high-fidelity visual and technical specifications for the local-first **Rector** MVP. It outlines the overall system architecture, state transition lifecycle, operational event flows, data models, and the internal mechanics of the validation and self-healing subsystem.

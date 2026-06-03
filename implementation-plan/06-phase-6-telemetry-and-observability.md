@@ -1,3 +1,8 @@
+> [!WARNING]
+> STALE / QUARANTINED DOC: This cloud-heavy implementation-plan document is preserved for historical research only.
+> Do not use it as the active implementation plan for Rector 0.1.0.
+> Current source of truth: `docs/architecture/rector-0.1.0-architecture.md` and `docs/plans/rector-master-roadmap.md`.
+
 # Phase 6: Telemetry, Observability & APM
 
 To prove the economic asymmetry of Rector, we must rigorously track every token spent and monitor the performance of the distributed agents.

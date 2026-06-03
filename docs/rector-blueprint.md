@@ -1,3 +1,8 @@
+> [!WARNING]
+> STALE / QUARANTINED DOC: This document is preserved for historical research only.
+> Do not use it as the active implementation plan for Rector 0.1.0.
+> Current source of truth: `docs/architecture/rector-0.1.0-architecture.md` and `docs/plans/rector-master-roadmap.md`.
+
 # Rector: Step-by-Step Implementation Blueprint
 
 This document outlines the exact sequence of implementation chunks to build Rector, a neuro-symbolic multi-agent orchestration framework.

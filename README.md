@@ -1,19 +1,21 @@
-# Rector — Autonomous AI for Software Engineering
+# Rector — Chat-First Self-Healing AI for Software Engineering
 
-> A neuro-symbolic multi-agent orchestration framework that routes AI tasks through a deterministic assembly line — slashing LLM costs by 90% while eliminating hallucinations and infinite loops.
+> Open-source Apache-2.0 software that gives users a normal chat experience while hidden deterministic orchestration, validation, and self-healing loops handle the engineering work underneath.
 
-[![Status](https://img.shields.io/badge/status-stealth-blue?style=flat-square)](#)
-[![License](https://img.shields.io/badge/license-Proprietary-red?style=flat-square)](#)
+[![Status](https://img.shields.io/badge/status-0.1.0%20planning-blue?style=flat-square)](#)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square)](#)
 
 ---
 
 ## What Is Rector?
 
+Rector is a chat-first AI engineering system. Users should interact with it like Claude or ChatGPT: open chat, describe the work, watch concise progress, and receive useful output. They should not need to operate model routing, subagents, retries, validation, or repair loops manually.
+
 Most AI coding agents are brilliant but unreliable. They hallucinate APIs, get stuck in infinite loops, and cost a fortune because they use a frontier model for every single step.
 
 Rector solves this by applying a fundamental principle from manufacturing: **separate planning from execution**.
 
-Instead of letting a massive LLM steer the entire process, Rector uses:
+Behind the chat interface, Rector uses:
 
 1. **A deterministic state machine** — the Thalamus Router — that programmatically controls every routing decision
 2. **A tiered intelligence pipeline** — cheap SLMs handle the mechanical work; expensive flagship models are reserved strictly for deep reasoning and final synthesis
@@ -170,10 +172,16 @@ src/
 
 ---
 
-## Status
+## Status and Current Plan
 
-Rector is actively under development. The cognitive architecture, protocol design, and infrastructure plan are in place. Implementation of the cognitive pipeline is underway.
+Rector 0.1.0 is actively migrating from the old local task-MVP toward the current product direction: an Apache-2.0 open-source, chat-first engineering assistant with hidden deterministic orchestration, validation, and self-healing underneath.
 
-See [`docs/`](docs/) for full architectural documentation, implementation plans, and research artifacts.
+Current source-of-truth docs:
+
+- [`docs/architecture/rector-0.1.0-architecture.md`](docs/architecture/rector-0.1.0-architecture.md) — authoritative architecture and product direction.
+- [`docs/plans/rector-master-roadmap.md`](docs/plans/rector-master-roadmap.md) — authoritative roadmap and chunk order.
+- [`docs/README.md`](docs/README.md) — docs index explaining current vs. stale documents.
+
+Older local-MVP and cloud-heavy planning docs are preserved for research only and are marked stale/quarantined. If they conflict with the source-of-truth docs above, the source-of-truth docs win.
 
 ---
