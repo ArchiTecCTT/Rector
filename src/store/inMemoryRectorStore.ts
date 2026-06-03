@@ -189,6 +189,42 @@ export class InMemoryRectorStore {
   }
 
   /**
+   * Atomically commits a run update and appends a run transition event.
+   * Ensures that if the event append fails (e.g. duplicate event ID), the run remains unchanged.
+   */
+  async commitRunTransition(
+    runId: string,
+    patch: UpdateRunInput,
+    event: RunEvent
+  ): Promise<{ run: Run; event: RunEvent }> {
+    const current = this.runs.get(runId);
+    if (!current) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+
+    const updated = RunSchema.parse({
+      ...clone(current),
+      ...clone(patch),
+      id: current.id,
+      createdAt: current.createdAt,
+      updatedAt: this.now(),
+    });
+
+    const parsedEvent = RunEventSchema.parse(clone(event));
+    if (this.events.has(parsedEvent.id)) {
+      throw new Error(`Duplicate event ID: ${parsedEvent.id}`);
+    }
+
+    this.runs.set(runId, clone(updated));
+    this.events.set(parsedEvent.id, clone(parsedEvent));
+
+    return {
+      run: clone(updated),
+      event: clone(parsedEvent),
+    };
+  }
+
+  /**
    * Appends an event to the run's event log.
    * Rejects events with duplicate IDs to preserve event log integrity.
    */

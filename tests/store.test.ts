@@ -211,4 +211,61 @@ describe("InMemoryRectorStore", () => {
     expect(await store.updateArtifact("non-existent", { summary: "New" })).toBeUndefined();
     expect(await store.deleteArtifact("non-existent")).toBe(false);
   });
+
+  it("atomically commits run transitions using commitRunTransition", async () => {
+    const store = new InMemoryRectorStore({ now: () => "2026-06-03T00:00:00.000Z" });
+    const run = await store.createRun({
+      conversationId: "conv-1",
+      userMessageId: "msg-1",
+      status: "running",
+      phase: "TRIAGE",
+      route: "local",
+      complexity: "simple",
+      budget,
+      costEstimate: { usd: 0.5 },
+      tokenEstimate: { input: 100, output: 200 },
+      traceId: "trace-1",
+      attempts: 0,
+      healingAttempts: 0,
+      validationAttempts: 0,
+    });
+
+    const event = {
+      id: "evt-trans-test",
+      runId: run.id,
+      type: "PHASE_CHANGED" as const,
+      phase: "PLANNING" as const,
+      payload: { reason: "test" },
+      traceId: "trace-1",
+      createdAt: "2026-06-03T00:00:01.000Z",
+    };
+
+    // 1. Successful atomic commit
+    const result = await store.commitRunTransition(run.id, { phase: "PLANNING" }, event);
+    expect(result.run.phase).toBe("PLANNING");
+    expect(result.event.id).toBe("evt-trans-test");
+
+    const fetchedRun = await store.getRun(run.id);
+    expect(fetchedRun?.phase).toBe("PLANNING");
+    expect(await store.listEvents(run.id)).toEqual([result.event]);
+
+    // 2. Failure: non-existent run ID
+    await expect(
+      store.commitRunTransition("non-existent-run", { phase: "TRIAGE" }, { ...event, id: "evt-different" })
+    ).rejects.toThrow("Run not found: non-existent-run");
+
+    // 3. Failure: validation error on run patch
+    await expect(
+      store.commitRunTransition(run.id, { phase: "INVALID_PHASE" as any }, { ...event, id: "evt-different" })
+    ).rejects.toThrow();
+
+    // 4. Failure: duplicate event ID
+    await expect(
+      store.commitRunTransition(run.id, { phase: "CONTEXT_BUILDING" }, event)
+    ).rejects.toThrow("Duplicate event ID: evt-trans-test");
+
+    // Ensure the run phase did not change after failed transition attempts
+    const runAfterFails = await store.getRun(run.id);
+    expect(runAfterFails?.phase).toBe("PLANNING");
+  });
 });
