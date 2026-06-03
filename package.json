@@ -5,6 +5,12 @@
   "private": false,
   "license": "Apache-2.0",
   "type": "module",
+  "exports": {
+    "./extensions": {
+      "types": "./dist/extensions/index.d.ts",
+      "import": "./dist/extensions/index.js"
+    }
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",

@@ -158,6 +158,13 @@
 - **Status:** Open until durable memory/search/provider integrations.
 - **Plan:** Current truth library is provider-free and process-local. It validates TRUSTED/UNVERIFIED/REJECTED status, provenance, and citations; excludes rejected items by default; and uses deterministic keyword scoring. It does not provide durable persistence, embeddings, semantic ranking, access controls beyond in-process callers, citation freshness checks, or Chroma/Algolia network integrations. Production memory/search must add durable storage, retention/deletion policy, permission filtering, redaction review for stored content, semantic retrieval, and explicit trust-review workflows before enabling shared or hosted use.
 
+### Public extension contracts have no loader or isolation
+
+- **Source:** Chunk 20 implementation.
+- **Severity:** Low for local alpha, Medium for production extension ecosystems.
+- **Status:** Open until extension runtime/security hardening.
+- **Plan:** Current public extension contracts define typed schemas, manifests, API version compatibility, and no-network sample interfaces only. Rector does not yet load third-party packages, verify signatures, isolate extension code, enforce runtime permissions beyond schema-level `networkAccess: false`/`networkCalls: 0`, or provide a durable extension registry. Production extension support must add explicit permission grants, sandboxing/isolation, provenance/signing, version negotiation, revocation, audit logging, and network/file-system policy enforcement before accepting untrusted extensions.
+
 ## Closed / Mitigated
 
 ### Fake orchestrator returned placeholder assistant text

@@ -167,6 +167,7 @@ Tests cover: state transitions, schemas, event bus, repository immutability, hap
 - [`SECURITY.md`](SECURITY.md) — responsible disclosure and agentic/sandbox safety examples.
 - [`TRADEMARKS.md`](TRADEMARKS.md) — Rector name/logo usage policy.
 - [`docs/contributing/adapters.md`](docs/contributing/adapters.md) — adapter contribution guide skeleton.
+- [`docs/extensions/public-contracts.md`](docs/extensions/public-contracts.md) — alpha extension manifest, compatibility, and typed contracts.
 
 ---
 

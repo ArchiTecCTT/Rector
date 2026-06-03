@@ -11,8 +11,9 @@ Read these first for Rector 0.1.0 work:
 3. [`plans/chunks/002-migration-map.md`](plans/chunks/002-migration-map.md) — current old-task-MVP to chat/run migration map and compatibility strategy.
 4. `plans/chunks/*.md` — per-chunk implementation plans when present.
 5. [`getting-started/provider-free-quickstart.md`](getting-started/provider-free-quickstart.md) — local setup without paid provider credentials.
-6. [`contributing/adapters.md`](contributing/adapters.md) — adapter contribution guide skeleton.
-7. [`../reviews/`](../reviews/) — review inputs that informed the current architecture and roadmap.
+6. [`extensions/public-contracts.md`](extensions/public-contracts.md) — public alpha extension manifest, compatibility, and typed contract surface.
+7. [`contributing/adapters.md`](contributing/adapters.md) — adapter contribution guide skeleton.
+8. [`../reviews/`](../reviews/) — review inputs that informed the current architecture and roadmap.
 
 Current direction: Rector is Apache-2.0 open-source software with a normal chat-first user experience. Deterministic orchestration, model routing, validation, sandboxing, and self-healing run underneath the chat interface and should not be exposed as the primary UX.
 
