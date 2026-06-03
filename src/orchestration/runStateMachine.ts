@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { RunEvent, RunEventType } from "../protocol/events";
 import type { RunPhase } from "../protocol/phases";
+import { redactSecrets } from "../security/redaction";
 import type { Run, UpdateRunInput } from "../store/schemas";
 
 export type RunStateMachineStore = {
@@ -152,7 +153,7 @@ function buildRunPatch(targetPhase: RunPhase, options: RunTransitionOptions): Up
   if (options.lastError !== undefined) patch.lastError = options.lastError;
 
   if (targetPhase === "NEEDS_DECISION") {
-    patch.decisionRequest = options.decisionRequest ?? {};
+    patch.decisionRequest = redactSecrets(options.decisionRequest ?? {});
   } else if (options.decision !== undefined) {
     patch.decisionRequest = undefined;
   }
@@ -190,7 +191,7 @@ function buildRunEvent(
     runId: run.id,
     type,
     phase: targetPhase,
-    payload,
+    payload: redactSecrets(payload),
     traceId: options.traceId ?? run.traceId,
     createdAt: options.now?.() ?? new Date().toISOString(),
   };

@@ -5,18 +5,24 @@ import { TaskManager } from "../thalamus/router";
 import { getSetupChecklist } from "../setupChecklist";
 import { STATES } from "../domain/states";
 import { transitionRun } from "../orchestration/runStateMachine";
+import { redactSecrets, redactString } from "../security/redaction";
 import { InMemoryRectorStore } from "../store/inMemoryRectorStore";
 import type { Run, RunEvent } from "../store/schemas";
 
-export function createApp(manager: TaskManager): express.Application {
+export interface ApiSecurityOptions {
+  corsAllowedOrigins?: string[];
+  rateLimit?: {
+    windowMs?: number;
+    maxRequests?: number;
+  };
+}
+
+export function createApp(manager: TaskManager, securityOptions: ApiSecurityOptions = {}): express.Application {
   const app = express();
   const rectorStore = new InMemoryRectorStore();
-  app.use((_req, res, next) => {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("Referrer-Policy", "no-referrer");
-    next();
-  });
+  app.use(securityHeadersMiddleware);
+  app.use(corsMiddleware(securityOptions));
+  app.use(chatRateLimitMiddleware(securityOptions));
   app.use(express.json());
   const publicDir = path.resolve(process.cwd(), "src/public");
   app.use(express.static(publicDir));
@@ -78,21 +84,23 @@ export function createApp(manager: TaskManager): express.Application {
         return res.status(400).json({ error: "content (string) is required" });
       }
 
+      const redactedContent = redactString(content);
+      const redactionState = redactedContent === content ? "none" : "redacted";
       const userMessage = await rectorStore.createMessage({
         conversationId: conversation.id,
         role: "user",
-        content,
+        content: redactedContent,
         status: "created",
-        redactionState: "none",
+        redactionState,
       });
-      const run = await createFakeChatRun(rectorStore, conversation.id, userMessage.id, content);
+      const run = await createFakeChatRun(rectorStore, conversation.id, userMessage.id, redactedContent);
       const assistantMessage = await rectorStore.createMessage({
         conversationId: conversation.id,
         role: "assistant",
-        content: `Rector received: ${content}. This shell created a local run trace without provider calls.`,
+        content: `Rector received: ${redactedContent}. This shell created a local run trace without provider calls.`,
         status: "completed",
         runId: run.id,
-        redactionState: "none",
+        redactionState,
       });
       await rectorStore.updateMessage(userMessage.id, { status: "completed", runId: run.id });
       const events = await rectorStore.listEvents(run.id);
@@ -259,6 +267,106 @@ export function createApp(manager: TaskManager): express.Application {
   return app;
 }
 
+function securityHeadersMiddleware(_req: express.Request, res: express.Response, next: express.NextFunction): void {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+}
+
+function corsMiddleware(options: ApiSecurityOptions): express.RequestHandler {
+  const configuredOrigins = new Set([
+    ...(options.corsAllowedOrigins ?? []),
+    ...parseCsvEnv(process.env.CORS_ALLOWED_ORIGINS),
+  ]);
+
+  return (req, res, next) => {
+    const origin = req.header("Origin");
+    if (origin && (configuredOrigins.has(origin) || isDevLocalhostOrigin(origin))) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+      res.setHeader("Access-Control-Max-Age", "600");
+    }
+
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+    next();
+  };
+}
+
+function chatRateLimitMiddleware(options: ApiSecurityOptions): express.RequestHandler {
+  const windowMs = options.rateLimit?.windowMs ?? numberFromEnv("CHAT_RATE_LIMIT_WINDOW_MS", 60_000);
+  const maxRequests = options.rateLimit?.maxRequests ?? numberFromEnv("CHAT_RATE_LIMIT_MAX", 60);
+  const buckets = new Map<string, { resetAt: number; count: number }>();
+
+  return (req, res, next) => {
+    if (req.method !== "POST" || !req.path.startsWith("/api/chat/")) {
+      next();
+      return;
+    }
+    if (maxRequests <= 0) {
+      next();
+      return;
+    }
+
+    const now = Date.now();
+
+    // Clean up expired buckets opportunistically to prevent memory growth
+    for (const [k, b] of buckets.entries()) {
+      if (b.resetAt <= now) {
+        buckets.delete(k);
+      }
+    }
+
+    const key = req.ip || req.socket.remoteAddress || "unknown";
+    const bucket = buckets.get(key);
+    if (!bucket) {
+      buckets.set(key, { resetAt: now + windowMs, count: 1 });
+      res.setHeader("X-RateLimit-Limit", String(maxRequests));
+      res.setHeader("X-RateLimit-Remaining", String(Math.max(0, maxRequests - 1)));
+      next();
+      return;
+    }
+
+    if (bucket.count >= maxRequests) {
+      res.setHeader("Retry-After", String(Math.ceil((bucket.resetAt - now) / 1000)));
+      res.status(429).json({ error: "Too many chat requests" });
+      return;
+    }
+
+    bucket.count += 1;
+    res.setHeader("X-RateLimit-Limit", String(maxRequests));
+    res.setHeader("X-RateLimit-Remaining", String(Math.max(0, maxRequests - bucket.count)));
+    next();
+  };
+}
+
+function parseCsvEnv(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function isDevLocalhostOrigin(origin: string): boolean {
+  if (process.env.NODE_ENV === "production") return false;
+  try {
+    const url = new URL(origin);
+    return ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function numberFromEnv(key: string, fallback: number): number {
+  const value = Number(process.env[key]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
 function nonEmptyOrDefault(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
 }
@@ -341,7 +449,7 @@ function runEvent(
     runId: run.id,
     type,
     phase,
-    payload,
+    payload: redactSecrets(payload),
     traceId: run.traceId,
     createdAt: new Date().toISOString(),
   };

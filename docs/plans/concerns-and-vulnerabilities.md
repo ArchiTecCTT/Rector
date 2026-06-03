@@ -53,6 +53,20 @@
 - **Status:** Mitigated locally with duplicate rejection and random UUID default.
 - **Plan:** Production stores must enforce unique event IDs and transaction/conditional-write semantics.
 
+### Security controls are local-process baselines only
+
+- **Source:** Chunk 7 implementation.
+- **Severity:** Medium for production deployment.
+- **Status:** Open.
+- **Plan:** Replace in-memory rate limiting with shared/distributed limiter, add real auth/session enforcement, centralize budget enforcement at provider call boundaries, and harden redaction with structured secret classifiers before public multi-user deployment.
+
+### In-memory rate limiter is local-only and requires distributed backend in production
+
+- **Source:** Chunk 7 review fixes.
+- **Severity:** Low for local-MVP, High for multi-instance production.
+- **Status:** Mitigated locally via opportunistic expiry cleanup in middleware.
+- **Plan:** The current rate limiter uses an in-memory `Map` with opportunistic cleaning of expired buckets on each request. While this prevents unbounded memory growth locally, a production-grade deployment with multiple API instances requires a distributed rate limiter (e.g. Redis, Memcached, or Cloudflare KV/Durable Objects) to enforce rate limits consistently across instances and prevent local `Map` memory overhead under high concurrency.
+
 ## Closed / Mitigated
 
 ### Non-atomic run update then event append
