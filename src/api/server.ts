@@ -6,6 +6,7 @@ import { getSetupChecklist } from "../setupChecklist";
 import { STATES } from "../domain/states";
 import { buildContextPack, createContextMaterial, type ContextPack } from "../orchestration/contextBuilder";
 import { arbitratePlanWithCrucible } from "../orchestration/crucible";
+import { compileAcceptedPlanToDag } from "../orchestration/dagCompiler";
 import { createFakePlan } from "../orchestration/planner";
 import { transitionRun } from "../orchestration/runStateMachine";
 import { reviewPlanWithSkeptic } from "../orchestration/skeptic";
@@ -442,6 +443,19 @@ async function createFakeChatRun(
     },
   }));
 
+  const dagCompilationPayload =
+    crucibleDecision.verdict === "ACCEPTED"
+      ? {
+          compiledDag: compileAcceptedPlanToDag({
+            runId: run.id,
+            crucibleDecision,
+            budgetPolicy: run.budget,
+          }),
+        }
+      : {
+          skippedReason: `Crucible verdict ${crucibleDecision.verdict} is not ACCEPTED`,
+        };
+
   const phases = [
     "TRIAGE",
     "CONTEXT_BUILDING",
@@ -467,6 +481,7 @@ async function createFakeChatRun(
         ...(phase === "PLANNING" ? { plannerOutput } : {}),
         ...(phase === "SKEPTIC_REVIEW" ? { skepticReview } : {}),
         ...(phase === "CRUCIBLE" ? { crucibleDecision } : {}),
+        ...(phase === "DAG_COMPILATION" ? dagCompilationPayload : {}),
       },
     });
     current = result.run;

@@ -24,6 +24,7 @@ export const DagEdgeSchema = z.object({
   from: z.string().min(1),
   to: z.string().min(1),
 });
+export type DagEdge = z.infer<typeof DagEdgeSchema>;
 
 export const DagNodeSchema = z.object({
   id: z.string().min(1),
@@ -49,6 +50,7 @@ export const DagSchema = z.object({
   edges: z.array(DagEdgeSchema).default([]),
   validationPolicy: z.record(z.unknown()).optional(),
   budgetPolicy: z.record(z.unknown()).optional(),
+  metadata: z.record(z.unknown()).optional(),
   createdAt: z.string().datetime(),
 });
 

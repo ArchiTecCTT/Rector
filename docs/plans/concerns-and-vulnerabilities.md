@@ -102,6 +102,13 @@
 - **Status:** Open until planner revision/healing/provider-backed arbitration chunks.
 - **Plan:** Current Crucible accepts sound plans, blocks blocker findings, requests targeted revisions, and escalates after two rounds. It does not mutate plans, invoke alternate reviewers, run external validation, or automatically produce revised planner output yet.
 
+### DAG compiler emits safe local metadata, not executable sandbox policies
+
+- **Source:** Chunk 12 implementation.
+- **Severity:** Medium production-hardening limitation.
+- **Status:** Open until executor/sandbox/provider chunks enforce runtime isolation.
+- **Plan:** Current DAG compilation is deterministic and denies unsafe shell permissions by default, but permissions are metadata only. Future executor work must enforce these policies at tool boundaries, define real sandbox capabilities, prevent metadata drift from granting shell/file access, and harden `budgetPolicy` merging so caller-provided overrides cannot weaken local/default limits without explicit approval.
+
 ## Closed / Mitigated
 
 ### Non-atomic run update then event append
