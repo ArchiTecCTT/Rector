@@ -6,6 +6,10 @@
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
     "./extensions": {
       "types": "./dist/extensions/index.d.ts",
       "import": "./dist/extensions/index.js"
@@ -24,8 +28,9 @@
     }
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "dev": "tsx watch --env-file=.env src/bin/server.ts",
+    "build": "tsc && node scripts/fix-dist-esm-imports.js",
+    "check": "tsc --noEmit",
     "build:site": "node scripts/build-site.js",
     "test": "vitest run",
     "test:watch": "vitest"

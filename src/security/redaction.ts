@@ -1,8 +1,8 @@
 const REDACTED = "[REDACTED]";
 
-const SECRET_KEY_PATTERN = /(^|[_-])(api[_-]?key|token|secret|password|authorization|cookie|connection[_-]?string)($|[_-])/i;
-const URI_KEY_PATTERN = /(^|[_-])(uri|url|dsn)($|[_-])/i;
-const CREDENTIAL_URI_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@:]+):([^\s/@]+)@/gi;
+const SECRET_KEYWORDS = ["apikey", "token", "secret", "password", "authorization", "cookie", "connectionstring"];
+const URI_KEYWORDS = ["uri", "url", "dsn"];
+const CREDENTIAL_URI_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@]*@)/gi;
 const BEARER_PATTERN = /\bBearer\s+[^\s,;]+/gi;
 const BASIC_PATTERN = /\bBasic\s+[^\s,;]+/gi;
 const INLINE_SECRET_PATTERN = /\b(api[_-]?key|token|secret|password)=([^\s,;&]+)/gi;
@@ -20,7 +20,17 @@ export function redactSecrets<T>(value: T): T {
 }
 
 export function isSensitiveKey(key: string): boolean {
-  return SECRET_KEY_PATTERN.test(key);
+  const compactKey = compactKeyName(key);
+  return SECRET_KEYWORDS.some((keyword) => compactKey.includes(keyword));
+}
+
+function isUriKey(key: string): boolean {
+  const compactKey = compactKeyName(key);
+  return URI_KEYWORDS.some((keyword) => compactKey.includes(keyword));
+}
+
+function compactKeyName(key: string): string {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function redactValue(value: unknown, key: string | undefined, seen: WeakSet<object>): unknown {
@@ -44,7 +54,7 @@ function redactValue(value: unknown, key: string | undefined, seen: WeakSet<obje
       output[childKey] = REDACTED;
       continue;
     }
-    if (URI_KEY_PATTERN.test(childKey) && typeof childValue === "string") {
+    if (isUriKey(childKey) && typeof childValue === "string") {
       output[childKey] = redactString(childValue);
       continue;
     }

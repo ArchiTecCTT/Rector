@@ -149,7 +149,7 @@ describe("chat brainstem end-to-end", () => {
         const validation = eventForPhase(body.events, "VALIDATING").payload.validationHealingResult;
         const synthesis = eventForPhase(body.events, "SYNTHESIZING").payload.synthesis;
 
-        expect(execution.status).toBe("PARTIAL");
+        expect(execution.status).toBe("FAILED");
         expect(validation.status).toBe("HEALED");
         expect(validation.attempts).toBe(1);
         expect(validation.actions).toEqual(

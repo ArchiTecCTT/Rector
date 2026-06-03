@@ -133,6 +133,25 @@ describe("redaction", () => {
     expect(redactString("connect mongodb://admin:s3cret@host/db using Bearer abc.def.ghi")).toBe(
       "connect mongodb://[REDACTED]@host/db using Bearer [REDACTED]"
     );
+    expect(redactString("connect mongodb://admin@host/db")).toBe("connect mongodb://[REDACTED]@host/db");
+  });
+
+  it("redacts camelCase secret-looking keys", () => {
+    const redacted = redactSecrets({
+      githubToken: "ghp_abc123",
+      dbPassword: "my_password",
+      awsSecretAccessKey: "aws_key_123",
+      sessionCookie: "cookie_val",
+      regularValue: "keep",
+    });
+
+    expect(redacted).toEqual({
+      githubToken: "[REDACTED]",
+      dbPassword: "[REDACTED]",
+      awsSecretAccessKey: "[REDACTED]",
+      sessionCookie: "[REDACTED]",
+      regularValue: "keep",
+    });
   });
 });
 
@@ -184,7 +203,7 @@ describe("API security middleware", () => {
   });
 
   it("allows requests and sweeps expired buckets after rate-limit window reset", async () => {
-    const app = createApp(new TaskManager(), { rateLimit: { windowMs: 50, maxRequests: 1 } });
+    const app = createApp(new TaskManager(), { rateLimit: { windowMs: 250, maxRequests: 1 } });
 
     await withServer(app, async (base) => {
       const first = await fetch(`${base}/api/chat/conversations`, {
@@ -201,8 +220,8 @@ describe("API security middleware", () => {
       });
       expect(second.status).toBe(429);
 
-      // Wait for window to expire
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      // Wait for window to expire with enough buffer for loaded CI workers.
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
       const third = await fetch(`${base}/api/chat/conversations`, {
         method: "POST",

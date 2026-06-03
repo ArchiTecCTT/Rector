@@ -392,7 +392,7 @@ function dagStatus(results: NodeExecutionResult[]): DagExecutionStatus {
 
   if (failed === 0 && skipped === 0) return "SUCCESS";
   if (failed === 0 && succeeded === 0 && skipped > 0) return "SKIPPED";
-  if (failed > 0 && skipped === 0 && succeeded === 0) return "FAILED";
+  if (failed > 0 && succeeded === 0) return "FAILED";
   return "PARTIAL";
 }
 

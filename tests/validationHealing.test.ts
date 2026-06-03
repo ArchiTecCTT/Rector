@@ -281,6 +281,44 @@ describe("validation and healing loop", () => {
     ]);
   });
 
+  it("treats an empty skipped DAG as validated rather than failed", async () => {
+    const emptyDag = dag({ nodes: [], edges: [] });
+    const executionResult = await run(emptyDag);
+
+    expect(executionResult.status).toBe("SKIPPED");
+
+    const result = await validateAndHealExecution({ compiledDag: emptyDag, executionResult });
+
+    expect(result.status).toBe("VALIDATED");
+    expect(result.failures).toEqual([]);
+    expect(result.actions).toEqual([]);
+  });
+
+  it("requires human decision instead of auto-healing high-risk task failures", async () => {
+    const highRiskDag = dag({
+      nodes: [
+        {
+          id: "task:high-risk",
+          type: "LLM_EXECUTION",
+          dependsOn: [],
+          toolPermissions: ["fake.local"],
+          retryPolicy: { maxAttempts: 1, backoffMs: 0 },
+          timeoutMs: 5,
+          metadata: { risk: "high" },
+        },
+      ],
+      edges: [],
+    });
+    const executionResult = await run(highRiskDag, { simulatedDurationMsByNodeId: { "task:high-risk": 10 } });
+
+    const result = await validateAndHealExecution({ compiledDag: highRiskDag, executionResult });
+
+    expect(result.status).toBe("NEEDS_DECISION");
+    expect(result.actions).toEqual([
+      expect.objectContaining({ type: "REQUEST_DECISION", nodeId: "task:high-risk" }),
+    ]);
+  });
+
   it("asserts the dependencyChain correctly for nested dependency root cause", async () => {
     const chainDag = dag({
       nodes: [

@@ -1,27 +1,15 @@
-import { createApp } from "./api/server";
-import { TaskManager } from "./thalamus/router";
-import { LocalTelemetry } from "./adapters/providers";
-import { createGracefulShutdownHandler, parseDeploymentEnvironment } from "./deployment";
-import http from "node:http";
+export { createApp } from "./api/server";
+export { TaskManager } from "./thalamus/router";
+export { LocalTelemetry } from "./adapters/providers";
 
-const deploymentConfig = parseDeploymentEnvironment();
-const PORT = deploymentConfig.port;
+export * as deployment from "./deployment";
+export * as extensions from "./extensions";
+export * as memory from "./memory";
+export * as observability from "./observability";
+export * as orchestration from "./orchestration";
+export * as providers from "./providers";
+export * as sandbox from "./sandbox";
+export * as store from "./store";
+export * as workflows from "./workflows";
 
-const telemetry = new LocalTelemetry();
-const manager = new TaskManager({
-  record: (event) => telemetry.record(event as Parameters<LocalTelemetry["record"]>[0]),
-  getMetrics: () => telemetry.getMetrics(),
-});
-
-const app = createApp(manager);
-
-const server = http.createServer(app);
-
-server.listen({ port: PORT }, () => {
-  console.log(`Rector MVP running on http://localhost:${PORT}`);
-});
-
-const gracefulShutdown = createGracefulShutdownHandler({ server });
-gracefulShutdown.install();
-
-export { app, deploymentConfig, gracefulShutdown, manager, telemetry };
+export { parseDeploymentEnvironment, createGracefulShutdownHandler } from "./deployment";

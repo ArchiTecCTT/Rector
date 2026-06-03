@@ -93,7 +93,7 @@ export async function validateAndHealExecution(input: ValidateAndHealExecutionIn
     const failures = classifyExecutionFailures(input.compiledDag, current);
     appendFailures(observedFailures, failures);
 
-    if (current.status === "SUCCESS") {
+    if (current.status === "SUCCESS" || (current.status === "SKIPPED" && failures.length === 0)) {
       return parseResult({ status: attempts > 0 ? "HEALED" : "VALIDATED", attempts, failures: observedFailures, actions, finalExecutionResult: current });
     }
 
@@ -299,10 +299,10 @@ function isUnsafeToAutoHeal(compiledDag: Dag, nodeId: string | undefined): boole
   if (node.toolPermissions.some((permission) => SHELL_PERMISSION_PATTERN.test(permission.toLowerCase()))) return true;
 
   const metadata = recordFrom(node.metadata);
-  if (metadata?.approvalRequired === true || metadata?.risk === "destructive") return true;
+  if (metadata?.approvalRequired === true || metadata?.risk === "destructive" || metadata?.risk === "high") return true;
 
   const input = recordFrom(node.input);
-  if (input?.approvalRequired === true || input?.risk === "destructive") return true;
+  if (input?.approvalRequired === true || input?.risk === "destructive" || input?.risk === "high") return true;
 
   return false;
 }

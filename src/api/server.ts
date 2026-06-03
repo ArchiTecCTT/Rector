@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import express from "express";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { TaskManager } from "../thalamus/router";
 import { getSetupChecklist } from "../setupChecklist";
 import { STATES } from "../domain/states";
@@ -43,7 +45,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.use(corsMiddleware(securityOptions));
   app.use(chatRateLimitMiddleware(securityOptions));
   app.use(express.json());
-  const publicDir = path.resolve(process.cwd(), "src/public");
+  const publicDir = resolvePublicDir();
   app.use(express.static(publicDir));
 
   // --- Chat routes ---
@@ -496,6 +498,16 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   });
 
   return app;
+}
+
+function resolvePublicDir(): string {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(moduleDir, "../public"),
+    path.resolve(moduleDir, "../../src/public"),
+    path.resolve(process.cwd(), "src/public"),
+  ];
+  return candidates.find((candidate) => fs.existsSync(path.join(candidate, "index.html"))) ?? candidates[0];
 }
 
 function securityHeadersMiddleware(_req: express.Request, res: express.Response, next: express.NextFunction): void {

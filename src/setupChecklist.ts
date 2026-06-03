@@ -10,6 +10,7 @@ export interface SetupItem {
 export const SETUP_ITEMS: SetupItem[] = [
   { key: "NODE_ENV", label: "Environment", description: "Use development for local mode; production enables real adapter wiring later.", required: false, defaultValue: "development", category: "core" },
   { key: "PORT", label: "HTTP Port", description: "Local API/UI port.", required: false, defaultValue: "3000", category: "core" },
+  { key: "HOST", label: "HTTP Host", description: "Bind host for local API/UI. Defaults to loopback for local safety.", required: false, defaultValue: "127.0.0.1", category: "core" },
   { key: "DOPPLER_TOKEN", label: "Doppler Token", description: "Service token used to load production secrets.", required: false, category: "core" },
 
   { key: "KAFKA_BROKERS", label: "Kafka Brokers", description: "Comma-separated Kafka bootstrap servers.", required: false, defaultValue: "localhost:9092", category: "event-bus" },
@@ -47,6 +48,7 @@ export const SETUP_ITEMS: SetupItem[] = [
   { key: "LINEAR_API_KEY", label: "Linear API Key", description: "Linear GraphQL token for issue ingest/handoff.", required: false, category: "integrations" },
   { key: "LINEAR_WEBHOOK_SECRET", label: "Linear Webhook Secret", description: "Secret used to verify incoming Linear webhooks.", required: false, category: "integrations" },
   { key: "MAKE_WEBHOOK_URL", label: "Make Webhook URL", description: "Make.com webhook for human approval automations.", required: false, category: "integrations" },
+  { key: "MAKE_WEBHOOK_SECRET", label: "Make Webhook Secret", description: "Secret used to authenticate Make webhook payloads.", required: false, category: "integrations" },
 
   { key: "TELEMETRY_BACKEND", label: "Telemetry Backend", description: "Telemetry provider: local, posthog, datadog, or newrelic.", required: false, defaultValue: "local", category: "telemetry" },
   { key: "POSTHOG_API_KEY", label: "PostHog API Key", description: "PostHog project key for cost/token events.", required: false, category: "telemetry" },
@@ -76,6 +78,7 @@ const SENSITIVE_KEYS = new Set([
   "LINEAR_API_KEY",
   "LINEAR_WEBHOOK_SECRET",
   "MAKE_WEBHOOK_URL",
+  "MAKE_WEBHOOK_SECRET",
   "POSTHOG_API_KEY",
   "DATADOG_API_KEY",
   "NEW_RELIC_LICENSE_KEY",

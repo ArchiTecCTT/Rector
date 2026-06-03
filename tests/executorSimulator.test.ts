@@ -81,7 +81,7 @@ describe("executor simulator", () => {
   it("skips downstream nodes when a dependency failed", async () => {
     const result = await executeCompiledDag(dag(), { injectFailureNodeIds: ["task:a"], now: () => NOW });
 
-    expect(result.status).toBe("PARTIAL");
+    expect(result.status).toBe("FAILED");
     expect(result.nodeResults.map((node) => [node.nodeId, node.status])).toEqual([
       ["task:a", "FAILED"],
       ["task:b", "SKIPPED"],

@@ -6,10 +6,10 @@
 
 ### Dependency audit reports vulnerabilities
 
-- **Source:** `npm install` / `npm audit` output during branch setup.
-- **Severity:** Unknown; npm reported 5 vulnerabilities (4 moderate, 1 critical).
+- **Source:** `npm install` / `npm audit` output during branch setup; Gemini final audit.
+- **Severity:** Medium-high for dev-server exposure; npm reported 5 vulnerabilities (4 moderate, 1 critical). Confirmed known root includes vulnerable `esbuild <=0.24.2` via dev dependencies, associated with DNS rebinding/local dev server exposure (GHSA-67mh-4wv8-2f99).
 - **Status:** Open.
-- **Plan:** Address in a dedicated dependency/security chunk or before public release. Do not run `npm audit fix --force` blindly because it may introduce breaking changes.
+- **Plan:** Address in a dedicated dependency/security chunk or before public release. Prefer upgrading `vitest`/`tsx` or adding a safe dependency override for `esbuild >=0.25.0`; do not run `npm audit fix --force` blindly because it may introduce breaking changes.
 
 ### Chat store is in-memory and resets on restart
 
@@ -55,10 +55,10 @@
 
 ### Security controls are local-process baselines only
 
-- **Source:** Chunk 7 implementation.
+- **Source:** Chunk 7 implementation; Gemini final audit.
 - **Severity:** Medium for production deployment.
 - **Status:** Open.
-- **Plan:** Replace in-memory rate limiting with shared/distributed limiter, add real auth/session enforcement, centralize budget enforcement at provider call boundaries, and harden redaction with structured secret classifiers before public multi-user deployment.
+- **Plan:** Replace in-memory rate limiting with shared/distributed limiter, add real auth/session enforcement, centralize budget enforcement at provider call boundaries, and continue hardening redaction with structured secret classifiers before public multi-user deployment. Confirmed camelCase secret-key and username-only URI redaction gaps were fixed after final audit with regression tests.
 
 ### In-memory rate limiter is local-only and requires distributed backend in production
 
@@ -170,7 +170,7 @@
 - **Source:** Chunk 21 implementation.
 - **Severity:** Low for local alpha, High if exposed beyond localhost/trusted dev networks.
 - **Status:** Open until production operator access controls and real control-plane semantics exist.
-- **Plan:** Current `/api/operator/*` endpoints are explicitly marked `localOnly: true` / `auth: local-only-no-auth`, use the in-memory store, expose run/event/cost/artifact metadata for optional Retool consumption, keep retry/abort/approval decisions as non-mutating placeholders, and stub Linear issue creation with zero network calls. Before any hosted or shared deployment, add authentication, authorization/RBAC, CSRF/origin hardening, audit logs, durable persistence, real approval/retry/abort semantics, artifact access controls, and a real Linear adapter behind explicit env/budget gates.
+- **Plan:** Current `/api/operator/*` endpoints are explicitly marked `localOnly: true` / `auth: local-only-no-auth`, use the in-memory store, expose run/event/cost/artifact metadata for optional Retool consumption, keep retry/abort/approval decisions as non-mutating placeholders, and stub Linear issue creation with zero network calls. Final audit found the dev server implicitly bound to all interfaces; bootstrap now defaults to `127.0.0.1` via `HOST`. Before any hosted or shared deployment, add authentication, authorization/RBAC, CSRF/origin hardening, audit logs, durable persistence, real approval/retry/abort semantics, artifact access controls, and a real Linear adapter behind explicit env/budget gates.
 
 ### Safe code execution is contract-only and not an isolation boundary
 
