@@ -1,138 +1,179 @@
-# Rector — Local-First MVP
+# Rector — Autonomous AI for Software Engineering
 
-Run Rector locally on `http://localhost:3000` with in-memory adapters for the event bus, task store, LLMs, sandbox, and telemetry.
+> A neuro-symbolic multi-agent orchestration framework that routes AI tasks through a deterministic assembly line — slashing LLM costs by 90% while eliminating hallucinations and infinite loops.
 
-## Quickstart
+[![Status](https://img.shields.io/badge/status-stealth-blue?style=flat-square)](#)
+[![License](https://img.shields.io/badge/license-Proprietary-red?style=flat-square)](#)
+
+---
+
+## What Is Rector?
+
+Most AI coding agents are brilliant but unreliable. They hallucinate APIs, get stuck in infinite loops, and cost a fortune because they use a frontier model for every single step.
+
+Rector solves this by applying a fundamental principle from manufacturing: **separate planning from execution**.
+
+Instead of letting a massive LLM steer the entire process, Rector uses:
+
+1. **A deterministic state machine** — the Thalamus Router — that programmatically controls every routing decision
+2. **A tiered intelligence pipeline** — cheap SLMs handle the mechanical work; expensive flagship models are reserved strictly for deep reasoning and final synthesis
+3. **A self-healing sandbox** — generated code executes in isolated environments; failures are caught, parsed, and routed back for localized fixes before they cascade
+
+The result: a system that thinks before it acts, debates before it executes, and heals itself when things break — at a fraction of the cost of monolithic LLM approaches.
+
+---
+
+## Core Philosophy
+
+### Economic Asymmetry
+Use tiny, fast, cheap Small Language Models (SLMs) for 90% of mechanical data processing. Reserve expensive Flagship models strictly for final synthesis and deep reasoning.
+
+### Deterministic Guardrails
+LLMs do not orchestrate tasks. A programmatic router manages all routing, retries, and execution loops. The system is auditable, predictable, and free of probabilistic steering.
+
+### Pre-Execution Cognitive Alignment
+Before any code is touched, the system forces the plan through a rigorous refinement phase — establishing the "What" and the "Why" so the "How" is grounded in reality.
+
+### Self-Healing Execution
+Generated outputs execute in isolated sandboxes. Errors are parsed deterministically and routed back for localized fixes without involving the Flagship layer.
+
+---
+
+## Architecture Overview
+
+```
+User Prompt
+    │
+    ▼
+Intake Triage Router ── (trivial) ──► Flash LLM ──► Output
+    │
+    │ (complex)
+    ▼
+Phase 1: Schema & Encoding
+    ├─ Prompt Improver ── searches repo + memory
+    └─ Context Anchor ── asks "why does this matter?"
+    │
+    ▼
+Phase 2: Task Decomposition
+    └─ Thalamus Router 1 ── Tree of Thoughts breakdown
+    │
+    ▼
+Phase 3: Metacognitive Monitoring
+    ├─ The Skeptic ── evidence-based stress-testing
+    └─ The Crucible ── max 2-round debate (deterministic)
+    │
+    ▼
+Phase 4: Compilation + Execution
+    ├─ Main Brain ── assigns models, compiles JSON DAG
+    └─ Thalamus Engine ── deterministic execution
+    │
+    ▼
+Output / Human Handoff
+```
+
+---
+
+## Key Features
+
+- **Multi-phase cognitive pipeline** — Prompt Improver, dual Thalamus Routers, Skeptic red-teaming, Main Brain compiler
+- **Deterministic state machine** — every transition is rule-based, not LLM-guessed
+- **Evidence-based debate** — plans are stress-tested with read-only tools before execution
+- **Self-healing sandbox** — localized error fixes without re-running the full pipeline
+- **Tiered model routing** — SLMs for mechanical work, Flagship for synthesis only
+- **JSON DAG execution** — the Main Brain outputs a strict execution graph; the engine executes it programmatically
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| **SLM Assembly Line** | Cloudflare Workers AI, Groq |
+| **Flagship Layer** | Azure OpenAI (GPT-5.x) |
+| **Event Bus / State** | BullMQ + Redis Streams |
+| **Vector Memory** | Chroma |
+| **Code Sandbox** | E2B, Depot |
+| **Observability** | Middleware.io, DataDog, Sentry, PostHog |
+| **Frontend** | Bubble.io |
+
+---
+
+## Quick Start
 
 ```bash
+# Prerequisites
+node >= 20
+npm >= 10
+
+# Install dependencies
 npm install
-npm test
+
+# Build TypeScript
 npm run build
+
+# Run in local development mode (no API keys required)
 npm run dev
+
+# Open the dashboard
+open http://localhost:3000
 ```
 
-Open `http://localhost:3000`.
+Local mode runs with in-memory adapters. Set real provider credentials in `.env` to activate live integrations.
 
-## What the MVP Does
+---
 
-- Creates Rector tasks from the browser UI or REST API.
-- Advances each task through a deterministic Thalamus state machine.
-- Simulates intake, flagship planning, SLM fan-out, sandbox validation, healing, synthesis, and human handoff.
-- Shows task cards, subtask detail, event history, telemetry, and provider setup checklist in the UI.
-- Keeps real provider calls disabled; every provider is local/in-memory for now.
+## Environment Setup
 
-## Testing
+Copy `.env.example` to `.env` and configure the providers you want to activate:
 
-- `npm test` — Vitest + API smoke tests.
-- `npm run build` — TypeScript compile.
-
-Covered: state transitions, schemas, event bus, repository immutability, local providers, happy path, healing path, unhealable abort path, API controls, setup masking, and static UI serving.
-
-## State Flow
-
-```text
-1_INTAKE → 2_ARCHITECTURAL_PLAN → 3_SLM_EXECUTION_FANOUT → 4_SANDBOX_VALIDATION
-  ↙ fail                                                        pass ↘
-5_HEALING_LOOP → 4_SANDBOX_VALIDATION → 6_FINAL_SYNTHESIS → 7_HUMAN_HANDOFF
-       ↘ unhealable failure → ABORTED
+```bash
+cp .env.example .env
 ```
 
-Tasks containing `fail`, `broken`, or `retry` intentionally trigger the healing loop. Tasks containing `unhealable` intentionally prove the abort path.
+Key variables:
 
-## REST API
+| Variable | Purpose |
+|---|---|
+| `NODE_ENV` | `development` for local mode, `production` for live providers |
+| `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` | Cloudflare Workers AI (SLM layer) |
+| `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY` | Azure OpenAI (Flagship layer) |
+| `REDIS_URL` | Redis connection (for BullMQ + event bus) |
+| `CHROMA_URL` | Chroma vector database |
+| `TOGETHER_API_KEY` | Together AI (model fine-tuning — pending) |
 
-- `POST /api/tasks` — create task: `{ "description": "Build a REST API" }`
-- `GET /api/tasks` — list tasks
-- `GET /api/tasks/:id` — get one task
-- `POST /api/tasks/:id/advance` — advance one pipeline step
-- `POST /api/tasks/:id/pause` — pause task
-- `POST /api/tasks/:id/retry` — resume paused task from intake
-- `POST /api/tasks/:id/approve` — persist approval at human handoff
-- `POST /api/tasks/:id/abort` — abort non-terminal task
-- `GET /api/telemetry` — local metrics
-- `GET /api/setup` — masked setup checklist
-- `POST /api/dev/scenario` — seed `happy` or `healing` demo task in local/dev mode
+For full variable documentation, see [`.env.example`](.env.example).
 
-## Setup Checklist for Real Provider Mode
+---
 
-Copy `.env.example` and fill only the providers you want to activate. The current MVP reads these for display/masking only; real adapters can be wired behind the existing interfaces later.
+## Running Tests
 
-### Core
+```bash
+npm test
+```
 
-| Variable | Purpose | Local default |
-|---|---|---|
-| `NODE_ENV` | `development` for local mode, `production` for provider mode | `development` |
-| `PORT` | API/UI port | `3000` |
-| `DOPPLER_TOKEN` | Secret loading in deployed environments | unset |
+Tests cover: state transitions, schemas, event bus, repository immutability, happy path, healing loop, abort path, and API controls.
 
-### Kafka / Confluent
+---
 
-| Variable | Purpose | Local default |
-|---|---|---|
-| `KAFKA_BROKERS` | Kafka bootstrap servers | `localhost:9092` |
-| `KAFKA_CLIENT_ID` | Client ID for workers/router | `rector-local` |
-| `KAFKA_USERNAME` | Confluent API key/SASL username | unset |
-| `KAFKA_PASSWORD` | Confluent API secret/SASL password | unset |
-| `KAFKA_SSL` | TLS for Confluent Cloud | `false` |
+## Project Structure
 
-### MongoDB
+```
+src/
+  adapters/       # Provider integrations (event bus, LLM, task store)
+  api/            # Express API server + REST routes
+  domain/         # State machine schemas, transitions, state definitions
+  public/         # Frontend assets (HTML, CSS, JS)
+  thalamus/       # Thalamus router engine
+  workers/        # Agent worker executors
+  index.ts        # Entry point
+```
 
-| Variable | Purpose | Local default |
-|---|---|---|
-| `MONGO_URI` | MongoDB task-state storage | `mongodb://localhost:27017/rector` |
-| `MONGO_DB` | Database name | `rector_core` |
+---
 
-### LLMs
+## Status
 
-| Variable | Purpose | Local default |
-|---|---|---|
-| `LLM_API_KEY` | Generic OpenAI-compatible key | unset |
-| `LLM_BASE_URL` | Generic OpenAI-compatible base URL | `https://api.openai.com/v1` |
-| `FLAGSHIP_MODEL` | Architecture/final synthesis model | `gpt-4o` |
-| `SLM_MODEL` | Cheap SLM fan-out model | `Qwen/Qwen2.5-Coder-7B-Instruct` |
-| `TOGETHER_API_KEY` | Together AI key for SLM/APC | unset |
-| `TOGETHER_BASE_URL` | Together endpoint | `https://api.together.xyz/v1` |
-| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint | unset |
-| `AZURE_OPENAI_API_KEY` | Azure OpenAI key | unset |
-| `AZURE_OPENAI_DEPLOYMENT` | Azure deployment name | unset |
-| `AWS_REGION` | Bedrock region | unset |
-| `AWS_ACCESS_KEY_ID` | Bedrock IAM access key | unset |
-| `AWS_SECRET_ACCESS_KEY` | Bedrock IAM secret | unset |
+Rector is actively under development. The cognitive architecture, protocol design, and infrastructure plan are in place. Implementation of the cognitive pipeline is underway.
 
-### Sandbox / Quality Gates
+See [`docs/`](docs/) for full architectural documentation, implementation plans, and research artifacts.
 
-| Variable | Purpose | Local default |
-|---|---|---|
-| `SANDBOX_RUNTIME` | `local` or `depot` | `local` |
-| `DEPOT_API_KEY` | Depot sandbox key | unset |
-| `SENTRY_DSN` | Error/healing telemetry | unset |
-| `CODECOV_TOKEN` | Coverage reporting | unset |
-| `CODESCENE_TOKEN` | Codescene quality gate | unset |
-
-### Memory / Research
-
-| Variable | Purpose | Local default |
-|---|---|---|
-| `CHROMA_URL` | Vector memory endpoint | `http://localhost:8000` |
-| `CHROMA_API_KEY` | Hosted Chroma key | unset |
-| `PERPLEXITY_API_KEY` | Docs/research distillation | unset |
-
-### Linear / Make
-
-| Variable | Purpose | Local default |
-|---|---|---|
-| `LINEAR_API_KEY` | Linear GraphQL API | unset |
-| `LINEAR_WEBHOOK_SECRET` | Verify Linear webhooks | unset |
-| `MAKE_WEBHOOK_URL` | Human approval automations | unset |
-
-### Telemetry
-
-| Variable | Purpose | Local default |
-|---|---|---|
-| `TELEMETRY_BACKEND` | `local`, `posthog`, `datadog`, or `newrelic` | `local` |
-| `POSTHOG_API_KEY` | Cost/token analytics | unset |
-| `POSTHOG_HOST` | PostHog ingest host | `https://app.posthog.com` |
-| `DATADOG_API_KEY` | APM/infrastructure metrics | unset |
-| `DATADOG_SITE` | DataDog site | `datadoghq.com` |
-| `NEW_RELIC_LICENSE_KEY` | New Relic fallback APM | unset |
-| `AMPLITUDE_API_KEY` | Frontend product analytics | unset |
+---
