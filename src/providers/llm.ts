@@ -155,10 +155,12 @@ export interface TogetherAIProviderOptions {
   fetchImpl?: typeof fetch;
 }
 
-export interface BuiltTogetherRequest {
+export interface BuiltProviderRequest {
   url: string;
   init: RequestInit & { headers: Record<string, string>; body: string };
 }
+
+export type BuiltTogetherRequest = BuiltProviderRequest;
 
 export class TogetherAIProvider implements LLMProvider {
   readonly metadata = ProviderCapabilityMetadataSchema.parse({
@@ -318,6 +320,366 @@ export class TogetherAIProvider implements LLMProvider {
   }
 }
 
+export interface CloudflareWorkersAIProviderOptions {
+  accountId?: string;
+  apiToken?: string;
+  baseUrl?: string;
+  enableNetwork?: boolean;
+  fetchImpl?: typeof fetch;
+}
+
+export class CloudflareWorkersAIProvider implements LLMProvider {
+  readonly metadata = ProviderCapabilityMetadataSchema.parse({
+    id: "cloudflare",
+    displayName: "Cloudflare Workers AI",
+    routes: ["cheap", "fast"],
+    models: {
+      cheap: "@cf/meta/llama-3.1-8b-instruct",
+      fast: "@cf/meta/llama-3.1-8b-instruct",
+    },
+    supportsJson: false,
+    supportsStreaming: false,
+    maxContextTokens: 32_000,
+    estimatedUsdPer1kInputTokens: 0.0002,
+    estimatedUsdPer1kOutputTokens: 0.0002,
+  });
+
+  private readonly accountId: string;
+  private readonly apiToken: string;
+  private readonly baseUrl: string;
+  private readonly enableNetwork: boolean;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(options: CloudflareWorkersAIProviderOptions = {}) {
+    this.accountId = options.accountId ?? process.env.CLOUDFLARE_ACCOUNT_ID ?? "";
+    this.apiToken = options.apiToken ?? process.env.CLOUDFLARE_API_TOKEN ?? "";
+    this.baseUrl = (options.baseUrl ?? process.env.CLOUDFLARE_BASE_URL ?? "https://api.cloudflare.com/client/v4").replace(/\/+$/, "");
+    this.enableNetwork = options.enableNetwork ?? false;
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  }
+
+  validateConfig(): void {
+    if (!this.accountId.trim()) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "CLOUDFLARE_ACCOUNT_ID is required to use Cloudflare Workers AI provider",
+      });
+    }
+    if (!this.apiToken.trim()) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "CLOUDFLARE_API_TOKEN is required to use Cloudflare Workers AI provider",
+      });
+    }
+    if (!/^https?:\/\//i.test(this.baseUrl)) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "CLOUDFLARE_BASE_URL must be an absolute http(s) URL",
+      });
+    }
+  }
+
+  estimateRequest(request: LLMRequest): LLMUsage {
+    return estimateCostedRequest(request, this.metadata, 256);
+  }
+
+  buildRequest(request: LLMRequest): BuiltProviderRequest {
+    this.validateConfig();
+    const parsed = LLMRequestSchema.parse(request);
+    const modelRoute = parsed.modelRoute ?? "fast";
+    const model = parsed.model ?? this.metadata.models[modelRoute] ?? this.metadata.models.fast;
+    const body: Record<string, unknown> = {
+      messages: parsed.messages,
+      max_tokens: parsed.maxOutputTokens ?? 256,
+    };
+
+    if (parsed.temperature !== undefined) body.temperature = parsed.temperature;
+
+    return {
+      url: `${this.baseUrl}/accounts/${this.accountId}/ai/run/${model}`,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      },
+    };
+  }
+
+  async invoke(request: LLMRequest): Promise<LLMResponse> {
+    const parsed = LLMRequestSchema.parse(request);
+    const built = this.buildRequest(parsed);
+
+    if (!this.enableNetwork) {
+      throw new ProviderError({
+        code: "NETWORK_DISABLED",
+        provider: this.metadata.id,
+        message: "Cloudflare Workers AI network calls are disabled unless enableNetwork is explicitly true",
+      });
+    }
+
+    const response = await this.fetchImpl(built.url, built.init);
+    if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, "Cloudflare Workers AI");
+
+    const raw = await response.json();
+    return parseCloudflareResponse(this, parsed, raw);
+  }
+}
+
+export interface AzureOpenAIProviderOptions {
+  apiKey?: string;
+  endpoint?: string;
+  apiVersion?: string;
+  deployments?: Partial<Record<ModelRoute, string>>;
+  enableNetwork?: boolean;
+  fetchImpl?: typeof fetch;
+}
+
+export class AzureOpenAIProvider implements LLMProvider {
+  readonly metadata = ProviderCapabilityMetadataSchema.parse({
+    id: "azure-openai",
+    displayName: "Azure OpenAI",
+    routes: ["fast", "flagship"],
+    models: {
+      fast: "gpt-4o-mini",
+      flagship: "gpt-5",
+    },
+    supportsJson: true,
+    supportsStreaming: false,
+    maxContextTokens: 128_000,
+    estimatedUsdPer1kInputTokens: 0.0025,
+    estimatedUsdPer1kOutputTokens: 0.01,
+  });
+
+  private readonly apiKey: string;
+  private readonly endpoint: string;
+  private readonly apiVersion: string;
+  private readonly deployments: Partial<Record<ModelRoute, string>>;
+  private readonly enableNetwork: boolean;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(options: AzureOpenAIProviderOptions = {}) {
+    this.apiKey = options.apiKey ?? process.env.AZURE_OPENAI_API_KEY ?? "";
+    this.endpoint = (options.endpoint ?? process.env.AZURE_OPENAI_ENDPOINT ?? "").replace(/\/+$/, "");
+    this.apiVersion = options.apiVersion ?? process.env.AZURE_OPENAI_API_VERSION ?? "2024-10-21";
+    this.deployments = {
+      cheap: process.env.AZURE_OPENAI_CHEAP_DEPLOYMENT,
+      fast: process.env.AZURE_OPENAI_FAST_DEPLOYMENT ?? process.env.AZURE_OPENAI_DEPLOYMENT,
+      flagship: process.env.AZURE_OPENAI_FLAGSHIP_DEPLOYMENT ?? process.env.AZURE_OPENAI_DEPLOYMENT,
+      research: process.env.AZURE_OPENAI_RESEARCH_DEPLOYMENT,
+      ...options.deployments,
+    };
+    this.enableNetwork = options.enableNetwork ?? false;
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  }
+
+  validateConfig(): void {
+    if (!this.apiKey.trim()) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "AZURE_OPENAI_API_KEY is required to use Azure OpenAI provider",
+      });
+    }
+    if (!this.endpoint.trim()) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "AZURE_OPENAI_ENDPOINT is required to use Azure OpenAI provider",
+      });
+    }
+    if (!/^https?:\/\//i.test(this.endpoint)) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "AZURE_OPENAI_ENDPOINT must be an absolute http(s) URL",
+      });
+    }
+    if (!this.apiVersion.trim()) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "AZURE_OPENAI_API_VERSION is required to use Azure OpenAI provider",
+      });
+    }
+    const hasSupportedDeployment = this.metadata.routes.some((route) => this.deploymentFor(route));
+    if (!hasSupportedDeployment) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "AZURE_OPENAI_DEPLOYMENT or route-specific Azure deployment env is required to use Azure OpenAI provider",
+      });
+    }
+  }
+
+  estimateRequest(request: LLMRequest): LLMUsage {
+    return estimateCostedRequest(request, this.metadata, 512);
+  }
+
+  buildRequest(request: LLMRequest): BuiltProviderRequest {
+    this.validateConfig();
+    const parsed = LLMRequestSchema.parse(request);
+    const modelRoute = parsed.modelRoute ?? "fast";
+    const deployment = parsed.model ?? this.deploymentFor(modelRoute);
+
+    if (!deployment) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: `Azure OpenAI deployment is not configured for ${modelRoute} route`,
+      });
+    }
+
+    const body: Record<string, unknown> = {
+      messages: parsed.messages,
+      max_tokens: parsed.maxOutputTokens ?? 512,
+    };
+
+    if (parsed.temperature !== undefined) body.temperature = parsed.temperature;
+    if (parsed.responseFormat !== undefined) body.response_format = parsed.responseFormat;
+
+    return {
+      url: `${this.endpoint}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${encodeURIComponent(this.apiVersion)}`,
+      init: {
+        method: "POST",
+        headers: {
+          "api-key": this.apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      },
+    };
+  }
+
+  async invoke(request: LLMRequest): Promise<LLMResponse> {
+    const parsed = LLMRequestSchema.parse(request);
+    const built = this.buildRequest(parsed);
+
+    if (!this.enableNetwork) {
+      throw new ProviderError({
+        code: "NETWORK_DISABLED",
+        provider: this.metadata.id,
+        message: "Azure OpenAI network calls are disabled unless enableNetwork is explicitly true",
+      });
+    }
+
+    const response = await this.fetchImpl(built.url, built.init);
+    if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, "Azure OpenAI");
+
+    const raw = await response.json();
+    return parseOpenAICompatibleResponse(this.metadata.id, this.metadata, parsed, raw, this.estimateRequest(parsed));
+  }
+
+  private deploymentFor(route: ModelRoute): string | undefined {
+    return valueOrUndefined(this.deployments[route]);
+  }
+}
+
+export interface PerplexityResearchProviderOptions {
+  apiKey?: string;
+  baseUrl?: string;
+  enableNetwork?: boolean;
+  fetchImpl?: typeof fetch;
+}
+
+export class PerplexityResearchProvider implements LLMProvider {
+  readonly metadata = ProviderCapabilityMetadataSchema.parse({
+    id: "perplexity",
+    displayName: "Perplexity Research",
+    routes: ["research"],
+    models: {
+      research: "sonar-pro",
+    },
+    supportsJson: false,
+    supportsStreaming: false,
+    maxContextTokens: 128_000,
+    estimatedUsdPer1kInputTokens: 0.003,
+    estimatedUsdPer1kOutputTokens: 0.015,
+  });
+
+  private readonly apiKey: string;
+  private readonly baseUrl: string;
+  private readonly enableNetwork: boolean;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(options: PerplexityResearchProviderOptions = {}) {
+    this.apiKey = options.apiKey ?? process.env.PERPLEXITY_API_KEY ?? "";
+    this.baseUrl = (options.baseUrl ?? process.env.PERPLEXITY_BASE_URL ?? "https://api.perplexity.ai").replace(/\/+$/, "");
+    this.enableNetwork = options.enableNetwork ?? false;
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  }
+
+  validateConfig(): void {
+    if (!this.apiKey.trim()) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "PERPLEXITY_API_KEY is required to use Perplexity research provider",
+      });
+    }
+    if (!/^https?:\/\//i.test(this.baseUrl)) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "PERPLEXITY_BASE_URL must be an absolute http(s) URL",
+      });
+    }
+  }
+
+  estimateRequest(request: LLMRequest): LLMUsage {
+    return estimateCostedRequest(request, this.metadata, 512);
+  }
+
+  buildRequest(request: LLMRequest): BuiltProviderRequest {
+    this.validateConfig();
+    const parsed = LLMRequestSchema.parse(request);
+    const model = parsed.model ?? this.metadata.models[parsed.modelRoute ?? "research"] ?? this.metadata.models.research;
+    const body: Record<string, unknown> = {
+      model,
+      messages: parsed.messages,
+      max_tokens: parsed.maxOutputTokens ?? 512,
+    };
+
+    if (parsed.temperature !== undefined) body.temperature = parsed.temperature;
+
+    return {
+      url: `${this.baseUrl}/chat/completions`,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      },
+    };
+  }
+
+  async invoke(request: LLMRequest): Promise<LLMResponse> {
+    const parsed = LLMRequestSchema.parse(request);
+    const built = this.buildRequest(parsed);
+
+    if (!this.enableNetwork) {
+      throw new ProviderError({
+        code: "NETWORK_DISABLED",
+        provider: this.metadata.id,
+        message: "Perplexity network calls are disabled unless enableNetwork is explicitly true",
+      });
+    }
+
+    const response = await this.fetchImpl(built.url, built.init);
+    if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, "Perplexity");
+
+    const raw = await response.json();
+    return parseOpenAICompatibleResponse(this.metadata.id, this.metadata, parsed, raw, this.estimateRequest(parsed));
+  }
+}
+
 export interface ModelRouterOptions {
   mode?: "local" | "external";
   providers?: LLMProvider[];
@@ -344,11 +706,32 @@ export interface ModelRouter {
 
 export function buildModelRouter(options: ModelRouterOptions = {}): ModelRouter {
   const mode = options.mode ?? "local";
+  const env = options.env ?? {};
   const providers = options.providers ?? [
     new FakeLLMProvider(),
+    new CloudflareWorkersAIProvider({
+      accountId: env.CLOUDFLARE_ACCOUNT_ID,
+      apiToken: env.CLOUDFLARE_API_TOKEN,
+      baseUrl: env.CLOUDFLARE_BASE_URL,
+    }),
+    new AzureOpenAIProvider({
+      apiKey: env.AZURE_OPENAI_API_KEY,
+      endpoint: env.AZURE_OPENAI_ENDPOINT,
+      apiVersion: env.AZURE_OPENAI_API_VERSION,
+      deployments: {
+        cheap: env.AZURE_OPENAI_CHEAP_DEPLOYMENT,
+        fast: env.AZURE_OPENAI_FAST_DEPLOYMENT ?? env.AZURE_OPENAI_DEPLOYMENT,
+        flagship: env.AZURE_OPENAI_FLAGSHIP_DEPLOYMENT ?? env.AZURE_OPENAI_DEPLOYMENT,
+        research: env.AZURE_OPENAI_RESEARCH_DEPLOYMENT,
+      },
+    }),
+    new PerplexityResearchProvider({
+      apiKey: env.PERPLEXITY_API_KEY,
+      baseUrl: env.PERPLEXITY_BASE_URL,
+    }),
     new TogetherAIProvider({
-      apiKey: options.env?.TOGETHER_API_KEY,
-      baseUrl: options.env?.TOGETHER_BASE_URL,
+      apiKey: env.TOGETHER_API_KEY,
+      baseUrl: env.TOGETHER_BASE_URL,
     }),
   ];
   const fake = providers.find((provider) => provider.metadata.id === "fake") ?? new FakeLLMProvider();
@@ -373,7 +756,7 @@ export function buildModelRouter(options: ModelRouterOptions = {}): ModelRouter 
         isProviderConfigValid(provider)
       );
 
-      const provider = candidates[0];
+      const provider = prioritizeProvidersForRoute(candidates, targetRoute)[0];
       if (!provider) {
         return selection(fake, "fake", `no configured provider supports ${targetRoute}; selecting fake provider`);
       }
@@ -399,6 +782,145 @@ export async function invokeWithBudget(provider: LLMProvider, request: LLMReques
   }
 
   return provider.invoke(parsed);
+}
+
+function estimateCostedRequest(request: LLMRequest, metadata: ProviderCapabilityMetadata, defaultOutputTokens: number): LLMUsage {
+  const parsed = LLMRequestSchema.parse(request);
+  const inputTokens = estimateInputTokens(parsed);
+  const outputTokens = parsed.maxOutputTokens ?? defaultOutputTokens;
+  const estimatedUsd = roundUsd(
+    (inputTokens / 1_000) * metadata.estimatedUsdPer1kInputTokens +
+    (outputTokens / 1_000) * metadata.estimatedUsdPer1kOutputTokens
+  );
+
+  return LLMUsageSchema.parse({
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    estimatedUsd,
+    modelCalls: 1,
+  });
+}
+
+function parseOpenAICompatibleResponse(
+  provider: string,
+  metadata: ProviderCapabilityMetadata,
+  request: LLMRequest,
+  raw: unknown,
+  fallback: LLMUsage
+): LLMResponse {
+  const rawRecord = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const choices = Array.isArray(rawRecord.choices) ? rawRecord.choices : [];
+  const first = choices[0] && typeof choices[0] === "object" ? choices[0] as Record<string, unknown> : {};
+  const message = first.message && typeof first.message === "object" ? first.message as Record<string, unknown> : {};
+  const content = typeof message.content === "string" ? message.content : "";
+  const model = typeof rawRecord.model === "string"
+    ? rawRecord.model
+    : request.model ?? metadata.models[request.modelRoute ?? "fast"] ?? metadata.models.research ?? metadata.models.fast;
+  const usageRecord = rawRecord.usage && typeof rawRecord.usage === "object" ? rawRecord.usage as Record<string, unknown> : {};
+  const inputTokens = numberValue(usageRecord.prompt_tokens, fallback.inputTokens);
+  const outputTokens = numberValue(usageRecord.completion_tokens, fallback.outputTokens);
+  const usage = LLMUsageSchema.parse({
+    inputTokens,
+    outputTokens,
+    totalTokens: numberValue(usageRecord.total_tokens, inputTokens + outputTokens),
+    estimatedUsd: roundUsd(
+      (inputTokens / 1_000) * metadata.estimatedUsdPer1kInputTokens +
+      (outputTokens / 1_000) * metadata.estimatedUsdPer1kOutputTokens
+    ),
+    modelCalls: 1,
+  });
+
+  try {
+    return LLMResponseSchema.parse({
+      provider,
+      model,
+      content,
+      finishReason: normalizeFinishReason(first.finish_reason),
+      usage,
+      raw,
+    });
+  } catch (error) {
+    throw new ProviderError({
+      code: "PROVIDER_RESPONSE_INVALID",
+      provider,
+      message: `${metadata.displayName} response did not match LLM response contract`,
+      details: error,
+    });
+  }
+}
+
+function parseCloudflareResponse(provider: CloudflareWorkersAIProvider, request: LLMRequest, raw: unknown): LLMResponse {
+  const rawRecord = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const result = rawRecord.result && typeof rawRecord.result === "object" ? rawRecord.result as Record<string, unknown> : {};
+  const content = typeof result.response === "string"
+    ? result.response
+    : typeof result.content === "string"
+      ? result.content
+      : "";
+  const usageRecord = result.usage && typeof result.usage === "object" ? result.usage as Record<string, unknown> : {};
+  const fallback = provider.estimateRequest(request);
+  const inputTokens = numberValue(usageRecord.prompt_tokens, fallback.inputTokens);
+  const outputTokens = numberValue(usageRecord.completion_tokens, fallback.outputTokens);
+  const metadata = provider.metadata;
+  const usage = LLMUsageSchema.parse({
+    inputTokens,
+    outputTokens,
+    totalTokens: numberValue(usageRecord.total_tokens, inputTokens + outputTokens),
+    estimatedUsd: roundUsd(
+      (inputTokens / 1_000) * metadata.estimatedUsdPer1kInputTokens +
+      (outputTokens / 1_000) * metadata.estimatedUsdPer1kOutputTokens
+    ),
+    modelCalls: 1,
+  });
+
+  try {
+    return LLMResponseSchema.parse({
+      provider: metadata.id,
+      model: request.model ?? metadata.models[request.modelRoute ?? "fast"] ?? metadata.models.fast,
+      content,
+      finishReason: "stop",
+      usage,
+      raw,
+    });
+  } catch (error) {
+    throw new ProviderError({
+      code: "PROVIDER_RESPONSE_INVALID",
+      provider: metadata.id,
+      message: "Cloudflare Workers AI response did not match LLM response contract",
+      details: error,
+    });
+  }
+}
+
+function throwProviderHttpError(provider: string, status: number, displayName: string): never {
+  throw new ProviderError({
+    code: "PROVIDER_HTTP_ERROR",
+    provider,
+    status,
+    retryable: status >= 500 || status === 429,
+    message: `${displayName} request failed with HTTP ${status}`,
+  });
+}
+
+function prioritizeProvidersForRoute(providers: LLMProvider[], route: ModelRoute): LLMProvider[] {
+  const priority: Record<ModelRoute, string[]> = {
+    cheap: ["cloudflare", "azure-openai", "together"],
+    fast: ["cloudflare", "azure-openai", "together"],
+    flagship: ["azure-openai", "together"],
+    research: ["perplexity", "azure-openai", "together"],
+    fake: ["fake"],
+  };
+  const preferred = priority[route] ?? [];
+  return [...providers].sort((left, right) => {
+    const leftRank = preferred.includes(left.metadata.id) ? preferred.indexOf(left.metadata.id) : preferred.length;
+    const rightRank = preferred.includes(right.metadata.id) ? preferred.indexOf(right.metadata.id) : preferred.length;
+    return leftRank - rightRank;
+  });
+}
+
+function valueOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function providerBudgetUsage(provider: string, estimate: LLMUsage, run: Run): BudgetUsage {

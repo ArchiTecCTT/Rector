@@ -144,6 +144,13 @@
 - **Status:** Open / NEEDS_DECISION.
 - **Plan:** While budget limits are correctly evaluated at the provider call boundary, any request exceeding budget or requiring manual human approval is hard-blocked because the corresponding approval interactive UX (user-in-the-loop permissioning) does not yet exist. This needs a product/architecture decision on how human approval responses are solicited, formatted, and injected back into the execution flow.
 
+### Provider adapter layer Phase 2 remains opt-in and not production hardened
+
+- **Source:** Chunk 18 implementation.
+- **Severity:** Medium product/prod limitation.
+- **Status:** Open until provider runtime hardening and chat integration chunks.
+- **Plan:** Cloudflare Workers AI, Azure OpenAI, and Perplexity adapters now have config validation, request builders, mocked response parsing tests, budget-gated invocation compatibility, route-based router selection, and network-disabled-by-default behavior. They are still optional adapters with approximate token/cost estimates, no streaming/tool calls, no retry/backoff/circuit breaker policy, no provider-side redaction audit beyond existing baseline utilities, and no live-provider CI. Production flows must add exact pricing/version metadata, richer provider error normalization, retry/backoff, timeout controls, redaction at payload boundaries, durable usage accounting, and explicit user approval UX before enabling live calls broadly.
+
 ## Closed / Mitigated
 
 ### Fake orchestrator returned placeholder assistant text
