@@ -6,7 +6,8 @@ import { getSetupChecklist } from "../setupChecklist";
 import { STATES } from "../domain/states";
 import { buildContextPack, createContextMaterial, type ContextPack } from "../orchestration/contextBuilder";
 import { arbitratePlanWithCrucible } from "../orchestration/crucible";
-import { compileAcceptedPlanToDag } from "../orchestration/dagCompiler";
+import { compileAcceptedPlanToDag, type CompiledDag } from "../orchestration/dagCompiler";
+import { executeCompiledDag } from "../orchestration/executorSimulator";
 import { createFakePlan } from "../orchestration/planner";
 import { transitionRun } from "../orchestration/runStateMachine";
 import { reviewPlanWithSkeptic } from "../orchestration/skeptic";
@@ -443,18 +444,21 @@ async function createFakeChatRun(
     },
   }));
 
-  const dagCompilationPayload =
+  const compiledDag: CompiledDag | undefined =
     crucibleDecision.verdict === "ACCEPTED"
-      ? {
-          compiledDag: compileAcceptedPlanToDag({
-            runId: run.id,
-            crucibleDecision,
-            budgetPolicy: run.budget,
-          }),
-        }
-      : {
-          skippedReason: `Crucible verdict ${crucibleDecision.verdict} is not ACCEPTED`,
-        };
+      ? compileAcceptedPlanToDag({
+          runId: run.id,
+          crucibleDecision,
+          budgetPolicy: run.budget,
+        })
+      : undefined;
+
+  const dagCompilationPayload = compiledDag
+    ? { compiledDag }
+    : { skippedReason: `Crucible verdict ${crucibleDecision.verdict} is not ACCEPTED` };
+  const executionPayload = compiledDag
+    ? { executionResult: await executeCompiledDag(compiledDag) }
+    : { skippedReason: "Execution skipped because no compiled DAG exists" };
 
   const phases = [
     "TRIAGE",
@@ -482,6 +486,7 @@ async function createFakeChatRun(
         ...(phase === "SKEPTIC_REVIEW" ? { skepticReview } : {}),
         ...(phase === "CRUCIBLE" ? { crucibleDecision } : {}),
         ...(phase === "DAG_COMPILATION" ? dagCompilationPayload : {}),
+        ...(phase === "EXECUTING" ? executionPayload : {}),
       },
     });
     current = result.run;

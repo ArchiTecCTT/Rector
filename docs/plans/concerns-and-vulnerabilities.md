@@ -106,8 +106,15 @@
 
 - **Source:** Chunk 12 implementation.
 - **Severity:** Medium production-hardening limitation.
-- **Status:** Open until executor/sandbox/provider chunks enforce runtime isolation.
-- **Plan:** Current DAG compilation is deterministic and denies unsafe shell permissions by default, but permissions are metadata only. Future executor work must enforce these policies at tool boundaries, define real sandbox capabilities, prevent metadata drift from granting shell/file access, and harden `budgetPolicy` merging so caller-provided overrides cannot weaken local/default limits without explicit approval.
+- **Status:** Partially mitigated by Chunk 13 simulator; still open for real execution.
+- **Plan:** Current DAG compilation is deterministic and denies unsafe shell permissions by default, and the Chunk 13 fake executor enforces shell denial in the simulated path. Real provider/tool execution must still enforce these policies at sandbox/tool boundaries, define real sandbox capabilities, prevent metadata drift from granting shell/file access, and harden `budgetPolicy` merging so caller-provided overrides cannot weaken local/default limits without explicit approval.
+
+### Executor simulator is deterministic fake execution only
+
+- **Source:** Chunk 13 implementation.
+- **Severity:** Medium product/prod limitation.
+- **Status:** Open until real sandbox/provider executor chunks.
+- **Plan:** The executor simulator runs in memory, never calls shell/providers, and only compares deterministic metadata for retries, dependency blocking, timeout, and unsafe shell denial. Production execution still needs sandbox isolation, durable execution logs, cancellation, real timeout enforcement, tool allowlists, filesystem/network controls, and provider budget enforcement at call boundaries.
 
 ## Closed / Mitigated
 

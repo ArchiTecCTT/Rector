@@ -138,11 +138,17 @@ describe("chat API vertical shell", () => {
     expect(crucibleEvent?.payload?.crucibleDecision?.maxRounds).toBe(2);
 
     const dagEvent = (sent.data as any).events.find((event: any) => event.phase === "DAG_COMPILATION");
+    const executingEvent = (sent.data as any).events.find((event: any) => event.phase === "EXECUTING");
     if (crucibleEvent?.payload?.crucibleDecision?.verdict === "ACCEPTED") {
       expect(dagEvent?.payload?.compiledDag?.nodes?.length).toBeGreaterThan(0);
       expect(dagEvent?.payload?.compiledDag?.metadata?.plannerTaskToDagNode).toBeDefined();
+      expect(executingEvent?.payload?.executionResult?.status).toBe("SUCCESS");
+      expect(executingEvent?.payload?.executionResult?.nodeResults?.length).toBe(
+        dagEvent?.payload?.compiledDag?.nodes?.length
+      );
     } else {
       expect(dagEvent?.payload?.skippedReason).toContain("Crucible verdict");
+      expect(executingEvent?.payload?.skippedReason).toContain("compiled DAG");
     }
   });
 
