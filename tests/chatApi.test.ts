@@ -119,6 +119,14 @@ describe("chat API vertical shell", () => {
     const contextEvent = (sent.data as any).events.find((event: any) => event.phase === "CONTEXT_BUILDING");
     expect(contextEvent?.payload?.contextPack?.conversationRef?.id).toBe(conversationId);
     expect(contextEvent?.payload?.contextPack?.messageRefs?.length).toBeGreaterThanOrEqual(1);
+
+    const planningEvent = (sent.data as any).events.find((event: any) => event.phase === "PLANNING");
+    expect(planningEvent?.payload?.plannerOutput?.goal).toContain("Fix the TypeScript bug");
+    expect(planningEvent?.payload?.plannerOutput?.tasks.map((task: any) => task.id)).toEqual([
+      "code.inspect",
+      "code.edit",
+      "code.validate",
+    ]);
   });
 
   it("returns run events", async () => {

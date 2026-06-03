@@ -81,6 +81,13 @@
 - **Status:** Open until durable artifact storage chunk.
 - **Plan:** Context packs omit raw oversized content and reference artifact handles, but artifact records are still stored only in `InMemoryRectorStore` metadata and reset on restart. Current in-memory artifacts keep raw oversized content in `artifact.metadata.content`; durable stores must separate blob content from metadata and define retention, access controls, redaction, and encryption before production use.
 
+### Planner is deterministic fake and does not execute or optimize plans
+
+- **Source:** Chunk 9 implementation.
+- **Severity:** Medium product limitation.
+- **Status:** Open until skeptic/crucible/DAG/provider chunks replace the fake planner shell.
+- **Plan:** Current planner validates schema shape, route-specific task templates, validation coverage, and unsafe approval gates. It does not use LLM reasoning, workspace-aware dependency analysis, real tool availability, or execution DAG compilation yet.
+
 ## Closed / Mitigated
 
 ### Non-atomic run update then event append

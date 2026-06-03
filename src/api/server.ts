@@ -5,6 +5,7 @@ import { TaskManager } from "../thalamus/router";
 import { getSetupChecklist } from "../setupChecklist";
 import { STATES } from "../domain/states";
 import { buildContextPack, createContextMaterial, type ContextPack } from "../orchestration/contextBuilder";
+import { createFakePlan } from "../orchestration/planner";
 import { transitionRun } from "../orchestration/runStateMachine";
 import { triageUserMessage, type TriageResult } from "../orchestration/triage";
 import { redactSecrets, redactString } from "../security/redaction";
@@ -397,6 +398,8 @@ async function createFakeChatRun(
   contextPack: ContextPack
 ): Promise<Run> {
   const traceId = `trace-${crypto.randomUUID()}`;
+  const plannerOutput = createFakePlan({ triage, contextPack, messageContent: prompt });
+
   const run = await store.createRun({
     conversationId,
     userMessageId,
@@ -457,6 +460,7 @@ async function createFakeChatRun(
         note: phase === "DONE" ? "Shell run completed" : "Shell run advanced",
         ...(phase === "TRIAGE" ? { triage } : {}),
         ...(phase === "CONTEXT_BUILDING" ? { contextPack } : {}),
+        ...(phase === "PLANNING" ? { plannerOutput } : {}),
       },
     });
     current = result.run;
