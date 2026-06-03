@@ -151,6 +151,13 @@
 - **Status:** Open until provider runtime hardening and chat integration chunks.
 - **Plan:** Cloudflare Workers AI, Azure OpenAI, and Perplexity adapters now have config validation, request builders, mocked response parsing tests, budget-gated invocation compatibility, route-based router selection, and network-disabled-by-default behavior. They are still optional adapters with approximate token/cost estimates, no streaming/tool calls, no retry/backoff/circuit breaker policy, no provider-side redaction audit beyond existing baseline utilities, and no live-provider CI. Production flows must add exact pricing/version metadata, richer provider error normalization, retry/backoff, timeout controls, redaction at payload boundaries, durable usage accounting, and explicit user approval UX before enabling live calls broadly.
 
+### Truth library is in-memory keyword retrieval only
+
+- **Source:** Chunk 19 implementation.
+- **Severity:** Low for local alpha, Medium for production knowledge workflows.
+- **Status:** Open until durable memory/search/provider integrations.
+- **Plan:** Current truth library is provider-free and process-local. It validates TRUSTED/UNVERIFIED/REJECTED status, provenance, and citations; excludes rejected items by default; and uses deterministic keyword scoring. It does not provide durable persistence, embeddings, semantic ranking, access controls beyond in-process callers, citation freshness checks, or Chroma/Algolia network integrations. Production memory/search must add durable storage, retention/deletion policy, permission filtering, redaction review for stored content, semantic retrieval, and explicit trust-review workflows before enabling shared or hosted use.
+
 ## Closed / Mitigated
 
 ### Fake orchestrator returned placeholder assistant text

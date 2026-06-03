@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import type { InMemoryRectorStore } from "../store/inMemoryRectorStore";
 import type { Artifact, Conversation, Message } from "../store/schemas";
+import { truthItemToArtifactHandle, type TruthLibraryReader } from "../memory";
 import { TriageResultSchema, type TriageResult } from "./triage";
 
 const DEFAULT_ARTIFACT_THRESHOLD_BYTES = 4096;
@@ -127,6 +128,9 @@ export type BuildContextPackInput = {
   constraints?: string[];
   relevantDocs?: ArtifactHandle[];
   relevantMemory?: ArtifactHandle[];
+  truthLibrary?: TruthLibraryReader;
+  truthQuery?: string;
+  truthSearchLimit?: number;
   providerInfo?: ContextPack["availableProviders"];
   toolInfo?: ContextPack["availableTools"];
   now?: () => string;
@@ -140,6 +144,10 @@ export async function buildContextPack(
   const artifactHandles = materials.flatMap((material) => (material.artifactHandle ? [material.artifactHandle] : []));
   const inlineContext = materials.flatMap((material) => (material.inlineContent ? [material.inlineContent] : []));
   const riskFlags = [...new Set(input.triage.riskFlags)];
+  const truthQuery = input.truthQuery ?? input.userMessage.content;
+  const localRelevantDocs = input.relevantDocs ?? searchTruthLibrary(input.truthLibrary, truthQuery, "doc", input.truthSearchLimit);
+  const localRelevantMemory =
+    input.relevantMemory ?? searchTruthLibrary(input.truthLibrary, truthQuery, "memory", input.truthSearchLimit);
 
   const pack = {
     id: `ctx-${sha256(`${input.conversation.id}:${input.userMessage.id}:${input.userMessage.createdAt}`).slice(0, 16)}`,
@@ -157,8 +165,8 @@ export async function buildContextPack(
       runId: message.runId,
       createdAt: message.createdAt,
     })),
-    relevantDocs: input.relevantDocs ?? [],
-    relevantMemory: input.relevantMemory ?? [],
+    relevantDocs: localRelevantDocs,
+    relevantMemory: localRelevantMemory,
     constraints: input.constraints ?? defaultConstraints(),
     availableProviders: input.providerInfo ?? {
       configured: [],
@@ -195,6 +203,18 @@ function artifactToHandle(artifact: Artifact): ArtifactHandle {
     piiState: artifact.piiState,
     retentionPolicy: artifact.retentionPolicy,
   });
+}
+
+function searchTruthLibrary(
+  truthLibrary: TruthLibraryReader | undefined,
+  query: string,
+  kind: "doc" | "memory",
+  limit = 5
+): ArtifactHandle[] {
+  if (truthLibrary === undefined) return [];
+  return truthLibrary
+    .search({ query, kinds: [kind], limit })
+    .map((result) => truthItemToArtifactHandle(result.item));
 }
 
 function defaultConstraints(): string[] {
