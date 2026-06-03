@@ -12,6 +12,7 @@ import { createFakePlan } from "../orchestration/planner";
 import { transitionRun } from "../orchestration/runStateMachine";
 import { reviewPlanWithSkeptic } from "../orchestration/skeptic";
 import { triageUserMessage, type TriageResult } from "../orchestration/triage";
+import { validateAndHealExecution } from "../orchestration/validationHealing";
 import { redactSecrets, redactString } from "../security/redaction";
 import { InMemoryRectorStore } from "../store/inMemoryRectorStore";
 import type { Run, RunEvent } from "../store/schemas";
@@ -456,9 +457,13 @@ async function createFakeChatRun(
   const dagCompilationPayload = compiledDag
     ? { compiledDag }
     : { skippedReason: `Crucible verdict ${crucibleDecision.verdict} is not ACCEPTED` };
-  const executionPayload = compiledDag
-    ? { executionResult: await executeCompiledDag(compiledDag) }
+  const executionResult = compiledDag ? await executeCompiledDag(compiledDag) : undefined;
+  const executionPayload = executionResult
+    ? { executionResult }
     : { skippedReason: "Execution skipped because no compiled DAG exists" };
+  const validationPayload = compiledDag && executionResult
+    ? { validationHealingResult: await validateAndHealExecution({ compiledDag, executionResult }) }
+    : { skippedReason: "Execution skipped or missing; validation and healing skipped" };
 
   const phases = [
     "TRIAGE",
@@ -487,6 +492,7 @@ async function createFakeChatRun(
         ...(phase === "CRUCIBLE" ? { crucibleDecision } : {}),
         ...(phase === "DAG_COMPILATION" ? dagCompilationPayload : {}),
         ...(phase === "EXECUTING" ? executionPayload : {}),
+        ...(phase === "VALIDATING" ? validationPayload : {}),
       },
     });
     current = result.run;

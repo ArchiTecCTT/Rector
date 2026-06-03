@@ -139,6 +139,7 @@ describe("chat API vertical shell", () => {
 
     const dagEvent = (sent.data as any).events.find((event: any) => event.phase === "DAG_COMPILATION");
     const executingEvent = (sent.data as any).events.find((event: any) => event.phase === "EXECUTING");
+    const validatingEvent = (sent.data as any).events.find((event: any) => event.phase === "VALIDATING");
     if (crucibleEvent?.payload?.crucibleDecision?.verdict === "ACCEPTED") {
       expect(dagEvent?.payload?.compiledDag?.nodes?.length).toBeGreaterThan(0);
       expect(dagEvent?.payload?.compiledDag?.metadata?.plannerTaskToDagNode).toBeDefined();
@@ -146,9 +147,12 @@ describe("chat API vertical shell", () => {
       expect(executingEvent?.payload?.executionResult?.nodeResults?.length).toBe(
         dagEvent?.payload?.compiledDag?.nodes?.length
       );
+      expect(validatingEvent?.payload?.validationHealingResult?.status).toBe("VALIDATED");
+      expect(validatingEvent?.payload?.validationHealingResult?.actions).toEqual([]);
     } else {
       expect(dagEvent?.payload?.skippedReason).toContain("Crucible verdict");
       expect(executingEvent?.payload?.skippedReason).toContain("compiled DAG");
+      expect(validatingEvent?.payload?.skippedReason).toContain("Execution skipped");
     }
   });
 

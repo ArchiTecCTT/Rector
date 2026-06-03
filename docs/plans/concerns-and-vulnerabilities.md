@@ -116,6 +116,13 @@
 - **Status:** Open until real sandbox/provider executor chunks.
 - **Plan:** The executor simulator runs in memory, never calls shell/providers, and only compares deterministic metadata for retries, dependency blocking, timeout, and unsafe shell denial. Production execution still needs sandbox isolation, durable execution logs, cancellation, real timeout enforcement, tool allowlists, filesystem/network controls, and provider budget enforcement at call boundaries.
 
+### Validation/healing loop replays the whole fake DAG
+
+- **Source:** Chunk 14 implementation.
+- **Severity:** Medium product/prod limitation.
+- **Status:** Open until real executor/healing chunks.
+- **Plan:** The alpha healing loop is deterministic, bounded, provider-free, shell-free, and safe for local simulation. It heals only transient/timeout simulator failures by re-running the DAG with adjusted simulator options. Real execution needs node-level replay, artifact isolation/rollback, durable attempt records, richer failure taxonomy, human decision UX for permission/destructive actions, and real timeout/root-cause diagnostics.
+
 ## Closed / Mitigated
 
 ### Non-atomic run update then event append
