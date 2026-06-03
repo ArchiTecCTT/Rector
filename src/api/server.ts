@@ -7,6 +7,7 @@ import { STATES } from "../domain/states";
 import { buildContextPack, createContextMaterial, type ContextPack } from "../orchestration/contextBuilder";
 import { createFakePlan } from "../orchestration/planner";
 import { transitionRun } from "../orchestration/runStateMachine";
+import { reviewPlanWithSkeptic } from "../orchestration/skeptic";
 import { triageUserMessage, type TriageResult } from "../orchestration/triage";
 import { redactSecrets, redactString } from "../security/redaction";
 import { InMemoryRectorStore } from "../store/inMemoryRectorStore";
@@ -399,6 +400,7 @@ async function createFakeChatRun(
 ): Promise<Run> {
   const traceId = `trace-${crypto.randomUUID()}`;
   const plannerOutput = createFakePlan({ triage, contextPack, messageContent: prompt });
+  const skepticReview = reviewPlanWithSkeptic(plannerOutput, contextPack);
 
   const run = await store.createRun({
     conversationId,
@@ -461,6 +463,7 @@ async function createFakeChatRun(
         ...(phase === "TRIAGE" ? { triage } : {}),
         ...(phase === "CONTEXT_BUILDING" ? { contextPack } : {}),
         ...(phase === "PLANNING" ? { plannerOutput } : {}),
+        ...(phase === "SKEPTIC_REVIEW" ? { skepticReview } : {}),
       },
     });
     current = result.run;

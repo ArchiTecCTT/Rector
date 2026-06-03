@@ -85,8 +85,15 @@
 
 - **Source:** Chunk 9 implementation.
 - **Severity:** Medium product limitation.
-- **Status:** Open until skeptic/crucible/DAG/provider chunks replace the fake planner shell.
+- **Status:** Open until crucible/DAG/provider chunks replace the fake planner shell.
 - **Plan:** Current planner validates schema shape, route-specific task templates, validation coverage, and unsafe approval gates. It does not use LLM reasoning, workspace-aware dependency analysis, real tool availability, or execution DAG compilation yet.
+
+### Skeptic review is heuristic-only
+
+- **Source:** Chunk 10 implementation.
+- **Severity:** Medium product limitation.
+- **Status:** Open until Crucible/provider-backed review chunks.
+- **Plan:** Current skeptic review deterministically checks validation coverage, dangling dependencies, approval gates, empty-task clarification, absent context references, and low-risk underestimates. It does not perform semantic plan critique, real filesystem/API existence checks, exploit analysis, or multi-reviewer consensus yet.
 
 ## Closed / Mitigated
 

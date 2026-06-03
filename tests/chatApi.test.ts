@@ -127,6 +127,10 @@ describe("chat API vertical shell", () => {
       "code.edit",
       "code.validate",
     ]);
+
+    const skepticEvent = (sent.data as any).events.find((event: any) => event.phase === "SKEPTIC_REVIEW");
+    expect(skepticEvent?.payload?.skepticReview?.verdict).toBeDefined();
+    expect(skepticEvent?.payload?.skepticReview?.findings).toEqual(expect.any(Array));
   });
 
   it("returns run events", async () => {
