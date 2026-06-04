@@ -2,7 +2,7 @@
 
 > Open-source Apache-2.0 software that gives users a normal chat experience while hidden deterministic orchestration, validation, and self-healing loops handle the engineering work underneath.
 
-[![Status](https://img.shields.io/badge/status-0.1.0%20planning-blue?style=flat-square)](#)
+[![Status](https://img.shields.io/badge/status-0.1.0--alpha-blue?style=flat-square)](#)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square)](#)
 
 ---
@@ -17,11 +17,13 @@ Rector solves this by applying a fundamental principle from manufacturing: **sep
 
 Behind the chat interface, Rector uses:
 
-1. **A deterministic state machine** — the Thalamus Router — that programmatically controls every routing decision
-2. **A tiered intelligence pipeline** — cheap SLMs handle the mechanical work; expensive flagship models are reserved strictly for deep reasoning and final synthesis
-3. **A self-healing sandbox** — generated code executes in isolated environments; failures are caught, parsed, and routed back for localized fixes before they cascade
+1. **A deterministic control plane** — a run state machine that programmatically drives every phase transition, retry, and healing decision, so routing is auditable rather than LLM-guessed
+2. **A tiered intelligence pipeline** — cheap SLMs are intended for the mechanical work; flagship models are reserved strictly for deep reasoning and final synthesis (provider routing ships behind adapters; the alpha runs fully on fake/local adapters)
+3. **A bounded self-healing loop** — generated work is validated, and recoverable failures trigger a capped, deterministic repair loop before they cascade
 
 The result: a system that thinks before it acts, debates before it executes, and heals itself when things break — at a fraction of the cost of monolithic LLM approaches.
+
+> **Alpha status:** This is a local developer preview. The full pipeline runs end-to-end on deterministic fake/local adapters with no API keys and no network. External providers, durable storage, and real sandbox isolation are defined behind contracts but not yet live — see [Status and Current Plan](#status-and-current-plan).
 
 ---
 
@@ -37,52 +39,51 @@ LLMs do not orchestrate tasks. A programmatic router manages all routing, retrie
 Before any code is touched, the system forces the plan through a rigorous refinement phase — establishing the "What" and the "Why" so the "How" is grounded in reality.
 
 ### Self-Healing Execution
-Generated outputs execute in isolated sandboxes. Errors are parsed deterministically and routed back for localized fixes without involving the Flagship layer.
+Validation failure is not terminal. Recoverable errors are classified and routed into a bounded, deterministic repair loop without involving the Flagship layer. Unsafe or unrecoverable cases escalate to a concise human decision. (Real isolated sandbox execution is contract-defined but deferred past the alpha — see the roadmap.)
 
 ---
 
 ## Architecture Overview
 
+Rector runs every chat request through a deterministic sequence of run phases. The control plane drives the transitions; models (when enabled) only propose content at specific steps.
+
+```text
+User message
+    │
+    ▼
+CHAT_RECEIVED ──► TRIAGE ──► CONTEXT_BUILDING
+    │                              │
+    │   (classify route +          │  (compact context pack:
+    │    complexity)               │   intent, repo state, docs,
+    │                              │   memory hits, risk flags)
+    ▼                              ▼
+PLANNING ──► SKEPTIC_REVIEW ──► CRUCIBLE
+    │         (adversarial         │  (deterministic arbiter,
+    │          read-only review)   │   max 2 rounds)
+    ▼                              ▼
+DAG_COMPILATION ──► EXECUTING ──► VALIDATING
+                                   │
+                        ┌──────────┴───────────┐
+                        │ pass                  │ fail (and safe)
+                        ▼                       ▼
+                  SYNTHESIZING            HEALING ──► VALIDATING
+                        │                  (bounded repair loop)
+                        ▼
+        DONE  /  NEEDS_DECISION  /  FAILED
 ```
-User Prompt
-    │
-    ▼
-Intake Triage Router ── (trivial) ──► Flash LLM ──► Output
-    │
-    │ (complex)
-    ▼
-Phase 1: Schema & Encoding
-    ├─ Prompt Improver ── searches repo + memory
-    └─ Context Anchor ── asks "why does this matter?"
-    │
-    ▼
-Phase 2: Task Decomposition
-    └─ Thalamus Router 1 ── Tree of Thoughts breakdown
-    │
-    ▼
-Phase 3: Metacognitive Monitoring
-    ├─ The Skeptic ── evidence-based stress-testing
-    └─ The Crucible ── max 2-round debate (deterministic)
-    │
-    ▼
-Phase 4: Compilation + Execution
-    ├─ Main Brain ── assigns models, compiles JSON DAG
-    └─ Thalamus Engine ── deterministic execution
-    │
-    ▼
-Output / Human Handoff
-```
+
+`NEEDS_DECISION` is a first-class outcome (ambiguous intent, budget cap, retry cap, risky side effect, or missing credential), not an error. The canonical phase enum and the rationale for each stage live in [`docs/architecture/rector-0.1.0-architecture.md`](docs/architecture/rector-0.1.0-architecture.md).
 
 ---
 
 ## Key Features
 
-- **Multi-phase cognitive pipeline** — Prompt Improver, dual Thalamus Routers, Skeptic red-teaming, Main Brain compiler
-- **Deterministic state machine** — every transition is rule-based, not LLM-guessed
-- **Evidence-based debate** — plans are stress-tested with read-only tools before execution
-- **Self-healing sandbox** — localized error fixes without re-running the full pipeline
-- **Tiered model routing** — SLMs for mechanical work, Flagship for synthesis only
-- **JSON DAG execution** — the Main Brain outputs a strict execution graph; the engine executes it programmatically
+- **Multi-phase cognitive pipeline** — triage, context building, planner, skeptic review, crucible arbitration, DAG compilation, execution, validation/healing, and synthesis
+- **Deterministic control plane** — every phase transition is rule-based, committed through a run state machine with an append-only event log
+- **Evidence-based debate** — plans are stress-tested by an adversarial skeptic, then arbitrated by a deterministic crucible (max two rounds)
+- **Bounded self-healing** — recoverable validation failures trigger a capped repair loop; unsafe cases escalate to a human decision
+- **Tiered model routing** — provider adapters route SLM vs. flagship work behind budget gates (alpha runs on fake/local providers, no keys required)
+- **JSON DAG execution** — the planner output compiles into a strict execution graph that the executor runs programmatically
 
 ---
 
@@ -118,7 +119,7 @@ npm run build
 # Run in local development mode (no API keys required)
 npm run dev
 
-# Open the dashboard
+# Open the local chat UI
 open http://localhost:3000
 ```
 
@@ -185,16 +186,31 @@ Continuous integration runs in GitHub Actions via [`.github/workflows/ci.yml`](.
 
 ## Project Structure
 
-```
+```text
 src/
-  adapters/       # Provider integrations (event bus, LLM, task store)
-  api/            # Express API server + REST routes
-  domain/         # State machine schemas, transitions, state definitions
-  public/         # Frontend assets (HTML, CSS, JS)
-  thalamus/       # Thalamus router engine
-  workers/        # Agent worker executors
-  index.ts        # Entry point
+  orchestration/   # run state machine + cognitive modules (triage, contextBuilder,
+                   #   planner, skeptic, crucible, dagCompiler, executorSimulator,
+                   #   validationHealing, synthesizer)
+  protocol/        # canonical phases, envelope, DAG, event, and shared schemas
+  store/           # in-memory Rector store + store schemas (atomic run/event commit)
+  api/             # Express API server (chat, runs, operator, setup endpoints)
+  public/          # local chat UI assets (HTML, CSS, JS)
+  providers/       # LLM provider contracts + model router (fake/local by default)
+  memory/          # local truth library + memory adapters (Chroma/Algolia stubs)
+  observability/   # trace IDs, spans, phase timing, no-op telemetry adapters
+  security/        # budget evaluator + redaction utilities
+  sandbox/         # safe local code-execution contracts (no real isolation yet)
+  extensions/      # public extension contracts (rector.extensions.v1alpha1)
+  workflows/       # external workflow contracts/stubs (Linear, Make, etc.)
+  deployment/      # deployment env parsing, config redaction, readiness report
+  bin/server.ts    # runtime bootstrap (keeps src/index.ts side-effect free)
+  index.ts         # package entry point
 ```
+
+> Migration note: some older local-MVP folders (`adapters/`, `domain/`, `thalamus/`,
+> `workers/`) remain in `src/` and are being retired incrementally as the chat/run
+> architecture replaces them. New code depends on the `protocol/`, `orchestration/`,
+> and `store/` interfaces, not the old task-specific types.
 
 ---
 
