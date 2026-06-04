@@ -1,304 +1,96 @@
 // ============================================================
-// Rector Stealth Portal Client Application Logic
-// Handles client-side state machine simulation & ROI calculators.
+// Rector local chat UI — client logic
+// Talks only to the real provider-free chat API. No fabricated
+// data: the timeline, trace, and observability are built from
+// actual run events returned by the backend.
 // ============================================================
 
-// --- Configuration Setup ---
 const API = "/api";
-let activeDialog = null;
 
-// --- State Variables for Simulator ---
-let currentTask = null;
-let currentStepIndex = -1;
-let simInterval = null;
-let simMetrics = {
-  modelInvocations: 0,
-  cacheHits: 0,
-  totalCost: 0,
-  validationRuns: 0,
-  healingRuns: 0,
-  synthesisRuns: 0
+// Canonical run phases (mirror of src/protocol/phases.ts).
+const RUN_PHASES = [
+  "CHAT_RECEIVED",
+  "TRIAGE",
+  "CONTEXT_BUILDING",
+  "PLANNING",
+  "SKEPTIC_REVIEW",
+  "CRUCIBLE",
+  "DAG_COMPILATION",
+  "EXECUTING",
+  "VALIDATING",
+  "HEALING",
+  "SYNTHESIZING",
+  "DONE",
+];
+
+// User-facing status labels per phase (mirror of RUN_PHASE_STATUS_LABELS).
+const PHASE_STATUS_LABELS = {
+  CHAT_RECEIVED: "Thinking",
+  TRIAGE: "Thinking",
+  CONTEXT_BUILDING: "Thinking",
+  PLANNING: "Planning",
+  SKEPTIC_REVIEW: "Planning",
+  CRUCIBLE: "Planning",
+  DAG_COMPILATION: "Planning",
+  EXECUTING: "Executing",
+  VALIDATING: "Validating",
+  HEALING: "Repairing",
+  SYNTHESIZING: "Thinking",
+  DONE: "Done",
+  NEEDS_DECISION: "Needs decision",
+  FAILED: "Failed",
+  ABORTED: "Failed",
 };
 
-// --- Scenarios specifications ---
-const SCENARIOS = {
-  happy: {
-    id: "REC-9082-HAPPY",
-    description: "Build high-performance REST API endpoints with Vitest testing suite for task management database",
-    states: [
-      { state: "1_INTAKE", statusText: "DISTILLING VECTOR CONTEXT" },
-      { state: "2_ARCHITECTURAL_PLAN", statusText: "FLAGSHIP PLAN GENERATION" },
-      { state: "3_SLM_EXECUTION_FANOUT", statusText: "SLM WORKER EXECUTION" },
-      { state: "4_SANDBOX_VALIDATION", statusText: "SANDBOX TEST RUN" },
-      { state: "6_FINAL_SYNTHESIS", statusText: "FINAL ARCHITECTURE SYNTHESIS" },
-      { state: "7_HUMAN_HANDOFF", statusText: "COMPLETED & HANDED OFF" }
-    ],
-    subtasks: [
-      { title: "AST code representation distillation", status: "completed", type: "intake" },
-      { title: "Red-team cognitive strategy blueprinting", status: "completed", type: "plan" },
-      { title: "Synthesize route controllers in server.ts", status: "completed", type: "slm" },
-      { title: "Generate JSON repository database adapters", status: "completed", type: "slm" },
-      { title: "Write Vitest specs in server.test.ts", status: "completed", type: "slm" },
-      { title: "Execute 'vitest run' inside Depot container", status: "completed", type: "sandbox" },
-      { title: "Consolidate PR branch & update Linear ticket", status: "completed", type: "flagship" }
-    ],
-    logs: [
-      { state: "1_INTAKE", text: "[INTAKE] Task ingested from webhook. Querying Chroma vector store for database contexts...", type: "system" },
-      { state: "1_INTAKE", text: "[INTAKE] Distilled 18 code chunks into 8.2KB dense markdown blueprint context. Chroma index lookup: 14ms", type: "success" },
-      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Initializing Flagship Model (Claude 3.5 Sonnet) to construct implementation spec...", type: "system" },
-      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] System specifications generated: 3 sub-agent code-writing files allocated. KV-cache prefix written.", type: "success" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] Launching concurrent Small Language Models (Qwen 2.5 Coder 7B) on Together AI...", type: "system" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-1] Generated server.ts task route handler. Prefix Cache HIT: 91%", type: "success" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-2] Synthesized database adapter. Time-to-first-token: 180ms", type: "success" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-3] Wrote Vitest test specs. Together AI Compute Cost: $0.0004", type: "success" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Spinning up isolated Depot container environment using Node 20 runtime...", type: "system" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Injecting code volumes and running Vitest integration test suite...", type: "system" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Vitest: 14/14 test cases successfully executed. Coverage: 100%. Sandbox exited with status: 0", type: "success" },
-      { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Initiating Flagship Model review of sandboxed files and tests outputs...", type: "system" },
-      { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Code pattern clean. AST integrity check verified. Constructing final PR package...", type: "success" },
-      { state: "7_HUMAN_HANDOFF", text: "[HANDOFF] PR #104 published. Linear issue 'RECT-82' resolved. State Machine finished deterministically.", type: "success" }
-    ]
-  },
-  healing: {
-    id: "REC-3841-HEAL",
-    description: "Refactor multi-agent router retry logic and resolve AST node leak failures",
-    states: [
-      { state: "1_INTAKE", statusText: "DISTILLING VECTOR CONTEXT" },
-      { state: "2_ARCHITECTURAL_PLAN", statusText: "FLAGSHIP PLAN GENERATION" },
-      { state: "3_SLM_EXECUTION_FANOUT", statusText: "SLM WORKER EXECUTION" },
-      { state: "4_SANDBOX_VALIDATION", statusText: "SANDBOX TEST RUN (FAILING)" },
-      { state: "5_HEALING_LOOP", statusText: "AST TRACE SELF-HEALING" },
-      { state: "4_SANDBOX_VALIDATION", statusText: "SANDBOX TEST RUN (PASSED)" },
-      { state: "6_FINAL_SYNTHESIS", statusText: "FINAL ARCHITECTURE SYNTHESIS" },
-      { state: "7_HUMAN_HANDOFF", statusText: "COMPLETED & HANDED OFF" }
-    ],
-    subtasks: [
-      { title: "Retrieve router context and active configurations", status: "completed", type: "intake" },
-      { title: "Generate healing tasks specification array", status: "completed", type: "plan" },
-      { title: "Refactor thalamus/router.ts retry transition states", status: "completed", type: "slm" },
-      { title: "Generate Vitest suite for retry mechanics", status: "completed", type: "slm" },
-      { title: "Verify specs inside Depot container (fails first)", status: "failed", type: "sandbox" },
-      { title: "Parse AST stack traces and re-route error", status: "completed", type: "healing" },
-      { title: "Rerun healed Vitest suite in Sandbox", status: "completed", type: "sandbox" },
-      { title: "Verify final synthesis & Linear webhook handshake", status: "completed", type: "flagship" }
-    ],
-    logs: [
-      { state: "1_INTAKE", text: "[INTAKE] Ingested retry loop failure issue. Chromadb sync triggered for thalamus router...", type: "system" },
-      { state: "1_INTAKE", text: "[INTAKE] Chunked 34 records. Derived 12.4KB dense context markdown vector. Completed: 11ms", type: "success" },
-      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Requesting spec from Flagship (Claude 3.5 Sonnet)...", type: "system" },
-      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Subtasks specified: 2 SLMs allocated concurrently for editing and testing. Prefix written.", type: "success" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] Together AI workers (Qwen 2.5 Coder 7B) active concurrently...", type: "system" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-1] Refactored thalamus/router.ts file. Prefix Cache HIT: 89%", type: "success" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-2] Wrote Vitest specs for retry states. Compute Cost: $0.0003", type: "success" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Launching Docker Node runtime sandbox in Depot...", type: "system" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Running test commands: 'vitest run'... Execution active.", type: "system" },
-      { state: "4_SANDBOX_VALIDATION", text: "[ERROR] Vitest ASSERTION FAILED: router.ts Line 42. Target retry state mismatched. Sandbox exited with status: 1", type: "error" },
-      { state: "5_HEALING_LOOP", text: "[HEALING] Caught Sandbox exit code 1. Dispatching to AST Trace Healing Engine...", type: "system" },
-      { state: "5_HEALING_LOOP", text: "[HEALING] Locating assertion at line 42. Matching Sentry trace telemetry. Rerouting to Qwen Coder with error context...", type: "system" },
-      { state: "5_HEALING_LOOP", text: "[HEALING] [Worker-Correction] Successfully patched target retry state mismatch inside router.ts. Cost: $0.0001", type: "success" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Spinning up new clean sandbox container. Re-injecting healed router.ts module...", type: "system" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Vitest: 8/8 test cases executed. Passed. Coverage: 100%. Sandbox status: 0", type: "success" },
-      { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Frontier Flagship reviewing task correctness, changes diff, and sandbox history...", type: "system" },
-      { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Synthesis approved. Ready to deploy code utilities.", type: "success" },
-      { state: "7_HUMAN_HANDOFF", text: "[HANDOFF] PR #105 compiled. Linear notification updated. State Machine finished deterministically.", type: "success" }
-    ]
-  },
-  migration: {
-    id: "REC-4091-MIGR",
-    description: "Automate Next.js Page Router codebase migration to the v15 App Router architecture",
-    states: [
-      { state: "1_INTAKE", statusText: "DISTILLING VECTOR CONTEXT" },
-      { state: "2_ARCHITECTURAL_PLAN", statusText: "FLAGSHIP PLAN GENERATION" },
-      { state: "3_SLM_EXECUTION_FANOUT", statusText: "SLM WORKER EXECUTION" },
-      { state: "4_SANDBOX_VALIDATION", statusText: "SANDBOX TEST RUN" },
-      { state: "6_FINAL_SYNTHESIS", statusText: "FINAL ARCHITECTURE SYNTHESIS" },
-      { state: "7_HUMAN_HANDOFF", statusText: "COMPLETED & HANDED OFF" }
-    ],
-    subtasks: [
-      { title: "Analyze pages directory structures and page dependency trees", status: "completed", type: "intake" },
-      { title: "Formulate Page Router to App Router mapping plans", status: "completed", type: "plan" },
-      { title: "Convert legacy pages/index.tsx to app/page.tsx Server Component", status: "completed", type: "slm" },
-      { title: "Convert pages/about.tsx to app/about/page.tsx Server Component", status: "completed", type: "slm" },
-      { title: "Migrate legacy layouts to nested layout.tsx routing wrappers", status: "completed", type: "slm" },
-      { title: "Execute 'next build' and page routing tests inside Depot sandbox", status: "completed", type: "sandbox" },
-      { title: "Verify NextJS routing bundle outputs and publish PR branch", status: "completed", type: "flagship" }
-    ],
-    logs: [
-      { state: "1_INTAKE", text: "[INTAKE] Next.js Page Router codebase migration target detected. Querying file structures...", type: "system" },
-      { state: "1_INTAKE", text: "[INTAKE] Distilled 42 legacy routes into a clean structural page mapping document. Chromadb lookup: 21ms", type: "success" },
-      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Initializing Flagship Model (Claude 3.5 Sonnet) to construct translation schema...", type: "system" },
-      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] NextJS conversion blueprint generated. Storing layout prefixes inside Together AI cache...", type: "success" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] Launching concurrent specialized code rewriting models (Qwen 2.5 Coder 7B)...", type: "system" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-1] Migrated index.tsx home routing. Together AI Prefix Cache HIT: 93%", type: "success" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-2] Refactored about.tsx and layouts into modern layouts wrappers. Time: 155ms", type: "success" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[Worker-3] Wrote Vitest routing integrity tests.", type: "success" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Spinning up isolated Depot container loaded with Next v15 developer environment...", type: "system" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Executing 'npm run build' compiler page-generation verification specs...", type: "system" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] NextJS: all page route chunks generated successfully. Bundle sizes checked. Exit code: 0", type: "success" },
-      { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Initiating Flagship Model logic checks for App Router optimization and hydration rules...", type: "system" },
-      { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Server Component boundaries validated. Ready to ship optimal NextJS layout utilities.", type: "success" },
-      { state: "7_HUMAN_HANDOFF", text: "[HANDOFF] PR #106 published. Migrated NextJS layout codebase successfully. Tasks complete.", type: "success" }
-    ]
-  },
-  stripe: {
-    id: "REC-7801-STRIPE",
-    description: "Implement secure Stripe checkout webhook signature verification and checkout session endpoints",
-    states: [
-      { state: "1_INTAKE", statusText: "DISTILLING VECTOR CONTEXT" },
-      { state: "2_ARCHITECTURAL_PLAN", statusText: "FLAGSHIP PLAN GENERATION" },
-      { state: "3_SLM_EXECUTION_FANOUT", statusText: "SLM WORKER EXECUTION" },
-      { state: "4_SANDBOX_VALIDATION", statusText: "SANDBOX TEST RUN" },
-      { state: "6_FINAL_SYNTHESIS", statusText: "FINAL ARCHITECTURE SYNTHESIS" },
-      { state: "7_HUMAN_HANDOFF", statusText: "COMPLETED & HANDED OFF" }
-    ],
-    subtasks: [
-      { title: "Retrieve Stripe subscription API specs and DB schemas", status: "completed", type: "intake" },
-      { title: "Formulate webhook endpoint signature checking plans", status: "completed", type: "plan" },
-      { title: "Implement signature checking stripe.ts verification helpers", status: "completed", type: "slm" },
-      { title: "Implement invoice.created webhook controller adapters", status: "completed", type: "slm" },
-      { title: "Write mock Stripe request webhook payload signing test specs", status: "completed", type: "slm" },
-      { title: "Execute billing integration tests using stripe-mock services", status: "completed", type: "sandbox" },
-      { title: "Synthesize payment gateways status and publish PR branch", status: "completed", type: "flagship" }
-    ],
-    logs: [
-      { state: "1_INTAKE", text: "[INTAKE] Stripe billing integration target specs received. Analyzing webhook verification limits...", type: "system" },
-      { state: "1_INTAKE", text: "[INTAKE] Index matching: invoice, checkout, subscription entities synced: 8ms", type: "success" },
-      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Dispatching Frontier Model to layout secure payload signature inspection methods...", type: "system" },
-      { state: "2_ARCHITECTURAL_PLAN", text: "[PLAN] Security specifications outlined. Together AI prefix cache schemas committed.", type: "success" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] Deploying concurrent specialized code writing models (Qwen 2.5 Coder 7B)...", type: "system" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-1] Wrote stripe.ts billing logic helper. Together AI Prefix Cache HIT: 92%", type: "success" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[EXECUTION] [Worker-2] Restructured user invoice database adapter models. Time: 140ms", type: "success" },
-      { state: "3_SLM_EXECUTION_FANOUT", text: "[Worker-3] Wrote checkout mock request payloads specs.", type: "success" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Initializing isolated Depot container sandbox with Stripe-mock servers gateway fixtures...", type: "system" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Triggering webhook mock payloads verification requests and inspecting DB transitions...", type: "system" },
-      { state: "4_SANDBOX_VALIDATION", text: "[VALIDATE] Checkout verification succeeded. Subscriptions updated. Tests: 18/18 passed. Exit code: 0", type: "success" },
-      { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Flagship Architect auditing signature validations and rate limits error handlers...", type: "system" },
-      { state: "6_FINAL_SYNTHESIS", text: "[SYNTHESIS] Security checks approved. Creating billing integration pull request...", type: "success" },
-      { state: "7_HUMAN_HANDOFF", text: "[HANDOFF] PR #107 compiled. Billing integration live. State machine execution completed successfully.", type: "success" }
-    ]
-  }
+// --- Client state ---
+const state = {
+  conversationId: null,
+  conversations: [],
+  lastResultByMessage: new Map(), // assistantMessageId -> result payload (for trace)
 };
 
-// --- Economic Base Calculator Constants ---
-const COSTS = {
-  artisanalTask: 7.40,  // GPT-4o on every single step & loop
-  rectorTaskBase: 0.37, // 90% SLMs + 10% Flagship
-  cacheSavings: 0.40,   // Prefix caching saves 40%
-  codebaseMultiplier: {
-    small: 1.0,
-    medium: 1.5,
-    large: 2.5
-  }
-};
+// --- DOM refs ---
+const els = {};
 
-// ============================================================
-// Page Setup Dialog Controls
-// ============================================================
-
-function bindSetupModal() {
-  const setupBtn = document.getElementById("setup-btn");
-  const modal = document.getElementById("setup-modal");
-  
-  if (setupBtn && modal) {
-    setupBtn.addEventListener("click", () => {
-      modal.showModal();
-    });
-  }
-}
-
-// ============================================================
-// Interactive ROI & Cognitive Arbitrage Calculator
-// ============================================================
-
-function updateCalculator() {
-  const tasksInput = document.getElementById("calc-tasks");
-  const sizeSelect = document.getElementById("calc-size");
-  const cachingCheck = document.getElementById("check-caching");
-  const healingCheck = document.getElementById("check-healing");
-
-  const costArtisanalEl = document.getElementById("cost-artisanal");
-  const costRectorEl = document.getElementById("cost-rector");
-  const costSavingsEl = document.getElementById("cost-savings");
-
-  if (!tasksInput || !sizeSelect || !cachingCheck || !healingCheck) return;
-
-  const tasksVolume = parseInt(tasksInput.value) || 0;
-  const codebaseSize = sizeSelect.value;
-  const multiplier = COSTS.codebaseMultiplier[codebaseSize] || 1.0;
-
-  // Traditional cost: Tasks * base cost * size multiplier
-  let artisanalTotal = tasksVolume * COSTS.artisanalTask * multiplier;
-
-  // Rector cost: base cost * size multiplier
-  let rectorBase = COSTS.rectorTaskBase * multiplier;
-  if (cachingCheck.checked) {
-    rectorBase = rectorBase * (1.0 - COSTS.cacheSavings);
-  }
-  // Add a tiny overhead for healing if enabled
-  if (healingCheck.checked) {
-    rectorBase += 0.05 * multiplier;
-  }
-
-  let rectorTotal = tasksVolume * rectorBase;
-  let savingsTotal = artisanalTotal - rectorTotal;
-
-  // Keep positive
-  if (savingsTotal < 0) savingsTotal = 0;
-
-  // Format currencies
-  costArtisanalEl.innerText = `$${artisanalTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  costRectorEl.innerText = `$${rectorTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  costSavingsEl.innerText = `$${savingsTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function bindCalculatorEvents() {
-  const ids = ["calc-tasks", "calc-size", "check-caching", "check-healing"];
-  ids.forEach(id => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.addEventListener("input", updateCalculator);
-      el.addEventListener("change", updateCalculator);
-    }
-  });
-
-  // Run initial calculation
-  updateCalculator();
-}
-
-// ============================================================
-// Interactive Tabs Swapping
-// ============================================================
-
-function bindTabs() {
-  const tabVisual = document.getElementById("tab-visual");
-  const tabLogs = document.getElementById("tab-logs");
-  const contentVisual = document.getElementById("content-visual");
-  const contentLogs = document.getElementById("content-logs");
-
-  if (tabVisual && tabLogs && contentVisual && contentLogs) {
-    tabVisual.addEventListener("click", () => {
-      tabVisual.classList.add("tabs__item--active");
-      tabLogs.classList.remove("tabs__item--active");
-      contentVisual.classList.remove("hidden");
-      contentLogs.classList.add("hidden");
-    });
-
-    tabLogs.addEventListener("click", () => {
-      tabLogs.classList.add("tabs__item--active");
-      tabVisual.classList.remove("tabs__item--active");
-      contentLogs.classList.remove("hidden");
-      contentVisual.classList.add("hidden");
-    });
+function cacheEls() {
+  const ids = [
+    "conversation-list",
+    "conversation-empty",
+    "new-conversation",
+    "health-indicator",
+    "chat-title",
+    "run-status",
+    "toggle-trace",
+    "close-trace",
+    "messages",
+    "empty-state",
+    "suggestions",
+    "composer",
+    "composer-input",
+    "composer-send",
+    "trace-drawer",
+    "trace-empty",
+    "trace-body",
+    "trace-status",
+    "trace-route",
+    "trace-complexity",
+    "trace-id",
+    "obs-spans",
+    "obs-duration",
+    "obs-calls",
+    "obs-cost",
+    "timeline",
+    "decision-section",
+    "decision-card",
+    "events",
+  ];
+  for (const id of ids) {
+    els[id] = document.getElementById(id);
   }
 }
 
-// ============================================================
-// Chat API Shell
-// ============================================================
-
-let rectorChatConversationId = null;
-
-async function chatApi(path, options = {}) {
+// --- API helper ---
+async function api(path, options = {}) {
   const res = await fetch(`${API}${path}`, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
@@ -311,420 +103,467 @@ async function chatApi(path, options = {}) {
   return data;
 }
 
-function appendChatLine(targetId, text, type = "system") {
-  const box = document.getElementById(targetId);
-  if (!box) return;
-  const line = document.createElement("div");
-  line.className = `log-line ${type}-line`;
-  line.innerText = text;
-  box.appendChild(line);
-  box.scrollTop = box.scrollHeight;
+// --- Utility ---
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
-async function ensureChatConversation() {
-  if (rectorChatConversationId) return rectorChatConversationId;
-  const conversation = await chatApi("/chat/conversations", {
+function statusPillClass(phase, runStatus) {
+  if (phase === "FAILED" || phase === "ABORTED" || runStatus === "failed" || runStatus === "aborted") {
+    return "status-pill--failed";
+  }
+  if (phase === "NEEDS_DECISION" || runStatus === "needs_decision") {
+    return "status-pill--decision";
+  }
+  if (phase === "DONE" || runStatus === "completed") {
+    return "status-pill--done";
+  }
+  return "status-pill--running";
+}
+
+function setRunStatus(label, pillClass) {
+  els["run-status"].textContent = label;
+  els["run-status"].className = `status-pill ${pillClass}`;
+}
+
+// --- Health check ---
+async function checkHealth() {
+  try {
+    await api("/setup");
+    els["health-indicator"].textContent = "online";
+    els["health-indicator"].classList.remove("muted");
+  } catch {
+    els["health-indicator"].textContent = "offline";
+  }
+}
+
+// --- Conversations ---
+async function loadConversations() {
+  try {
+    const data = await api("/chat/conversations?workspaceId=browser");
+    state.conversations = data.conversations || [];
+    renderConversationList();
+  } catch (err) {
+    console.error("Failed to load conversations", err);
+  }
+}
+
+function renderConversationList() {
+  const list = els["conversation-list"];
+  list.innerHTML = "";
+  if (!state.conversations.length) {
+    const empty = document.createElement("p");
+    empty.className = "conversation-list__empty";
+    empty.textContent = "No conversations yet. Send a message to start one.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const conv of state.conversations) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "conversation-item" + (conv.id === state.conversationId ? " active" : "");
+    item.textContent = conv.title || "Untitled conversation";
+    item.title = conv.title || conv.id;
+    item.addEventListener("click", () => openConversation(conv.id));
+    list.appendChild(item);
+  }
+}
+
+async function ensureConversation() {
+  if (state.conversationId) return state.conversationId;
+  const conv = await api("/chat/conversations", {
     method: "POST",
-    body: JSON.stringify({ title: "Rector chat shell", workspaceId: "browser" }),
+    body: JSON.stringify({ title: "New conversation", workspaceId: "browser" }),
   });
-  rectorChatConversationId = conversation.id;
-  const label = document.getElementById("rector-chat-conversation");
-  if (label) label.innerText = `CONVERSATION: ${conversation.id}`;
-  return rectorChatConversationId;
+  state.conversationId = conv.id;
+  state.conversations.unshift(conv);
+  renderConversationList();
+  return conv.id;
 }
 
-function bindChatShell() {
-  const form = document.getElementById("rector-chat-form");
-  const input = document.getElementById("rector-chat-input");
-  const status = document.getElementById("rector-chat-run-status");
-  const submit = document.getElementById("rector-chat-submit");
-
-  if (!form || !input) return;
-
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const content = input.value.trim();
-    if (!content) return;
-
-    if (submit) submit.disabled = true;
-    if (status) {
-      status.innerText = "SENDING";
-      status.className = "pill text-signal";
-    }
-    appendChatLine("rector-chat-messages", `[USER] ${content}`, "system");
-
-    try {
-      const conversationId = await ensureChatConversation();
-      const result = await chatApi(`/chat/conversations/${conversationId}/messages`, {
-        method: "POST",
-        body: JSON.stringify({ content }),
-      });
-
-      input.value = "";
-      appendChatLine("rector-chat-messages", `[ASSISTANT] ${result.assistantMessage.content}`, "success");
-      if (status) {
-        status.innerText = `${result.run.status.toUpperCase()} · ${result.run.phase}`;
-        status.className = "pill text-signal";
-      }
-
-      const eventsBox = document.getElementById("rector-chat-events");
-      if (eventsBox) eventsBox.innerHTML = "";
-      result.events.forEach((event) => {
-        appendChatLine("rector-chat-events", `[${event.type}] ${event.phase} · ${event.runId}`, event.type === "RUN_COMPLETED" ? "success" : "system");
-      });
-    } catch (err) {
-      appendChatLine("rector-chat-messages", `[ERROR] ${err.message}`, "error");
-      if (status) {
-        status.innerText = "ERROR";
-        status.className = "pill";
-      }
-    } finally {
-      if (submit) submit.disabled = false;
-    }
-  });
+function startNewConversation() {
+  state.conversationId = null;
+  els["chat-title"].textContent = "New conversation";
+  setRunStatus("Idle", "status-pill--idle");
+  clearMessages(true);
+  resetTrace();
+  renderConversationList();
+  els["composer-input"].focus();
 }
 
-// ============================================================
-// Interactive State Machine Simulator Engine
-// ============================================================
-
-function resetSimulator() {
-  clearInterval(simInterval);
-  simInterval = null;
-  currentTask = null;
-  currentStepIndex = -1;
-
-  // Reset visual steps
-  const steps = document.querySelectorAll(".pipeline-step");
-  steps.forEach(step => {
-    step.classList.remove("active", "completed");
-  });
-
-  // Reset connectors
-  const connectors = document.querySelectorAll(".pipeline-connector");
-  connectors.forEach(conn => {
-    conn.classList.remove("active", "completed");
-  });
-
-  // Reset active status block
-  document.getElementById("sim-task-id").innerText = "TASK: IDLE";
-  document.getElementById("sim-task-state-badge").innerText = "NO EVENT";
-  document.getElementById("sim-task-state-badge").className = "pill";
-  document.getElementById("sim-task-desc").innerText = "No active task. Seed a scenario to watch the execution engine spin.";
-  document.getElementById("subtask-progress-box").classList.add("hidden");
-  document.getElementById("sim-subtasks-list").innerHTML = "";
-
-  // Reset controls
-  const resetBtn = document.getElementById("btn-reset-sim");
-  if (resetBtn) resetBtn.disabled = true;
-
-  // Clear Logs
-  const logsBox = document.getElementById("terminal-logs-box");
-  logsBox.innerHTML = '<div class="log-line system-line">[SYSTEM] Rector factory engine reset. Waiting for task ingestion event...</div>';
-
-  if (window.lucide) {
-    lucide.createIcons();
+async function openConversation(id) {
+  if (!id) return;
+  state.conversationId = id;
+  renderConversationList();
+  resetTrace();
+  try {
+    const data = await api(`/chat/conversations/${id}`);
+    els["chat-title"].textContent = data.conversation?.title || "Conversation";
+    clearMessages(false);
+    const messages = data.messages || [];
+    for (const message of messages) {
+      renderMessage(message.role, message.content, { messageId: message.id });
+    }
+    // We don't have stored run events for historical messages here; trace is
+    // available for messages sent in this session.
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (lastAssistant) {
+      setRunStatus("Done", "status-pill--done");
+    }
+  } catch (err) {
+    console.error("Failed to open conversation", err);
   }
 }
 
-function initScenario(type) {
-  resetSimulator();
-  currentTask = JSON.parse(JSON.stringify(SCENARIOS[type]));
-  currentStepIndex = 0;
-
-  document.getElementById("sim-task-id").innerText = `TASK: ${currentTask.id}`;
-  document.getElementById("sim-task-state-badge").innerText = "INGESTED";
-  document.getElementById("sim-task-state-badge").className = "pill text-signal";
-  document.getElementById("sim-task-desc").innerText = currentTask.description;
-
-  // Setup subtask visual elements based on scenario
-  const listEl = document.getElementById("sim-subtasks-list");
-  listEl.innerHTML = currentTask.subtasks.map((s, i) => `
-    <div class="subtask-item-sim" id="subtask-item-${i}">
-      <span>${s.title}</span>
-      <span class="status-badge-sim" id="subtask-badge-${i}">queued</span>
-    </div>
-  `).join("");
-  document.getElementById("subtask-progress-box").classList.remove("hidden");
-
-  // Enable control buttons
-  const resetBtnEl = document.getElementById("btn-reset-sim");
-  if (resetBtnEl) resetBtnEl.disabled = false;
-
-  // Write initial log
-  logWrite(`[SYSTEM] Task ingested into queue. Triggering Thalamus event router. ID: ${currentTask.id}`, "system");
-
-  // Step immediately to the first state: INTAKE
-  executeStep();
+// --- Messages ---
+function clearMessages(showEmpty) {
+  els["messages"].innerHTML = "";
+  if (showEmpty && els["empty-state"]) {
+    // Rebuild the empty state by reloading the suggestions block.
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.innerHTML = `
+      <div class="empty-state__mark" aria-hidden="true"></div>
+      <h2>Chat with Rector</h2>
+      <p>Every message runs the full local pipeline on deterministic fake adapters. No providers are called.</p>`;
+    els["messages"].appendChild(empty);
+  }
 }
 
-function logWrite(text, type) {
-  const logsBox = document.getElementById("terminal-logs-box");
-  if (!logsBox) return;
-
-  const line = document.createElement("div");
-  line.className = `log-line ${type}-line`;
-  line.innerText = text;
-  logsBox.appendChild(line);
-  logsBox.scrollTop = logsBox.scrollHeight;
+function removeEmptyState() {
+  const empty = els["messages"].querySelector(".empty-state");
+  if (empty) empty.remove();
 }
 
-function updateTelemetryStats(stepState) {
-  // Ticking metrics on every transition
-  simMetrics.modelInvocations += 1;
-  
-  if (stepState === "1_INTAKE") {
-    simMetrics.cacheHits = 0;
-    simMetrics.totalCost += 0.0001; // SLM ingest call
-  } else if (stepState === "2_ARCHITECTURAL_PLAN") {
-    simMetrics.totalCost += 0.015; // Flagship plan call
-    simMetrics.cacheHits = 30;
-  } else if (stepState === "3_SLM_EXECUTION_FANOUT") {
-    simMetrics.cacheHits = 88;
-    simMetrics.totalCost += 0.0004; // cheap SLM calls
-  } else if (stepState === "4_SANDBOX_VALIDATION") {
-    simMetrics.validationRuns += 1;
-    simMetrics.totalCost += 0.002; // sandbox execution overhead
-  } else if (stepState === "5_HEALING_LOOP") {
-    simMetrics.healingRuns += 1;
-    simMetrics.totalCost += 0.0008; // AST healing run
-  } else if (stepState === "6_FINAL_SYNTHESIS") {
-    simMetrics.synthesisRuns += 1;
-    simMetrics.totalCost += 0.015; // Flagship synthesis call
+function renderMessage(role, content, opts = {}) {
+  removeEmptyState();
+  const wrap = document.createElement("div");
+  wrap.className = `msg msg--${role}`;
+  if (opts.messageId) wrap.dataset.messageId = opts.messageId;
+
+  const roleEl = document.createElement("div");
+  roleEl.className = "msg__role";
+  roleEl.textContent = role === "user" ? "You" : "Rector";
+
+  const bubble = document.createElement("div");
+  bubble.className = "msg__bubble";
+  if (opts.pending) bubble.classList.add("is-pending");
+  bubble.textContent = content;
+
+  wrap.appendChild(roleEl);
+  wrap.appendChild(bubble);
+
+  if (role === "assistant" && opts.withTraceLink) {
+    const footer = document.createElement("div");
+    footer.className = "msg__footer";
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "msg__trace-link";
+    link.textContent = "View trace";
+    link.addEventListener("click", () => {
+      if (opts.messageId) renderTraceForMessage(opts.messageId);
+      openTrace();
+    });
+    footer.appendChild(link);
+    wrap.appendChild(footer);
   }
 
-  // Update dynamic elements
-  document.getElementById("stat-invocations").innerText = simMetrics.modelInvocations;
-  document.getElementById("stat-hits").innerText = `${simMetrics.cacheHits}%`;
-  document.getElementById("stat-cost").innerText = `$${simMetrics.totalCost.toFixed(4)}`;
-
-  // Calculate dynamic savings percentage against Artisanal (which runs everything on GPT-4o = ~$0.08 per event)
-  const artisanalComp = simMetrics.modelInvocations * 0.078;
-  const reduction = artisanalComp > 0 ? ((artisanalComp - simMetrics.totalCost) / artisanalComp) * 100 : 95;
-  document.getElementById("stat-savings").innerText = `${reduction.toFixed(0)}%`;
+  els["messages"].appendChild(wrap);
+  els["messages"].scrollTop = els["messages"].scrollHeight;
+  return wrap;
 }
 
-function executeStep() {
-  if (!currentTask || currentStepIndex < 0 || currentStepIndex >= currentTask.states.length) {
-    // Pipeline finished
-    clearInterval(simInterval);
-    simInterval = null;
-    logWrite("[SYSTEM] Assembly line pipeline processing finalized deterministically.", "success");
-    if (window.lucide) lucide.createIcons();
+// --- Send flow ---
+async function sendMessage(content) {
+  const trimmed = content.trim();
+  if (!trimmed) return;
+
+  els["composer-send"].disabled = true;
+  renderMessage("user", trimmed);
+  const pending = renderMessage("assistant", "Running local pipeline…", { pending: true });
+  setRunStatus("Thinking", "status-pill--running");
+
+  try {
+    const conversationId = await ensureConversation();
+    const result = await api(`/chat/conversations/${conversationId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ content: trimmed }),
+    });
+
+    // Title the conversation from the first message if still default.
+    const conv = state.conversations.find((c) => c.id === conversationId);
+    if (conv && conv.title === "New conversation") {
+      conv.title = trimmed.slice(0, 48);
+      els["chat-title"].textContent = conv.title;
+      renderConversationList();
+    }
+
+    // Replace pending bubble with the real assistant message.
+    pending.remove();
+    const assistantId = result.assistantMessage?.id;
+    if (assistantId) {
+      state.lastResultByMessage.set(assistantId, result);
+    }
+    renderMessage("assistant", result.assistantMessage.content, {
+      messageId: assistantId,
+      withTraceLink: true,
+    });
+
+    const phase = result.run?.phase;
+    const runStatus = result.run?.status;
+    setRunStatus(PHASE_STATUS_LABELS[phase] || phase || "Done", statusPillClass(phase, runStatus));
+
+    renderTrace(result);
+  } catch (err) {
+    pending.remove();
+    renderMessage("assistant", `Error: ${err.message}`, {});
+    setRunStatus("Failed", "status-pill--failed");
+  } finally {
+    els["composer-send"].disabled = false;
+    els["composer-input"].focus();
+  }
+}
+
+// --- Trace drawer ---
+function openTrace() {
+  document.querySelector(".app").classList.add("trace-open");
+  els["toggle-trace"].setAttribute("aria-pressed", "true");
+}
+
+function closeTrace() {
+  document.querySelector(".app").classList.remove("trace-open");
+  els["toggle-trace"].setAttribute("aria-pressed", "false");
+}
+
+function toggleTrace() {
+  const isOpen = document.querySelector(".app").classList.contains("trace-open");
+  if (isOpen) closeTrace();
+  else openTrace();
+}
+
+function resetTrace() {
+  els["trace-empty"].hidden = false;
+  els["trace-body"].hidden = true;
+}
+
+function renderTraceForMessage(messageId) {
+  const result = state.lastResultByMessage.get(messageId);
+  if (result) renderTrace(result);
+}
+
+function findEventPayload(events, predicate) {
+  const event = events.find(predicate);
+  return event ? event.payload || {} : null;
+}
+
+function renderTrace(result) {
+  const run = result.run || {};
+  const events = result.events || [];
+  const obs = result.observability || {};
+
+  els["trace-empty"].hidden = true;
+  els["trace-body"].hidden = false;
+
+  // Summary
+  els["trace-status"].textContent = run.status ? run.status.toUpperCase() : "—";
+  els["trace-route"].textContent = run.route || "—";
+  els["trace-complexity"].textContent = run.complexity || "—";
+  els["trace-id"].textContent = run.traceId || "—";
+
+  // Observability
+  els["obs-spans"].textContent = obs.spanCount ?? 0;
+  els["obs-duration"].textContent = `${obs.durationMs ?? 0}ms`;
+  els["obs-calls"].textContent = obs.modelCallCount ?? 0;
+  els["obs-cost"].textContent = `$${obs.estimatedCostUsd ?? 0}`;
+
+  renderTimeline(run, events);
+  renderDecision(run, events);
+  renderEvents(events);
+}
+
+function renderTimeline(run, events) {
+  const reachedPhases = new Set(events.map((e) => e.phase));
+  const finalPhase = run.phase;
+  const isTerminalBad = finalPhase === "FAILED" || finalPhase === "ABORTED" || finalPhase === "NEEDS_DECISION";
+
+  // Map phase -> short evidence pulled from real event payloads.
+  const evidence = buildPhaseEvidence(events);
+
+  const timeline = els["timeline"];
+  timeline.innerHTML = "";
+
+  for (const phase of RUN_PHASES) {
+    const reached = reachedPhases.has(phase);
+    // Skip phases never reached, except always show DONE outcome at the end.
+    if (!reached && phase !== "DONE") continue;
+
+    const li = document.createElement("li");
+    li.className = "timeline__item";
+    if (phase === finalPhase) {
+      li.classList.add("timeline__item--active");
+    } else if (reached) {
+      li.classList.add("timeline__item--done");
+    }
+
+    const dot = document.createElement("span");
+    dot.className = "timeline__dot";
+
+    const label = document.createElement("span");
+    label.className = "timeline__phase";
+    label.textContent = phase;
+
+    const meta = document.createElement("span");
+    meta.className = "timeline__meta";
+    meta.textContent = evidence[phase] || "";
+
+    li.appendChild(dot);
+    li.appendChild(label);
+    li.appendChild(meta);
+    timeline.appendChild(li);
+  }
+
+  // If the run ended in a non-DONE terminal phase, append it explicitly.
+  if (isTerminalBad) {
+    const li = document.createElement("li");
+    li.className =
+      "timeline__item " +
+      (finalPhase === "NEEDS_DECISION" ? "timeline__item--decision" : "timeline__item--failed");
+    const dot = document.createElement("span");
+    dot.className = "timeline__dot";
+    const label = document.createElement("span");
+    label.className = "timeline__phase";
+    label.textContent = finalPhase;
+    li.appendChild(dot);
+    li.appendChild(label);
+    timeline.appendChild(li);
+  }
+}
+
+function buildPhaseEvidence(events) {
+  const evidence = {};
+  for (const event of events) {
+    const p = event.payload || {};
+    if (event.phase === "TRIAGE" && p.triage) {
+      evidence.TRIAGE = `${p.triage.route}/${p.triage.complexity}`;
+    }
+    if (event.phase === "SKEPTIC_REVIEW" && p.skepticReview) {
+      const f = p.skepticReview.findings ? p.skepticReview.findings.length : 0;
+      evidence.SKEPTIC_REVIEW = `${p.skepticReview.verdict} (${f})`;
+    }
+    if (event.phase === "CRUCIBLE" && p.crucibleDecision) {
+      evidence.CRUCIBLE = p.crucibleDecision.verdict;
+    }
+    if (event.phase === "DAG_COMPILATION" && p.compiledDag) {
+      const n = p.compiledDag.nodes ? p.compiledDag.nodes.length : 0;
+      evidence.DAG_COMPILATION = `${n} nodes`;
+    }
+    if (event.phase === "EXECUTING" && p.executionResult) {
+      evidence.EXECUTING = p.executionResult.status;
+    }
+    if (event.phase === "VALIDATING" && p.validationHealingResult) {
+      evidence.VALIDATING = p.validationHealingResult.status;
+    }
+    if (event.phase === "PLANNING" && p.plannerOutput) {
+      const t = p.plannerOutput.tasks ? p.plannerOutput.tasks.length : 0;
+      evidence.PLANNING = `${t} tasks`;
+    }
+  }
+  return evidence;
+}
+
+function renderDecision(run, events) {
+  const section = els["decision-section"];
+  const decisionEvent = findEventPayload(events, (e) => e.type === "DECISION_REQUESTED");
+  const hasDecision = run.phase === "NEEDS_DECISION" || run.decisionRequest || decisionEvent;
+
+  if (!hasDecision) {
+    section.hidden = true;
     return;
   }
 
-  const currentStep = currentTask.states[currentStepIndex];
-  const stateVal = currentStep.state;
+  section.hidden = false;
+  const detail = run.decisionRequest || decisionEvent || {};
+  els["decision-card"].textContent =
+    typeof detail === "object" && Object.keys(detail).length
+      ? JSON.stringify(detail, null, 2)
+      : "This run paused for a human decision. No additional detail was provided by the local pipeline.";
+}
 
-  // 1. Update pipeline state visualization classes
-  const steps = document.querySelectorAll(".pipeline-step");
-  steps.forEach(step => {
-    const sState = step.getAttribute("data-state");
-    if (sState === stateVal) {
-      step.className = "pipeline-step active";
-    } else {
-      // Find the index of this step in visual flow
-      const stepStates = Array.from(steps).map(st => st.getAttribute("data-state"));
-      const activeIdxInFlow = stepStates.indexOf(stateVal);
-      const stepIdxInFlow = stepStates.indexOf(sState);
+function renderEvents(events) {
+  const container = els["events"];
+  container.innerHTML = "";
+  for (const event of events) {
+    const row = document.createElement("div");
+    row.className = "event";
+    const type = document.createElement("span");
+    type.className = "event__type";
+    type.textContent = event.type;
+    const phase = document.createElement("span");
+    phase.className = "event__phase";
+    phase.textContent = event.phase;
+    row.appendChild(type);
+    row.appendChild(phase);
+    container.appendChild(row);
+  }
+}
 
-      if (stepIdxInFlow < activeIdxInFlow) {
-        step.className = "pipeline-step completed";
-      } else {
-        step.className = "pipeline-step";
-      }
-    }
+// --- Composer behavior ---
+function autoGrow(textarea) {
+  textarea.style.height = "auto";
+  textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+}
+
+function bindComposer() {
+  const form = els["composer"];
+  const input = els["composer-input"];
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const content = input.value;
+    input.value = "";
+    autoGrow(input);
+    sendMessage(content);
   });
 
-  // Connectors coloring
-  const connectors = document.querySelectorAll(".pipeline-connector");
-  steps.forEach((step, idx) => {
-    if (idx < connectors.length) {
-      const conn = connectors[idx];
-      const visualSteps = Array.from(steps);
-      const activeIdx = visualSteps.findIndex(s => s.classList.contains("active"));
-      if (idx < activeIdx) {
-        conn.className = "pipeline-connector completed";
-      } else if (idx === activeIdx) {
-        conn.className = "pipeline-connector active";
-      } else {
-        conn.className = "pipeline-connector";
-      }
+  input.addEventListener("input", () => autoGrow(input));
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      form.requestSubmit();
     }
   });
-
-  // 2. Set task state label
-  document.getElementById("sim-task-state-badge").innerText = stateVal;
-  if (stateVal === "5_HEALING_LOOP") {
-    document.getElementById("sim-task-state-badge").className = "pill text-signal";
-  } else if (stateVal === "7_HUMAN_HANDOFF") {
-    document.getElementById("sim-task-state-badge").className = "pill";
-    document.getElementById("sim-task-state-badge").style.backgroundColor = "var(--color-ink)";
-    document.getElementById("sim-task-state-badge").style.color = "var(--color-on-ink)";
-  } else {
-    document.getElementById("sim-task-state-badge").className = "pill text-signal";
-  }
-
-  // 3. Write logs for this specific state
-  const stateLogs = currentTask.logs.filter(log => log.state === stateVal);
-  stateLogs.forEach(log => {
-    logWrite(log.text, log.type);
-  });
-
-  // 4. Update subtask checklist dynamically based on step index
-  updateSubtasksProgress(stateVal);
-
-  // 5. Update Telemetry metrics
-  updateTelemetryStats(stateVal);
-
-  // Ready for next step
-  currentStepIndex++;
 }
 
-function updateSubtasksProgress(stateVal) {
-  const subtasks = currentTask.subtasks;
-
-  if (stateVal === "1_INTAKE") {
-    setSubtaskBadge(0, "running");
-  } else if (stateVal === "2_ARCHITECTURAL_PLAN") {
-    setSubtaskBadge(0, "completed");
-    setSubtaskBadge(1, "running");
-  } else if (stateVal === "3_SLM_EXECUTION_FANOUT") {
-    setSubtaskBadge(1, "completed");
-    setSubtaskBadge(2, "running");
-    setSubtaskBadge(3, "running");
-    setSubtaskBadge(4, "running");
-  } else if (stateVal === "4_SANDBOX_VALIDATION") {
-    // If it's the healing loop scenario and this is the first validation (step index 3)
-    // subtask 4 fails.
-    if (currentTask.id === "REC-3841-HEAL" && currentStepIndex === 3) {
-      setSubtaskBadge(2, "completed");
-      setSubtaskBadge(3, "completed");
-      setSubtaskBadge(4, "failed");
-    } else {
-      // standard passing
-      setSubtaskBadge(2, "completed");
-      setSubtaskBadge(3, "completed");
-      setSubtaskBadge(4, "completed");
-      setSubtaskBadge(6, "running");
-    }
-  } else if (stateVal === "5_HEALING_LOOP") {
-    setSubtaskBadge(5, "running");
-  } else if (stateVal === "6_FINAL_SYNTHESIS") {
-    // Set validation re-runs as completed
-    if (currentTask.id === "REC-3841-HEAL") {
-      setSubtaskBadge(4, "completed");
-      setSubtaskBadge(5, "completed");
-      setSubtaskBadge(6, "completed");
-      setSubtaskBadge(7, "running");
-    } else {
-      setSubtaskBadge(6, "completed");
-    }
-  } else if (stateVal === "7_HUMAN_HANDOFF") {
-    subtasks.forEach((_, i) => setSubtaskBadge(i, "completed"));
-  }
-}
-
-function setSubtaskBadge(index, status) {
-  const badge = document.getElementById(`subtask-badge-${index}`);
-  if (badge) {
-    badge.innerText = status;
-    badge.className = `status-badge-sim ${status}`;
-  }
-}
-
-function startAutoPlay() {
-  if (simInterval) clearInterval(simInterval);
-  simInterval = setInterval(() => {
-    executeStep();
-  }, 2200);
-}
-
-function bindSimulatorEvents() {
-  const seedHappyBtn = document.getElementById("btn-seed-happy");
-  const seedHealingBtn = document.getElementById("btn-seed-healing");
-  const seedMigrationBtn = document.getElementById("btn-seed-migration");
-  const seedStripeBtn = document.getElementById("btn-seed-stripe");
-  const resetBtn = document.getElementById("btn-reset-sim");
-
-  if (seedHappyBtn) {
-    seedHappyBtn.addEventListener("click", () => {
-      initScenario("happy");
-      startAutoPlay();
-    });
-  }
-
-  if (seedHealingBtn) {
-    seedHealingBtn.addEventListener("click", () => {
-      initScenario("healing");
-      startAutoPlay();
-    });
-  }
-
-  if (seedMigrationBtn) {
-    seedMigrationBtn.addEventListener("click", () => {
-      initScenario("migration");
-      startAutoPlay();
-    });
-  }
-
-  if (seedStripeBtn) {
-    seedStripeBtn.addEventListener("click", () => {
-      initScenario("stripe");
-      startAutoPlay();
-    });
-  }
-
-  if (resetBtn) {
-    resetBtn.addEventListener("click", () => {
-      resetSimulator();
-    });
-  }
-}
-
-// ============================================================
-// Scroll-Driven Light Animations Observer
-// ============================================================
-
-function initScrollAnimations() {
-  const elements = document.querySelectorAll(".scroll-animate");
-  if (elements.length === 0) return;
-
-  const observerOptions = {
-    root: null,
-    rootMargin: "-6% 0px -6% 0px", // Trigger slightly inside target thresholds
-    threshold: 0.05
-  };
-
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        entry.target.classList.add("in-view");
-      } else {
-        // Reverse animation when leaving viewport frame
-        entry.target.classList.remove("in-view");
-      }
-    });
-  }, observerOptions);
-
-  elements.forEach(el => {
-    observer.observe(el);
+function bindSuggestions() {
+  els["messages"].addEventListener("click", (event) => {
+    const btn = event.target.closest(".suggestion");
+    if (!btn) return;
+    const prompt = btn.dataset.prompt || btn.textContent.trim();
+    els["composer-input"].value = prompt;
+    els["composer"].requestSubmit();
   });
 }
 
-// ============================================================
-// Initialization Entry Point
-// ============================================================
-
+// --- Init ---
 function init() {
-  bindSetupModal();
-  bindCalculatorEvents();
-  bindTabs();
-  bindChatShell();
-  bindSimulatorEvents();
-  initScrollAnimations();
+  cacheEls();
+  bindComposer();
+  bindSuggestions();
+
+  els["new-conversation"].addEventListener("click", startNewConversation);
+  els["toggle-trace"].addEventListener("click", toggleTrace);
+  els["close-trace"].addEventListener("click", closeTrace);
+
+  checkHealth();
+  loadConversations();
+  els["composer-input"].focus();
 }
 
-// Run when DOM elements are fully structured
-window.addEventListener("DOMContentLoaded", init);
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}

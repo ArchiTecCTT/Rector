@@ -258,8 +258,8 @@ describe("chat API vertical shell", () => {
 
     expect(res.status).toBe(200);
     expect(html).toContain("Rector");
-    expect(html).toContain("blueprint");
-    expect(html).toContain("data-chat-shell");
-    expect(html).toContain("rector-chat-form");
+    expect(html).toContain("Chat with Rector");
+    expect(html).toContain("id=\"composer\"");
+    expect(html).toContain("id=\"trace-drawer\"");
   });
 });
