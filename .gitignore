@@ -10,3 +10,4 @@ coverage/
 reviews/
 test_debug.mjs
 progress.md
+scripts/local/
