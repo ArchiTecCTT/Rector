@@ -4,12 +4,17 @@
 
 ## Open
 
-### Dependency audit reports vulnerabilities
+### Dependency audit: vitest major-upgrade vulnerabilities deferred (require maintainer approval)
 
-- **Source:** `npm install` / `npm audit` output during branch setup; Gemini final audit.
-- **Severity:** Medium-high for dev-server exposure; npm reported 5 vulnerabilities (4 moderate, 1 critical). Confirmed known root includes vulnerable `esbuild <=0.24.2` via dev dependencies, associated with DNS rebinding/local dev server exposure (GHSA-67mh-4wv8-2f99).
-- **Status:** Open.
-- **Plan:** Address in a dedicated dependency/security chunk or before public release. Prefer upgrading `vitest`/`tsx` or adding a safe dependency override for `esbuild >=0.25.0`; do not run `npm audit fix --force` blindly because it may introduce breaking changes.
+- **Source:** `npm audit` during the `dependency-security-triage` spec; see `docs/security/dependency-audit-2026-06-04.md`.
+- **Severity:** 1 critical + 3 moderate, all dev-tooling only (not in the `dist` runtime).
+  - `vitest` — critical, GHSA-5xrq-8626-4rwp (Vitest UI server arbitrary file read/exec; UI server is not used by `npm test`).
+  - `vite` — moderate, GHSA-4w7w-66w2-5vf9 (path traversal in optimized-deps `.map` handling; dev server only).
+  - `@vitest/mocker` — moderate (transitive via vulnerable `vite`).
+  - `vite-node` — moderate (transitive via vulnerable `vite`).
+- **Status:** Open / deferred — awaiting maintainer approval.
+- **Root cause:** Rector pins `vitest@^2.1.0` (resolves `vitest@2.1.9`). npm's only offered remediation for all four findings is `vitest@4.1.8`, flagged `isSemVerMajor: true` and only applicable via `npm audit fix --force`.
+- **Plan:** Per the no-forced-fix policy (Requirement 4 / steering `security.md`), the `vitest@4` major upgrade was **not** applied autonomously because it requires `npm audit fix --force` and is a breaking change to the test toolchain. Deferred for explicit maintainer approval. When approved, upgrade `vitest` to `>=4.1.8`, re-run the full verification baseline (`npm test`/`build`/`check`), and confirm the advisories clear. Runtime exposure is nil today: these are dev/test dependencies, not shipped in `dist`, and `npm test` runs `vitest run` (no UI server). Traceability: `docs/security/dependency-audit-2026-06-04.md`.
 
 ### Chat store is in-memory and resets on restart
 
@@ -201,6 +206,14 @@
 - **Plan:** The issue catalog and generated Markdown drafts are deterministic and checked by `node scripts/generate-roadmap-issues.js --check`, but they are not automatically derived from the roadmap text and do not sync to GitHub or Linear. When roadmap chunks change, maintainers must update `docs/issues/roadmap-issues.json`, regenerate docs, and run the check command. A future release workflow can add CI enforcement or a one-way issue creation tool behind explicit maintainer approval.
 
 ## Closed / Mitigated
+
+### Esbuild dev-server advisory resolved via npm overrides (GHSA-67mh-4wv8-2f99)
+
+- **Source:** `npm audit` during branch setup and Gemini final audit; remediated by the `dependency-security-triage` spec.
+- **Severity:** Moderate (CVSS 5.3, CWE-346) — esbuild dev server allowed any website to send requests and read responses (DNS-rebinding-style exposure). Dev/test tooling only; never shipped in the `dist` runtime.
+- **Fix:** Added an additive npm `overrides` entry to `package.json` forcing `esbuild >=0.25.0`, then regenerated the lockfile with `npm install` (no `npm audit fix --force`, no runtime dependency change). `npm ls esbuild` now resolves every entry to `esbuild@0.28.0` (via both `tsx` and `vitest > vite`), and `npm audit` no longer reports GHSA-67mh-4wv8-2f99. The full verification baseline stayed green after the change: `npm test` 28 files / 278 tests (29 files / 280 tests with the added `tests/dependencySecurity.test.ts` override regression guard), `npm run build` and `npm run check` both succeeded.
+- **Status:** Closed / Mitigated for the esbuild advisory. The remaining `vitest`/`vite`/`@vitest/mocker`/`vite-node` findings (which require a forced `vitest@4` major upgrade) are tracked separately under `## Open` and deferred for maintainer approval.
+- **Traceability:** `docs/security/dependency-audit-2026-06-04.md`.
 
 ### Fake orchestrator returned placeholder assistant text
 

@@ -24,8 +24,8 @@ Hard constraints honored throughout:
 
 ## Tasks
 
-- [ ] 1. Stage 1: Capture and commit the Audit Report
-  - [ ] 1.1 Create `docs/security/` and capture audit output into a structured Audit_Report
+- [x] 1. Stage 1: Capture and commit the Audit Report
+  - [x] 1.1 Create `docs/security/` and capture audit output into a structured Audit_Report
     - Create the `docs/security/` directory (new committed Audit_Report_Directory)
     - Run `npm audit` and `npm audit --json`; capture the human-readable summary and the
       machine-readable per-finding detail
@@ -36,14 +36,14 @@ Hard constraints honored throughout:
       file
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
 
-  - [ ] 1.2 Implement the metadata-capture fallback (EH-1)
+  - [x] 1.2 Implement the metadata-capture fallback (EH-1)
     - If the report file is written but metadata (date/command/tool versions) cannot be
       captured, retain the report file unchanged and set `Metadata capture status: partial`
       with a note describing what could not be captured (never discard or rewrite the findings)
     - _Requirements: 1.6_
 
-- [ ] 2. Stage 2: Root-cause analysis and classification
-  - [ ] 2.1 Enumerate findings with dependency paths, classification, and runtime exposure
+- [x] 2. Stage 2: Root-cause analysis and classification
+  - [x] 2.1 Enumerate findings with dependency paths, classification, and runtime exposure
     - For each vulnerable package: resolve the dependency path that introduces it (from
       `npm audit --json`), and classify it as direct, dev, or transitive
     - Where a finding affects only dev tooling and not the `dist` runtime, note the reduced
@@ -51,29 +51,29 @@ Hard constraints honored throughout:
     - Write these fields into the corresponding Finding sections of the Audit_Report
     - _Requirements: 2.1, 2.2, 2.5_
 
-  - [ ] 2.2 Document the esbuild path and assign remediation categories
+  - [x] 2.2 Document the esbuild path and assign remediation categories
     - Document the Esbuild_Advisory (GHSA-67mh-4wv8-2f99) dependency path via the `vitest`/`vite`
       and `tsx` development tooling
     - Record, for each finding, the root cause and the remediation category per the Decision
       Matrix (Safe_Fix, deferral, or escalation for approval)
     - _Requirements: 2.3, 2.4_
 
-- [ ] 3. Stage 3: Apply the Safe_Fix for the Esbuild_Advisory
-  - [ ] 3.1 Add the esbuild override and regenerate the lockfile
+- [x] 3. Stage 3: Apply the Safe_Fix for the Esbuild_Advisory
+  - [x] 3.1 Add the esbuild override and regenerate the lockfile
     - Add `"overrides": { "esbuild": ">=0.25.0" }` to `package.json` (additive; leave runtime
       `dependencies`/`devDependencies` untouched to preserve Provider_Free_Mode)
     - Regenerate the lockfile by running `npm install` (do not hand-edit the lockfile)
     - Describe the applied change and the affected dependency in the Audit_Report records
     - _Requirements: 3.1, 3.2, 3.3, 3.5_
 
-  - [ ] 3.2 Confirm the override resolved correctly (EH-7)
+  - [x] 3.2 Confirm the override resolved correctly (EH-7)
     - Run `npm ls esbuild` and confirm every resolved `esbuild` entry is `>=0.25.0`
     - If `npm ls esbuild` still reports a vulnerable version, or install reports peer/resolution
       conflicts, treat it as a failed verification: revert the change and record the cause
       (handoff to task 4.2)
     - _Requirements: 3.3_
 
-  - [ ] 3.3 Enforce the Forced_Fix approval gate (no autonomous `--force`)
+  - [x] 3.3 Enforce the Forced_Fix approval gate (no autonomous `--force`)
     - Do NOT run `npm audit fix --force`. If any finding's only remediation requires it, or a
       candidate remediation breaks the baseline, do not apply it; record the finding as a
       Remaining_Vulnerability requiring approval in the Audit_Report and route it to the
@@ -84,8 +84,8 @@ Hard constraints honored throughout:
       requires explicit user approval and MUST NOT be done autonomously.**
     - _Requirements: 3.4, 3.6, 3.7, 4.1, 4.2, 4.3, 4.4, 6.4_
 
-- [ ] 4. Stage 4: Verification gate
-  - [ ] 4.1 Run the full Verification_Baseline after applying the fix
+- [x] 4. Stage 4: Verification gate
+  - [x] 4.1 Run the full Verification_Baseline after applying the fix
     - Run `npm test`, `npm run build`, and `npm run check`
     - Confirm `npm test` reports at least 28 test files and 278 passing tests; confirm
       `npm run build` and `npm run check` complete successfully
@@ -93,7 +93,7 @@ Hard constraints honored throughout:
       the default `npm test` run free of real network access
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 6.1, 6.2, 6.3_
 
-  - [ ] 4.2 Implement revert-on-regression handling (EH-4, EH-7)
+  - [x] 4.2 Implement revert-on-regression handling (EH-4, EH-7)
     - If any baseline command fails after the change — including `npm test` reporting fewer than
       28 files or fewer than 278 tests — revert `package.json` and the lockfile to their
       pre-change state and record the failure cause
@@ -101,34 +101,34 @@ Hard constraints honored throughout:
       change in the tree
     - _Requirements: 5.5_
 
-- [ ] 5. Checkpoint - Ensure the fix verifies cleanly
+- [x] 5. Checkpoint - Ensure the fix verifies cleanly
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 6. Stage 5: Optional regression test for the override
-  - [ ]* 6.1 Add `tests/dependencySecurity.test.ts` asserting the esbuild override
+- [x] 6. Stage 5: Optional regression test for the override
+  - [x]* 6.1 Add `tests/dependencySecurity.test.ts` asserting the esbuild override
     - Model it on `tests/releasePackaging.test.ts`: import `../package.json` and assert
       `packageJson.overrides.esbuild === ">=0.25.0"` (and that `overrides` is defined)
     - Keep it deterministic, with no network access, no API keys, and fully in-process so it
       raises the baseline test count rather than lowering it
     - _Requirements: 3.1, 3.5_
 
-- [ ] 7. Stage 6: Update documentation and the Concerns_Register
-  - [ ] 7.1 Move the Dependency_Audit_Item to mitigated and reference the Audit_Report
+- [x] 7. Stage 6: Update documentation and the Concerns_Register
+  - [x] 7.1 Move the Dependency_Audit_Item to mitigated and reference the Audit_Report
     - In `docs/plans/concerns-and-vulnerabilities.md`, move the "Dependency audit reports
       vulnerabilities" item from Open to Closed / Mitigated once the Safe_Fix resolves the
       Esbuild_Advisory, describing the applied override fix
     - Reference the `docs/security/dependency-audit-<date>.md` path for traceability
     - _Requirements: 7.1, 7.3_
 
-  - [ ] 7.2 Record Remaining_Vulnerabilities and enforce the register-retention guard (EH-6)
+  - [x] 7.2 Record Remaining_Vulnerabilities and enforce the register-retention guard (EH-6)
     - For each Remaining_Vulnerability, add or keep an Open entry documenting its severity, root
       cause, and the rationale for deferral; retain the tracked entry while it is unresolved
     - If the Concerns_Register cannot be written, or an edit would drop unresolved records, halt
       the process and surface the failure to the Maintainer rather than proceeding
     - _Requirements: 7.2, 7.4, 7.5_
 
-- [ ] 8. Final verification - re-run the full baseline and capture evidence
-  - [ ] 8.1 Re-run the Verification_Baseline and record the resolved state
+- [x] 8. Final verification - re-run the full baseline and capture evidence
+  - [x] 8.1 Re-run the Verification_Baseline and record the resolved state
     - Re-run `npm test`, `npm run build`, and `npm run check` with the optional config-assertion
       test included; confirm at least 28 files / 278 tests pass (>= 29 files / >= 279 tests if
       task 6.1 was added) and that build and check succeed
