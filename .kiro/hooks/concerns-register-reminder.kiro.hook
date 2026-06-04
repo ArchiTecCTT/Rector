@@ -1,0 +1,20 @@
+{
+  "name": "Concerns Register Reminder",
+  "version": "1.0.0",
+  "description": "When sensitive modules change, remind the agent to consider updating the concerns-and-vulnerabilities register. Does not auto-edit docs.",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "src/security/**",
+      "src/providers/**",
+      "src/sandbox/**",
+      "src/workflows/**",
+      "src/deployment/**",
+      "src/api/**"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A file under a security/provider/sandbox/workflow/deployment/api module changed. Consider whether this introduces or changes a limitation, security risk, provider/budget risk, or sandbox risk. If so, update docs/plans/concerns-and-vulnerabilities.md with source, severity, status, and plan. Do NOT auto-edit the register unless this change actually adds or modifies a known limitation. If nothing changed risk-wise, take no action."
+  }
+}
