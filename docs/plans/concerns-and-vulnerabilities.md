@@ -231,9 +231,9 @@
 
 ### Stale local-MVP docs could mislead agents/contributors
 
-- **Source:** Chunk 0 reviews.
+- **Source:** Chunk 0 reviews; follow-up aggressive doc cleanup audit.
 - **Severity:** Major planning risk.
-- **Fix:** Added source-of-truth docs/README and stale banners to old docs/specs/implementation-plan files.
+- **Fix:** Removed superseded local-MVP and cloud-heavy planning docs, then updated `docs/README.md`, `docs/architecture/rector-0.1.0-architecture.md`, and `.kiro/steering/docs.md` so current source-of-truth docs are the only active guidance.
 - **Status:** Closed.
 
 ### Open-source project lacked license/community scaffolding

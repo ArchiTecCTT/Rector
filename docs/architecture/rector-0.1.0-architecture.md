@@ -19,19 +19,19 @@ Internally, Rector routes work through deterministic protocols, small/large mode
 
 ## 2. Current Repo Reality
 
-The repository currently contains an older local MVP implementation:
+The repository now contains the completed provider-free `v0.1.0-alpha` brainstem:
 
-- package name: `rector-local-mvp`
-- task-oriented domain names
-- local in-memory adapters
-- old docs under `docs/local-mvp-*` and `implementation-plan/*`
-- existing tests around old task pipeline
+- chat-first Express API and local browser UI
+- deterministic orchestration through triage, context building, planning, skeptic review, crucible arbitration, DAG compilation, executor simulation, validation, healing, and synthesis
+- local in-memory adapters and provider-free defaults
+- generated roadmap issue catalogs and Linear export metadata
+- tests covering the alpha contracts and pipeline
 
-Rector 0.1.0 must explicitly migrate from the old task MVP to the new chat/run architecture. The migration is part of the plan, not an incidental refactor.
+The next product migration is from deterministic provider-free alpha to a real BYOK alpha with live model adapters, persistence, streaming progress, and safe workspace execution.
 
 ### Migration Principle
 
-Do not delete useful old code immediately. First wrap or adapt it behind new chat/run interfaces, then retire stale task concepts once the new vertical slice passes tests.
+Keep the provider-free local mode as the regression baseline while adding live BYOK modes behind explicit configuration flags.
 
 ## 3. Product Principles
 

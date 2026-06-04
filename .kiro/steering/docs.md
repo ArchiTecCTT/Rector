@@ -8,23 +8,17 @@ Read and trust these first, in order, when they conflict with anything else:
 2. `docs/plans/rector-master-roadmap.md` — authoritative roadmap and chunk order.
 3. `docs/plans/concerns-and-vulnerabilities.md` — running risk/limitation register.
 4. `docs/audits/final-gemini-audit.md` — confirmed audit findings (fixed and open).
-5. `docs/README.md` — docs index distinguishing current vs. stale.
+5. `docs/README.md` — docs index for current source-of-truth documents.
 
-## Stale / Quarantined Docs
+## Stale Docs Policy
 
-Historical local-MVP and cloud-heavy docs are preserved for research, not as instructions:
-
-- `docs/local-mvp-design.md`, `docs/local-mvp-implementation-plan.md`
-- `docs/specs/Rector-Specs-1.md`, `docs/rector-blueprint.md`
-- `implementation-plan/*`
+Historical local-MVP and cloud-heavy docs were deleted after the alpha completion audit. Do not recreate them. If old design context is needed, use git history instead of restoring stale files.
 
 Rules:
 
-- Do **not** delete stale docs unless explicitly instructed. Add/keep a warning banner and
-  quarantine instead.
-- If a stale doc conflicts with a source-of-truth doc, the source-of-truth doc wins.
-- The README "Architecture Overview" still uses older "Thalamus" naming. The brainstem
-  pipeline in the architecture doc and steering is current.
+- Prefer updating current source-of-truth docs over adding parallel planning docs.
+- If a new document becomes stale, either update it immediately or delete it when superseded.
+- The brainstem pipeline in the architecture doc and steering is current.
 
 ## Concerns Register Policy
 
