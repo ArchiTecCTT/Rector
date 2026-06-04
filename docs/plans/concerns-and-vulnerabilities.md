@@ -202,8 +202,8 @@
 
 - **Source:** Chunk 25 implementation.
 - **Severity:** Low for local alpha, Medium for contributor coordination if stale.
-- **Status:** Open until issue catalog generation is integrated into release/CI workflow.
-- **Plan:** The issue catalog and generated Markdown drafts are deterministic and checked by `node scripts/generate-roadmap-issues.js --check`, but they are not automatically derived from the roadmap text and do not sync to GitHub or Linear. When roadmap chunks change, maintainers must update `docs/issues/roadmap-issues.json`, regenerate docs, and run the check command. A future release workflow can add CI enforcement or a one-way issue creation tool behind explicit maintainer approval.
+- **Status:** Partially mitigated — drift check now enforced in CI; GitHub/Linear sync still manual.
+- **Plan:** The issue catalog and generated Markdown drafts are deterministic and checked by `node scripts/generate-roadmap-issues.js --check`. As of the `ci-release-workflow` spec, this drift check runs as a required gate in GitHub Actions (`.github/workflows/ci.yml`) on Node 20 and Node 22, so catalog drift now fails CI. The drafts are still not automatically derived from the roadmap text and do not sync to GitHub or Linear. When roadmap chunks change, maintainers must update `docs/issues/roadmap-issues.json`, regenerate docs, and run the check command. A future one-way issue creation/sync tool remains deferred behind explicit maintainer approval.
 
 ## Closed / Mitigated
 

@@ -151,13 +151,25 @@ For full variable documentation, see [`.env.example`](.env.example).
 
 ---
 
-## Running Tests
+## CI / Verification Gates
+
+Run the same gates locally that CI enforces on every push and pull request:
 
 ```bash
-npm test
+npm test        # vitest run
+npm run build   # tsc + dist ESM import fixups
+npm run check   # tsc --noEmit type check
+node scripts/generate-roadmap-issues.js --check   # issue-catalog drift check
 ```
 
 Tests cover: state transitions, schemas, event bus, repository immutability, happy path, healing loop, abort path, and API controls.
+
+Continuous integration runs in GitHub Actions via [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+
+- The four gates above run on a Node version matrix (Node 20 and Node 22).
+- Dependencies install deterministically with `npm ci`; the run is provider-free and requires no secrets or API keys.
+- `npm audit` runs as a **non-blocking** step. It surfaces the deferred Vitest/Vite dev-tooling advisories without failing the build, pending a maintainer-approved upgrade.
+- The workflow performs no release side effects (no publish, tag, or push). Release tagging stays a manual, maintainer-gated action.
 
 ---
 

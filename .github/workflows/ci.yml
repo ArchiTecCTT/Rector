@@ -1,0 +1,55 @@
+name: CI
+
+# Provider-free verification workflow for the Rector v0.1.0-alpha hardening path.
+# Reproduces the local verification gates (test, build, type-check, issue-catalog drift)
+# across a Node 20 / Node 22 matrix. Requires no secrets, no providers, and performs no
+# release side effects (no publish, tag, or push). Release tagging stays manual.
+
+on:
+  push:
+    branches: [main, rector-0.1.0]
+  pull_request:
+    branches: [main, rector-0.1.0]
+
+# Least privilege: read-only token cannot push commits, create tags, or publish releases.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify / Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies (deterministic)
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Type check
+        run: npm run check
+
+      - name: Issue catalog drift check
+        run: node scripts/generate-roadmap-issues.js --check
+
+      - name: Dependency audit (non-blocking)
+        # Deferred Vitest/Vite dev-tooling advisories remain pending maintainer approval,
+        # so this step surfaces the report without failing the build.
+        continue-on-error: true
+        run: npm audit

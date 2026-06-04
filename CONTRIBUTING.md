@@ -23,12 +23,16 @@ Do not commit secrets. Keep examples provider-neutral or use empty placeholder v
 
 ## Build and test
 
-Before opening a PR:
+Before opening a PR, run the same gates CI enforces (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 
 ```bash
 npm test
 npm run build
+npm run check
+node scripts/generate-roadmap-issues.js --check
 ```
+
+CI runs these on Node 20 and Node 22 and adds a non-blocking `npm audit` step. No secrets or provider keys are required.
 
 Add or update tests for behavior changes. Documentation-only PRs do not need new runtime tests but should still keep commands passing when possible.
 
