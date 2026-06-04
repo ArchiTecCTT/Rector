@@ -48,6 +48,9 @@ jobs:
       - name: Issue catalog drift check
         run: node scripts/generate-roadmap-issues.js --check
 
+      - name: Linear export drift check
+        run: node scripts/export-linear-issues.js --check
+
       - name: Dependency audit (non-blocking)
         # Deferred Vitest/Vite dev-tooling advisories remain pending maintainer approval,
         # so this step surfaces the report without failing the build.
