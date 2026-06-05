@@ -3,26 +3,27 @@ import fs from "node:fs";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import { TaskManager } from "../thalamus/router";
 import { getSetupChecklist } from "../setupChecklist";
 import { STATES } from "../domain/states";
-import { buildContextPack, createContextMaterial, type ContextPack } from "../orchestration/contextBuilder";
-import { arbitratePlanWithCrucible } from "../orchestration/crucible";
-import { compileAcceptedPlanToDag, type CompiledDag } from "../orchestration/dagCompiler";
-import { executeCompiledDag, type ExecutorSimulatorOptions } from "../orchestration/executorSimulator";
-import { createFakePlan } from "../orchestration/planner";
-import { transitionRun } from "../orchestration/runStateMachine";
-import { reviewPlanWithSkeptic } from "../orchestration/skeptic";
-import { synthesizeChatBrainstemResponse, type BrainstemSynthesis } from "../orchestration/synthesizer";
-import { triageUserMessage, type TriageResult } from "../orchestration/triage";
-import { validateAndHealExecution, type HealingLoopResult } from "../orchestration/validationHealing";
-import {
-  createInMemoryObservabilityTrace,
-  type InMemoryObservabilityTrace,
-  type ObservabilitySpan,
-  type ObservabilitySummary,
-} from "../observability";
+import { buildContextPack, createContextMaterial } from "../orchestration/contextBuilder";
+import type { ExecutorSimulatorOptions } from "../orchestration/executorSimulator";
+import { runChat } from "../orchestration/chatRunner";
+import { triageUserMessage } from "../orchestration/triage";
+import { createInMemoryObservabilityTrace } from "../observability";
 import { redactSecrets, redactString } from "../security/redaction";
+import {
+  AzureOpenAIProvider,
+  CloudflareWorkersAIProvider,
+  PerplexityResearchProvider,
+  ProviderError,
+  TogetherAIProvider,
+  type LLMProvider,
+  type LLMRequest,
+  type ModelRouter,
+} from "../providers/llm";
+import type { OrchestratorMode } from "../deployment";
 import { InMemoryRectorStore } from "../store/inMemoryRectorStore";
 import type { Artifact, Run, RunEvent } from "../store/schemas";
 
@@ -32,10 +33,187 @@ export interface ApiSecurityOptions {
     windowMs?: number;
     maxRequests?: number;
   };
+  /**
+   * Orchestration wiring for the chat pipeline. `executorOptions`/`maxHealingAttempts` tune the
+   * deterministic phases shared by both modes. `mode` and `router` are resolved once at startup
+   * (`parseOrchestrationConfig` + `buildModelRouter`) and stored here so the chat runner can
+   * dispatch by mode; `mode` defaults to `local` (provider-free) and `router` is optional because
+   * local mode requires no provider. The chat endpoint is wired to consume `mode`/`router` in a
+   * later task; this option is accepted and stored without rewiring the endpoint.
+   */
   orchestration?: {
     executorOptions?: ExecutorSimulatorOptions;
     maxHealingAttempts?: number;
+    mode?: OrchestratorMode;
+    router?: ModelRouter;
   };
+}
+
+// --- Provider connection-test service (ORN-32) ---
+
+/**
+ * Supported provider identifiers the connection test can build and ping. Any value outside this
+ * set is rejected as CONFIG_INVALID before any provider is constructed or any network call occurs.
+ */
+export const SUPPORTED_PROVIDER_IDS = ["together", "cloudflare", "azure-openai", "perplexity"] as const;
+
+/** Type guard for the supported provider id set, used to reject unsupported ids with a 400. */
+function isSupportedProviderId(providerId: string): boolean {
+  return (SUPPORTED_PROVIDER_IDS as readonly string[]).includes(providerId);
+}
+
+export const TestConnectionRequestSchema = z.object({
+  providerId: z.string().min(1), // "together" | "cloudflare" | "azure-openai" | "perplexity"
+});
+export type TestConnectionRequest = z.infer<typeof TestConnectionRequestSchema>;
+
+export const TestConnectionResponseSchema = z.object({
+  ok: z.boolean(),
+  providerId: z.string().min(1),
+  model: z.string().optional(), // present only on success
+  code: z.string().optional(), // ProviderErrorCode on failure
+  error: z.string().optional(), // redacted message on failure
+  networkAttempted: z.boolean(), // false when config invalid blocks before any call
+});
+export type TestConnectionResponse = z.infer<typeof TestConnectionResponseSchema>;
+
+/**
+ * Builds exactly one provider instance for the requested id, wired with the injected `fetchImpl`
+ * and `enableNetwork`. Reads only the env key names the provider needs; never logs values. Returns
+ * `undefined` for an unsupported/unknown provider id so the caller can short-circuit safely.
+ */
+function resolveConnectionTestProvider(
+  providerId: string,
+  env: Record<string, string | undefined>,
+  options: { enableNetwork: boolean; fetchImpl: typeof fetch }
+): LLMProvider | undefined {
+  const { enableNetwork, fetchImpl } = options;
+  switch (providerId) {
+    case "together":
+      return new TogetherAIProvider({
+        apiKey: env.TOGETHER_API_KEY,
+        baseUrl: env.TOGETHER_BASE_URL,
+        enableNetwork,
+        fetchImpl,
+      });
+    case "cloudflare":
+      return new CloudflareWorkersAIProvider({
+        accountId: env.CLOUDFLARE_ACCOUNT_ID,
+        apiToken: env.CLOUDFLARE_API_TOKEN,
+        baseUrl: env.CLOUDFLARE_BASE_URL,
+        enableNetwork,
+        fetchImpl,
+      });
+    case "azure-openai":
+      return new AzureOpenAIProvider({
+        apiKey: env.AZURE_OPENAI_API_KEY,
+        endpoint: env.AZURE_OPENAI_ENDPOINT,
+        apiVersion: env.AZURE_OPENAI_API_VERSION,
+        deployments: {
+          cheap: env.AZURE_OPENAI_CHEAP_DEPLOYMENT,
+          fast: env.AZURE_OPENAI_FAST_DEPLOYMENT ?? env.AZURE_OPENAI_DEPLOYMENT,
+          flagship: env.AZURE_OPENAI_FLAGSHIP_DEPLOYMENT ?? env.AZURE_OPENAI_DEPLOYMENT,
+          research: env.AZURE_OPENAI_RESEARCH_DEPLOYMENT,
+        },
+        enableNetwork,
+        fetchImpl,
+      });
+    case "perplexity":
+      return new PerplexityResearchProvider({
+        apiKey: env.PERPLEXITY_API_KEY,
+        baseUrl: env.PERPLEXITY_BASE_URL,
+        enableNetwork,
+        fetchImpl,
+      });
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Verifies a single provider's credentials with at most one minimal network ping.
+ *
+ * Pure and unit-testable via an injected `fetchImpl`. Guarantees:
+ * - Unknown/unsupported `providerId` => `CONFIG_INVALID`, `networkAttempted: false`, zero calls.
+ * - `validateConfig()` runs first; on failure => `CONFIG_INVALID`, `networkAttempted: false`.
+ * - Otherwise a single `invoke()` ping (small `maxOutputTokens`) is attempted.
+ * - Every outbound error message is passed through `redactString`; the response never includes the
+ *   API key, Authorization header, or the raw provider body.
+ */
+export async function runConnectionTest(input: {
+  providerId: string;
+  env: Record<string, string | undefined>;
+  fetchImpl: typeof fetch;
+}): Promise<TestConnectionResponse> {
+  const { providerId, env, fetchImpl } = input;
+
+  const provider = resolveConnectionTestProvider(providerId, env, { enableNetwork: true, fetchImpl });
+  if (!provider) {
+    return TestConnectionResponseSchema.parse({
+      ok: false,
+      providerId,
+      code: "CONFIG_INVALID",
+      error: redactString(`Unsupported providerId: ${providerId}`),
+      networkAttempted: false,
+    });
+  }
+
+  // Config validation short-circuits BEFORE any network call is attempted.
+  try {
+    provider.validateConfig();
+  } catch (error) {
+    return TestConnectionResponseSchema.parse({
+      ok: false,
+      providerId,
+      code: error instanceof ProviderError ? error.code : "CONFIG_INVALID",
+      error: redactString(connectionTestErrorMessage(error)),
+      networkAttempted: false,
+    });
+  }
+
+  const pingRequest: LLMRequest = {
+    messages: [
+      { role: "system", content: "ping" },
+      { role: "user", content: "reply with: pong" },
+    ],
+    maxOutputTokens: 8,
+    task: "connection-test",
+  };
+
+  try {
+    const response = await provider.invoke(pingRequest);
+    return TestConnectionResponseSchema.parse({
+      ok: true,
+      providerId,
+      model: response.model,
+      networkAttempted: true,
+    });
+  } catch (error) {
+    return TestConnectionResponseSchema.parse({
+      ok: false,
+      providerId,
+      code: error instanceof ProviderError ? error.code : "PROVIDER_ERROR",
+      error: redactString(connectionTestErrorMessage(error)),
+      networkAttempted: true,
+    });
+  }
+}
+
+function connectionTestErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+/** Builds a concise, redaction-ready message from a Zod (or other) request-body parse failure. */
+function requestValidationMessage(error: unknown): string {
+  if (error instanceof z.ZodError) {
+    const summary = error.issues
+      .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
+      .join("; ");
+    return `Invalid request body: ${summary}`;
+  }
+  if (error instanceof Error) return error.message;
+  return String(error);
 }
 
 export function createApp(manager: TaskManager, securityOptions: ApiSecurityOptions = {}): express.Application {
@@ -132,15 +310,25 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
           materials: [contextMaterial],
         });
       });
-      const { run, synthesis, observabilitySummary } = await createFakeChatRun(
+      const orchestration = securityOptions.orchestration;
+      const { run, synthesis, observabilitySummary } = await runChat(
         rectorStore,
-        conversation.id,
-        userMessage.id,
-        redactedContent,
-        triage,
-        contextPack,
-        observability,
-        securityOptions.orchestration
+        {
+          conversationId: conversation.id,
+          userMessageId: userMessage.id,
+          prompt: redactedContent,
+          triage,
+          contextPack,
+          observability,
+          options: orchestration,
+        },
+        {
+          // Default to local (provider-free) when no orchestration option is configured so existing
+          // behavior and tests are unchanged. enableNetwork is only meaningful in external mode.
+          mode: orchestration?.mode ?? "local",
+          router: orchestration?.router,
+          enableNetwork: orchestration?.mode === "external",
+        }
       );
       const assistantMessage = await rectorStore.createMessage({
         conversationId: conversation.id,
@@ -470,6 +658,42 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     res.json(getSetupChecklist());
   });
 
+  // --- Provider connection test (ORN-32) ---
+
+  app.post("/api/setup/test-connection", async (req, res) => {
+    let request: TestConnectionRequest;
+    try {
+      request = TestConnectionRequestSchema.parse(req.body ?? {});
+    } catch (err: unknown) {
+      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
+    }
+
+    // An unsupported providerId is rejected with a 400 before any provider is built or any network
+    // call is attempted (Requirement 2.4). The body keeps the safe TestConnectionResponse shape.
+    if (!isSupportedProviderId(request.providerId)) {
+      return res.status(400).json(
+        TestConnectionResponseSchema.parse({
+          ok: false,
+          providerId: request.providerId,
+          code: "CONFIG_INVALID",
+          error: redactString(`Unsupported providerId: ${request.providerId}`),
+          networkAttempted: false,
+        })
+      );
+    }
+
+    try {
+      const result = await runConnectionTest({
+        providerId: request.providerId,
+        env: process.env,
+        fetchImpl: fetch,
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: redactString(err?.message ?? String(err)) });
+    }
+  });
+
   // --- Scenario seeding ---
 
   app.post("/api/dev/scenario", async (req, res) => {
@@ -760,184 +984,4 @@ function numberField(value: Record<string, unknown>, key: string): number | unde
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-async function createFakeChatRun(
-  store: InMemoryRectorStore,
-  conversationId: string,
-  userMessageId: string,
-  prompt: string,
-  triage: TriageResult,
-  contextPack: ContextPack,
-  observability: InMemoryObservabilityTrace,
-  options: { executorOptions?: ExecutorSimulatorOptions; maxHealingAttempts?: number } = {}
-): Promise<{ run: Run; synthesis: BrainstemSynthesis; observabilitySummary: ObservabilitySummary }> {
-  const traceId = observability.traceId;
-  const plannerOutput = await observability.recordSpan("PLANNING", () =>
-    createFakePlan({ triage, contextPack, messageContent: prompt })
-  );
-  const skepticReview = await observability.recordSpan("SKEPTIC_REVIEW", () =>
-    reviewPlanWithSkeptic(plannerOutput, contextPack)
-  );
-  const crucibleDecision = await observability.recordSpan("CRUCIBLE", () =>
-    arbitratePlanWithCrucible({ plannerOutput, skepticReview })
-  );
-
-  const run = await store.createRun({
-    conversationId,
-    userMessageId,
-    status: "running",
-    phase: "CHAT_RECEIVED",
-    route: triage.route,
-    complexity: triage.complexity,
-    budget: {
-      maxUsd: 0,
-      maxInputTokens: 0,
-      maxOutputTokens: 0,
-      maxModelCalls: 0,
-      maxRuntimeMs: 1000,
-      maxHealingAttempts: options.maxHealingAttempts ?? 2,
-      allowedProviders: [],
-      approvalRequiredAboveUsd: 0,
-    },
-    costEstimate: { usd: 0 },
-    actualCost: { usd: 0 },
-    tokenEstimate: { input: 0, output: 0 },
-    actualTokens: { input: 0, output: 0 },
-    traceId,
-    attempts: 1,
-    healingAttempts: 0,
-    validationAttempts: 0,
-  });
-
-  await store.appendEvent(runEvent(run, "RUN_CREATED", "CHAT_RECEIVED", {
-    source: "chat-api",
-    promptPreview: prompt.slice(0, 120),
-    triage: {
-      route: triage.route,
-      confidence: triage.confidence,
-      complexity: triage.complexity,
-      riskFlags: triage.riskFlags,
-    },
-    observability: phaseObservabilityPayload(observability, "CHAT_RECEIVED"),
-  }));
-
-  const compiledDag: CompiledDag | undefined = await observability.recordSpan("DAG_COMPILATION", () =>
-    crucibleDecision.verdict === "ACCEPTED"
-      ? compileAcceptedPlanToDag({
-          runId: run.id,
-          crucibleDecision,
-          budgetPolicy: run.budget,
-        })
-      : undefined
-  );
-
-  const dagCompilationPayload = compiledDag
-    ? { compiledDag }
-    : { skippedReason: `Crucible verdict ${crucibleDecision.verdict} is not ACCEPTED` };
-  const executionResult = await observability.recordSpan("EXECUTING", () =>
-    compiledDag ? executeCompiledDag(compiledDag, options.executorOptions) : undefined
-  );
-  const executionPayload = executionResult
-    ? { executionResult }
-    : { skippedReason: "Execution skipped because no compiled DAG exists" };
-  const validationHealingResult: HealingLoopResult | undefined = await observability.recordSpan("VALIDATING", () =>
-    compiledDag && executionResult
-      ? validateAndHealExecution({
-          compiledDag,
-          executionResult,
-          executorOptions: options.executorOptions,
-          maxHealingAttempts: options.maxHealingAttempts,
-        })
-      : undefined
-  );
-  const validationPayload = validationHealingResult
-    ? { validationHealingResult }
-    : { skippedReason: "Execution skipped or missing; validation and healing skipped" };
-  const synthesis = await observability.recordSpan("SYNTHESIZING", () =>
-    synthesizeChatBrainstemResponse({
-      traceId,
-      triage,
-      contextPack,
-      plannerOutput,
-      skepticReview,
-      crucibleDecision,
-      compiledDag,
-      executionResult,
-      validationHealingResult,
-      observabilitySummary: observability.getSummary(),
-    })
-  );
-  await observability.recordSpan("DONE", () => undefined);
-
-  const phases = [
-    "TRIAGE",
-    "CONTEXT_BUILDING",
-    "PLANNING",
-    "SKEPTIC_REVIEW",
-    "CRUCIBLE",
-    "DAG_COMPILATION",
-    "EXECUTING",
-    "VALIDATING",
-    "SYNTHESIZING",
-    "DONE",
-  ] as const;
-
-  let current = run;
-  for (const phase of phases) {
-    const result = await transitionRun(store, current.id, phase, {
-      traceId,
-      payload: {
-        source: "fake-orchestrator",
-        note: phase === "DONE" ? "Local brainstem run completed" : "Local brainstem run advanced",
-        ...(phase === "TRIAGE" ? { triage } : {}),
-        ...(phase === "CONTEXT_BUILDING" ? { contextPack } : {}),
-        ...(phase === "PLANNING" ? { plannerOutput } : {}),
-        ...(phase === "SKEPTIC_REVIEW" ? { skepticReview } : {}),
-        ...(phase === "CRUCIBLE" ? { crucibleDecision } : {}),
-        ...(phase === "DAG_COMPILATION" ? dagCompilationPayload : {}),
-        ...(phase === "EXECUTING" ? executionPayload : {}),
-        ...(phase === "VALIDATING" ? validationPayload : {}),
-        ...(phase === "SYNTHESIZING" ? { synthesis } : {}),
-        observability: phaseObservabilityPayload(observability, phase),
-      },
-      ...(phase === "VALIDATING" && validationHealingResult
-        ? {
-            validationAttempts: validationHealingResult.attempts + 1,
-            healingAttempts: validationHealingResult.attempts,
-          }
-        : {}),
-    });
-    current = result.run;
-  }
-
-  return { run: current, synthesis, observabilitySummary: observability.getSummary() };
-}
-
-function phaseObservabilityPayload(
-  observability: InMemoryObservabilityTrace,
-  phase: string
-): { traceId: string; span?: ObservabilitySpan; summary: ObservabilitySummary } {
-  return {
-    traceId: observability.traceId,
-    span: observability.getLastSpanForPhase(phase),
-    summary: observability.getSummary(),
-  };
-}
-
-function runEvent(
-  run: Run,
-  type: RunEvent["type"],
-  phase: RunEvent["phase"],
-  payload: Record<string, unknown>
-): RunEvent {
-  return {
-    id: `evt-${crypto.randomUUID()}`,
-    runId: run.id,
-    type,
-    phase,
-    payload: redactSecrets(payload),
-    traceId: run.traceId,
-    createdAt: new Date().toISOString(),
-  };
 }
