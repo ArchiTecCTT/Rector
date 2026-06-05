@@ -45,6 +45,7 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.5.0",
+    "fast-check": "^4.8.0",
     "supertest": "^6.3.4",
     "tsx": "^4.19.0",
     "typescript": "^5.6.3",
