@@ -7,7 +7,9 @@ Use the GitKraken MCP for git inspection when useful:
 - Check branch state and status.
 - View diffs and compare against `main`.
 - Review commit history.
-- Stage/commit only when the user explicitly asks.
+- Stage/commit only when the user explicitly asks, with one exception: during spec task
+  execution, commit locally after each verified task (see `spec-task-commits.md`). Pushing
+  and tagging still require an explicit request.
 
 Plain terminal git is also fine for read-only inspection:
 
