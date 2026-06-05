@@ -3,6 +3,7 @@ export * from "./crucible";
 export * from "./dagCompiler";
 export * from "./executorSimulator";
 export * from "./planner";
+export * from "./prompts";
 export * from "./runStateMachine";
 export * from "./skeptic";
 export * from "./synthesizer";

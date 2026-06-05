@@ -1,6 +1,19 @@
 import { z } from "zod";
 import { ContextPackSchema, summarize, type ContextPack } from "./contextBuilder";
 import { TRIAGE_ROUTES, TriageResultSchema, type TriageResult } from "./triage";
+import { buildPlannerPrompt, buildPlannerRepairPrompt } from "./prompts";
+import {
+  invokeWithBudget,
+  LLMUsageSchema,
+  ProviderError,
+  type LLMProvider,
+  type LLMRequest,
+  type LLMResponse,
+  type LLMUsage,
+} from "../providers/llm";
+import { evaluateBudget, type BudgetUsage } from "../security/budget";
+import { redactSecrets, redactString } from "../security/redaction";
+import type { Run } from "../store";
 
 export const PlannerRiskLevelSchema = z.enum(["low", "medium", "high", "destructive"]);
 export type PlannerRiskLevel = z.infer<typeof PlannerRiskLevelSchema>;
@@ -387,4 +400,311 @@ function hasDestructiveRisk(triage: TriageResult, intent: string): boolean {
     triage.riskFlags.includes("deployment_risk") ||
     /\b(delete|remove|drop|wipe|destroy|overwrite|production|deploy)\b/i.test(intent)
   );
+}
+
+// ---------------------------------------------------------------------------
+// Live planner agent (ORN-34)
+// ---------------------------------------------------------------------------
+
+/** Result status of a live planner invocation. */
+export type LivePlannerStatus = "ok" | "blocked";
+
+/**
+ * Structured, redacted blocker emitted when the live planner cannot return a
+ * safe plan. Never carries a provider secret, API key, or raw model output;
+ * `details` for `PLANNER_INVALID` carries only Zod issue paths (schema field
+ * identifiers).
+ */
+export const PlannerBlockerSchema = z.object({
+  code: z.enum(["BUDGET_DENIED", "PLANNER_INVALID", "PROVIDER_ERROR"]),
+  message: z.string().min(1),
+  details: z.unknown().optional(),
+});
+export type PlannerBlocker = z.infer<typeof PlannerBlockerSchema>;
+
+/**
+ * Outcome of {@link runLivePlanner}. `status === "ok"` carries a schema-valid
+ * `plan`; `status === "blocked"` carries a redacted `blocker`. `usage` is the
+ * accumulated token/cost record across every provider call performed and
+ * `attempts` is the number of provider calls initiated (0–2).
+ */
+export interface LivePlannerResult {
+  status: LivePlannerStatus;
+  plan?: PlannerOutput;
+  blocker?: PlannerBlocker;
+  usage: LLMUsage;
+  provider: string;
+  model: string;
+  attempts: number;
+}
+
+/** Dependencies for {@link runLivePlanner}. The provider is mocked in tests. */
+export interface LivePlannerDeps {
+  provider: LLMProvider;
+  run: Run;
+  buildPrompt?: typeof buildPlannerPrompt;
+  buildRepairPrompt?: typeof buildPlannerRepairPrompt;
+}
+
+const ZERO_USAGE: LLMUsage = LLMUsageSchema.parse({
+  inputTokens: 0,
+  outputTokens: 0,
+  totalTokens: 0,
+  estimatedUsd: 0,
+  modelCalls: 0,
+});
+
+/**
+ * Prompts a configured provider for a plan, validates it against the same
+ * safety bar as {@link createFakePlan} (`PlannerOutputSchema` +
+ * `validatePlannerOutput`), retries exactly once with a repair prompt on
+ * failure, and otherwise resolves with a structured, redacted blocker. A budget
+ * preflight runs before every provider call, so a denied budget yields a
+ * `BUDGET_DENIED` blocker with zero provider invocations. No exception escapes
+ * for budget/provider/validation failures; only an invalid `input` (a caller
+ * precondition violation) throws.
+ */
+export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps): Promise<LivePlannerResult> {
+  // Req 4.9: validate input against PlannerInputSchema before constructing any prompt.
+  const parsedInput = PlannerInputSchema.parse(input);
+
+  const { provider, run } = deps;
+  const buildPrompt = deps.buildPrompt ?? buildPlannerPrompt;
+  const buildRepairPrompt = deps.buildRepairPrompt ?? buildPlannerRepairPrompt;
+  const model = plannerModel(provider);
+
+  let totalUsage = ZERO_USAGE;
+  let messages = buildPrompt(parsedInput);
+  let lastFailure: ValidationFailure = { repairSummary: "Planner output was not produced", issuePaths: [] };
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    // Req 4.10: request a JSON object response format from the provider.
+    const request: LLMRequest = {
+      messages,
+      modelRoute: "flagship",
+      responseFormat: { type: "json_object" },
+      task: "planner",
+    };
+
+    // Req 4.5 / 4.7 / 4.8: budget preflight BEFORE any provider.invoke.
+    const estimate = provider.estimateRequest(request);
+    const decision = evaluateBudget(run, buildPreflightUsage(provider, estimate, run, totalUsage));
+    if (decision.status !== "allowed") {
+      const reason = decision.reasons.join("; ") || "budget preflight denied the planner call";
+      return blockedResult(
+        makeBlocker("BUDGET_DENIED", `Planner call denied by budget preflight: ${reason}`),
+        totalUsage,
+        provider,
+        model,
+        attempt - 1
+      );
+    }
+
+    let response: LLMResponse;
+    try {
+      // Double-gated: invokeWithBudget re-checks the budget before the network call.
+      response = await invokeWithBudget(provider, request, run);
+    } catch (error) {
+      // Req 4.11: map any provider error/exception to a redacted PROVIDER_ERROR blocker.
+      const rawMessage = error instanceof ProviderError || error instanceof Error ? error.message : String(error);
+      return blockedResult(
+        makeBlocker("PROVIDER_ERROR", `Provider call failed: ${rawMessage}`),
+        totalUsage,
+        provider,
+        model,
+        attempt
+      );
+    }
+
+    // Req 4.12: accumulate LLM usage across every provider call performed.
+    totalUsage = addUsage(totalUsage, response.usage);
+
+    const parsed = tryParseJson(response.content);
+    if (parsed.ok) {
+      // Req 4.1: validate parsed JSON against schema + validatePlannerOutput invariants.
+      const validation = safeValidatePlannerOutput(parsed.value);
+      if (validation.ok) {
+        return okResult(validation.plan, totalUsage, provider, response.model, attempt);
+      }
+      lastFailure = validation;
+    } else {
+      lastFailure = {
+        repairSummary: `Response was not valid JSON: ${parsed.error}`,
+        issuePaths: [],
+      };
+    }
+
+    // Req 4.2: issue exactly one repair prompt on the first failure, then stop.
+    if (attempt === 1) {
+      messages = buildRepairPrompt(parsedInput, response.content, lastFailure.repairSummary);
+    }
+  }
+
+  // Req 4.3 / 4.4 / 4.6: still invalid after one repair -> redacted PLANNER_INVALID blocker.
+  return blockedResult(
+    makeBlocker("PLANNER_INVALID", plannerInvalidMessage(lastFailure.issuePaths), { issues: lastFailure.issuePaths }),
+    totalUsage,
+    provider,
+    plannerModel(provider),
+    2
+  );
+}
+
+interface ValidationFailure {
+  /** Rich, model-facing summary used only in the repair prompt (round-trips to the provider). */
+  repairSummary: string;
+  /** Safe schema-field identifiers (Zod issue paths) for the returned blocker details. */
+  issuePaths: string[];
+}
+
+type SafeValidation = { ok: true; plan: PlannerOutput } | ({ ok: false } & ValidationFailure);
+
+/**
+ * Validates a parsed value to the same bar as {@link createFakePlan} but never
+ * throws: returns the schema-field identifiers (Zod issue paths) on failure so
+ * the blocker can report them without echoing raw model output.
+ */
+function safeValidatePlannerOutput(value: unknown): SafeValidation {
+  const schemaResult = PlannerOutputSchema.safeParse(value);
+  if (!schemaResult.success) {
+    return {
+      ok: false,
+      repairSummary: schemaResult.error.issues
+        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+        .join("; "),
+      issuePaths: uniqueIssuePaths(schemaResult.error.issues),
+    };
+  }
+
+  try {
+    const plan = validatePlannerOutput(schemaResult.data);
+    return { ok: true, plan };
+  } catch (error) {
+    // Dependency / approval-gate invariant violations are thrown as plain Errors.
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      repairSummary: message,
+      issuePaths: invariantIssuePaths(message),
+    };
+  }
+}
+
+function uniqueIssuePaths(issues: z.ZodIssue[]): string[] {
+  const paths = issues.map((issue) => issue.path.map((segment) => String(segment)).join(".") || "(root)");
+  return Array.from(new Set(paths));
+}
+
+/**
+ * Maps an invariant-violation message to a safe schema-field identifier without
+ * echoing the offending (model-provided) task ids in the returned blocker.
+ */
+function invariantIssuePaths(message: string): string[] {
+  if (/approval gate/i.test(message)) return ["approvalGates"];
+  if (/dependency|dependencies/i.test(message)) return ["dependencies"];
+  return ["(invariant)"];
+}
+
+function plannerInvalidMessage(issuePaths: string[]): string {
+  if (issuePaths.length === 0) {
+    return "Planner output was invalid after one repair attempt";
+  }
+  return `Planner output failed validation after one repair attempt at fields: ${issuePaths.join(", ")}`;
+}
+
+function plannerModel(provider: LLMProvider): string {
+  const models = provider.metadata.models;
+  return (
+    models.flagship ??
+    models.fast ??
+    models.research ??
+    models.cheap ??
+    Object.values(models)[0] ??
+    provider.metadata.id
+  );
+}
+
+function buildPreflightUsage(
+  provider: LLMProvider,
+  estimate: LLMUsage,
+  run: Run,
+  totalUsage: LLMUsage
+): BudgetUsage {
+  return {
+    provider: provider.metadata.id,
+    estimatedUsd: committedNumber(run.actualCost?.usd, run.costEstimate.usd) + totalUsage.estimatedUsd + estimate.estimatedUsd,
+    inputTokens: committedNumber(run.actualTokens?.input, run.tokenEstimate.input) + totalUsage.inputTokens + estimate.inputTokens,
+    outputTokens: committedNumber(run.actualTokens?.output, run.tokenEstimate.output) + totalUsage.outputTokens + estimate.outputTokens,
+    modelCalls: committedNumber(run.actualCost?.modelCalls, run.costEstimate.modelCalls) + totalUsage.modelCalls + estimate.modelCalls,
+    runtimeMs: committedNumber(run.actualCost?.runtimeMs, run.costEstimate.runtimeMs),
+    healingAttempts: run.healingAttempts,
+  };
+}
+
+function addUsage(left: LLMUsage, right: LLMUsage): LLMUsage {
+  return LLMUsageSchema.parse({
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+    estimatedUsd: left.estimatedUsd + right.estimatedUsd,
+    modelCalls: left.modelCalls + right.modelCalls,
+  });
+}
+
+function tryParseJson(content: string): { ok: true; value: unknown } | { ok: false; error: string } {
+  try {
+    return { ok: true, value: JSON.parse(content) as unknown };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** Builds a redacted blocker. `message` runs through redactString; `details` through redactSecrets. */
+function makeBlocker(code: PlannerBlocker["code"], message: string, details?: unknown): PlannerBlocker {
+  const redactedMessage = redactString(message).trim();
+  return PlannerBlockerSchema.parse({
+    code,
+    message: redactedMessage.length > 0 ? redactedMessage : code,
+    ...(details !== undefined ? { details: redactSecrets(details) } : {}),
+  });
+}
+
+function blockedResult(
+  blocker: PlannerBlocker,
+  usage: LLMUsage,
+  provider: LLMProvider,
+  model: string,
+  attempts: number
+): LivePlannerResult {
+  return {
+    status: "blocked",
+    blocker,
+    usage,
+    provider: provider.metadata.id,
+    model,
+    attempts,
+  };
+}
+
+function okResult(
+  plan: PlannerOutput,
+  usage: LLMUsage,
+  provider: LLMProvider,
+  model: string,
+  attempts: number
+): LivePlannerResult {
+  return {
+    status: "ok",
+    plan,
+    usage,
+    provider: provider.metadata.id,
+    model,
+    attempts,
+  };
+}
+
+function committedNumber(primary: unknown, fallback: unknown): number {
+  if (typeof primary === "number" && Number.isFinite(primary)) return primary;
+  if (typeof fallback === "number" && Number.isFinite(fallback)) return fallback;
+  return 0;
 }
