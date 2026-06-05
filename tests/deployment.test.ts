@@ -1,11 +1,15 @@
 import { EventEmitter } from "node:events";
+import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import {
+  OrchestrationConfigError,
   createDeploymentReadinessReport,
   createGracefulShutdownHandler,
   parseDeploymentEnvironment,
+  parseOrchestrationConfig,
   redactDeploymentConfig,
 } from "../src/deployment";
+import { arbKeyLikeSecret } from "./support/byokArbitraries";
 
 class FakeServer {
   closeCalls = 0;
@@ -187,5 +191,278 @@ describe("graceful shutdown helper", () => {
     expect(result.error?.message).toContain("timed out");
     expect(exits).toEqual([1]);
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("timed out"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Property 8: External mode defaults safely and never requires keys for `npm test`
+// Validates: Requirements 1.1, 1.2, 1.4, 1.5, 1.6
+// ---------------------------------------------------------------------------
+
+describe("Property 8: orchestration config defaults safely and never leaks secrets", () => {
+  // Runs `parse` under a fetch spy and asserts orchestration parsing performs
+  // zero network I/O (Requirement 1.6) regardless of the outcome.
+  function withoutNetwork<T>(parse: () => T): T {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      const result = parse();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      return result;
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  }
+
+  // (a) Requirement 1.1: unset / empty / whitespace-only ORCHESTRATOR_MODE resolves to
+  // local with an empty provider list, even when key-like secrets are present in the env,
+  // and never touches the network (1.6).
+  it("resolves unset, empty, or whitespace mode to local without leaking env secrets", () => {
+    const arbBlankMode = fc.oneof(
+      fc.constant<string | undefined>(undefined),
+      fc.constantFrom("", " ", "   ", "\t", "\n", "\r\n", " \t \n "),
+    );
+
+    fc.assert(
+      fc.property(arbBlankMode, arbKeyLikeSecret(), (mode, secret) => {
+        const env: Record<string, string | undefined> = {
+          ORCHESTRATOR_MODE: mode,
+          // Secrets in the environment must never surface in the returned config.
+          TOGETHER_API_KEY: secret,
+          CLOUDFLARE_API_TOKEN: secret,
+          AZURE_OPENAI_API_KEY: secret,
+          PERPLEXITY_API_KEY: secret,
+        };
+
+        const config = withoutNetwork(() => parseOrchestrationConfig(env));
+
+        expect(config.mode).toBe("local");
+        expect(config.configuredProviders).toEqual([]);
+        expect(JSON.stringify(config)).not.toContain(secret);
+      }),
+    );
+  });
+
+  // (b) Requirement 1.2: external mode with no validated provider throws a redacted
+  // OrchestrationConfigError (caught here, never a crash) whose message and setupHint
+  // expose no secret value, and the parse performs zero network I/O (1.6).
+  it("throws a redacted EXTERNAL_MODE_NO_PROVIDER error when no provider validates", () => {
+    fc.assert(
+      fc.property(arbKeyLikeSecret(), (secret) => {
+        // Each provider is left incompletely configured so none validates: cloudflare is
+        // missing CLOUDFLARE_ACCOUNT_ID and azure is missing its endpoint/deployment, while
+        // together/perplexity have no key at all. The injected secret therefore reaches the
+        // parser but must not appear in the resulting error.
+        const env: Record<string, string | undefined> = {
+          ORCHESTRATOR_MODE: "external",
+          CLOUDFLARE_API_TOKEN: secret,
+          AZURE_OPENAI_API_KEY: secret,
+        };
+
+        let caught: unknown;
+        withoutNetwork(() => {
+          try {
+            parseOrchestrationConfig(env);
+          } catch (error) {
+            caught = error;
+          }
+        });
+
+        expect(caught).toBeInstanceOf(OrchestrationConfigError);
+        const error = caught as OrchestrationConfigError;
+        expect(error.code).toBe("EXTERNAL_MODE_NO_PROVIDER");
+        expect(error.message).not.toContain(secret);
+        expect(error.setupHint).not.toContain(secret);
+        // The hint should still guide the operator using env key NAMES only.
+        expect(error.setupHint).toContain("TOGETHER_API_KEY");
+      }),
+    );
+  });
+
+  // (d) Requirement 1.4: any non-blank value that does not exactly match a known mode is
+  // rejected with a redacted ORCHESTRATOR_MODE_INVALID error, with no secret leakage and
+  // zero network I/O (1.6).
+  it("rejects unknown, non-blank modes with a redacted ORCHESTRATOR_MODE_INVALID error", () => {
+    const arbInvalidMode = fc
+      .string({ minLength: 1, maxLength: 24 })
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0 && value !== "local" && value !== "external");
+
+    fc.assert(
+      fc.property(arbInvalidMode, arbKeyLikeSecret(), (mode, secret) => {
+        const env: Record<string, string | undefined> = {
+          ORCHESTRATOR_MODE: mode,
+          TOGETHER_API_KEY: secret,
+        };
+
+        let caught: unknown;
+        withoutNetwork(() => {
+          try {
+            parseOrchestrationConfig(env);
+          } catch (error) {
+            caught = error;
+          }
+        });
+
+        expect(caught).toBeInstanceOf(OrchestrationConfigError);
+        const error = caught as OrchestrationConfigError;
+        expect(error.code).toBe("ORCHESTRATOR_MODE_INVALID");
+        expect(error.message).not.toContain(secret);
+        expect(error.setupHint).not.toContain(secret);
+      }),
+    );
+  });
+
+  // Requirement 1.5: external mode with at least one validated provider returns that
+  // provider in the configured list, without reading any secret value into the config and
+  // without touching the network (1.6).
+  it("lists validated providers in external mode without leaking the configured secret", () => {
+    fc.assert(
+      fc.property(arbKeyLikeSecret(), (secret) => {
+        const env: Record<string, string | undefined> = {
+          ORCHESTRATOR_MODE: "external",
+          // A non-empty key plus the default https base URL validates the Together provider.
+          TOGETHER_API_KEY: secret,
+        };
+
+        const config = withoutNetwork(() => parseOrchestrationConfig(env));
+
+        expect(config.mode).toBe("external");
+        expect(config.configuredProviders).toContain("together");
+        expect(JSON.stringify(config)).not.toContain(secret);
+      }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unit tests: parseOrchestrationConfig (example-based, concrete cases)
+// Validates: Requirements 1.2, 1.3, 1.5, 1.6
+// ---------------------------------------------------------------------------
+
+describe("parseOrchestrationConfig (unit)", () => {
+  // A concrete, fixed secret value reused across the redaction assertions so we
+  // can search for an exact substring in serialized output and error fields.
+  const SECRET = "sk-unit-test-1234567890ABCDEFghijklmnop";
+
+  // Requirement 1.1 (supporting context for the unit suite): an unset
+  // ORCHESTRATOR_MODE resolves to the provider-free local default, and the
+  // parse performs zero network I/O (Requirement 1.6).
+  it("defaults to local with an empty provider list when ORCHESTRATOR_MODE is unset", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      const config = parseOrchestrationConfig({});
+
+      expect(config).toEqual({ mode: "local", configuredProviders: [] });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  // Requirement 1.4: an explicit unknown mode is rejected with
+  // ORCHESTRATOR_MODE_INVALID (no fallback to local).
+  it("throws ORCHESTRATOR_MODE_INVALID for an unknown mode value like 'hybrid'", () => {
+    let caught: unknown;
+    try {
+      parseOrchestrationConfig({ ORCHESTRATOR_MODE: "hybrid" });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OrchestrationConfigError);
+    expect((caught as OrchestrationConfigError).code).toBe("ORCHESTRATOR_MODE_INVALID");
+  });
+
+  // Requirement 1.4: mode matching is case-sensitive, so "LOCAL" is rejected
+  // rather than silently coerced to the local default.
+  it("rejects a wrong-case mode 'LOCAL' with ORCHESTRATOR_MODE_INVALID (case-sensitive)", () => {
+    let caught: unknown;
+    try {
+      parseOrchestrationConfig({ ORCHESTRATOR_MODE: "LOCAL" });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OrchestrationConfigError);
+    expect((caught as OrchestrationConfigError).code).toBe("ORCHESTRATOR_MODE_INVALID");
+  });
+
+  // Requirement 1.5 + 1.6: external mode with one validated provider lists that
+  // provider id and performs zero network I/O.
+  it("lists the configured provider in external mode when its env validates", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      const config = parseOrchestrationConfig({
+        ORCHESTRATOR_MODE: "external",
+        // A non-empty key plus the default https base URL validates Together.
+        TOGETHER_API_KEY: "together-dummy-key",
+      });
+
+      expect(config.mode).toBe("external");
+      expect(config.configuredProviders).toContain("together");
+      // Only the configured provider is listed; partially configured providers
+      // (none here) do not appear.
+      expect(config.configuredProviders).toEqual(["together"]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  // Requirement 1.2: external mode with no validated provider throws
+  // EXTERNAL_MODE_NO_PROVIDER with a redacted hint that names required env KEY
+  // names (never values) to guide setup.
+  it("throws EXTERNAL_MODE_NO_PROVIDER when external mode has no validated provider", () => {
+    let caught: unknown;
+    try {
+      // No provider env supplied at all, so none validate.
+      parseOrchestrationConfig({ ORCHESTRATOR_MODE: "external" });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OrchestrationConfigError);
+    const error = caught as OrchestrationConfigError;
+    expect(error.code).toBe("EXTERNAL_MODE_NO_PROVIDER");
+    // The hint guides the operator with env key NAMES for every supported provider.
+    expect(error.setupHint).toContain("TOGETHER_API_KEY");
+    expect(error.setupHint).toContain("CLOUDFLARE_ACCOUNT_ID");
+    expect(error.setupHint).toContain("AZURE_OPENAI_API_KEY");
+    expect(error.setupHint).toContain("PERPLEXITY_API_KEY");
+  });
+
+  // Requirement 1.3: the concrete secret value supplied via env must NOT appear
+  // anywhere in the returned configuration (success path).
+  it("never includes a secret value in the returned external-mode config", () => {
+    const config = parseOrchestrationConfig({
+      ORCHESTRATOR_MODE: "external",
+      TOGETHER_API_KEY: SECRET,
+    });
+
+    expect(config.mode).toBe("external");
+    expect(config.configuredProviders).toEqual(["together"]);
+    expect(JSON.stringify(config)).not.toContain(SECRET);
+  });
+
+  // Requirement 1.3: the concrete secret value supplied via env must NOT appear
+  // in the thrown error's message or setupHint (failure path). Cloudflare is
+  // partially configured (token present, account id missing) so it carries the
+  // secret into the parser but still fails validation.
+  it("never leaks a secret value in the EXTERNAL_MODE_NO_PROVIDER error message or setupHint", () => {
+    let caught: unknown;
+    try {
+      parseOrchestrationConfig({
+        ORCHESTRATOR_MODE: "external",
+        CLOUDFLARE_API_TOKEN: SECRET,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OrchestrationConfigError);
+    const error = caught as OrchestrationConfigError;
+    expect(error.code).toBe("EXTERNAL_MODE_NO_PROVIDER");
+    expect(error.message).not.toContain(SECRET);
+    expect(error.setupHint).not.toContain(SECRET);
   });
 });

@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { redactSecrets } from "../security/redaction";
+import { redactSecrets, redactString } from "../security/redaction";
+import {
+  AzureOpenAIProvider,
+  CloudflareWorkersAIProvider,
+  PerplexityResearchProvider,
+  TogetherAIProvider,
+  type LLMProvider,
+} from "../providers/llm";
 
 export const DEPLOYMENT_API_VERSION = "rector.deployment.v1alpha1";
 export const REDACTED = "[REDACTED]";
@@ -319,4 +326,140 @@ function closeServerWithTimeout(server: CloseableServer, timeoutMs: number): Pro
 function redactCredentialUrl(value: string | undefined): string | undefined {
   if (!value) return value;
   return value.replace(/\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@]*@)/gi, (_match, scheme: string) => `${scheme}${REDACTED}@`);
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration mode configuration and startup validation (ORN-31)
+// ---------------------------------------------------------------------------
+
+export const ORCHESTRATOR_MODES = ["local", "external"] as const;
+export const OrchestratorModeSchema = z.enum(ORCHESTRATOR_MODES);
+export type OrchestratorMode = z.infer<typeof OrchestratorModeSchema>;
+
+export interface OrchestrationConfig {
+  mode: OrchestratorMode;
+  // Provider ids whose config validated for external mode (e.g. ["together", "azure-openai"]).
+  // Empty in local mode. Never contains any secret value.
+  configuredProviders: string[];
+}
+
+export type OrchestrationConfigErrorCode = "ORCHESTRATOR_MODE_INVALID" | "EXTERNAL_MODE_NO_PROVIDER";
+
+export class OrchestrationConfigError extends Error {
+  readonly name = "OrchestrationConfigError";
+  readonly code: OrchestrationConfigErrorCode;
+  readonly setupHint: string; // redacted, safe to log/show
+
+  constructor(input: { code: OrchestrationConfigErrorCode; message: string; setupHint: string }) {
+    super(redactString(input.message));
+    this.code = input.code;
+    this.setupHint = redactString(input.setupHint);
+  }
+}
+
+interface ExternalProviderDescriptor {
+  id: string;
+  requiredEnvKeys: string[];
+  build(env: Record<string, string | undefined>): LLMProvider;
+}
+
+// Supported BYOK providers and the env key NAMES (never values) required to configure each.
+// Providers are constructed only from the supplied env so config parsing is deterministic and
+// performs no network I/O; required secret-bearing keys are forced (`?? ""`) so an absent value in
+// the supplied env never falls back to ambient process.env.
+const EXTERNAL_PROVIDER_DESCRIPTORS: ExternalProviderDescriptor[] = [
+  {
+    id: "together",
+    requiredEnvKeys: ["TOGETHER_API_KEY"],
+    build: (env) => new TogetherAIProvider({ apiKey: env.TOGETHER_API_KEY ?? "", baseUrl: env.TOGETHER_BASE_URL }),
+  },
+  {
+    id: "cloudflare",
+    requiredEnvKeys: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"],
+    build: (env) =>
+      new CloudflareWorkersAIProvider({
+        accountId: env.CLOUDFLARE_ACCOUNT_ID ?? "",
+        apiToken: env.CLOUDFLARE_API_TOKEN ?? "",
+        baseUrl: env.CLOUDFLARE_BASE_URL,
+      }),
+  },
+  {
+    id: "azure-openai",
+    requiredEnvKeys: ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_DEPLOYMENT"],
+    build: (env) =>
+      new AzureOpenAIProvider({
+        apiKey: env.AZURE_OPENAI_API_KEY ?? "",
+        endpoint: env.AZURE_OPENAI_ENDPOINT ?? "",
+        apiVersion: env.AZURE_OPENAI_API_VERSION,
+        deployments: {
+          cheap: env.AZURE_OPENAI_CHEAP_DEPLOYMENT,
+          fast: env.AZURE_OPENAI_FAST_DEPLOYMENT ?? env.AZURE_OPENAI_DEPLOYMENT,
+          flagship: env.AZURE_OPENAI_FLAGSHIP_DEPLOYMENT ?? env.AZURE_OPENAI_DEPLOYMENT,
+          research: env.AZURE_OPENAI_RESEARCH_DEPLOYMENT,
+        },
+      }),
+  },
+  {
+    id: "perplexity",
+    requiredEnvKeys: ["PERPLEXITY_API_KEY"],
+    build: (env) => new PerplexityResearchProvider({ apiKey: env.PERPLEXITY_API_KEY ?? "", baseUrl: env.PERPLEXITY_BASE_URL }),
+  },
+];
+
+// Parses ORCHESTRATOR_MODE (default "local"). In external mode, verifies at least one supported
+// provider's validateConfig() passes; otherwise throws OrchestrationConfigError with a redacted,
+// human-readable setup hint that names required env key names (never values). NEVER performs
+// network I/O and never reads a secret value into the returned configuration.
+export function parseOrchestrationConfig(
+  env: Record<string, string | undefined> = process.env
+): OrchestrationConfig {
+  const rawMode = env.ORCHESTRATOR_MODE;
+
+  // Requirement 1.1: unset, empty, or whitespace-only resolves to local with no providers.
+  if (rawMode === undefined || rawMode.trim().length === 0) {
+    return { mode: "local", configuredProviders: [] };
+  }
+
+  // Requirement 1.4: reject any value that does not exactly (case-sensitive) match a known mode.
+  const modeResult = OrchestratorModeSchema.safeParse(rawMode);
+  if (!modeResult.success) {
+    throw new OrchestrationConfigError({
+      code: "ORCHESTRATOR_MODE_INVALID",
+      message: `ORCHESTRATOR_MODE must exactly match one of: ${ORCHESTRATOR_MODES.join(", ")}`,
+      setupHint: `Set ORCHESTRATOR_MODE to one of: ${ORCHESTRATOR_MODES.join(", ")} (the provided value is not supported).`,
+    });
+  }
+
+  const mode = modeResult.data;
+  if (mode === "local") {
+    return { mode, configuredProviders: [] };
+  }
+
+  // Requirement 1.5: external mode lists every provider whose validateConfig() passes.
+  const configuredProviders = EXTERNAL_PROVIDER_DESCRIPTORS.filter((descriptor) =>
+    isOrchestrationProviderConfigValid(descriptor.build(env))
+  ).map((descriptor) => descriptor.id);
+
+  // Requirement 1.2: external mode with no validated provider throws a redacted setup error.
+  if (configuredProviders.length === 0) {
+    const requiredKeyHint = EXTERNAL_PROVIDER_DESCRIPTORS.map(
+      (descriptor) => `${descriptor.id} (${descriptor.requiredEnvKeys.join(", ")})`
+    ).join("; ");
+    throw new OrchestrationConfigError({
+      code: "EXTERNAL_MODE_NO_PROVIDER",
+      message: "ORCHESTRATOR_MODE=external requires at least one configured provider, but none validated.",
+      setupHint: `Set the environment variables for at least one supported provider, then retry. Supported providers and required keys: ${requiredKeyHint}.`,
+    });
+  }
+
+  return { mode, configuredProviders };
+}
+
+function isOrchestrationProviderConfigValid(provider: LLMProvider): boolean {
+  try {
+    provider.validateConfig();
+    return true;
+  } catch {
+    return false;
+  }
 }
