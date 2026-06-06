@@ -1,7 +1,11 @@
 import { z } from "zod";
 import type { Dag, DagNode } from "../protocol/dag";
+import type { PatchOperation, WorkspaceSandboxAdapter } from "../sandbox";
+import type { Run } from "../store";
+import type { ContextPack } from "./contextBuilder";
 import {
   DagExecutionResultSchema,
+  DagExecutionStatusSchema,
   executeCompiledDag,
   type DagExecutionResult,
   type ExecutionError,
@@ -25,6 +29,7 @@ export const HealingActionTypeSchema = z.enum([
   "REQUEST_DECISION",
   "FAIL_RUN",
   "NOOP",
+  "APPLY_PATCH",
 ]);
 export type HealingActionType = z.infer<typeof HealingActionTypeSchema>;
 
@@ -52,12 +57,24 @@ export type HealingAction = z.infer<typeof HealingActionSchema>;
 export const HealingLoopStatusSchema = z.enum(["VALIDATED", "HEALED", "NEEDS_DECISION", "FAILED"]);
 export type HealingLoopStatus = z.infer<typeof HealingLoopStatusSchema>;
 
+export const HealingRoundRecordSchema = z.object({
+  round: z.number().int().min(1),
+  failureClassification: ValidationFailureClassificationSchema,
+  nodeId: z.string().min(1).optional(),
+  repairApplied: z.boolean(),
+  patchArtifactId: z.string().min(1).optional(),
+  revalidationStatus: DagExecutionStatusSchema,
+  explanation: z.string().min(1),
+});
+export type HealingRoundRecord = z.infer<typeof HealingRoundRecordSchema>;
+
 export const HealingLoopResultSchema = z.object({
   status: HealingLoopStatusSchema,
   attempts: z.number().int().min(0),
   failures: z.array(ValidationFailureSchema),
   actions: z.array(HealingActionSchema),
   finalExecutionResult: DagExecutionResultSchema,
+  rounds: z.array(HealingRoundRecordSchema).default([]),
 });
 export type HealingLoopResult = z.infer<typeof HealingLoopResultSchema>;
 
@@ -66,12 +83,38 @@ export type HealingExecutor = (
   options?: ExecutorSimulatorOptions
 ) => DagExecutionResult | Promise<DagExecutionResult>;
 
+/**
+ * A repair patch proposed by a {@link LiveRepairAgent}. The agent never touches
+ * disk itself; the proposal is applied only through the safe executor.
+ */
+export interface RepairPatchProposal {
+  path: string;
+  operation: PatchOperation;
+  content: string;
+  rationale: string;
+}
+
+/**
+ * Proposes a patch from already-redacted failed output. Returns `undefined`
+ * when no safe repair is available.
+ */
+export type LiveRepairAgent = (input: {
+  failure: ValidationFailure;
+  failedOutput: string;
+  contextPack: ContextPack;
+  run: Run;
+}) => Promise<RepairPatchProposal | undefined>;
+
 export interface ValidateAndHealExecutionInput {
   compiledDag: Dag;
   executionResult?: DagExecutionResult;
   executor?: HealingExecutor;
   executorOptions?: ExecutorSimulatorOptions;
   maxHealingAttempts?: number;
+  repairAgent?: LiveRepairAgent;
+  sandbox?: WorkspaceSandboxAdapter;
+  contextPack?: ContextPack;
+  run?: Run;
 }
 
 const DEFAULT_MAX_HEALING_ATTEMPTS = 2;
@@ -359,7 +402,7 @@ function boundedAttempts(value: number): number {
   return Math.max(0, Math.floor(value));
 }
 
-function parseResult(result: HealingLoopResult): HealingLoopResult {
+function parseResult(result: z.input<typeof HealingLoopResultSchema>): HealingLoopResult {
   return HealingLoopResultSchema.parse(result);
 }
 
