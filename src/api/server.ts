@@ -11,7 +11,11 @@ import { buildContextPack, createContextMaterial } from "../orchestration/contex
 import type { ExecutorSimulatorOptions } from "../orchestration/executorSimulator";
 import { runChat } from "../orchestration/chatRunner";
 import { triageUserMessage } from "../orchestration/triage";
-import { createInMemoryObservabilityTrace } from "../observability";
+import {
+  createInMemoryObservabilityTrace,
+  aggregateRunCost,
+  aggregateConversationCost,
+} from "../observability";
 import { redactSecrets, redactString } from "../security/redaction";
 import {
   AzureOpenAIProvider,
@@ -644,6 +648,26 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
+  // Per-conversation cost aggregate (ORN-41, Req 3.6/3.10). Sums the per-run RunCostAggregates over
+  // the conversation's runs (insertion order preserved). For an UNKNOWN conversation id we do NOT
+  // 404: `listRuns` returns `[]`, so `aggregateConversationCost` yields a schema-valid all-zero
+  // aggregate (runCount 0, all numeric totals 0, empty `runs`), exactly as Requirement 3.10 wants.
+  // The extra `/cost` segment means this never shadows (and is never shadowed by) the
+  // `GET /api/chat/conversations/:id` route above.
+  app.get("/api/chat/conversations/:id/cost", async (req, res) => {
+    try {
+      const conversationId = req.params.id;
+      const runs = await rectorStore.listRuns(conversationId);
+      const eventsByRun = new Map<string, RunEvent[]>();
+      for (const run of runs) {
+        eventsByRun.set(run.id, await rectorStore.listEvents(run.id));
+      }
+      res.json(aggregateConversationCost(conversationId, runs, eventsByRun));
+    } catch (err: any) {
+      res.status(500).json({ error: redactString(err?.message ?? String(err)) });
+    }
+  });
+
   app.post("/api/chat/conversations/:id/messages", async (req, res) => {
     try {
       const conversation = await rectorStore.getConversation(req.params.id);
@@ -802,6 +826,20 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // broker-wrapped store, with a heartbeat keep-alive and clean teardown. The polling endpoint
   // above is preserved unchanged as the fallback.
   registerRunStreamRoute(app, { store: rectorStore, broker: runEventBroker });
+
+  // Per-run cost aggregate (ORN-41, Req 3.6/3.10). Derives the RunCostAggregate from the run's
+  // persisted (already-redacted) events. For an UNKNOWN run id we do NOT 404: `listEvents` returns
+  // `[]`, so `aggregateRunCost` yields a schema-valid all-zero aggregate (the requested runId, all
+  // numeric totals 0, empty provider/model lists), exactly as Requirement 3.10 specifies.
+  app.get("/api/runs/:id/cost", async (req, res) => {
+    try {
+      const runId = req.params.id;
+      const events = await rectorStore.listEvents(runId);
+      res.json(aggregateRunCost(runId, events));
+    } catch (err: any) {
+      res.status(500).json({ error: redactString(err?.message ?? String(err)) });
+    }
+  });
 
   // --- Local-only operator routes for optional Retool console ---
 
