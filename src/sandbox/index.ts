@@ -1,3 +1,5 @@
+import nodeFs from "node:fs";
+import nodePath from "node:path";
 import { z } from "zod";
 
 export const SANDBOX_ADAPTER_API_VERSION = "rector.sandbox.v1alpha1";
@@ -82,6 +84,140 @@ export const SandboxExecutionResultSchema = z.object({
   metadata: z.record(z.unknown()).default({}),
 });
 export type SandboxExecutionResult = z.infer<typeof SandboxExecutionResultSchema>;
+
+// ---------------------------------------------------------------------------
+// Workspace sandbox operations (ORN-37)
+// ---------------------------------------------------------------------------
+
+export const SandboxOperationKindSchema = z.enum([
+  "READ_FILE",
+  "LIST_DIR",
+  "PROPOSE_PATCH",
+  "RUN_COMMAND",
+]);
+export type SandboxOperationKind = z.infer<typeof SandboxOperationKindSchema>;
+
+export const SandboxDenialReasonSchema = z.enum([
+  "INVALID_PATH", // empty, null, or whitespace-only candidate path
+  "ABSOLUTE_PATH", // candidate path is absolute
+  "PATH_ESCAPE", // candidate path contains a ".." segment
+  "SYMLINK_ESCAPE", // realpath resolves outside the workspace root
+  "ARBITRARY_SHELL_DISABLED",
+  "COMMAND_NOT_ALLOWLISTED",
+  "DESTRUCTIVE_COMMAND_BLOCKED",
+  "COMMAND_TIMEOUT",
+  "NEEDS_APPROVAL",
+]);
+export type SandboxDenialReason = z.infer<typeof SandboxDenialReasonSchema>;
+
+export const SandboxOperationSchema = z.object({
+  kind: SandboxOperationKindSchema,
+  path: z.string().min(1).optional(), // required for READ_FILE / LIST_DIR / PROPOSE_PATCH
+  operation: PatchOperationSchema.optional(), // required for PROPOSE_PATCH
+  content: z.string().optional(), // patch content for PROPOSE_PATCH
+  command: z.string().min(1).optional(), // required for RUN_COMMAND (allowlisted)
+  args: z.array(z.string()).default([]),
+  timeoutMs: z.number().int().min(1).max(3_600_000).optional(),
+  approvalId: z.string().min(1).optional(), // references an explicit SandboxApproval
+  metadata: z.record(z.unknown()).default({}),
+});
+export type SandboxOperationInput = z.input<typeof SandboxOperationSchema>;
+export type SandboxOperation = z.infer<typeof SandboxOperationSchema>;
+
+export const SandboxOperationResultSchema = z.object({
+  kind: SandboxOperationKindSchema,
+  status: SandboxExecutionStatusSchema, // SUCCEEDED | FAILED | DENIED | NEEDS_APPROVAL
+  denialReason: SandboxDenialReasonSchema.optional(),
+  resolvedPath: z.string().min(1).optional(), // absolute, contained path (never returned on denial)
+  stdout: z.string().default(""),
+  stderr: z.string().default(""),
+  entries: z.array(z.string()).optional(), // for LIST_DIR
+  fileContent: z.string().optional(), // for READ_FILE (redacted)
+  artifacts: z.array(SandboxArtifactSchema).default([]), // PatchArtifact + captured stdio
+  approvalGates: z.array(ApprovalGateSchema).default([]),
+  networkCalls: z.literal(0),
+  startedAt: z.string().datetime(),
+  completedAt: z.string().datetime(),
+});
+export type SandboxOperationResult = z.infer<typeof SandboxOperationResultSchema>;
+
+export const SandboxApprovalSchema = z.object({
+  id: z.string().min(1),
+  scope: z.enum(["FILE_WRITE", "COMMAND"]),
+  target: z.string().min(1), // path or command the approval authorizes
+  approvedBy: z.string().min(1),
+});
+export type SandboxApproval = z.infer<typeof SandboxApprovalSchema>;
+
+/**
+ * Injectable filesystem surface used by the workspace sandbox. Tests supply an
+ * in-memory implementation so no real disk is required; production code falls
+ * back to `node:fs`. `resolveWithinWorkspace` only needs `realpathSync`.
+ */
+export interface WorkspaceFs {
+  realpathSync(path: string): string;
+  readFileSync(path: string): string;
+  readdirSync(path: string): string[];
+  writeFileSync(path: string, data: string): void;
+  existsSync(path: string): boolean;
+}
+
+export type ResolveWithinWorkspaceResult =
+  | { ok: true; absolutePath: string }
+  | { ok: false; reason: SandboxDenialReason };
+
+/**
+ * Pure, side-effect-free containment gate. Resolves `candidatePath` against
+ * `workspaceRoot`, applying validation checks in the fixed order:
+ *   1. empty / whitespace-only path  -> INVALID_PATH
+ *   2. absolute path                 -> ABSOLUTE_PATH
+ *   3. ".." (parent-traversal) segment -> PATH_ESCAPE
+ *   4. symlink realpath escape       -> SYMLINK_ESCAPE
+ *
+ * `isSafeRelativePath` is reused as the first cheap gate for the happy path. On
+ * success the returned `absolutePath` is equal to, or a descendant of, the
+ * (realpath-resolved) workspace root. No I/O is performed on a denied path: the
+ * only filesystem access is the `realpathSync` lookup used by the symlink check,
+ * which runs strictly after the cheap denial checks have passed.
+ */
+export function resolveWithinWorkspace(
+  workspaceRoot: string,
+  candidatePath: string,
+  fsImpl?: Pick<WorkspaceFs, "realpathSync">,
+): ResolveWithinWorkspaceResult {
+  // 1. empty-path check (INVALID_PATH) — before any other inspection or I/O.
+  if (typeof candidatePath !== "string" || candidatePath.trim().length === 0) {
+    return { ok: false, reason: "INVALID_PATH" };
+  }
+
+  // Cheap happy-path gate: a clean safe relative path skips the per-reason
+  // string checks below and proceeds straight to the symlink containment check.
+  if (!isSafeRelativePath(candidatePath)) {
+    // 2. absolute-path check (ABSOLUTE_PATH).
+    if (isAbsolutePath(candidatePath)) {
+      return { ok: false, reason: "ABSOLUTE_PATH" };
+    }
+    // 3. parent-traversal check (PATH_ESCAPE).
+    if (hasParentTraversalSegment(candidatePath)) {
+      return { ok: false, reason: "PATH_ESCAPE" };
+    }
+    // Any remaining reason `isSafeRelativePath` rejected (e.g. a "." segment) is
+    // harmless: it cannot escape the root, so normalization below handles it.
+  }
+
+  // 4. symlink realpath escape check (SYMLINK_ESCAPE). This is the only step
+  // that touches the filesystem, and only for paths that passed the checks above.
+  const realpathSync = fsImpl?.realpathSync ?? ((p: string) => nodeFs.realpathSync(p));
+  const realRoot = safeRealpath(nodePath.resolve(workspaceRoot), realpathSync);
+  const absoluteCandidate = nodePath.resolve(realRoot, candidatePath);
+  const realCandidate = realpathOrNearestExisting(absoluteCandidate, realpathSync);
+
+  if (!isContainedWithin(realRoot, realCandidate)) {
+    return { ok: false, reason: "SYMLINK_ESCAPE" };
+  }
+
+  return { ok: true, absolutePath: realCandidate };
+}
 
 export interface SandboxAdapter {
   readonly metadata: SandboxProviderMetadata;
@@ -331,6 +467,65 @@ function isSafeRelativePath(path: string | undefined): path is string {
   if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) return false;
   const normalized = path.replace(/\\/g, "/");
   return normalized.split("/").every((part) => part.length > 0 && part !== "." && part !== "..");
+}
+
+/**
+ * Detects absolute paths in either POSIX or Windows form, independent of the
+ * host platform, so adversarial inputs in tests are classified correctly:
+ *   - POSIX root: "/foo"
+ *   - backslash / UNC root: "\\foo", "\\\\server\\share"
+ *   - Windows drive: "C:\\foo", "c:/foo"
+ */
+function isAbsolutePath(path: string): boolean {
+  if (path.startsWith("/") || path.startsWith("\\")) return true;
+  if (/^[A-Za-z]:[\\/]/.test(path)) return true;
+  return false;
+}
+
+function hasParentTraversalSegment(path: string): boolean {
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.split("/").some((segment) => segment === "..");
+}
+
+function safeRealpath(path: string, realpathSync: (p: string) => string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return nodePath.resolve(path);
+  }
+}
+
+/**
+ * Resolves the realpath of `target`. When `target` does not exist (e.g. a new
+ * file proposed by PROPOSE_PATCH), it resolves the realpath of the nearest
+ * existing ancestor and re-appends the non-existent tail, so a symlinked
+ * ancestor still triggers a SYMLINK_ESCAPE while a brand-new contained file
+ * resolves successfully.
+ */
+function realpathOrNearestExisting(target: string, realpathSync: (p: string) => string): string {
+  let current = nodePath.resolve(target);
+  const tail: string[] = [];
+
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return tail.length > 0 ? nodePath.resolve(real, ...tail.reverse()) : real;
+    } catch {
+      const parent = nodePath.dirname(current);
+      if (parent === current) {
+        // Reached the filesystem root without an existing ancestor; fall back
+        // to the normalized absolute target.
+        return nodePath.resolve(target);
+      }
+      tail.push(nodePath.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function isContainedWithin(root: string, target: string): boolean {
+  const relative = nodePath.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !nodePath.isAbsolute(relative));
 }
 
 function parsePatchOperation(value: unknown): PatchOperation {

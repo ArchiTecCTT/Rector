@@ -2,10 +2,15 @@ import { describe, it, expect } from "vitest";
 import {
   buildPlannerPrompt,
   buildPlannerRepairPrompt,
+  buildSkepticPrompt,
+  buildSkepticRepairPrompt,
   PLANNER_SYSTEM_RULES,
   PLANNER_JSON_CONTRACT,
+  SKEPTIC_SYSTEM_RULES,
+  SKEPTIC_JSON_CONTRACT,
+  type SkepticPromptInput,
 } from "../src/orchestration/prompts";
-import { type PlannerInput } from "../src/orchestration/planner";
+import { createFakePlan, type PlannerInput, type PlannerOutput } from "../src/orchestration/planner";
 import { triageUserMessage, type TriageResult } from "../src/orchestration/triage";
 import type { ContextPack } from "../src/orchestration/contextBuilder";
 
@@ -100,5 +105,77 @@ describe("planner prompt construction", () => {
 
     const messages = buildPlannerPrompt(input);
     expect(messages[1].content).toContain("Explicit intent text");
+  });
+});
+
+function skepticInputFor(content: string): SkepticPromptInput {
+  const planner = inputFor(content);
+  const plannerOutput = createFakePlan(planner);
+  return { plannerOutput, contextPack: planner.contextPack, triage: planner.triage };
+}
+
+describe("skeptic prompt construction", () => {
+  it("builds a system + user prompt with rules, contract, and the plan to critique", () => {
+    const messages = buildSkepticPrompt(skepticInputFor("Fix the bug in src/api/server.ts and update tests."));
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0].role).toBe("system");
+    expect(messages[0].content).toContain(SKEPTIC_SYSTEM_RULES);
+    expect(messages[0].content).toContain(SKEPTIC_JSON_CONTRACT);
+
+    expect(messages[1].role).toBe("user");
+    // The serialized plan goal and triage route are embedded so the model critiques the real plan.
+    expect(messages[1].content).toContain("CODE_EDIT");
+    expect(messages[1].content).toContain("code.edit");
+  });
+
+  it("documents the draft JSON contract fields the validator enforces", () => {
+    const systemContent = buildSkepticPrompt(skepticInputFor("Explain Rector")).at(0)!.content;
+
+    for (const field of ["verdict", "findings", "severity", "category", "message", "evidence", "recommendation"]) {
+      expect(systemContent).toContain(`"${field}"`);
+    }
+    expect(systemContent).toContain("BLOCKER");
+  });
+
+  it("validates input against the schema before building a prompt", () => {
+    const invalid = { plannerOutput: { goal: "" }, contextPack: {} } as unknown as SkepticPromptInput;
+    expect(() => buildSkepticPrompt(invalid)).toThrow();
+  });
+
+  it("redacts secrets embedded in the plan before they reach the prompt", () => {
+    const base = skepticInputFor("Investigate the leak and update tests.");
+    const plannerOutput: PlannerOutput = {
+      ...base.plannerOutput,
+      goal: "Rotate the leaked credential token=supersecret123 found in logs",
+    };
+
+    const messages = buildSkepticPrompt({ ...base, plannerOutput });
+
+    expect(messages[1].content).not.toContain("supersecret123");
+    expect(messages[1].content).toContain("token=[REDACTED]");
+  });
+
+  it("builds a repair prompt that replays context and includes the prior draft and error", () => {
+    const input = skepticInputFor("Add pagination to the /users endpoint and update tests.");
+    const priorContent = '{"verdict": "SOUND"}';
+    const errorSummary = "findings: Required";
+
+    const messages = buildSkepticRepairPrompt(input, priorContent, errorSummary);
+
+    expect(messages).toHaveLength(4);
+    expect(messages[2]).toEqual({ role: "assistant", content: priorContent });
+    expect(messages[3].role).toBe("user");
+    expect(messages[3].content).toContain(errorSummary);
+    expect(messages[3].content).toContain("ONLY the corrected JSON object");
+  });
+
+  it("reuses the same system rules and context message in the repair prompt", () => {
+    const input = skepticInputFor("Refactor the planner module and add tests.");
+    const initial = buildSkepticPrompt(input);
+    const repair = buildSkepticRepairPrompt(input, "bad output", "verdict: Invalid enum value");
+
+    expect(repair[0]).toEqual(initial[0]);
+    expect(repair[1]).toEqual(initial[1]);
   });
 });
