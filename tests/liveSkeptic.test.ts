@@ -36,6 +36,7 @@ import {
   SpyLLMProvider,
   arbMalformedSkepticJson,
   arbPlannerInput,
+  arbSubThresholdBudget,
   arbValidSkepticDraft,
   generousBudget,
   makeExternalRun,
@@ -209,6 +210,70 @@ describe("Property 7: live skeptic output conforms to the schema or yields a str
           expect(result.attempts).toBe(2);
         }
       }),
+      { numRuns: 200 }
+    );
+  });
+});
+
+/**
+ * Property 8: Budget denial precedes the network call (skeptic).
+ *
+ * Validates Requirements 6.1 and 6.3. The control plane runs Budget_Preflight
+ * BEFORE any provider invocation, so when the budget cannot afford a positive
+ * estimate the live skeptic must short-circuit deterministically:
+ *   - Req 6.1: the provider is invoked only after preflight returns an allow
+ *     decision; a deny decision means the call never happens;
+ *   - Req 6.3: the result is a structured `BUDGET_DENIED` blocker, the reported
+ *     provider cost is 0 USD (no call => no spend), and zero provider calls were
+ *     made.
+ *
+ * The spy provider is scripted with a perfectly valid review draft on purpose:
+ * if the preflight gate ever leaked and the provider were invoked, the call
+ * would succeed and `invokeCount` would rise above 0 — so `invokeCount === 0`
+ * is a meaningful guard that the denial truly precedes the network call rather
+ * than an accident of a failing provider. Everything is in-memory and mock-only:
+ * no API key and no network are used.
+ */
+describe("Property 8: budget denial precedes the network call (skeptic)", () => {
+  // Validates: Requirements 6.1, 6.3.
+  it("returns a BUDGET_DENIED blocker with 0 USD cost and zero provider invocations for any sub-threshold budget", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        arbPlannerInput(),
+        arbSubThresholdBudget(),
+        arbValidSkepticDraft(),
+        async (input, budget, draft) => {
+          // A valid draft is scripted so that ANY provider call would succeed.
+          // The only way `invokeCount` stays 0 is the preflight denying the call
+          // before it is made (Req 6.1).
+          const provider = new SpyLLMProvider({
+            estimate: DEFAULT_SPY_USAGE,
+            responses: [skepticDraftToJson(draft)],
+          });
+          const run = makeExternalRun(budget);
+          const plannerOutput = createFakePlan(input);
+
+          // Must resolve, never throw, on a denied budget (Req 9.4).
+          const result = await runLiveSkeptic(
+            { plannerOutput, contextPack: input.contextPack, triage: input.triage },
+            { provider, run }
+          );
+
+          // Req 6.3: a structured BUDGET_DENIED blocker, no review.
+          expect(result.status).toBe("blocked");
+          expect(result.blocker?.code).toBe("BUDGET_DENIED");
+          expect(result.review).toBeUndefined();
+
+          // Req 6.1: the provider was never invoked — denial precedes the call.
+          expect(provider.invokeCount).toBe(0);
+          expect(result.attempts).toBe(0);
+
+          // Req 6.3: provider cost is 0 USD (no call => no spend), and no model
+          // call was counted toward usage.
+          expect(result.usage.estimatedUsd).toBe(0);
+          expect(result.usage.modelCalls).toBe(0);
+        }
+      ),
       { numRuns: 200 }
     );
   });
