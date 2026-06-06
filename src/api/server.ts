@@ -27,7 +27,7 @@ import type { OrchestratorMode } from "../deployment";
 import { createRectorStore, type PersistenceConfig, type RectorStore } from "../store";
 import { RunEventSchema } from "../store/schemas";
 import type { Artifact, Run, RunEvent } from "../store/schemas";
-import { RunPhaseSchema } from "../protocol/phases";
+import { RunPhaseSchema, isTerminalRunPhase } from "../protocol/phases";
 
 export interface ApiSecurityOptions {
   corsAllowedOrigins?: string[];
@@ -396,12 +396,200 @@ export const SseFrameSchema = z.discriminatedUnion("type", [
 ]);
 export type SseFrame = z.infer<typeof SseFrameSchema>;
 
+// --- SSE run stream route (ORN-40, task 7.2) ---
+
+/** Default heartbeat cadence (15s) for an open stream, per Requirement 2.10. */
+const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
+
+/**
+ * Serialize an {@link SseFrame} to the Server-Sent Events wire format.
+ *
+ * Every frame is validated through {@link SseFrameSchema} BEFORE it is written, so only persisted,
+ * redaction-applied data ever reaches the wire (no secret can appear in a frame). The frame's
+ * discriminant `type` is emitted as the SSE `event:` name (so the browser `EventSource` can use
+ * named listeners) and the full validated frame is the JSON `data:` payload.
+ */
+export function serializeSseFrame(frame: SseFrame): string {
+  const validated = SseFrameSchema.parse(frame);
+  return `event: ${validated.type}\ndata: ${JSON.stringify(validated)}\n\n`;
+}
+
+/**
+ * The minimal subset of an Express `Response` the SSE stream needs. Modeled as an interface so the
+ * teardown/redaction tests (tasks 7.4/7.5) can drive the handler with an injectable fake `res`
+ * that records writes and `end()` calls without a real socket.
+ */
+export interface SseResponseLike {
+  setHeader(name: string, value: string): void;
+  flushHeaders?(): void;
+  write(chunk: string): void;
+  end(): void;
+}
+
+/** The minimal subset of an Express `Request` the SSE stream needs (client-disconnect signal). */
+export interface SseRequestLike {
+  on(event: "close", listener: () => void): void;
+}
+
+export interface RunStreamHandlerOptions {
+  runId: string;
+  req: SseRequestLike;
+  res: SseResponseLike;
+  store: RectorStore;
+  broker: RunEventBroker;
+  /** Heartbeat cadence in ms; defaults to {@link DEFAULT_SSE_HEARTBEAT_MS}. */
+  heartbeatMs?: number;
+  /** Injectable timer factory so tests can drive the heartbeat with a fake clock. */
+  setIntervalImpl?: (handler: () => void, ms: number) => ReturnType<typeof setInterval>;
+  clearIntervalImpl?: (handle: ReturnType<typeof setInterval>) => void;
+}
+
+/**
+ * Core SSE stream handler for `GET /api/runs/:id/stream` (ORN-40).
+ *
+ * Lifecycle:
+ *  1. Set SSE headers (`text/event-stream`, `no-cache`, `keep-alive`) and flush them.
+ *  2. **Subscribe FIRST, then replay** — to guarantee no event is dropped or doubled across the
+ *     catch-up→live boundary, the handler subscribes to the broker *before* it reads the persisted
+ *     snapshot. Events that arrive while the snapshot is being read/emitted are buffered, not lost.
+ *     The catch-up replay (`listEvents(runId)`, ascending insertion order) emits each event exactly
+ *     once and records its id; the buffered live events are then flushed with de-duplication by
+ *     event id (an event present in both the snapshot and the buffer is emitted once, an event only
+ *     in the buffer is still emitted). After the flush, live events emit directly. Net result: no
+ *     omission (subscribed before the snapshot) and no duplicate (de-dup by id).
+ *  3. Emit each event as a `run-event` frame.
+ *  4. On the first event carrying a Terminal_Phase, emit exactly one `done` frame and tear down.
+ *  5. Heartbeat (`: keep-alive`) every `heartbeatMs`, carrying no run data; cleared on teardown.
+ *  6. A client disconnect (`req.on("close")`) performs the same single clean teardown.
+ *
+ * A non-existent `runId` simply yields an empty snapshot: the handler replays nothing, stays
+ * subscribed for live events, and fabricates no payload (Requirement 2.9).
+ */
+export async function handleRunStream(options: RunStreamHandlerOptions): Promise<void> {
+  const { runId, req, res, store, broker, heartbeatMs = DEFAULT_SSE_HEARTBEAT_MS } = options;
+  const setIntervalImpl = options.setIntervalImpl ?? ((handler, ms) => setInterval(handler, ms));
+  const clearIntervalImpl = options.clearIntervalImpl ?? ((handle) => clearInterval(handle));
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  let closed = false;
+  let replaying = true;
+  const emittedIds = new Set<string>();
+  const liveBuffer: RunEvent[] = [];
+  let unsubscribe: (() => void) | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+
+  /** Single, idempotent teardown: optional final frame, then unsubscribe + clear timer + end once. */
+  const teardown = (finalFrame?: SseFrame): void => {
+    if (closed) return;
+    closed = true;
+    if (finalFrame) res.write(serializeSseFrame(finalFrame));
+    unsubscribe?.();
+    if (heartbeat !== undefined) clearIntervalImpl(heartbeat);
+    res.end();
+  };
+
+  /**
+   * Emit one persisted event as a `run-event` frame (de-duplicated by id). Returns true when the
+   * event is terminal — in which case it has already emitted the single `done` frame and torn down.
+   */
+  const emitEvent = (event: RunEvent): boolean => {
+    if (closed) return false;
+    if (emittedIds.has(event.id)) return false; // boundary de-dup: never emit the same event twice
+    emittedIds.add(event.id);
+    res.write(serializeSseFrame({ type: "run-event", runId, event }));
+    if (isTerminalRunPhase(event.phase)) {
+      teardown({ type: "done", runId, phase: event.phase });
+      return true;
+    }
+    return false;
+  };
+
+  // Subscribe BEFORE reading the snapshot so nothing published during catch-up is missed. While
+  // replaying we buffer; once the boundary is crossed, live events emit directly (still de-duped).
+  unsubscribe = broker.subscribe(runId, (event) => {
+    if (closed) return;
+    if (replaying) {
+      liveBuffer.push(event);
+      return;
+    }
+    emitEvent(event);
+  });
+
+  // Client disconnect before a terminal phase => clean teardown (no leaked listener/timer).
+  req.on("close", () => teardown());
+
+  try {
+    // Catch-up: replay already-persisted events exactly once, in ascending insertion order.
+    const persisted = await store.listEvents(runId);
+    for (const event of persisted) {
+      if (closed) return;
+      if (emitEvent(event)) return; // terminal phase observed during catch-up
+    }
+
+    // Boundary: stop buffering and flush events that arrived during catch-up (de-duped by id).
+    // No live publish can interleave here — everything from this point is synchronous.
+    replaying = false;
+    const buffered = liveBuffer.splice(0, liveBuffer.length);
+    for (const event of buffered) {
+      if (closed) return;
+      if (emitEvent(event)) return; // terminal phase observed while flushing the boundary buffer
+    }
+  } catch {
+    // A catch-up read failure tears down cleanly without emitting any fabricated/secret payload.
+    teardown();
+    return;
+  }
+
+  if (closed) return;
+
+  // Heartbeat: an SSE comment carrying no run data, cleared on teardown (Requirement 2.10).
+  heartbeat = setIntervalImpl(() => {
+    if (closed) return;
+    res.write(": keep-alive\n\n");
+  }, heartbeatMs);
+}
+
+/**
+ * Register `GET /api/runs/:id/stream` as an SSE endpoint backed by {@link handleRunStream}.
+ *
+ * The route is intentionally thin: it forwards the Express `req`/`res` (which structurally satisfy
+ * {@link SseRequestLike}/{@link SseResponseLike}) and the injected `store`/`broker` to the handler.
+ * The `store` should be the broker-wrapped store (`withEventBroadcast`) so live appended/committed
+ * events flow to subscribers.
+ */
+export function registerRunStreamRoute(
+  app: express.Application,
+  deps: { store: RectorStore; broker: RunEventBroker; heartbeatMs?: number }
+): void {
+  app.get("/api/runs/:id/stream", (req, res) => {
+    void handleRunStream({
+      runId: req.params.id,
+      req,
+      res,
+      store: deps.store,
+      broker: deps.broker,
+      heartbeatMs: deps.heartbeatMs,
+    });
+  });
+}
+
 export function createApp(manager: TaskManager, securityOptions: ApiSecurityOptions = {}): express.Application {
   const app = express();
   // Select the store from the deployment persistence config (ORN-39). When no persistence config
   // is supplied (or its driver is `memory`), `createRectorStore` returns the default
   // InMemoryRectorStore, keeping the provider-free path the regression baseline and unchanged.
-  const rectorStore = createRectorStore(securityOptions.persistence);
+  //
+  // Streaming (ORN-40): create one in-process RunEventBroker per app and wrap the selected store
+  // with `withEventBroadcast` so every persisted/redacted appended or committed event is published
+  // to the broker for live SSE subscribers. The wrapper preserves the RectorStore interface, so the
+  // synchronous POST chat flow and the `GET /api/runs/:id/events` polling endpoint use it
+  // transparently with no behavior change.
+  const runEventBroker = createRunEventBroker();
+  const rectorStore = withEventBroadcast(createRectorStore(securityOptions.persistence), runEventBroker);
   app.use(securityHeadersMiddleware);
   app.use(corsMiddleware(securityOptions));
   app.use(chatRateLimitMiddleware(securityOptions));
@@ -547,6 +735,11 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       res.status(500).json({ error: err.message });
     }
   });
+
+  // Live SSE run stream (ORN-40): catch-up replay of persisted events, then live frames from the
+  // broker-wrapped store, with a heartbeat keep-alive and clean teardown. The polling endpoint
+  // above is preserved unchanged as the fallback.
+  registerRunStreamRoute(app, { store: rectorStore, broker: runEventBroker });
 
   // --- Local-only operator routes for optional Retool console ---
 
