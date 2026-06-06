@@ -954,7 +954,18 @@ function matchesDestructiveDenylist(command: string, args: string[]): boolean {
     const rest = tokens.slice(i + 1).map((token) => token.toLowerCase());
 
     if (base === "rm") {
-      if (rest.some((arg) => /^-(?=[a-z]*r)(?=[a-z]*f)[a-z]+$/.test(arg))) return true;
+      let recursive = false;
+      let force = false;
+      for (const arg of rest) {
+        const normalized = arg.toLowerCase();
+        if (normalized === "--recursive" || normalized === "--dir") recursive = true;
+        if (normalized === "--force") force = true;
+        if (/^-[a-z]+$/.test(normalized)) {
+          recursive = recursive || /[rR]/.test(arg);
+          force = force || normalized.includes("f");
+        }
+      }
+      if (recursive && force) return true;
     }
     if (base === "del" || base === "erase") {
       if (rest.some((arg) => arg === "/f" || arg === "/s" || arg === "/q")) return true;

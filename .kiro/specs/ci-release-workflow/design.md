@@ -8,7 +8,7 @@ verification gates on every push and pull request to the protected branches (`ma
 `rector-0.1.0`). The workflow enforces the `Verification_Baseline` (`npm test`,
 `npm run build`, `npm run check`), the deterministic `Drift_Check`
 (`node scripts/generate-roadmap-issues.js --check`), and a non-blocking dependency
-`Audit_Step` (`npm audit`) across a Node version matrix of Node 20 and Node 22.
+`Audit_Step` (`npm audit`) across a Node version matrix of Node 22 and Node 24.
 
 The workflow is intentionally minimal and self-contained:
 
@@ -69,8 +69,8 @@ documentation. The conceptual structure is:
 flowchart TD
     A[push / pull_request to main or rector-0.1.0] --> B[Workflow: CI]
     B --> C{Matrix strategy<br/>fail-fast: false}
-    C --> D[Job: verify<br/>Node 20<br/>ubuntu-latest]
-    C --> E[Job: verify<br/>Node 22<br/>ubuntu-latest]
+    C --> D[Job: verify<br/>Node 22<br/>ubuntu-latest]
+    C --> E[Job: verify<br/>Node 24<br/>ubuntu-latest]
     subgraph Steps [Ordered steps per matrix entry]
         direction TB
         S1[actions/checkout] --> S2[actions/setup-node<br/>node-version + cache: npm]
@@ -101,13 +101,13 @@ the `workflows/` directory.
 
 ### Matrix Strategy
 
-The `verify` job uses a `CI_Provider` matrix strategy over `node-version: [20, 22]` (Req 6.1,
+The `verify` job uses a `CI_Provider` matrix strategy over `node-version: [22, 24]` (Req 6.1,
 6.2, 6.3). Key choices:
 
 - `runs-on: ubuntu-latest` — Linux is the cheapest, fastest GitHub-hosted runner and matches the
   project's development assumptions; no OS-specific behavior is under test.
 - `strategy.fail-fast: false` — a failure on one Node version does not cancel the other, so
-  maintainers see results for both Node 20 and Node 22 in a single run (supports Req 6.4 by
+  maintainers see results for both Node 22 and Node 24 in a single run (supports Req 6.4 by
   reporting per-entry failures independently).
 - The job display name is `Verify / Node ${{ matrix.node-version }}` so each matrix leg is
   individually identifiable in the checks UI and in branch-protection required-check lists.
@@ -167,7 +167,7 @@ A single named job (Req 1.3) with:
 - `name: Verify / Node ${{ matrix.node-version }}`
 - `runs-on: ubuntu-latest`
 - `strategy.fail-fast: false`
-- `strategy.matrix.node-version: [20, 22]`
+- `strategy.matrix.node-version: [22, 24]`
 
 ### Step Interfaces (ordered)
 
@@ -250,7 +250,7 @@ jobs:
     strategy:
       fail-fast: <bool>              # false                      (Req 6.4)
       matrix:
-        node-version: [<int>, ...]   # [20, 22]                   (Req 6.1, 6.2, 6.3)
+        node-version: [<int>, ...]   # [22, 24]                   (Req 6.1, 6.2, 6.3)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -274,7 +274,7 @@ Key configuration values (treated as the authoritative "data"):
 | Trigger events | `push`, `pull_request` | Req 2 |
 | Trigger branches | `main`, `rector-0.1.0` | Req 2.1, 2.2 |
 | Permissions | `contents: read` | Req 8, Req 12 |
-| Node matrix | `[20, 22]` | Req 6 |
+| Node matrix | `[22, 24]` | Req 6 |
 | `fail-fast` | `false` | Req 6.4 |
 | Install command | `npm ci` | Req 3.1 |
 | Baseline commands | `npm test`, `npm run build`, `npm run check` | Req 4 |
@@ -291,7 +291,7 @@ jobs per gate or per Node version.
 **Rationale:** The gates are sequential and share the same installed dependency tree, so one job
 per matrix entry minimizes redundant `npm ci`/cache work while still exercising every gate on
 every Node version (Req 6). It also produces a small, stable set of named checks
-(`Verify / Node 20`, `Verify / Node 22`) suitable for branch protection. A future release
+(`Verify / Node 22`, `Verify / Node 24`) suitable for branch protection. A future release
 workflow stays a separate file, keeping this job untouched (Req 12.4).
 
 ### Decision 2: `fail-fast: false`
@@ -299,7 +299,7 @@ workflow stays a separate file, keeping this job untouched (Req 12.4).
 **Decision:** Disable fail-fast on the matrix.
 
 **Rationale:** Maintainers benefit from seeing whether a failure is Node-version-specific. With
-fail-fast enabled, a Node 20 failure would cancel the Node 22 leg and hide whether the problem
+fail-fast enabled, a Node 22 failure would cancel the Node 24 leg and hide whether the problem
 reproduces there. Disabling it gives complete per-entry results (Req 6.4).
 
 ### Decision 3: Non-blocking audit via `continue-on-error: true`
@@ -325,7 +325,7 @@ upgrades without review.
 and compares it to the committed `docs/issues/generated/` files — no network, no writes in
 `--check` mode (Req 5.3). It exits non-zero on any missing/changed/extra file or catalog
 validation error, which correctly fails the job on drift (Req 5.2). Running it under the matrix
-also confirms it behaves identically on Node 20 and Node 22.
+also confirms it behaves identically on Node 22 and Node 24.
 
 ### Decision 5: `cache: npm` keyed on the lockfile
 
@@ -442,7 +442,7 @@ Validate `.github/workflows/ci.yml` without adding a YAML parser to the project 
 1. **Structured review against this design.** Confirm the file contains: `name: CI`; explicit
    `push` and `pull_request` triggers on `[main, rector-0.1.0]`; `permissions: contents: read`;
    a `verify` job with `runs-on: ubuntu-latest`, `fail-fast: false`, and
-   `matrix.node-version: [20, 22]`; and the eight ordered steps with the exact commands from the
+   `matrix.node-version: [22, 24]`; and the eight ordered steps with the exact commands from the
    Data Models table.
 2. **Optional ad-hoc YAML well-formedness check using already-available tooling**, e.g. a
    one-off Node command using a transient parser via `npx` (not added to `package.json`), or a
@@ -458,7 +458,7 @@ After committing the workflow on a branch and opening a pull request against a p
 
 - Confirm the workflow triggers on the `pull_request` event (Req 2.2) and, after merge/push,
   on the `push` event (Req 2.1).
-- Confirm two matrix legs appear (`Verify / Node 20`, `Verify / Node 22`) and both run the full
+- Confirm two matrix legs appear (`Verify / Node 22`, `Verify / Node 24`) and both run the full
   gate set (Req 6).
 - Confirm the cache is populated on the first run and restored on a subsequent run (Req 9).
 - Confirm a green run reports overall success even though the non-blocking audit step shows the
@@ -483,7 +483,7 @@ Planned edits:
    section** that states:
    - The CI gates enforced by the workflow: `npm test`, `npm run build`, `npm run check`, and
      the drift check `node scripts/generate-roadmap-issues.js --check` (Req 10.1).
-   - That CI runs on Node 20 and Node 22 (Req 10.2).
+   - That CI runs on Node 22 and Node 24 (Req 10.2).
    - That the `npm audit` step is **non-blocking** and exists to surface deferred dev-tooling
      advisories (Req 10.3).
    - The location of the workflow file: `.github/workflows/ci.yml` (Req 10.4).

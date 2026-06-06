@@ -4,7 +4,7 @@
 
 This plan delivers a single GitHub Actions CI workflow at `.github/workflows/ci.yml`
 that reproduces Rector's local verification gates (`npm test`, `npm run build`,
-`npm run check`, plus the deterministic drift check) across a Node 20 / Node 22 matrix,
+`npm run check`, plus the deterministic drift check) across a Node 22 / Node 24 matrix,
 installs deterministically with `npm ci`, surfaces a non-blocking `npm audit`, and runs
 provider-free with no secrets. It then validates that file locally (structured review,
 optional well-formedness check), confirms the green baseline with the local-equivalent
@@ -36,7 +36,7 @@ file in a valid, integrated state.
   - [x] 1.2 Define the `verify` job, Node matrix, and dependency-setup steps
     - Add a single named job `verify` with `name: Verify / Node ${{ matrix.node-version }}`
       and `runs-on: ubuntu-latest`.
-    - Configure `strategy.fail-fast: false` and `strategy.matrix.node-version: [20, 22]`
+    - Configure `strategy.fail-fast: false` and `strategy.matrix.node-version: [22, 24]`
       so both Node versions report results independently.
     - Add the first ordered steps: `actions/checkout@v4`, then `actions/setup-node@v4`
       with `node-version: ${{ matrix.node-version }}` and `cache: npm` (npm cache keyed on
@@ -66,7 +66,7 @@ file in a valid, integrated state.
   - [x] 2.1 Structured review of `ci.yml` against the design
     - Confirm the file contains: `name: CI`; explicit `push` and `pull_request` triggers on
       `[main, rector-0.1.0]`; `permissions: contents: read`; the `verify` job with
-      `runs-on: ubuntu-latest`, `fail-fast: false`, `matrix.node-version: [20, 22]`; and the
+      `runs-on: ubuntu-latest`, `fail-fast: false`, `matrix.node-version: [22, 24]`; and the
       eight ordered steps with the exact commands from the design's Data Models table.
     - Confirm no `secrets.*` references and no publish/tag/push steps exist.
     - _Requirements: 1.2, 2.3, 3.2, 6.3, 7.2, 8.1, 12.1, 12.2, 12.3_
@@ -95,7 +95,7 @@ file in a valid, integrated state.
     - Expand the existing "Running Tests" section into a "CI / Verification Gates" section
       describing the gates enforced by the workflow: `npm test`, `npm run build`,
       `npm run check`, and the drift check `node scripts/generate-roadmap-issues.js --check`.
-    - State that CI runs on Node 20 and Node 22, that the `npm audit` step is non-blocking
+    - State that CI runs on Node 22 and Node 24, that the `npm audit` step is non-blocking
       (surfaces deferred dev-tooling advisories without failing the build), and reference the
       workflow file location `.github/workflows/ci.yml`. Keep docs churn minimal.
     - _Requirements: 10.1, 10.2, 10.3, 10.4_

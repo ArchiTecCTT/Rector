@@ -444,15 +444,19 @@ describe("Property 7: external mode records provider/model/cost on the PLANNING 
         };
         expect(ProviderCallMetadataSchema.safeParse(reunited).success).toBe(true);
 
-        // --- (2) Run cost/token fields reflect the reported usage. ---
-        expect((run.costEstimate as { usd: number }).usd).toBe(reported.estimatedUsd);
-        expect((run.costEstimate as { modelCalls?: number }).modelCalls).toBe(reported.modelCalls);
-        expect((run.actualCost as { usd: number }).usd).toBe(reported.estimatedUsd);
-        expect((run.actualCost as { modelCalls?: number }).modelCalls).toBe(reported.modelCalls);
-        expect((run.tokenEstimate as { input: number }).input).toBe(reported.inputTokens);
-        expect((run.tokenEstimate as { output: number }).output).toBe(reported.outputTokens);
-        expect((run.actualTokens as { input: number }).input).toBe(reported.inputTokens);
-        expect((run.actualTokens as { output: number }).output).toBe(reported.outputTokens);
+        // --- (2) Run cost/token fields reflect cumulative live-step usage. ---
+        const expectedUsd = reported.estimatedUsd + DEFAULT_SPY_USAGE.estimatedUsd * 2;
+        const expectedModelCalls = reported.modelCalls + DEFAULT_SPY_USAGE.modelCalls * 2;
+        const expectedInputTokens = reported.inputTokens + DEFAULT_SPY_USAGE.inputTokens * 2;
+        const expectedOutputTokens = reported.outputTokens + DEFAULT_SPY_USAGE.outputTokens * 2;
+        expect((run.costEstimate as { usd: number }).usd).toBeCloseTo(expectedUsd, 12);
+        expect((run.costEstimate as { modelCalls?: number }).modelCalls).toBe(expectedModelCalls);
+        expect((run.actualCost as { usd: number }).usd).toBeCloseTo(expectedUsd, 12);
+        expect((run.actualCost as { modelCalls?: number }).modelCalls).toBe(expectedModelCalls);
+        expect((run.tokenEstimate as { input: number }).input).toBe(expectedInputTokens);
+        expect((run.tokenEstimate as { output: number }).output).toBe(expectedOutputTokens);
+        expect((run.actualTokens as { input: number }).input).toBe(expectedInputTokens);
+        expect((run.actualTokens as { output: number }).output).toBe(expectedOutputTokens);
 
         // --- (3) No secret leakage in the recorded provider metadata. ---
         // The security redaction boundary ran over the event payload: the
@@ -598,6 +602,38 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     expect(synthCall!.provider).toBe(provider.metadata.id);
     expect(synthCall!.model).toBe(provider.metadata.models.flagship);
     expect(synthCall!.modelRoute).toBe("flagship");
+  });
+
+  it("denies the synthesizer when planner plus skeptic usage exhausts max calls/cost", async () => {
+    const store = new InMemoryRectorStore();
+    const args = await buildArgs(store, "Explain the deterministic orchestration pipeline.");
+
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [
+        { content: planToJson(NON_FILE_OPERATION_PLAN) },
+        { content: SOUND_SKEPTIC_DRAFT },
+        { content: CITED_SYNTHESIS_DRAFT },
+      ],
+    });
+
+    const { run } = await runChat(store, args, {
+      mode: "external",
+      router: spyRouter(provider),
+      budget: generousBudget({ maxUsd: 0.02, maxModelCalls: 2 }),
+    });
+
+    expect(run.phase).toBe("DONE");
+    expect(run.status).toBe("completed");
+    expect(provider.invokeCount).toBe(2);
+    expect((run.actualCost as { usd: number }).usd).toBeCloseTo(0.02, 12);
+    expect((run.actualCost as { modelCalls?: number }).modelCalls).toBe(2);
+
+    const events = await store.listEvents(run.id);
+    const synthCall = findProviderCallEvent(events, "SYNTHESIZING");
+    expect(synthCall).toBeDefined();
+    expect(synthCall!.attempts).toBe(0);
+    expect((synthCall!.usage as Record<string, unknown>).modelCalls).toBe(0);
   });
 
   // Req 9.3 / 9.4: a live skeptic blocker terminates the run FAILED — without an

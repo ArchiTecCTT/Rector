@@ -23,6 +23,7 @@ import {
 } from "../src/providers/llm";
 import {
   SpyLLMProvider,
+  DEFAULT_SPY_USAGE,
   makeContextPack,
   planToJson,
   skepticDraftToJson,
@@ -512,9 +513,9 @@ describe("external chat runner (ORN-33)", () => {
     const metadata = ProviderCallMetadataSchema.parse({
       ...providerCall,
       usage: {
-        inputTokens: (result.run.tokenEstimate as any).input,
-        outputTokens: (result.run.tokenEstimate as any).output,
-        totalTokens: (result.run.tokenEstimate as any).input + (result.run.tokenEstimate as any).output,
+        inputTokens: reportedUsage.inputTokens,
+        outputTokens: reportedUsage.outputTokens,
+        totalTokens: reportedUsage.totalTokens,
         estimatedUsd: providerCall.usage.estimatedUsd,
         modelCalls: providerCall.usage.modelCalls,
       },
@@ -524,14 +525,18 @@ describe("external chat runner (ORN-33)", () => {
     expect(metadata.usage.estimatedUsd).toBe(reportedUsage.estimatedUsd);
     expect(metadata.usage.modelCalls).toBe(reportedUsage.modelCalls);
 
-    // The reported usage is mapped into the run's cost/token fields (Req 3.6).
-    expect(result.run.costEstimate.usd).toBe(reportedUsage.estimatedUsd);
-    expect((result.run.tokenEstimate as any).input).toBe(reportedUsage.inputTokens);
-    expect((result.run.tokenEstimate as any).output).toBe(reportedUsage.outputTokens);
-    expect(result.run.actualCost?.usd).toBe(reportedUsage.estimatedUsd);
-    expect((result.run.actualCost as any)?.modelCalls).toBe(reportedUsage.modelCalls);
-    expect((result.run.actualTokens as any)?.input).toBe(reportedUsage.inputTokens);
-    expect((result.run.actualTokens as any)?.output).toBe(reportedUsage.outputTokens);
+    // Run cost/token fields are cumulative across planner + skeptic + synthesizer (Req 3.6).
+    const expectedUsd = reportedUsage.estimatedUsd + DEFAULT_SPY_USAGE.estimatedUsd * 2;
+    const expectedInputTokens = reportedUsage.inputTokens + DEFAULT_SPY_USAGE.inputTokens * 2;
+    const expectedOutputTokens = reportedUsage.outputTokens + DEFAULT_SPY_USAGE.outputTokens * 2;
+    const expectedModelCalls = reportedUsage.modelCalls + DEFAULT_SPY_USAGE.modelCalls * 2;
+    expect(result.run.costEstimate.usd).toBeCloseTo(expectedUsd, 12);
+    expect((result.run.tokenEstimate as any).input).toBe(expectedInputTokens);
+    expect((result.run.tokenEstimate as any).output).toBe(expectedOutputTokens);
+    expect(result.run.actualCost?.usd).toBeCloseTo(expectedUsd, 12);
+    expect((result.run.actualCost as any)?.modelCalls).toBe(expectedModelCalls);
+    expect((result.run.actualTokens as any)?.input).toBe(expectedInputTokens);
+    expect((result.run.actualTokens as any)?.output).toBe(expectedOutputTokens);
   });
 
   it("maps a BUDGET_DENIED blocker to NEEDS_DECISION without invoking the provider or throwing", async () => {

@@ -107,7 +107,7 @@ DAG_COMPILATION ──► EXECUTING ──► VALIDATING
 
 ```bash
 # Prerequisites
-node >= 20
+node >= 22.5.0
 npm >= 10
 
 # Install dependencies
@@ -167,7 +167,7 @@ Tests cover: state transitions, schemas, event bus, repository immutability, hap
 
 Continuous integration runs in GitHub Actions via [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
-- The four gates above run on a Node version matrix (Node 20 and Node 22).
+- The four gates above run on a Node version matrix (Node 22 and Node 24).
 - Dependencies install deterministically with `npm ci`; the run is provider-free and requires no secrets or API keys.
 - `npm audit` runs as a **non-blocking** step. It surfaces the deferred Vitest/Vite dev-tooling advisories without failing the build, pending a maintainer-approved upgrade.
 - The workflow performs no release side effects (no publish, tag, or push). Release tagging stays a manual, maintainer-gated action.

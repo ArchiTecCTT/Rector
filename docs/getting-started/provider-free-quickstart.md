@@ -4,7 +4,7 @@ Use this path for first-time development and documentation/testing work. It shou
 
 ## Prerequisites
 
-- Node.js 20 or newer
+- Node.js 22.5.0 or newer
 - npm 10 or newer
 
 ## Install

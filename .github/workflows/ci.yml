@@ -2,7 +2,7 @@ name: CI
 
 # Provider-free verification workflow for the Rector v0.1.0-alpha hardening path.
 # Reproduces the local verification gates (test, build, type-check, issue-catalog drift)
-# across a Node 20 / Node 22 matrix. Requires no secrets, no providers, and performs no
+# across a Node 22 / Node 24 matrix. Requires no secrets, no providers, and performs no
 # release side effects (no publish, tag, or push). Release tagging stays manual.
 
 on:
@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22]
+        node-version: [22, 24]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -334,17 +334,11 @@ export async function runExternalChatRun(
 
   const plannerOutput = plannerResult.plan;
 
-  // Map the accumulated provider usage into the run's cost/token fields so the budget gate and the
-  // cost dashboard (future phase) observe real usage (Req 3.6). Recorded as both estimate and
-  // actual since Phase 1 has a single committed provider call per run.
+  // Map the accumulated provider usage into the run's cost/token fields so every later provider
+  // preflight sees the committed spend from earlier live steps (planner → skeptic → repair → synth).
+  // Recorded as both estimate and actual because BYOK currently commits usage after each response.
   const usage = plannerResult.usage;
-  const updatedRun = await store.updateRun(run.id, {
-    costEstimate: { usd: usage.estimatedUsd, modelCalls: usage.modelCalls, provider: plannerResult.provider },
-    actualCost: { usd: usage.estimatedUsd, modelCalls: usage.modelCalls, provider: plannerResult.provider },
-    tokenEstimate: { input: usage.inputTokens, output: usage.outputTokens },
-    actualTokens: { input: usage.inputTokens, output: usage.outputTokens },
-  });
-  const costedRun = updatedRun ?? run;
+  const costedRun = await addProviderUsageToRun(store, run, usage, plannerResult.provider);
 
   // Provider/model/cost metadata recorded on the PLANNING event (Req 3.5).
   const providerCall = buildProviderCallMetadata(selection, plannerResult.provider, plannerResult.model, usage, plannerResult.attempts);
@@ -364,13 +358,14 @@ export async function runExternalChatRun(
     skepticResult.usage,
     skepticResult.attempts
   );
+  const skepticCostedRun = await addProviderUsageToRun(store, costedRun, skepticResult.usage, skepticResult.provider);
 
   if (skepticResult.status === "blocked" || !skepticResult.review) {
     const blocker: SkepticBlocker = skepticResult.blocker ?? {
       code: "SKEPTIC_INVALID",
       message: "Skeptic returned no review",
     };
-    return resolveSkepticBlocker(store, args, costedRun, blocker, deps, {
+    return resolveSkepticBlocker(store, args, skepticCostedRun, blocker, deps, {
       plannerOutput,
       planningProviderCall: providerCall,
       skepticProviderCall,
@@ -385,7 +380,7 @@ export async function runExternalChatRun(
   return runExternalPostPlanningPhases({
     store,
     args,
-    run: costedRun,
+    run: skepticCostedRun,
     plannerOutput,
     skepticReview,
     crucibleDecision,
@@ -447,9 +442,18 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
     commandRunner: deps.commandRunner,
     now: deps.now,
   });
-  const repairSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "repair", run });
+  let budgetRun = run;
+  const repairSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "repair", run: budgetRun });
   const repairAgent: LiveRepairAgent =
-    deps.repairAgent ?? createLiveRepairAgent({ provider: repairSelection.provider, approvals });
+    deps.repairAgent ??
+    createLiveRepairAgent({
+      provider: repairSelection.provider,
+      approvals,
+      getRun: () => budgetRun,
+      commitUsage: async (usage, provider) => {
+        budgetRun = await addProviderUsageToRun(store, budgetRun, usage, provider);
+      },
+    });
 
   // EXECUTING — dispatch the DAG through the safe executor.
   const executionResult = await observability.recordSpan("EXECUTING", () =>
@@ -472,7 +476,7 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
           repairAgent,
           sandbox,
           contextPack: args.contextPack,
-          run,
+          run: budgetRun,
         })
       : undefined
   );
@@ -502,9 +506,9 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
 
   if (proceedToSynthesis) {
     // SYNTHESIZING — live, evidence-cited answer with deterministic fallback (ORN-36).
-    const synthSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "synthesizer", run });
+    const synthSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "synthesizer", run: budgetRun });
     const synthResult = await observability.recordSpan("SYNTHESIZING", () =>
-      runLiveSynthesizer(synthInput, { provider: synthSelection.provider, run })
+      runLiveSynthesizer(synthInput, { provider: synthSelection.provider, run: budgetRun })
     );
     synthesis = synthResult.synthesis;
     synthProviderCall = buildProviderCallMetadata(
@@ -514,6 +518,7 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
       synthResult.usage,
       synthResult.attempts
     );
+    budgetRun = await addProviderUsageToRun(store, budgetRun, synthResult.usage, synthResult.provider);
     await observability.recordSpan("DONE", () => undefined);
   } else {
     // Terminal NEEDS_DECISION / FAILED: return the deterministic synthesis (status derived from the
@@ -715,7 +720,12 @@ function committedRunNumber(primary: unknown, fallback: unknown): number {
  * the bounded healing loop can apply the patch through the safe executor and reach HEALED. The safe
  * executor still enforces workspace containment, the allowlist, and the destructive denylist.
  */
-function createLiveRepairAgent(deps: { provider: LLMProvider; approvals: SandboxApproval[] }): LiveRepairAgent {
+function createLiveRepairAgent(deps: {
+  provider: LLMProvider;
+  approvals: SandboxApproval[];
+  getRun?: () => Run;
+  commitUsage?: (usage: LLMUsage, provider: string) => Promise<void>;
+}): LiveRepairAgent {
   return async ({ failure, failedOutput, contextPack, run }) => {
     try {
       const messages = buildRepairPrompt({
@@ -731,18 +741,20 @@ function createLiveRepairAgent(deps: { provider: LLMProvider; approvals: Sandbox
         task: "repair",
       };
 
-      // Budget preflight BEFORE any provider call.
+      // Budget preflight BEFORE any provider call. Use the latest committed run usage so repeated
+      // repair attempts are counted cumulatively with planner/skeptic and prior repair calls.
+      const currentRun = deps.getRun?.() ?? run;
       const estimate = deps.provider.estimateRequest(request);
-      const decision = evaluateBudget(run, buildRepairPreflightUsage(deps.provider, estimate, run));
+      const decision = evaluateBudget(currentRun, buildRepairPreflightUsage(deps.provider, estimate, currentRun));
       // Req 3.4: layer the EXPLICIT per-run ceiling onto the existing preflight. `enforceMaxPerRunBudget`
       // projects the accumulated run cost so far (the committed run cost) plus this repair call's
       // estimate and denies BEFORE any provider.invoke when the projection would breach the run's
       // per-run ceiling. Either gate denying blocks the call (no network I/O on denial).
       const ceiling = enforceMaxPerRunBudget(
-        run,
+        currentRun,
         {
-          estimatedUsd: committedRunNumber(run.actualCost?.usd, run.costEstimate.usd),
-          modelCalls: committedRunNumber(run.actualCost?.modelCalls, run.costEstimate.modelCalls),
+          estimatedUsd: committedRunNumber(currentRun.actualCost?.usd, currentRun.costEstimate.usd),
+          modelCalls: committedRunNumber(currentRun.actualCost?.modelCalls, currentRun.costEstimate.modelCalls),
         },
         estimate
       );
@@ -750,10 +762,12 @@ function createLiveRepairAgent(deps: { provider: LLMProvider; approvals: Sandbox
 
       let response: LLMResponse;
       try {
-        response = await invokeWithBudget(deps.provider, request, run);
+        response = await invokeWithBudget(deps.provider, request, currentRun);
       } catch {
         return undefined;
       }
+
+      await deps.commitUsage?.(response.usage, response.provider);
 
       let parsedContent: unknown;
       try {
@@ -971,6 +985,28 @@ async function resolvePlannerBlocker(
   const status: BrainstemSynthesisStatus = isPlannerInvalid ? "FAILED" : "NEEDS_DECISION";
   const synthesis = buildBlockedSynthesis(args, blocker, status, observability.getSummary());
   return { run: current, synthesis, observabilitySummary: observability.getSummary() };
+}
+
+async function addProviderUsageToRun(
+  store: RectorStore,
+  run: Run,
+  usage: LLMUsage,
+  provider: string
+): Promise<Run> {
+  const current = (await store.getRun(run.id)) ?? run;
+  const costUsd = committedRunNumber(current.actualCost?.usd, current.costEstimate.usd) + usage.estimatedUsd;
+  const modelCalls = committedRunNumber(current.actualCost?.modelCalls, current.costEstimate.modelCalls) + usage.modelCalls;
+  const inputTokens = committedRunNumber(current.actualTokens?.input, current.tokenEstimate.input) + usage.inputTokens;
+  const outputTokens = committedRunNumber(current.actualTokens?.output, current.tokenEstimate.output) + usage.outputTokens;
+
+  const updated = await store.updateRun(current.id, {
+    costEstimate: { ...current.costEstimate, usd: costUsd, modelCalls, provider },
+    actualCost: { ...(current.actualCost ?? {}), usd: costUsd, modelCalls, provider },
+    tokenEstimate: { ...current.tokenEstimate, input: inputTokens, output: outputTokens },
+    actualTokens: { ...(current.actualTokens ?? {}), input: inputTokens, output: outputTokens },
+  });
+
+  return updated ?? current;
 }
 
 function buildProviderCallMetadata(

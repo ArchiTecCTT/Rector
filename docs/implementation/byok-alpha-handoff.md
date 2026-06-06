@@ -11,6 +11,11 @@ commands that must pass before any commit, and the explicit non-goals that bound
 Everything below is current and tracked in the repository. Do **not** re-derive context from
 memory, chat history, or any deleted/quarantined document — use these.
 
+## Runtime requirement
+
+Use Node.js `>=22.5.0`. The local SQLite persistence path uses Node's built-in `node:sqlite`
+`DatabaseSync` API, which is unavailable on Node 20. CI verifies Node 22 and Node 24.
+
 ### BYOK alpha specs
 
 The approved specs are the controlling requirements for each phase. Each folder contains

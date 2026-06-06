@@ -187,13 +187,17 @@ describe("BYOK external-mode end-to-end", () => {
       expect(providerCall.usage.inputTokens).toBe("[REDACTED]");
       expect(providerCall.usage.outputTokens).toBe("[REDACTED]");
 
-      // --- (2) Run cost/token fields reflect the spy's reported usage (Req 3.6). ---
-      expect(body.run.costEstimate.usd).toBe(reportedUsage.estimatedUsd);
-      expect(body.run.costEstimate.modelCalls).toBe(reportedUsage.modelCalls);
-      expect(body.run.actualCost.usd).toBe(reportedUsage.estimatedUsd);
-      expect(body.run.actualCost.modelCalls).toBe(reportedUsage.modelCalls);
-      expect(body.run.tokenEstimate).toEqual({ input: reportedUsage.inputTokens, output: reportedUsage.outputTokens });
-      expect(body.run.actualTokens).toEqual({ input: reportedUsage.inputTokens, output: reportedUsage.outputTokens });
+      // --- (2) Run cost/token fields accumulate planner + skeptic + synthesizer usage (Req 3.6). ---
+      const expectedUsd = reportedUsage.estimatedUsd + DEFAULT_SPY_USAGE.estimatedUsd * 2;
+      const expectedModelCalls = reportedUsage.modelCalls + DEFAULT_SPY_USAGE.modelCalls * 2;
+      const expectedInputTokens = reportedUsage.inputTokens + DEFAULT_SPY_USAGE.inputTokens * 2;
+      const expectedOutputTokens = reportedUsage.outputTokens + DEFAULT_SPY_USAGE.outputTokens * 2;
+      expect(body.run.costEstimate.usd).toBeCloseTo(expectedUsd, 12);
+      expect(body.run.costEstimate.modelCalls).toBe(expectedModelCalls);
+      expect(body.run.actualCost.usd).toBeCloseTo(expectedUsd, 12);
+      expect(body.run.actualCost.modelCalls).toBe(expectedModelCalls);
+      expect(body.run.tokenEstimate).toEqual({ input: expectedInputTokens, output: expectedOutputTokens });
+      expect(body.run.actualTokens).toEqual({ input: expectedInputTokens, output: expectedOutputTokens });
 
       // No stray auth material anywhere in the success response body.
       expect(sent.rawBody).not.toMatch(/Bearer\s+\S/);

@@ -11,10 +11,10 @@ Rector is an Apache-2.0, chat-first, self-healing AI orchestration system. It is
 by default, requires no API keys, and performs no real network access in normal tests. The
 current verification baseline is `npm test` (29 test files / 280 tests), `npm run build`, and
 `npm run check`, all passing, plus a deterministic, local-only issue-catalog drift check
-(`node scripts/generate-roadmap-issues.js --check`). The project requires Node.js `>=20`.
+(`node scripts/generate-roadmap-issues.js --check`). The project requires Node.js `>=22.5.0`.
 
 The CI workflow MUST reproduce these local gates in GitHub Actions across a Node version matrix
-(Node 20 and Node 22), install dependencies deterministically with `npm ci`, run a
+(Node 22 and Node 24), install dependencies deterministically with `npm ci`, run a
 non-blocking `npm audit` step that surfaces (but does not fail on) the deferred dev-tooling
 advisories from the dependency-security-triage spec, and require no secrets or API keys. The
 workflow MUST be structured so a separate release workflow can be added later without rework.
@@ -35,7 +35,7 @@ maintainer-gated action and is out of scope for this spec.
   `node scripts/generate-roadmap-issues.js --check` that verifies the generated issue catalog
   is in sync with the canonical catalog metadata.
 - **Node_Version_Matrix**: The set of Node.js major versions the CI_Workflow runs against,
-  consisting of Node 20 and Node 22.
+  consisting of Node 22 and Node 24.
 - **Deterministic_Install**: Dependency installation performed with `npm ci` against the
   committed lockfile.
 - **Audit_Step**: The CI_Workflow step that runs `npm audit` to surface dependency advisories.
@@ -130,12 +130,12 @@ that catalog drift is caught automatically.
 ### Requirement 6: Test Across the Node Version Matrix
 
 **User Story:** As a maintainer, I want CI to run on every supported Node version, so that the
-project stays compatible with Node 20 and Node 22.
+project stays compatible with Node 22 and Node 24.
 
 #### Acceptance Criteria
 
-1. THE CI_Workflow SHALL run the Verification_Baseline and the Drift_Check on Node 20.
-2. THE CI_Workflow SHALL run the Verification_Baseline and the Drift_Check on Node 22.
+1. THE CI_Workflow SHALL run the Verification_Baseline and the Drift_Check on Node 22.
+2. THE CI_Workflow SHALL run the Verification_Baseline and the Drift_Check on Node 24.
 3. THE CI_Workflow SHALL define the Node_Version_Matrix using a CI_Provider matrix strategy.
 4. IF the Verification_Baseline or the Drift_Check fails on any entry of the Node_Version_Matrix,
    THEN THE CI_Workflow SHALL fail the job for that entry.
@@ -190,7 +190,7 @@ which checks must pass before merge.
 
 1. THE CI_Documentation SHALL describe the CI gates enforced by the CI_Workflow, including the
    Verification_Baseline and the Drift_Check.
-2. THE CI_Documentation SHALL state that the CI_Workflow runs on Node 20 and Node 22.
+2. THE CI_Documentation SHALL state that the CI_Workflow runs on Node 22 and Node 24.
 3. THE CI_Documentation SHALL state that the Audit_Step is Non_Blocking.
 4. THE CI_Documentation SHALL reference the location of the CI_Workflow_File.
 

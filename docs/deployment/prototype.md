@@ -6,7 +6,7 @@ Rector alpha remains local-first. This document describes deploy-shaped configur
 
 Suggested shape for a later Heroku backend app:
 
-- Runtime: Node.js 22+
+- Runtime: Node.js 22.5.0+ (`node:sqlite` is used by the local persistence path).
 - Start command: `npm run build && node dist/index.js` or a release-specific equivalent.
 - Required local defaults: `NODE_ENV=production`, `PORT` supplied by Heroku.
 - Optional app metadata: `DEPLOYMENT_TARGET=heroku`, `HEROKU_APP_NAME`, `HEROKU_RELEASE_VERSION`.
