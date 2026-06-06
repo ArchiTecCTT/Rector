@@ -7,12 +7,13 @@ import {
   validateAndHealExecution,
 } from "../src/orchestration/validationHealing";
 import type { CompiledDag } from "../src/orchestration/dagCompiler";
-import { WorkspaceSandboxAdapter, type SandboxApproval } from "../src/sandbox";
+import { WorkspaceSandboxAdapter, type SandboxApproval, type SandboxOperationResult } from "../src/sandbox";
 import { triageUserMessage } from "../src/orchestration/triage";
 import {
   arbFailingDag,
   createWorkspaceFs,
   generousBudget,
+  isWithinRoot,
   makeAlwaysFailingExecutor,
   makeAlwaysFailingRepairAgent,
   makeContextPack,
@@ -506,6 +507,148 @@ describe("Property 5: healing rounds are always bounded", () => {
         },
       ),
       { numRuns: 300 },
+    );
+  });
+});
+
+/**
+ * Property 9: Patches are applied only through the safe executor.
+ *
+ * Validates: Requirements 5.3, 5.6, 5.11
+ *
+ * Every file mutation the healing loop performs must flow through the safe
+ * executor (`sandbox.operate` with a `PROPOSE_PATCH` operation) and never via a
+ * direct file write or a shell. The design invariant asserted here is:
+ *
+ *   ∀ failing DAG d, ∀ configured bound b, driven by a repair agent that always
+ *   proposes a patch and a sandbox that approves the write:
+ *     validateAndHealExecution({ d, executor, repairAgent, sandbox, b })
+ *       ⟹ at least one HealingRoundRecord has repairApplied === true
+ *       ∧ ∀ round r with r.repairApplied === true:
+ *            r.patchArtifactId is set
+ *            ∧ r.patchArtifactId is an id emitted by input.sandbox  (req 5.6/5.3)
+ *       ∧ every successful PROPOSE_PATCH flowed through sandbox.operate
+ *       ∧ the number of workspace file writes equals the number of applied
+ *         patches and no write escaped the workspace root.                (req 5.11)
+ *
+ * To prove provenance, `sandbox.operate` is wrapped with a transparent spy that
+ * records every operation result and the `PatchArtifact` ids the sandbox
+ * emits; the healing loop's recorded `patchArtifactId`s must come from exactly
+ * that set. To prove "no write outside sandbox.operate", the in-memory
+ * `WorkspaceFs` double (injected into the adapter — the only writer) is asserted
+ * to have written only through the sandbox-applied patches and only within the
+ * workspace root. Everything is mock-only: deterministic executor and repair
+ * agent doubles, an injected filesystem, and a matching `FILE_WRITE` approval so
+ * each `PROPOSE_PATCH` resolves to `SUCCEEDED`. No API key, real disk, process,
+ * or network is used.
+ */
+interface ProvenanceHarness {
+  sandbox: WorkspaceSandboxAdapter;
+  fs: ReturnType<typeof createWorkspaceFs>;
+  /** Every result returned by `sandbox.operate`, in invocation order. */
+  operateCalls: SandboxOperationResult[];
+  /** Every `PatchArtifact` id the sandbox emitted across all operations. */
+  emittedPatchArtifactIds: Set<string>;
+}
+
+/**
+ * Builds a workspace sandbox whose `PROPOSE_PATCH` for {@link HEALING_REPAIR_PATH}
+ * resolves to `SUCCEEDED` (a matching `FILE_WRITE` approval is supplied) and
+ * wraps `operate` with a transparent spy so the test can assert every recorded
+ * `patchArtifactId` was emitted by this sandbox and every workspace write flowed
+ * through it.
+ */
+function buildProvenanceHarness(): ProvenanceHarness {
+  const fs = createWorkspaceFs({ root: HEALING_WORKSPACE_ROOT });
+  const approvals: SandboxApproval[] = [
+    { id: "approval-heal-1", scope: "FILE_WRITE", target: HEALING_REPAIR_PATH, approvedBy: "tester" },
+  ];
+  const sandbox = new WorkspaceSandboxAdapter({
+    workspaceRoot: HEALING_WORKSPACE_ROOT,
+    fsImpl: fs,
+    approvals,
+    now: HEALING_NOW,
+  });
+
+  const operateCalls: SandboxOperationResult[] = [];
+  const emittedPatchArtifactIds = new Set<string>();
+  // Bind the real method BEFORE shadowing it with the spy on the instance.
+  const originalOperate = sandbox.operate.bind(sandbox);
+  sandbox.operate = (async (operation) => {
+    const result = await originalOperate(operation);
+    operateCalls.push(result);
+    for (const artifact of result.artifacts) {
+      if (artifact.kind === "PATCH") emittedPatchArtifactIds.add(artifact.id);
+    }
+    return result;
+  }) as typeof sandbox.operate;
+
+  return { sandbox, fs, operateCalls, emittedPatchArtifactIds };
+}
+
+describe("Property 9: patches are applied only through the safe executor", () => {
+  // Validates: Requirements 5.3, 5.6, 5.11
+  it("carries a sandbox-emitted patchArtifactId for every applied repair and writes only via sandbox.operate", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        arbFailingDag(),
+        // Stay within the live-repair clamp so each configured value yields that
+        // many applied-repair rounds; the clamp itself is covered by Property 5.
+        fc.integer({ min: 1, max: 10 }),
+        async ({ dag, executionResult }, maxHealingAttempts) => {
+          const executor = makeAlwaysFailingExecutor(HEALING_NOW);
+          const repair = makeAlwaysFailingRepairAgent({ path: HEALING_REPAIR_PATH });
+          const harness = buildProvenanceHarness();
+
+          const result = await validateAndHealExecution({
+            compiledDag: dag,
+            executionResult,
+            executor: executor.executor,
+            maxHealingAttempts,
+            repairAgent: repair.agent,
+            sandbox: harness.sandbox,
+            contextPack: HEALING_CONTEXT_PACK,
+            run: HEALING_RUN,
+          });
+
+          // The always-failing executor + approving sandbox guarantees every
+          // round applies a repair patch, so there is at least one applied
+          // repair whose provenance we can assert.
+          const appliedRounds = result.rounds.filter((round) => round.repairApplied);
+          expect(appliedRounds.length).toBeGreaterThanOrEqual(1);
+
+          // Req 5.6 + 5.3: every applied repair carries a patchArtifactId equal to
+          // an id emitted by input.sandbox — a patch has no other possible origin.
+          for (const round of appliedRounds) {
+            expect(round.patchArtifactId).toBeDefined();
+            expect(harness.emittedPatchArtifactIds.has(round.patchArtifactId as string)).toBe(true);
+          }
+
+          // Req 5.3: every applied patch flowed through sandbox.operate as a
+          // SUCCEEDED PROPOSE_PATCH — one per applied round, no more, no less.
+          const appliedPatchOps = harness.operateCalls.filter(
+            (call) => call.kind === "PROPOSE_PATCH" && call.status === "SUCCEEDED",
+          );
+          expect(appliedPatchOps.length).toBe(appliedRounds.length);
+          // Every operation the loop issued is a PROPOSE_PATCH (no other I/O path).
+          expect(harness.operateCalls.every((call) => call.kind === "PROPOSE_PATCH")).toBe(true);
+
+          // Req 5.11: the only file writes that occurred are exactly the patches
+          // the sandbox applied via sandbox.operate, and none escaped the root.
+          expect(harness.fs.writes.length).toBe(appliedPatchOps.length);
+          expect(harness.fs.accessedOutsideRoot()).toEqual([]);
+          for (const write of harness.fs.writes) {
+            expect(isWithinRoot(harness.fs.root, write.path)).toBe(true);
+          }
+
+          // Each applied patch op resolved to a path contained by the workspace root.
+          for (const call of appliedPatchOps) {
+            expect(call.resolvedPath).toBeDefined();
+            expect(isWithinRoot(harness.fs.root, call.resolvedPath as string)).toBe(true);
+          }
+        },
+      ),
+      { numRuns: 200 },
     );
   });
 });
