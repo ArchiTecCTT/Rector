@@ -24,7 +24,7 @@ import {
   type ModelRouter,
 } from "../providers/llm";
 import type { OrchestratorMode } from "../deployment";
-import { createRectorStore, type PersistenceConfig } from "../store";
+import { createRectorStore, type PersistenceConfig, type RectorStore } from "../store";
 import type { Artifact, Run, RunEvent } from "../store/schemas";
 
 export interface ApiSecurityOptions {
@@ -279,6 +279,68 @@ export function createRunEventBroker(): RunEventBroker {
         if (current.size === 0) listenersByRun.delete(runId);
       };
     },
+  };
+}
+
+/**
+ * Wrap any {@link RectorStore} so that every appended or committed run event is published to the
+ * {@link RunEventBroker} **only after** the underlying store has persisted and redacted it (ORN-40).
+ *
+ * The returned value is a `RectorStore` with an unchanged interface: every method delegates to the
+ * wrapped `store`. For the two methods that create run events — `appendEvent` and
+ * `commitRunTransition` — the decorator FIRST awaits the underlying call (so the event is persisted
+ * and redacted, and the canonical persisted event is returned) and ONLY THEN publishes that returned
+ * event via `broker.publish(persistedEvent.runId, persistedEvent)`. It always publishes the value
+ * RETURNED by the store, never the input argument, guaranteeing publish-after-persist and that only
+ * persisted, redacted data is broadcast. If the underlying call throws (e.g. a duplicate event id or
+ * a rolled-back transition), nothing is published. All other methods pass through unchanged.
+ *
+ * Works transparently over any `RectorStore` implementation (InMemory, SQLite, or TiDB).
+ */
+export function withEventBroadcast(store: RectorStore, broker: RunEventBroker): RectorStore {
+  return {
+    createConversation: (input) => store.createConversation(input),
+    getConversation: (id) => store.getConversation(id),
+    listConversations: (workspaceId) => store.listConversations(workspaceId),
+    updateConversation: (id, patch) => store.updateConversation(id, patch),
+    deleteConversation: (id) => store.deleteConversation(id),
+
+    createMessage: (input) => store.createMessage(input),
+    getMessage: (id) => store.getMessage(id),
+    listMessages: (conversationId) => store.listMessages(conversationId),
+    updateMessage: (id, patch) => store.updateMessage(id, patch),
+    deleteMessage: (id) => store.deleteMessage(id),
+
+    createRun: (input) => store.createRun(input),
+    getRun: (id) => store.getRun(id),
+    listRuns: (conversationId) => store.listRuns(conversationId),
+    updateRun: (id, patch) => store.updateRun(id, patch),
+    deleteRun: (id) => store.deleteRun(id),
+
+    // Publish-after-persist: await the underlying transition first, then broadcast only the
+    // canonical persisted (already-redacted) event the store returned. A throw never publishes.
+    async commitRunTransition(runId, patch, event) {
+      const result = await store.commitRunTransition(runId, patch, event);
+      broker.publish(result.event.runId, result.event);
+      return result;
+    },
+
+    // Publish-after-persist: await the underlying append first, then broadcast only the persisted
+    // (already-redacted) event the store returned. If the append throws, nothing is published.
+    async appendEvent(event) {
+      const persistedEvent = await store.appendEvent(event);
+      broker.publish(persistedEvent.runId, persistedEvent);
+      return persistedEvent;
+    },
+    getEvent: (id) => store.getEvent(id),
+    listEvents: (runId) => store.listEvents(runId),
+    deleteEvent: (id) => store.deleteEvent(id),
+
+    createArtifact: (input) => store.createArtifact(input),
+    getArtifact: (id) => store.getArtifact(id),
+    listArtifacts: (kind) => store.listArtifacts(kind),
+    updateArtifact: (id, patch) => store.updateArtifact(id, patch),
+    deleteArtifact: (id) => store.deleteArtifact(id),
   };
 }
 
