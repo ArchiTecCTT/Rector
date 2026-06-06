@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Dag, DagNode } from "../protocol/dag";
 import type { PatchOperation, WorkspaceSandboxAdapter } from "../sandbox";
+import { redactString } from "../security/redaction";
 import type { Run } from "../store";
 import type { ContextPack } from "./contextBuilder";
 import {
@@ -118,9 +119,18 @@ export interface ValidateAndHealExecutionInput {
 }
 
 const DEFAULT_MAX_HEALING_ATTEMPTS = 2;
+const MIN_LIVE_HEALING_ATTEMPTS = 1;
+const MAX_LIVE_HEALING_ATTEMPTS = 10;
 const SHELL_PERMISSION_PATTERN = /(^|[.:_-])shell($|[.:_-])/i;
 
 export async function validateAndHealExecution(input: ValidateAndHealExecutionInput): Promise<HealingLoopResult> {
+  // Live-repair path (ORN-38): only when BOTH a repair agent and a safe executor
+  // are provided. Otherwise fall through to the byte-for-byte unchanged Phase 1
+  // deterministic retry behaviour below.
+  if (input.repairAgent && input.sandbox) {
+    return healWithLiveRepair(input, input.repairAgent, input.sandbox);
+  }
+
   const maxHealingAttempts = boundedAttempts(input.maxHealingAttempts ?? DEFAULT_MAX_HEALING_ATTEMPTS);
   const executor = input.executor ?? executeCompiledDag;
   let current = input.executionResult ?? (await executor(input.compiledDag, input.executorOptions));
@@ -195,6 +205,198 @@ export async function validateAndHealExecution(input: ValidateAndHealExecutionIn
     const nextOptions = healingOptions(input.compiledDag, input.executorOptions, retryFailures);
     current = await executor(input.compiledDag, nextOptions);
   }
+}
+
+/**
+ * Bounded live-repair healing path (ORN-38). Engaged only when a {@link LiveRepairAgent}
+ * and a {@link WorkspaceSandboxAdapter} are both provided. On a safe-to-auto-heal failure it
+ * redacts the failed output, asks the repair agent for a patch proposal, applies the proposal
+ * ONLY through `sandbox.operate({ kind: "PROPOSE_PATCH", ... })` (never via direct file writes
+ * or a shell), re-runs validation, and records exactly one {@link HealingRoundRecord} per round.
+ *
+ * Terminal outcomes:
+ *  - `HEALED`        — re-validation passed after an applied patch (artifacts preserved).
+ *  - `VALIDATED`     — execution already succeeded with no healing needed.
+ *  - `NEEDS_DECISION`— a PERMISSION / otherwise-unsafe failure that must not be auto-healed.
+ *  - `FAILED`        — the healing bound was reached, or no safe repair proposal was available;
+ *                      the final execution result and all artifacts are preserved alongside a
+ *                      redacted explanation.
+ *
+ * The loop never exceeds `maxHealingAttempts` rounds (clamped to 1..10) and never throws.
+ */
+async function healWithLiveRepair(
+  input: ValidateAndHealExecutionInput,
+  repairAgent: LiveRepairAgent,
+  sandbox: WorkspaceSandboxAdapter,
+): Promise<HealingLoopResult> {
+  const maxHealingAttempts = boundedLiveAttempts(input.maxHealingAttempts ?? DEFAULT_MAX_HEALING_ATTEMPTS);
+  const executor = input.executor ?? executeCompiledDag;
+  let current = input.executionResult ?? (await executor(input.compiledDag, input.executorOptions));
+  let attempts = 0;
+  const actions: HealingAction[] = [];
+  const observedFailures: ValidationFailure[] = [];
+  const rounds: HealingRoundRecord[] = [];
+
+  if (current.status === "SUCCESS") {
+    return parseResult({ status: "VALIDATED", attempts, failures: [], actions, finalExecutionResult: current, rounds });
+  }
+
+  for (;;) {
+    const failures = classifyExecutionFailures(input.compiledDag, current);
+    appendFailures(observedFailures, failures);
+
+    if (current.status === "SUCCESS" || (current.status === "SKIPPED" && failures.length === 0)) {
+      return parseResult({
+        status: attempts > 0 ? "HEALED" : "VALIDATED",
+        attempts,
+        failures: observedFailures,
+        actions,
+        finalExecutionResult: current,
+        rounds,
+      });
+    }
+
+    const actionable = rootActionableFailures(failures);
+
+    // PERMISSION / otherwise-unsafe failures are never auto-healed (req 5.8).
+    const decisionFailures = actionable.filter(
+      (failure) => failure.classification === "PERMISSION" || isUnsafeToAutoHeal(input.compiledDag, failure.nodeId),
+    );
+    if (decisionFailures.length > 0) {
+      for (const failure of decisionFailures) {
+        actions.push({
+          type: "REQUEST_DECISION",
+          nodeId: failure.nodeId,
+          classification: failure.classification,
+          reason: `Failure on ${failure.nodeId ?? "DAG"} requires a human decision and will not be auto-healed`,
+        });
+      }
+      return parseResult({ status: "NEEDS_DECISION", attempts, failures: observedFailures, actions, finalExecutionResult: current, rounds });
+    }
+
+    // Bound check BEFORE starting a new round so rounds.length <= maxHealingAttempts (req 5.1).
+    if (attempts >= maxHealingAttempts) {
+      for (const failure of actionable.length > 0 ? actionable : failures) {
+        actions.push({
+          type: "FAIL_RUN",
+          nodeId: failure.nodeId,
+          classification: failure.classification,
+          reason: `Max healing attempts (${maxHealingAttempts}) exhausted for ${failure.nodeId ?? "DAG"}`,
+        });
+      }
+      return parseResult({ status: "FAILED", attempts, failures: observedFailures, actions, finalExecutionResult: current, rounds });
+    }
+
+    const target = actionable[0] ?? failures[0];
+    attempts += 1;
+
+    const failedOutput = redactString(extractFailedOutput(current, target));
+    const proposal = await safeProposeRepair(repairAgent, {
+      failure: target,
+      failedOutput,
+      contextPack: input.contextPack as ContextPack,
+      run: input.run as Run,
+    });
+
+    let repairApplied = false;
+    let patchArtifactId: string | undefined;
+    let roundExplanation: string;
+
+    if (proposal) {
+      const patchResult = await sandbox.operate({
+        kind: "PROPOSE_PATCH",
+        path: proposal.path,
+        operation: proposal.operation,
+        content: proposal.content,
+        approvalId: `approval:file-write:${proposal.path}`,
+        metadata: { healingRound: attempts },
+      });
+      patchArtifactId = patchResult.artifacts[0]?.id;
+      repairApplied = patchResult.status === "SUCCEEDED";
+
+      actions.push({
+        type: "APPLY_PATCH",
+        nodeId: target.nodeId,
+        attempt: attempts,
+        classification: target.classification,
+        reason: repairApplied
+          ? `Applied repair patch for ${target.nodeId ?? "DAG"} via the safe executor`
+          : `Repair patch for ${target.nodeId ?? "DAG"} was not applied (${patchResult.status})`,
+      });
+
+      // Re-run validation only after a patch was actually applied (req 5.4).
+      if (repairApplied) {
+        current = await executor(input.compiledDag, input.executorOptions);
+      }
+
+      roundExplanation = redactString(
+        repairApplied
+          ? `Round ${attempts}: applied patch to ${proposal.path}; re-validation status ${current.status}. ${proposal.rationale}`
+          : `Round ${attempts}: patch proposal for ${proposal.path} was not applied (${patchResult.status}).`,
+      );
+    } else {
+      actions.push({
+        type: "FAIL_RUN",
+        nodeId: target.nodeId,
+        classification: target.classification,
+        reason: `No safe repair proposal available for ${target.nodeId ?? "DAG"}`,
+      });
+      roundExplanation = redactString(
+        `Round ${attempts}: repair agent returned no safe patch for ${target.nodeId ?? "DAG"} (${target.classification}).`,
+      );
+    }
+
+    rounds.push(
+      HealingRoundRecordSchema.parse({
+        round: attempts,
+        failureClassification: target.classification,
+        nodeId: target.nodeId,
+        repairApplied,
+        patchArtifactId: repairApplied ? patchArtifactId : undefined,
+        revalidationStatus: current.status,
+        explanation: roundExplanation,
+      }),
+    );
+
+    // No proposal means no progress is possible; terminate as FAILED (req 5.9).
+    if (!proposal) {
+      return parseResult({ status: "FAILED", attempts, failures: observedFailures, actions, finalExecutionResult: current, rounds });
+    }
+  }
+}
+
+/** Invokes the repair agent without letting a thrown error escape the healing loop (req 9.6). */
+async function safeProposeRepair(
+  repairAgent: LiveRepairAgent,
+  input: { failure: ValidationFailure; failedOutput: string; contextPack: ContextPack; run: Run },
+): Promise<RepairPatchProposal | undefined> {
+  try {
+    return await repairAgent(input);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Collects the failed command output for a failure into a single string for the repair prompt.
+ * The caller redacts the result before it crosses any trust boundary.
+ */
+function extractFailedOutput(executionResult: DagExecutionResult, failure: ValidationFailure): string {
+  const parts: string[] = [];
+  if (failure.message) parts.push(failure.message);
+
+  const node = failure.nodeId
+    ? executionResult.nodeResults.find((result) => result.nodeId === failure.nodeId)
+    : undefined;
+  if (node?.error?.message) parts.push(node.error.message);
+
+  const output = recordFrom(node?.output);
+  if (typeof output?.stdout === "string") parts.push(output.stdout);
+  if (typeof output?.stderr === "string") parts.push(output.stderr);
+
+  if (executionResult.error?.message) parts.push(executionResult.error.message);
+
+  return parts.join("\n");
 }
 
 export function classifyExecutionFailures(compiledDag: Dag, executionResult: DagExecutionResult): ValidationFailure[] {
@@ -400,6 +602,15 @@ function appendFailures(target: ValidationFailure[], failures: ValidationFailure
 function boundedAttempts(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_MAX_HEALING_ATTEMPTS;
   return Math.max(0, Math.floor(value));
+}
+
+/**
+ * Clamps the configured healing bound to the inclusive 1..10 range required by the
+ * live-repair loop (req 5.1). A non-finite value falls back to the default.
+ */
+function boundedLiveAttempts(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_MAX_HEALING_ATTEMPTS;
+  return Math.min(MAX_LIVE_HEALING_ATTEMPTS, Math.max(MIN_LIVE_HEALING_ATTEMPTS, Math.floor(value)));
 }
 
 function parseResult(result: z.input<typeof HealingLoopResultSchema>): HealingLoopResult {
