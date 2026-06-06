@@ -224,6 +224,64 @@ function requestValidationMessage(error: unknown): string {
   return String(error);
 }
 
+/** Listener invoked with each persisted (already-redacted) {@link RunEvent} published for a run. */
+export type RunEventListener = (event: RunEvent) => void;
+
+/**
+ * In-process publish/subscribe over persisted (already-redacted) run events, keyed by `runId`.
+ *
+ * Streaming (ORN-40) reuses the run events that `transitionRun`/`runEvent` already persist (and
+ * redact). The broker carries those persisted events to SSE subscribers; no secret can enter a
+ * frame because only persisted {@link RunEvent}s are published. The broker is a small, self-
+ * contained pub/sub with no I/O and no timers.
+ */
+export interface RunEventBroker {
+  /** Deliver `event` to every current listener for `runId` only. A no-op when there are none. */
+  publish(runId: string, event: RunEvent): void;
+  /**
+   * Register `listener` for a specific `runId`. Returns an unsubscribe function that removes
+   * exactly that listener; after unsubscribe the listener receives no further events.
+   */
+  subscribe(runId: string, listener: RunEventListener): () => void;
+}
+
+/**
+ * Create an in-process {@link RunEventBroker}.
+ *
+ * Listeners are kept per `runId` in a `Map<string, Set<RunEventListener>>`, so a publish for one
+ * run never reaches another run's listeners. Used by `withEventBroadcast` (task 6.2) and the SSE
+ * stream route (task 7.x).
+ */
+export function createRunEventBroker(): RunEventBroker {
+  const listenersByRun = new Map<string, Set<RunEventListener>>();
+
+  return {
+    publish(runId, event) {
+      const listeners = listenersByRun.get(runId);
+      if (!listeners || listeners.size === 0) return;
+      // Snapshot so a listener that subscribes/unsubscribes during delivery cannot disrupt this pass.
+      for (const listener of [...listeners]) {
+        listener(event);
+      }
+    },
+    subscribe(runId, listener) {
+      let listeners = listenersByRun.get(runId);
+      if (!listeners) {
+        listeners = new Set<RunEventListener>();
+        listenersByRun.set(runId, listeners);
+      }
+      listeners.add(listener);
+
+      return () => {
+        const current = listenersByRun.get(runId);
+        if (!current) return;
+        current.delete(listener);
+        if (current.size === 0) listenersByRun.delete(runId);
+      };
+    },
+  };
+}
+
 export function createApp(manager: TaskManager, securityOptions: ApiSecurityOptions = {}): express.Application {
   const app = express();
   // Select the store from the deployment persistence config (ORN-39). When no persistence config
