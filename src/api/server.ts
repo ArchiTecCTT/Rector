@@ -664,52 +664,114 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         redactionState,
       });
       const observability = createInMemoryObservabilityTrace({ provider: "local" });
-      const triage = await observability.recordSpan("TRIAGE", () => triageUserMessage(redactedContent));
-      const contextPack = await observability.recordSpan("CONTEXT_BUILDING", async () => {
-        const contextMaterial = await createContextMaterial(rectorStore, {
-          kind: "chat-user-message",
-          content: redactedContent,
-          summary: "Latest user message content",
-          retentionPolicy: conversation.retentionPolicy,
-          piiState: redactionState,
-        });
-        return buildContextPack(rectorStore, {
-          conversation,
-          messages: await rectorStore.listMessages(conversation.id),
-          userMessage,
-          triage,
-          materials: [contextMaterial],
-        });
-      });
       const orchestration = securityOptions.orchestration;
-      const { run, synthesis, observabilitySummary } = await runChat(
-        rectorStore,
-        {
+
+      // Shared chat pipeline: triage → context pack → runChat → assistant message + user-message
+      // completion. `pipelineStore` is the store the run executes against: the broker-wrapped
+      // `rectorStore` for the synchronous path, and a thin capturing wrapper in stream mode (so the
+      // run/trace ids can be surfaced the instant the run is persisted). The result carries
+      // everything both the synchronous 201 response and the background streaming branch need.
+      const runChatPipeline = async (pipelineStore: RectorStore) => {
+        const triage = await observability.recordSpan("TRIAGE", () => triageUserMessage(redactedContent));
+        const contextPack = await observability.recordSpan("CONTEXT_BUILDING", async () => {
+          const contextMaterial = await createContextMaterial(pipelineStore, {
+            kind: "chat-user-message",
+            content: redactedContent,
+            summary: "Latest user message content",
+            retentionPolicy: conversation.retentionPolicy,
+            piiState: redactionState,
+          });
+          return buildContextPack(pipelineStore, {
+            conversation,
+            messages: await pipelineStore.listMessages(conversation.id),
+            userMessage,
+            triage,
+            materials: [contextMaterial],
+          });
+        });
+        const result = await runChat(
+          pipelineStore,
+          {
+            conversationId: conversation.id,
+            userMessageId: userMessage.id,
+            prompt: redactedContent,
+            triage,
+            contextPack,
+            observability,
+            options: orchestration,
+          },
+          {
+            // Default to local (provider-free) when no orchestration option is configured so existing
+            // behavior and tests are unchanged. enableNetwork is only meaningful in external mode.
+            mode: orchestration?.mode ?? "local",
+            router: orchestration?.router,
+            enableNetwork: orchestration?.mode === "external",
+          }
+        );
+        const assistantMessage = await pipelineStore.createMessage({
           conversationId: conversation.id,
-          userMessageId: userMessage.id,
-          prompt: redactedContent,
-          triage,
-          contextPack,
-          observability,
-          options: orchestration,
-        },
-        {
-          // Default to local (provider-free) when no orchestration option is configured so existing
-          // behavior and tests are unchanged. enableNetwork is only meaningful in external mode.
-          mode: orchestration?.mode ?? "local",
-          router: orchestration?.router,
-          enableNetwork: orchestration?.mode === "external",
+          role: "assistant",
+          content: result.synthesis.response,
+          status: "completed",
+          runId: result.run.id,
+          redactionState,
+        });
+        await pipelineStore.updateMessage(userMessage.id, { status: "completed", runId: result.run.id });
+        return { ...result, assistantMessage };
+      };
+
+      // Streaming branch (ORN-40, Req 2.1/2.7/2.11): when `?stream=1` is requested, create the run
+      // and return `{ runId, traceId }` with `202` BEFORE the run reaches a Terminal_Phase, then run
+      // the pipeline in the background. Persisted events publish to the broker automatically (the
+      // store is broker-wrapped), so the client consumes them via `GET /api/runs/:id/stream`. The
+      // synchronous POST below and the `GET /api/runs/:id/events` Polling_Endpoint are unchanged.
+      const wantsStream = req.query.stream === "1" || req.query.stream === "true";
+      if (wantsStream) {
+        let resolveRun!: (run: Run) => void;
+        let rejectRun!: (error: unknown) => void;
+        const runCreated = new Promise<Run>((resolve, reject) => {
+          resolveRun = resolve;
+          rejectRun = reject;
+        });
+
+        // Capture the run the instant `runChat` persists it — the only point at which a runId/traceId
+        // becomes available — without creating a second run. Every other method delegates to the
+        // broker-wrapped store, so persisted events still publish to live SSE subscribers.
+        const capturingStore: RectorStore = {
+          ...rectorStore,
+          createRun: async (input) => {
+            try {
+              const run = await rectorStore.createRun(input);
+              resolveRun(run);
+              return run;
+            } catch (error) {
+              rejectRun(error);
+              throw error;
+            }
+          },
+        };
+
+        // Background run: never awaited before the 202. A failure AFTER the run is created surfaces to
+        // the client over the SSE stream (runChat persists a FAILED transition → terminal `done`
+        // frame); a failure BEFORE the run is created rejects `runCreated` so the request returns a
+        // redacted error and no stream is ever opened. The `.catch` keeps the rejection handled, so a
+        // background failure never produces an unhandled promise rejection or crashes the process.
+        void runChatPipeline(capturingStore).catch((error) => {
+          rejectRun(error);
+        });
+
+        try {
+          const run = await runCreated;
+          return res.status(202).json({ runId: run.id, traceId: run.traceId });
+        } catch (error) {
+          // Run-creation failure: redacted error, no background run persisted, and no stream opened
+          // (the stream is a separate GET the client never reaches without a runId).
+          return res.status(400).json({ error: redactString(requestValidationMessage(error)) });
         }
-      );
-      const assistantMessage = await rectorStore.createMessage({
-        conversationId: conversation.id,
-        role: "assistant",
-        content: synthesis.response,
-        status: "completed",
-        runId: run.id,
-        redactionState,
-      });
-      await rectorStore.updateMessage(userMessage.id, { status: "completed", runId: run.id });
+      }
+
+      // Synchronous (non-stream) path — unchanged behavior, preserved as the streaming fallback.
+      const { run, synthesis, observabilitySummary, assistantMessage } = await runChatPipeline(rectorStore);
       const events = await rectorStore.listEvents(run.id);
       const completedRun = await rectorStore.getRun(run.id);
 
