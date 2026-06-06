@@ -14,6 +14,13 @@ export const REDACTED = "[REDACTED]";
 const DeploymentTargetSchema = z.enum(["local", "heroku", "cloudflare"]);
 const NodeEnvSchema = z.enum(["development", "test", "production"]);
 
+// Persistence driver selection for the Phase 3 RectorStore factory (ORN-39). `memory` is the
+// default (the in-memory provider-free baseline), `sqlite` is the local file-backed store, and
+// `tidb` is the optional hosted path. The Mongo/Redis fields below remain for backward
+// compatibility but are unused by store selection — no Mongo client dependency is added.
+export const PersistenceDriverSchema = z.enum(["memory", "sqlite", "tidb"]);
+export type PersistenceDriver = z.infer<typeof PersistenceDriverSchema>;
+
 const optionalTrimmedString = z.preprocess((value) => {
   if (value === undefined || value === null) return undefined;
   const text = String(value).trim();
@@ -49,6 +56,20 @@ const portValue = z.preprocess((value) => {
   return Number.isNaN(parsed) ? value : parsed;
 }, z.number().int().min(1).max(65535));
 
+// Optional TCP port for the TiDB connection block; unset/empty resolves to undefined so an
+// incomplete block is detected by the store factory rather than coerced to a default.
+const optionalPort = z.preprocess((value) => {
+  if (value === undefined || value === null || String(value).trim() === "") return undefined;
+  if (typeof value === "number") return value;
+  const parsed = Number(String(value).trim());
+  return Number.isNaN(parsed) ? value : parsed;
+}, z.number().int().min(1).max(65535).optional());
+
+const persistenceDriverValue = z.preprocess(
+  (value) => (value === undefined || value === null || String(value).trim() === "" ? "memory" : value),
+  PersistenceDriverSchema
+).default("memory");
+
 export const DeploymentEnvironmentSchema = z.object({
   NODE_ENV: z.preprocess((value) => value ?? "development", NodeEnvSchema).default("development"),
   PORT: portValue.default(3000),
@@ -67,6 +88,15 @@ export const DeploymentEnvironmentSchema = z.object({
   MONGO_DB: optionalTrimmedString,
   REDIS_URL: optionalRedisUrl,
 
+  RECTOR_PERSISTENCE: persistenceDriverValue,
+  RECTOR_SQLITE_PATH: optionalTrimmedString,
+  TIDB_HOST: optionalTrimmedString,
+  TIDB_PORT: optionalPort,
+  TIDB_USER: optionalTrimmedString,
+  TIDB_PASSWORD: optionalTrimmedString,
+  TIDB_DATABASE: optionalTrimmedString,
+  TIDB_TLS: optionalBoolean,
+
   CHROMA_URL: optionalHttpUrl("CHROMA_URL"),
   CHROMA_API_KEY: optionalTrimmedString,
 
@@ -75,6 +105,20 @@ export const DeploymentEnvironmentSchema = z.object({
   POSTHOG_HOST: optionalHttpUrl("POSTHOG_HOST"),
 });
 export type DeploymentEnvironment = z.infer<typeof DeploymentEnvironmentSchema>;
+
+// Optional TiDB Cloud connection block (ORN-39). Read only when the persistence driver is `tidb`.
+// All fields are optional at the schema level so an incomplete block still parses; the store
+// factory (createRectorStore) is responsible for failing with a configuration error when the
+// driver is `tidb` and any required field is missing, before any network connection is attempted.
+export const TiDBConnectionConfigSchema = z.object({
+  host: z.string().min(1).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  user: z.string().min(1).optional(),
+  password: z.string().min(1).optional(),
+  database: z.string().min(1).optional(),
+  tls: z.boolean().optional(),
+});
+export type TiDBConnectionConfig = z.infer<typeof TiDBConnectionConfigSchema>;
 
 export const DeploymentConfigSchema = z.object({
   apiVersion: z.literal(DEPLOYMENT_API_VERSION),
@@ -93,6 +137,9 @@ export const DeploymentConfigSchema = z.object({
     proxyEnabled: z.boolean(),
   }),
   persistence: z.object({
+    driver: PersistenceDriverSchema.default("memory"),
+    sqlitePath: z.string().min(1).optional(),
+    tidb: TiDBConnectionConfigSchema.optional(),
     mongoUri: z.string().min(1).optional(),
     mongoDb: z.string().min(1).optional(),
     redisUrl: z.string().min(1).optional(),
@@ -153,6 +200,9 @@ export function parseDeploymentEnvironment(env: Record<string, unknown> = proces
       proxyEnabled: input.CLOUDFLARE_PROXY_ENABLED,
     },
     persistence: {
+      driver: input.RECTOR_PERSISTENCE,
+      sqlitePath: input.RECTOR_SQLITE_PATH,
+      tidb: buildTiDBConnectionConfig(input),
       mongoUri: input.MONGO_URI,
       mongoDb: input.MONGO_DB,
       redisUrl: input.REDIS_URL,
@@ -326,6 +376,23 @@ function closeServerWithTimeout(server: CloseableServer, timeoutMs: number): Pro
 function redactCredentialUrl(value: string | undefined): string | undefined {
   if (!value) return value;
   return value.replace(/\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@]*@)/gi, (_match, scheme: string) => `${scheme}${REDACTED}@`);
+}
+
+// Assembles the optional TiDB connection block from the parsed env. Returns undefined when no TiDB
+// field is supplied so the persistence config carries no empty block; when any field is present the
+// (possibly incomplete) block is preserved for the store factory to validate. Never auto-selected
+// for local use — only read when the persistence driver is `tidb`.
+function buildTiDBConnectionConfig(input: DeploymentEnvironment): TiDBConnectionConfig | undefined {
+  const tidb: TiDBConnectionConfig = {
+    host: input.TIDB_HOST,
+    port: input.TIDB_PORT,
+    user: input.TIDB_USER,
+    password: input.TIDB_PASSWORD,
+    database: input.TIDB_DATABASE,
+    tls: input.TIDB_TLS,
+  };
+  const hasAnyField = Object.values(tidb).some((value) => value !== undefined);
+  return hasAnyField ? tidb : undefined;
 }
 
 // ---------------------------------------------------------------------------
