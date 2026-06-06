@@ -150,6 +150,101 @@ describe("Property 1: local mode output is unchanged (regression baseline)", () 
     expect(result.run.phase).toBe("DONE");
     expect(result.run.actualCost?.modelCalls ?? 0).toBe(0);
   });
+
+  // Req 8.1 / 8.4: the deterministic synthesis preserves the Phase 1 output field
+  // set exactly. For arbitrary prompts the local-mode synthesis must expose the
+  // same key set as the deterministic `synthesizeChatBrainstemResponse` and report
+  // `providerCalls === 0` (provider-free).
+  it("preserves the deterministic synthesis output field set for arbitrary prompts", async () => {
+    await fc.assert(
+      fc.asyncProperty(arbPrompt(), async (prompt) => {
+        const store = new InMemoryRectorStore();
+        const { synthesis } = await runChat(store, await buildArgs(store, prompt), { mode: "local" });
+
+        // Exact Phase 1 BrainstemSynthesis field set (no fields added or dropped).
+        expect(new Set(Object.keys(synthesis))).toEqual(
+          new Set(["status", "route", "traceId", "evidence", "providerCalls", "observability", "response"]),
+        );
+
+        // Field types match the Phase 1 baseline contract.
+        expect(typeof synthesis.status).toBe("string");
+        expect(typeof synthesis.route).toBe("string");
+        expect(typeof synthesis.traceId).toBe("string");
+        expect(Array.isArray(synthesis.evidence)).toBe(true);
+        expect(typeof synthesis.response).toBe("string");
+
+        // Provider-free: the deterministic synthesizer always reports zero calls.
+        expect(synthesis.providerCalls).toBe(0);
+      }),
+      { numRuns: 30 },
+    );
+  });
+
+  // Req 8.1 / 8.4: the synthesis response string preserves the Phase 1 section
+  // ordering exactly: Status -> Route -> Trace -> Evidence -> Observed -> the
+  // deterministic "Local mode: provider calls: 0" marker, which is always last.
+  it("preserves the deterministic response section ordering for arbitrary prompts", async () => {
+    await fc.assert(
+      fc.asyncProperty(arbPrompt(), async (prompt) => {
+        const store = new InMemoryRectorStore();
+        const { synthesis } = await runChat(store, await buildArgs(store, prompt), { mode: "local" });
+
+        const response = synthesis.response;
+        const statusAt = response.indexOf("Status: ");
+        const routeAt = response.indexOf("Route: ");
+        const traceAt = response.indexOf("Trace: ");
+        const evidenceAt = response.indexOf("Evidence: ");
+        const observedAt = response.indexOf("Observed: ");
+        const localMarker = "Local mode: provider calls: 0, API keys: not required.";
+        const localAt = response.indexOf(localMarker);
+
+        // Every Phase 1 section is present.
+        expect(statusAt).toBeGreaterThanOrEqual(0);
+        expect(routeAt).toBeGreaterThan(statusAt);
+        expect(traceAt).toBeGreaterThan(routeAt);
+        expect(evidenceAt).toBeGreaterThan(traceAt);
+        expect(observedAt).toBeGreaterThan(evidenceAt);
+        expect(localAt).toBeGreaterThan(observedAt);
+
+        // The provider-free marker is the deterministic final section, and the
+        // Observed line reports zero provider calls in local mode.
+        expect(response.endsWith(localMarker)).toBe(true);
+        expect(response).toContain("provider calls: 0");
+      }),
+      { numRuns: 30 },
+    );
+  });
+
+  // Req 8.3 / 8.5: local mode makes exactly 0 provider calls and 0 outbound
+  // network requests. With no router wired, any attempted provider/network call
+  // would surface as a thrown error; the run instead completes provider-free with
+  // zero recorded model calls and zero estimated cost across both the run's
+  // authoritative fields and the observability trace.
+  it("makes zero provider and outbound network calls for arbitrary prompts", async () => {
+    await fc.assert(
+      fc.asyncProperty(arbPrompt(), async (prompt) => {
+        const store = new InMemoryRectorStore();
+        // Deliberately omit any router/budget: a local run must never reach for one.
+        const { run, observabilitySummary, synthesis } = await runChat(store, await buildArgs(store, prompt), {
+          mode: "local",
+        });
+
+        expect(run.phase).toBe("DONE");
+        expect(run.status).toBe("completed");
+
+        // Zero provider calls: authoritative run fields and the observability trace agree.
+        expect(run.actualCost?.modelCalls ?? 0).toBe(0);
+        expect((run.costEstimate as { modelCalls?: number }).modelCalls ?? 0).toBe(0);
+        expect(observabilitySummary.modelCallCount).toBe(0);
+        expect(synthesis.providerCalls).toBe(0);
+
+        // Zero cost: no network request could have been billed.
+        expect(run.costEstimate.usd).toBe(0);
+        expect(observabilitySummary.estimatedCostUsd).toBe(0);
+      }),
+      { numRuns: 30 },
+    );
+  });
 });
 
 /**
