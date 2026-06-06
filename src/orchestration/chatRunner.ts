@@ -27,7 +27,7 @@ import {
   type ObservabilitySpan,
   type ObservabilitySummary,
 } from "../observability";
-import { evaluateBudget, type BudgetUsage } from "../security/budget";
+import { enforceMaxPerRunBudget, evaluateBudget, type BudgetUsage } from "../security/budget";
 import { redactSecrets } from "../security/redaction";
 import {
   invokeWithBudget,
@@ -734,7 +734,19 @@ function createLiveRepairAgent(deps: { provider: LLMProvider; approvals: Sandbox
       // Budget preflight BEFORE any provider call.
       const estimate = deps.provider.estimateRequest(request);
       const decision = evaluateBudget(run, buildRepairPreflightUsage(deps.provider, estimate, run));
-      if (decision.status !== "allowed") return undefined;
+      // Req 3.4: layer the EXPLICIT per-run ceiling onto the existing preflight. `enforceMaxPerRunBudget`
+      // projects the accumulated run cost so far (the committed run cost) plus this repair call's
+      // estimate and denies BEFORE any provider.invoke when the projection would breach the run's
+      // per-run ceiling. Either gate denying blocks the call (no network I/O on denial).
+      const ceiling = enforceMaxPerRunBudget(
+        run,
+        {
+          estimatedUsd: committedRunNumber(run.actualCost?.usd, run.costEstimate.usd),
+          modelCalls: committedRunNumber(run.actualCost?.modelCalls, run.costEstimate.modelCalls),
+        },
+        estimate
+      );
+      if (decision.status !== "allowed" || ceiling.status !== "allowed") return undefined;
 
       let response: LLMResponse;
       try {

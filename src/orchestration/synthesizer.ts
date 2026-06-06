@@ -17,7 +17,7 @@ import {
   type LLMResponse,
   type LLMUsage,
 } from "../providers/llm";
-import { evaluateBudget, type BudgetUsage } from "../security/budget";
+import { enforceMaxPerRunBudget, evaluateBudget, type BudgetUsage } from "../security/budget";
 import { redactString } from "../security/redaction";
 import type { Run } from "../store";
 
@@ -236,7 +236,12 @@ export async function runLiveSynthesizer(
 
     const estimate = provider.estimateRequest(request);
     const decision = evaluateBudget(run, buildSynthesisPreflightUsage(provider, estimate, run, totalUsage));
-    if (decision.status !== "allowed") {
+    // Req 3.4: layer the EXPLICIT per-run ceiling onto the existing preflight. `enforceMaxPerRunBudget`
+    // projects the accumulated run cost so far (committed + usage already spent in this step) plus this
+    // call's estimate and denies BEFORE any provider.invoke when the projection would breach the run's
+    // per-run ceiling. Either gate denying routes to the deterministic fallback (no network I/O).
+    const ceiling = enforceMaxPerRunBudget(run, accumulatedSynthesisRunUsage(run, totalUsage), estimate);
+    if (decision.status !== "allowed" || ceiling.status !== "allowed") {
       // Req 6.4: zero provider calls, fallback, 0 USD cost for this step.
       return synthesisFallbackResult(input, totalUsage, provider, model, attempts);
     }
@@ -430,6 +435,19 @@ function buildSynthesisPreflightUsage(
     modelCalls: committedSynthesisNumber(run.actualCost?.modelCalls, run.costEstimate.modelCalls) + totalUsage.modelCalls + estimate.modelCalls,
     runtimeMs: committedSynthesisNumber(run.actualCost?.runtimeMs, run.costEstimate.runtimeMs),
     healingAttempts: run.healingAttempts,
+  };
+}
+
+/**
+ * Accumulated run cost so far (committed run cost + usage already spent in this step), shaped for the
+ * explicit per-run ceiling gate (`enforceMaxPerRunBudget`). Mirrors the accumulation in
+ * {@link buildSynthesisPreflightUsage}; the next-call estimate is passed to the gate separately so it
+ * projects `accumulated + next` against the run's per-run ceiling.
+ */
+function accumulatedSynthesisRunUsage(run: Run, totalUsage: LLMUsage): { estimatedUsd: number; modelCalls: number } {
+  return {
+    estimatedUsd: committedSynthesisNumber(run.actualCost?.usd, run.costEstimate.usd) + totalUsage.estimatedUsd,
+    modelCalls: committedSynthesisNumber(run.actualCost?.modelCalls, run.costEstimate.modelCalls) + totalUsage.modelCalls,
   };
 }
 

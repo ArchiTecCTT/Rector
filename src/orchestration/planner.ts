@@ -11,7 +11,7 @@ import {
   type LLMResponse,
   type LLMUsage,
 } from "../providers/llm";
-import { evaluateBudget, type BudgetUsage } from "../security/budget";
+import { enforceMaxPerRunBudget, evaluateBudget, type BudgetUsage } from "../security/budget";
 import { redactSecrets, redactString } from "../security/redaction";
 import type { Run } from "../store";
 
@@ -489,8 +489,14 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
     // Req 4.5 / 4.7 / 4.8: budget preflight BEFORE any provider.invoke.
     const estimate = provider.estimateRequest(request);
     const decision = evaluateBudget(run, buildPreflightUsage(provider, estimate, run, totalUsage));
-    if (decision.status !== "allowed") {
-      const reason = decision.reasons.join("; ") || "budget preflight denied the planner call";
+    // Req 3.4: layer the EXPLICIT per-run ceiling onto the existing preflight. `enforceMaxPerRunBudget`
+    // projects the accumulated run cost so far (committed + usage already spent in this step) plus this
+    // call's estimate and denies BEFORE any provider.invoke when the projection would breach the run's
+    // per-run ceiling. Either gate denying blocks the call (no network I/O on denial).
+    const ceiling = enforceMaxPerRunBudget(run, accumulatedRunUsage(run, totalUsage), estimate);
+    if (decision.status !== "allowed" || ceiling.status !== "allowed") {
+      const reason =
+        [...decision.reasons, ...ceiling.reasons].join("; ") || "budget preflight denied the planner call";
       return blockedResult(
         makeBlocker("BUDGET_DENIED", `Planner call denied by budget preflight: ${reason}`),
         totalUsage,
@@ -638,6 +644,19 @@ function buildPreflightUsage(
     modelCalls: committedNumber(run.actualCost?.modelCalls, run.costEstimate.modelCalls) + totalUsage.modelCalls + estimate.modelCalls,
     runtimeMs: committedNumber(run.actualCost?.runtimeMs, run.costEstimate.runtimeMs),
     healingAttempts: run.healingAttempts,
+  };
+}
+
+/**
+ * Accumulated run cost so far (committed run cost + usage already spent in this step), shaped for the
+ * explicit per-run ceiling gate (`enforceMaxPerRunBudget`). Mirrors the accumulation in
+ * {@link buildPreflightUsage}; the next-call estimate is passed to the gate separately so it projects
+ * `accumulated + next` against the run's per-run ceiling.
+ */
+function accumulatedRunUsage(run: Run, totalUsage: LLMUsage): { estimatedUsd: number; modelCalls: number } {
+  return {
+    estimatedUsd: committedNumber(run.actualCost?.usd, run.costEstimate.usd) + totalUsage.estimatedUsd,
+    modelCalls: committedNumber(run.actualCost?.modelCalls, run.costEstimate.modelCalls) + totalUsage.modelCalls,
   };
 }
 
