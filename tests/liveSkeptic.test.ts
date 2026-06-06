@@ -24,7 +24,10 @@
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
 
-import { createFakePlan } from "../src/orchestration/planner";
+import { createFakePlan, PlannerInputSchema } from "../src/orchestration/planner";
+import { arbitratePlanWithCrucible } from "../src/orchestration/crucible";
+import { triageUserMessage } from "../src/orchestration/triage";
+import { ProviderError, type LLMProvider, type LLMResponse } from "../src/providers/llm";
 import {
   runLiveSkeptic,
   SkepticReviewSchema,
@@ -39,6 +42,7 @@ import {
   arbSubThresholdBudget,
   arbValidSkepticDraft,
   generousBudget,
+  makeContextPack,
   makeExternalRun,
   skepticDraftToJson,
   type ScriptedResponse,
@@ -276,5 +280,319 @@ describe("Property 8: budget denial precedes the network call (skeptic)", () => 
       ),
       { numRuns: 200 }
     );
+  });
+});
+
+// ===========================================================================
+// runLiveSkeptic unit tests (task 5.5)
+// ===========================================================================
+//
+// Deterministic, example-based coverage that pins the concrete behaviours the
+// property tests above only sample: stamping the deterministic fields from the
+// clock and plan (Req 1.2), recomputing the verdict over a dishonest model
+// claim (Req 1.3), the crucible consuming an `ok` review unchanged (Req 1.4),
+// usage accumulation across attempts (Req 1.7), the 60s timeout counted as one
+// attempt (Req 1.8), and mapping a provider error to a redacted PROVIDER_ERROR
+// blocker that carries no raw response body (Req 1.9, 6.5, 7.1). Everything is
+// in-memory and mock-only: no API key and no network are used.
+
+/** A fixed, schema-valid planner input for the deterministic unit cases. */
+function fixedPlannerInput(prompt = "Fix the TypeScript bug in src/api/server.ts and update tests.") {
+  const triage = triageUserMessage(prompt);
+  return PlannerInputSchema.parse({
+    triage,
+    contextPack: makeContextPack(triage, prompt),
+    messageContent: prompt,
+  });
+}
+
+/** Builds a single schema-valid `SkepticFinding` of the requested severity. */
+function makeFinding(severity: SkepticFinding["severity"], index = 1): SkepticFinding {
+  return {
+    id: `finding-${index}`,
+    severity,
+    category: "safety",
+    message: `${severity} concern #${index}`,
+    evidence: `Evidence for ${severity} concern #${index}`,
+    recommendation: `Address the ${severity} concern #${index}`,
+  };
+}
+
+/**
+ * A hanging provider whose `invoke` never resolves, so the live skeptic's
+ * per-invocation timeout always wins the race. Exposes an invoke counter so the
+ * test can assert the timed-out call was counted as exactly one attempt.
+ */
+function makeHangingProvider(): { provider: LLMProvider; readonly invokeCount: number } {
+  const base = new SpyLLMProvider({ estimate: DEFAULT_SPY_USAGE });
+  const state = { invokeCount: 0 };
+  const provider: LLMProvider = {
+    metadata: base.metadata,
+    validateConfig: () => base.validateConfig(),
+    estimateRequest: (request) => base.estimateRequest(request),
+    invoke: () => {
+      state.invokeCount += 1;
+      // Never resolves and never rejects: no timer, so it does not hold the
+      // event loop open once the timeout race resolves.
+      return new Promise<LLMResponse>(() => {});
+    },
+  };
+  return {
+    provider,
+    get invokeCount() {
+      return state.invokeCount;
+    },
+  };
+}
+
+describe("runLiveSkeptic unit tests (task 5.5)", () => {
+  // Validates: Requirements 1.1, 1.2.
+  it("returns an ok review on a valid first try and stamps reviewedPlanId/planGoal/createdAt", async () => {
+    const draft: SkepticReviewDraft = { verdict: "NEEDS_REVISION", findings: [makeFinding("MINOR")] };
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [skepticDraftToJson(draft)],
+    });
+    const run = makeExternalRun(generousBudget());
+    const input = fixedPlannerInput();
+    const plannerOutput = createFakePlan(input);
+    const createdAt = "2026-02-02T03:04:05.000Z";
+
+    const result = await runLiveSkeptic(
+      { plannerOutput, contextPack: input.contextPack, triage: input.triage, now: () => createdAt },
+      { provider, run }
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.attempts).toBe(1);
+    expect(provider.invokeCount).toBe(1);
+    expect(result.blocker).toBeUndefined();
+
+    // Req 1.1: the assembled review conforms to the existing schema.
+    expect(() => SkepticReviewSchema.parse(result.review)).not.toThrow();
+
+    // Req 1.2: deterministic fields are stamped from the plan and the clock.
+    expect(result.review?.planGoal).toBe(plannerOutput.goal);
+    expect(result.review?.createdAt).toBe(createdAt);
+    expect(result.review?.reviewedPlanId).toBe((plannerOutput as { id?: string }).id);
+  });
+
+  // Validates: Requirements 1.5.
+  it("returns an ok review after exactly one repair when the first response is malformed", async () => {
+    const draft: SkepticReviewDraft = { verdict: "SOUND", findings: [] };
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: ["<<<NOT_JSON at all", skepticDraftToJson(draft)],
+    });
+    const run = makeExternalRun(generousBudget());
+    const input = fixedPlannerInput();
+    const plannerOutput = createFakePlan(input);
+
+    const result = await runLiveSkeptic(
+      { plannerOutput, contextPack: input.contextPack, triage: input.triage },
+      { provider, run }
+    );
+
+    // Req 1.5: one initial call + exactly one repair, then a valid review.
+    expect(result.status).toBe("ok");
+    expect(result.attempts).toBe(2);
+    expect(provider.invokeCount).toBe(2);
+    expect(() => SkepticReviewSchema.parse(result.review)).not.toThrow();
+  });
+
+  // Validates: Requirements 1.3. The model's advisory verdict is never trusted;
+  // the control plane recomputes it from the finding severities.
+  it("recomputes the verdict from finding severities, overriding a dishonest model verdict", async () => {
+    const run = makeExternalRun(generousBudget());
+    const input = fixedPlannerInput();
+    const plannerOutput = createFakePlan(input);
+
+    const cases: Array<{ draft: SkepticReviewDraft; expected: SkepticReviewVerdict }> = [
+      // Model claims SOUND while emitting a BLOCKER => recomputed BLOCKED.
+      { draft: { verdict: "SOUND", findings: [makeFinding("BLOCKER")] }, expected: "BLOCKED" },
+      // Model claims BLOCKED with no findings => recomputed SOUND.
+      { draft: { verdict: "BLOCKED", findings: [] }, expected: "SOUND" },
+      // Model claims SOUND with a MINOR finding => recomputed NEEDS_REVISION.
+      { draft: { verdict: "SOUND", findings: [makeFinding("MINOR")] }, expected: "NEEDS_REVISION" },
+    ];
+
+    for (const { draft, expected } of cases) {
+      const provider = new SpyLLMProvider({
+        estimate: DEFAULT_SPY_USAGE,
+        responses: [skepticDraftToJson(draft)],
+      });
+
+      const result = await runLiveSkeptic(
+        { plannerOutput, contextPack: input.contextPack, triage: input.triage },
+        { provider, run }
+      );
+
+      expect(result.status).toBe("ok");
+      expect(result.review?.verdict).toBe(expected);
+    }
+  });
+
+  // Validates: Requirements 1.9, 6.5, 7.1. A provider transport error maps to a
+  // redacted PROVIDER_ERROR blocker whose message carries no secret and which
+  // never echoes the raw provider response body.
+  it("maps a provider error to a redacted PROVIDER_ERROR blocker with no raw response body", async () => {
+    const secret = "sk-AABBCCDDEEFF00112233445566778899";
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [
+        {
+          error: new ProviderError({
+            code: "PROVIDER_HTTP_ERROR",
+            provider: "spy",
+            status: 401,
+            message: `Upstream rejected Authorization: Bearer ${secret}`,
+            details: { rawBody: `{"error":"invalid key ${secret}"}` },
+          }),
+        },
+      ],
+    });
+    const run = makeExternalRun(generousBudget());
+    const input = fixedPlannerInput();
+    const plannerOutput = createFakePlan(input);
+
+    const result = await runLiveSkeptic(
+      { plannerOutput, contextPack: input.contextPack, triage: input.triage },
+      { provider, run }
+    );
+
+    // Req 1.9: a structured PROVIDER_ERROR blocker, no review, no further call.
+    expect(result.status).toBe("blocked");
+    expect(result.blocker?.code).toBe("PROVIDER_ERROR");
+    expect(result.review).toBeUndefined();
+    expect(result.attempts).toBe(1);
+    expect(provider.invokeCount).toBe(1);
+
+    // Req 6.5/7.1: the secret is redacted out of the blocker message and the
+    // raw provider response body is excluded entirely.
+    expect(result.blocker?.message).not.toContain(secret);
+    expect(result.blocker?.message).toContain("[REDACTED]");
+    expect(result.blocker?.details).toBeUndefined();
+
+    // Belt-and-suspenders: no secret survives anywhere in the serialized result.
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  // Validates: Requirements 1.7, 1.9. A provider error on the repair call still
+  // preserves the usage accumulated from the first (successful) call.
+  it("preserves accumulated usage when the repair call errors", async () => {
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [
+        {
+          content: "<<<NOT_JSON garbage",
+          usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150, estimatedUsd: 0.01, modelCalls: 1 },
+        },
+        {
+          error: new ProviderError({ code: "PROVIDER_HTTP_ERROR", provider: "spy", message: "transient upstream failure" }),
+        },
+      ],
+    });
+    const run = makeExternalRun(generousBudget());
+    const input = fixedPlannerInput();
+    const plannerOutput = createFakePlan(input);
+
+    const result = await runLiveSkeptic(
+      { plannerOutput, contextPack: input.contextPack, triage: input.triage },
+      { provider, run }
+    );
+
+    expect(result.status).toBe("blocked");
+    expect(result.blocker?.code).toBe("PROVIDER_ERROR");
+    expect(result.attempts).toBe(2);
+    expect(provider.invokeCount).toBe(2);
+
+    // Req 1.9/1.7: the first call's usage is preserved in the returned result.
+    expect(result.usage.inputTokens).toBe(100);
+    expect(result.usage.outputTokens).toBe(50);
+    expect(result.usage.modelCalls).toBe(1);
+    expect(result.usage.estimatedUsd).toBeCloseTo(0.01, 5);
+  });
+
+  // Validates: Requirements 1.8. A bounded invocation that never returns is
+  // counted as a single attempt and yields a PROVIDER_ERROR blocker.
+  it("counts a timed-out invocation as one attempt and returns a PROVIDER_ERROR blocker", async () => {
+    const hanging = makeHangingProvider();
+    const run = makeExternalRun(generousBudget());
+    const input = fixedPlannerInput();
+    const plannerOutput = createFakePlan(input);
+
+    const result = await runLiveSkeptic(
+      { plannerOutput, contextPack: input.contextPack, triage: input.triage },
+      { provider: hanging.provider, run, timeoutMs: 20 }
+    );
+
+    // Req 1.8: the timeout counts as exactly one attempt; no second/third call.
+    expect(result.status).toBe("blocked");
+    expect(result.blocker?.code).toBe("PROVIDER_ERROR");
+    expect(result.attempts).toBe(1);
+    expect(hanging.invokeCount).toBe(1);
+    expect(result.blocker?.message).toContain("timed out");
+  });
+
+  // Validates: Requirements 1.7. Usage is the sum across every provider attempt.
+  it("accumulates LLMUsage across all provider attempts", async () => {
+    const draft: SkepticReviewDraft = { verdict: "SOUND", findings: [] };
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [
+        {
+          content: "<<<NOT_JSON garbage",
+          usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150, estimatedUsd: 0.01, modelCalls: 1 },
+        },
+        {
+          content: skepticDraftToJson(draft),
+          usage: { inputTokens: 200, outputTokens: 40, totalTokens: 240, estimatedUsd: 0.02, modelCalls: 1 },
+        },
+      ],
+    });
+    const run = makeExternalRun(generousBudget());
+    const input = fixedPlannerInput();
+    const plannerOutput = createFakePlan(input);
+
+    const result = await runLiveSkeptic(
+      { plannerOutput, contextPack: input.contextPack, triage: input.triage },
+      { provider, run }
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.attempts).toBe(2);
+
+    // Req 1.7: usage is the sum of both attempts.
+    expect(result.usage.inputTokens).toBe(300);
+    expect(result.usage.outputTokens).toBe(90);
+    expect(result.usage.totalTokens).toBe(390);
+    expect(result.usage.modelCalls).toBe(2);
+    expect(result.usage.estimatedUsd).toBeCloseTo(0.03, 5);
+  });
+
+  // Validates: Requirements 1.4. The `ok` review is consumed by
+  // `arbitratePlanWithCrucible` with no special-casing.
+  it("produces an ok review that the crucible accepts unchanged", async () => {
+    const draft: SkepticReviewDraft = { verdict: "SOUND", findings: [] };
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [skepticDraftToJson(draft)],
+    });
+    const run = makeExternalRun(generousBudget());
+    const input = fixedPlannerInput();
+    const plannerOutput = createFakePlan(input);
+
+    const result = await runLiveSkeptic(
+      { plannerOutput, contextPack: input.contextPack, triage: input.triage },
+      { provider, run }
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.review).toBeDefined();
+
+    // Req 1.4: the crucible consumes the live review exactly like a heuristic one.
+    const decision = arbitratePlanWithCrucible({ plannerOutput, skepticReview: result.review! });
+    expect(decision.verdict).toBe("ACCEPTED");
+    expect(decision.acceptedPlan?.goal).toBe(plannerOutput.goal);
   });
 });
