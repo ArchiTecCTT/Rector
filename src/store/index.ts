@@ -16,6 +16,7 @@ import type {
 
 export * from "./schemas";
 export * from "./inMemoryRectorStore";
+export * from "./sqlRectorStore";
 
 /**
  * The store contract shared by every Rector store implementation.
