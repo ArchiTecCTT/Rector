@@ -1,10 +1,12 @@
 import nodePath from "node:path";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { executeCompiledDag, type DagExecutionResult, type ExecutorSimulatorOptions } from "../src/orchestration/executorSimulator";
+import { executeCompiledDag, DagExecutionResultSchema, type DagExecutionResult, type ExecutorSimulatorOptions } from "../src/orchestration/executorSimulator";
 import {
   classifyExecutionFailures,
   validateAndHealExecution,
+  type HealingExecutor,
+  type LiveRepairAgent,
 } from "../src/orchestration/validationHealing";
 import type { CompiledDag } from "../src/orchestration/dagCompiler";
 import { WorkspaceSandboxAdapter, type SandboxApproval, type SandboxOperationResult } from "../src/sandbox";
@@ -12,12 +14,15 @@ import { triageUserMessage } from "../src/orchestration/triage";
 import {
   arbFailingDag,
   createWorkspaceFs,
+  embedSecret,
   generousBudget,
   isWithinRoot,
   makeAlwaysFailingExecutor,
   makeAlwaysFailingRepairAgent,
   makeContextPack,
   makeExternalRun,
+  makeFailingExecutionResult,
+  makeNoRepairAgent,
 } from "./support/byokArbitraries";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -650,5 +655,288 @@ describe("Property 9: patches are applied only through the safe executor", () =>
       ),
       { numRuns: 200 },
     );
+  });
+});
+
+/**
+ * Unit tests for the bounded healing loop (task 8.5).
+ *
+ * Validates: Requirements 5.2, 5.4, 5.5, 5.7, 5.8, 5.9, 5.10, 7.3
+ *
+ * These example-based tests pin the discrete healing outcomes the property
+ * tests (Property 5 / Property 9) cover only in aggregate:
+ *   - deterministic retry fallback when no repair agent/sandbox is provided
+ *     (req 5.7 — Phase 1 behaviour preserved);
+ *   - `NEEDS_DECISION` on a `PERMISSION` failure, with no repair attempted
+ *     (req 5.8);
+ *   - `HEALED` after a patch is applied through the safe executor and
+ *     re-validation passes (req 5.2, 5.4, 5.5);
+ *   - failed validation output preserved on exhaustion rather than hidden
+ *     (req 5.9, 5.10);
+ *   - the redacted explanation / redacted failed output on exhaustion
+ *     (req 7.3).
+ *
+ * Everything is mock-only: deterministic executor doubles, an injected
+ * in-memory workspace filesystem, and a matching `FILE_WRITE` approval so an
+ * applied `PROPOSE_PATCH` resolves to `SUCCEEDED`. No API key, real disk,
+ * process, or network is used. The module-level `HEALING_*` fixtures and
+ * `buildApprovingSandbox` helper defined above (Property 5) are reused here.
+ */
+describe("healing loop unit tests (task 8.5)", () => {
+  /** A single-node healable DAG (transient failures only -> auto-heal path). */
+  function singleNodeDag(): CompiledDag {
+    return dag({
+      nodes: [
+        {
+          id: "task:a",
+          type: "LLM_EXECUTION",
+          dependsOn: [],
+          toolPermissions: ["fake.local"],
+          retryPolicy: { maxAttempts: 1, backoffMs: 0 },
+          timeoutMs: 100,
+        },
+      ],
+      edges: [],
+    });
+  }
+
+  // Req 5.7: with neither a repair agent nor a sandbox, the loop falls back to
+  // the Phase 1 deterministic retry behaviour and records no live rounds.
+  it("heals deterministically by retrying the node when no repair agent or sandbox is provided", async () => {
+    const compiledDag = singleNodeDag();
+    const failing = makeFailingExecutionResult(compiledDag, () => NOW);
+
+    let executorCalls = 0;
+    const recoveringExecutor: HealingExecutor = async (dagToExecute) => {
+      executorCalls += 1;
+      // No injected failures on retry -> the node succeeds.
+      return executeCompiledDag(dagToExecute, { now: () => NOW });
+    };
+
+    const result = await validateAndHealExecution({
+      compiledDag,
+      executionResult: failing,
+      executor: recoveringExecutor,
+      maxHealingAttempts: 2,
+    });
+
+    expect(result.status).toBe("HEALED");
+    expect(result.attempts).toBe(1);
+    expect(executorCalls).toBe(1);
+    expect(result.actions).toContainEqual(
+      expect.objectContaining({ type: "RETRY_NODE", nodeId: "task:a", attempt: 1 }),
+    );
+    // The deterministic path never engages the live-repair loop, so no rounds.
+    expect(result.rounds).toEqual([]);
+    expect(result.finalExecutionResult.status).toBe("SUCCESS");
+  });
+
+  // Req 5.8: a PERMISSION failure is routed to NEEDS_DECISION and the repair
+  // agent is never consulted, even when a repair agent + sandbox are wired in.
+  it("returns NEEDS_DECISION on a PERMISSION failure without proposing a repair", async () => {
+    const permissionDag = dag({
+      nodes: [
+        {
+          id: "task:shell",
+          type: "SHELL_COMMAND",
+          dependsOn: [],
+          toolPermissions: ["unsafe.shell"],
+          retryPolicy: { maxAttempts: 1, backoffMs: 0 },
+          timeoutMs: 100,
+        },
+      ],
+      edges: [],
+    });
+    const permissionExecution = await run(permissionDag);
+    const repair = makeNoRepairAgent();
+    const sandbox = buildApprovingSandbox();
+
+    const result = await validateAndHealExecution({
+      compiledDag: permissionDag,
+      executionResult: permissionExecution,
+      repairAgent: repair.agent,
+      sandbox,
+      contextPack: HEALING_CONTEXT_PACK,
+      run: HEALING_RUN,
+    });
+
+    expect(result.status).toBe("NEEDS_DECISION");
+    expect(result.failures.some((failure) => failure.classification === "PERMISSION")).toBe(true);
+    expect(result.actions).toContainEqual(
+      expect.objectContaining({ type: "REQUEST_DECISION", nodeId: "task:shell" }),
+    );
+    // Req 5.8: no repair was attempted for the unsafe failure.
+    expect(repair.calls).toBe(0);
+    expect(result.rounds).toEqual([]);
+    // Artifacts (the failed node results) are preserved on the final result.
+    expect(result.finalExecutionResult.nodeResults).toHaveLength(1);
+  });
+
+  // Req 5.2 / 5.4 / 5.5: a safe-to-auto-heal failure triggers a redacted repair
+  // request, the patch is applied via the safe executor, re-validation passes,
+  // and the loop returns HEALED with exactly one recorded round.
+  it("returns HEALED after a patch is applied through the safe executor and re-validation passes", async () => {
+    const compiledDag = singleNodeDag();
+    const failing = makeFailingExecutionResult(compiledDag, () => NOW);
+
+    let revalidationCalls = 0;
+    const recoveringExecutor: HealingExecutor = async (dagToExecute) => {
+      revalidationCalls += 1;
+      // Re-validation after the applied patch succeeds.
+      return executeCompiledDag(dagToExecute, { now: () => NOW });
+    };
+    const repair = makeAlwaysFailingRepairAgent({ path: HEALING_REPAIR_PATH });
+    const sandbox = buildApprovingSandbox();
+
+    const result = await validateAndHealExecution({
+      compiledDag,
+      executionResult: failing,
+      executor: recoveringExecutor,
+      maxHealingAttempts: 3,
+      repairAgent: repair.agent,
+      sandbox,
+      contextPack: HEALING_CONTEXT_PACK,
+      run: HEALING_RUN,
+    });
+
+    // The HealingLoopStatus enum is VALIDATED | HEALED | NEEDS_DECISION | FAILED;
+    // a successful live heal returns HEALED (there is no SUCCEEDED member).
+    expect(result.status).toBe("HEALED");
+    expect(result.attempts).toBe(1);
+    expect(revalidationCalls).toBe(1);
+    expect(repair.calls).toBe(1);
+
+    // Req 5.4: exactly one HealingRoundRecord for the single applied round.
+    expect(result.rounds).toHaveLength(1);
+    const round = result.rounds[0];
+    expect(round.round).toBe(1);
+    expect(round.repairApplied).toBe(true);
+    // Req 5.5 / 5.6: the applied patch carries a sandbox-emitted artifact id.
+    expect(round.patchArtifactId).toBeDefined();
+    expect(round.revalidationStatus).toBe("SUCCESS");
+
+    // Req 5.3: the patch was applied via an APPLY_PATCH action (the safe executor).
+    expect(result.actions).toContainEqual(
+      expect.objectContaining({ type: "APPLY_PATCH", attempt: 1 }),
+    );
+    expect(result.finalExecutionResult.status).toBe("SUCCESS");
+  });
+
+  // Req 5.9 / 5.10: when the bound is exhausted, the loop returns FAILED with the
+  // final execution result and the failed validation output preserved (not hidden).
+  it("preserves failed validation output and records bounded rounds on exhaustion", async () => {
+    const compiledDag = singleNodeDag();
+    const failing = makeFailingExecutionResult(compiledDag, () => NOW);
+    const executor = makeAlwaysFailingExecutor(() => NOW);
+    const repair = makeAlwaysFailingRepairAgent({ path: HEALING_REPAIR_PATH });
+    const sandbox = buildApprovingSandbox();
+
+    const result = await validateAndHealExecution({
+      compiledDag,
+      executionResult: failing,
+      executor: executor.executor,
+      maxHealingAttempts: 2,
+      repairAgent: repair.agent,
+      sandbox,
+      contextPack: HEALING_CONTEXT_PACK,
+      run: HEALING_RUN,
+    });
+
+    expect(result.status).toBe("FAILED");
+    // Req 5.1: rounds never exceed the configured bound.
+    expect(result.rounds).toHaveLength(2);
+    expect(result.attempts).toBe(2);
+
+    // Req 5.9 / 5.10: the final execution result and its failed node output are
+    // preserved on the returned result rather than being hidden.
+    expect(result.finalExecutionResult.status).toBe("FAILED");
+    expect(result.finalExecutionResult.nodeResults.length).toBeGreaterThan(0);
+    expect(result.finalExecutionResult.nodeResults[0].error?.code).toBe("INJECTED_FAILURE");
+    expect(result.failures.length).toBeGreaterThan(0);
+    // Every round carries a non-empty (redacted) explanation.
+    for (const round of result.rounds) {
+      expect(round.explanation.length).toBeGreaterThan(0);
+    }
+  });
+
+  // Req 7.3: the failed output fed to the repair prompt and every round
+  // explanation are redacted, so an injected secret never survives either.
+  it("redacts secrets from the failed output fed to repair and from round explanations", async () => {
+    const secret = "sk-HEALINGUNITTESTSECRET0123456789abcdef";
+    const compiledDag = singleNodeDag();
+
+    // A failing execution result whose node error message embeds the secret in a
+    // redactable form (Authorization: Bearer <secret>).
+    const failing = DagExecutionResultSchema.parse({
+      dagId: compiledDag.id,
+      runId: compiledDag.runId,
+      status: "FAILED",
+      startedAt: NOW,
+      completedAt: NOW,
+      durationMs: 1,
+      nodeResults: [
+        {
+          nodeId: "task:a",
+          status: "FAILED",
+          attempts: 1,
+          startedAt: NOW,
+          completedAt: NOW,
+          durationMs: 1,
+          error: {
+            code: "INJECTED_FAILURE",
+            message: embedSecret(secret, "failure-message"),
+            nodeId: "task:a",
+          },
+          dependencies: [],
+        },
+      ],
+      events: [
+        { sequence: 1, type: "DAG_STARTED", at: NOW },
+        { sequence: 2, type: "DAG_COMPLETED", status: "FAILED", at: NOW },
+      ],
+      error: { code: "INJECTED_FAILURE", message: "DAG failed (injected for healing tests)" },
+    });
+
+    // Capture the failedOutput each repair invocation receives; also echo the
+    // secret back through the (design-"redacted") rationale so the explanation
+    // redaction is exercised too.
+    const seenFailedOutputs: string[] = [];
+    const repairAgent: LiveRepairAgent = async ({ failedOutput }) => {
+      seenFailedOutputs.push(failedOutput);
+      return {
+        path: HEALING_REPAIR_PATH,
+        operation: "update",
+        content: "// repair\n",
+        rationale: embedSecret(secret, "failure-message"),
+      };
+    };
+    const executor = makeAlwaysFailingExecutor(() => NOW);
+    const sandbox = buildApprovingSandbox();
+
+    const result = await validateAndHealExecution({
+      compiledDag,
+      executionResult: failing,
+      executor: executor.executor,
+      maxHealingAttempts: 2,
+      repairAgent,
+      sandbox,
+      contextPack: HEALING_CONTEXT_PACK,
+      run: HEALING_RUN,
+    });
+
+    expect(result.status).toBe("FAILED");
+
+    // Req 7.3: the failed output handed to the repair agent is redacted before
+    // crossing the trust boundary — the secret never reaches the agent.
+    expect(seenFailedOutputs.length).toBeGreaterThan(0);
+    for (const failedOutput of seenFailedOutputs) {
+      expect(failedOutput).not.toContain(secret);
+    }
+
+    // Req 7.3: every recorded round explanation is redacted.
+    expect(result.rounds.length).toBeGreaterThan(0);
+    for (const round of result.rounds) {
+      expect(round.explanation).not.toContain(secret);
+    }
   });
 });
