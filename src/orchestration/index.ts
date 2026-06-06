@@ -5,6 +5,7 @@ export * from "./executorSimulator";
 export * from "./planner";
 export * from "./prompts";
 export * from "./runStateMachine";
+export * from "./sandboxExecutor";
 export * from "./skeptic";
 export * from "./synthesizer";
 export * from "./triage";
