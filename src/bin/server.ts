@@ -47,6 +47,7 @@ const manager = new TaskManager({
 
 const app = createApp(manager, {
   orchestration: { mode: orchestrationConfig.mode, router: orchestrationRouter },
+  persistence: deploymentConfig.persistence,
 });
 const server = http.createServer(app);
 const gracefulShutdown = createGracefulShutdownHandler({ server });

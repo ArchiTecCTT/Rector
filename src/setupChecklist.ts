@@ -4,7 +4,7 @@ export interface SetupItem {
   description: string;
   required: boolean;
   defaultValue?: string;
-  category: "core" | "event-bus" | "database" | "llm" | "sandbox" | "memory" | "integrations" | "telemetry";
+  category: "core" | "event-bus" | "database" | "llm" | "sandbox" | "memory" | "integrations" | "telemetry" | "persistence";
 }
 
 export const SETUP_ITEMS: SetupItem[] = [
@@ -22,6 +22,15 @@ export const SETUP_ITEMS: SetupItem[] = [
 
   { key: "MONGO_URI", label: "MongoDB URI", description: "Mongo connection string for persistent task storage.", required: false, defaultValue: "mongodb://localhost:27017/rector", category: "database" },
   { key: "MONGO_DB", label: "MongoDB Database", description: "Database name for Rector state documents.", required: false, defaultValue: "rector_core", category: "database" },
+
+  { key: "RECTOR_PERSISTENCE", label: "RectorStore Driver", description: "Selects the RectorStore backend: memory (default) keeps the in-memory provider-free store and is the regression baseline (no file, no network); sqlite is the local file-backed store; tidb is the optional hosted TiDB Cloud path. Mongo/Redis vars are ignored by store selection.", required: false, defaultValue: "memory", category: "persistence" },
+  { key: "RECTOR_SQLITE_PATH", label: "SQLite Path", description: "Local file path for the sqlite driver (used only when RECTOR_PERSISTENCE=sqlite). Defaults to a local file; no cloud account and no network are required.", required: false, defaultValue: ".rector/rector.db", category: "persistence" },
+  { key: "TIDB_HOST", label: "TiDB Host", description: "TiDB Cloud host (used only when RECTOR_PERSISTENCE=tidb). The full TIDB_* block must be set for the hosted path.", required: false, category: "persistence" },
+  { key: "TIDB_PORT", label: "TiDB Port", description: "TiDB Cloud port (used only when RECTOR_PERSISTENCE=tidb).", required: false, defaultValue: "4000", category: "persistence" },
+  { key: "TIDB_USER", label: "TiDB User", description: "TiDB Cloud username (used only when RECTOR_PERSISTENCE=tidb).", required: false, category: "persistence" },
+  { key: "TIDB_PASSWORD", label: "TiDB Password", description: "TiDB Cloud password (used only when RECTOR_PERSISTENCE=tidb).", required: false, category: "persistence" },
+  { key: "TIDB_DATABASE", label: "TiDB Database", description: "TiDB Cloud database name (used only when RECTOR_PERSISTENCE=tidb).", required: false, category: "persistence" },
+  { key: "TIDB_TLS", label: "TiDB TLS", description: "Enable TLS for the TiDB Cloud connection (used only when RECTOR_PERSISTENCE=tidb).", required: false, defaultValue: "true", category: "persistence" },
 
   { key: "LLM_BASE_URL", label: "LLM Base URL", description: "OpenAI-compatible base URL for local/provider LLM calls.", required: false, defaultValue: "https://api.openai.com/v1", category: "llm" },
   { key: "LLM_API_KEY", label: "LLM API Key", description: "Generic OpenAI-compatible API key.", required: false, category: "llm" },
@@ -65,6 +74,7 @@ const SENSITIVE_KEYS = new Set([
   "KAFKA_USERNAME",
   "KAFKA_PASSWORD",
   "MONGO_URI",
+  "TIDB_PASSWORD",
   "LLM_API_KEY",
   "TOGETHER_API_KEY",
   "AZURE_OPENAI_API_KEY",

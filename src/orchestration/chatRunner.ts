@@ -48,7 +48,7 @@ import {
   type WorkspaceFs,
 } from "../sandbox";
 import { OrchestratorModeSchema, type OrchestratorMode } from "../deployment";
-import type { InMemoryRectorStore } from "../store/inMemoryRectorStore";
+import type { RectorStore } from "../store";
 import type { Budget, Run, RunEvent } from "../store/schemas";
 
 /**
@@ -163,7 +163,7 @@ export const DEFAULT_EXTERNAL_BUDGET: Budget = {
  *   provider/cost metadata. A configured `ModelRouter` is required (built once at app init).
  */
 export async function runChat(
-  store: InMemoryRectorStore,
+  store: RectorStore,
   args: ChatRunArgs,
   deps: ChatRunnerDeps
 ): Promise<ChatRunResult> {
@@ -181,7 +181,7 @@ export async function runChat(
  * and `createFakePlan` plan source as the original `createFakeChatRun`. The symbolic control plane
  * remains fully in charge: every phase is local and no network call occurs.
  */
-export async function runFakeChatRun(store: InMemoryRectorStore, args: ChatRunArgs): Promise<ChatRunResult> {
+export async function runFakeChatRun(store: RectorStore, args: ChatRunArgs): Promise<ChatRunResult> {
   const { conversationId, userMessageId, prompt, triage, contextPack, observability } = args;
   const options = args.options ?? {};
   const traceId = observability.traceId;
@@ -264,7 +264,7 @@ export async function runFakeChatRun(store: InMemoryRectorStore, args: ChatRunAr
  * exception ever propagates past this function for a budget/provider/validation failure.
  */
 export async function runExternalChatRun(
-  store: InMemoryRectorStore,
+  store: RectorStore,
   args: ChatRunArgs,
   deps: ChatRunnerDeps & { router: ModelRouter }
 ): Promise<ChatRunResult> {
@@ -396,7 +396,7 @@ export async function runExternalChatRun(
 }
 
 interface ExternalPostPlanningParams {
-  store: InMemoryRectorStore;
+  store: RectorStore;
   args: ChatRunArgs;
   run: Run;
   plannerOutput: PlannerOutput;
@@ -623,7 +623,7 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
  * transition, then transitions to `FAILED`. Mirrors {@link resolvePlannerBlocker}.
  */
 async function resolveSkepticBlocker(
-  store: InMemoryRectorStore,
+  store: RectorStore,
   args: ChatRunArgs,
   run: Run,
   blocker: SkepticBlocker,
@@ -772,7 +772,7 @@ function createLiveRepairAgent(deps: { provider: LLMProvider; approvals: Sandbox
 }
 
 interface PostPlanningParams {
-  store: InMemoryRectorStore;
+  store: RectorStore;
   args: ChatRunArgs;
   run: Run;
   plannerOutput: PlannerOutput;
@@ -898,7 +898,7 @@ async function runPostPlanningPhases(params: PostPlanningParams): Promise<ChatRu
  * `BUDGET_DENIED`/`PROVIDER_ERROR`. The blocker is already redacted by the live planner.
  */
 async function resolvePlannerBlocker(
-  store: InMemoryRectorStore,
+  store: RectorStore,
   args: ChatRunArgs,
   run: Run,
   blocker: PlannerBlocker,

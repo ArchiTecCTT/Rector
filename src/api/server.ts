@@ -24,7 +24,7 @@ import {
   type ModelRouter,
 } from "../providers/llm";
 import type { OrchestratorMode } from "../deployment";
-import { InMemoryRectorStore } from "../store/inMemoryRectorStore";
+import { createRectorStore, type PersistenceConfig } from "../store";
 import type { Artifact, Run, RunEvent } from "../store/schemas";
 
 export interface ApiSecurityOptions {
@@ -47,6 +47,14 @@ export interface ApiSecurityOptions {
     mode?: OrchestratorMode;
     router?: ModelRouter;
   };
+  /**
+   * Persistence selection for the Rector store (ORN-39). Forwarded verbatim to
+   * `createRectorStore`, which returns the default in-memory provider-free store when this is
+   * absent or its `driver` is `memory`, a local file-backed SQLite store for `sqlite`, and the
+   * optional hosted TiDB store for `tidb`. Omitting it preserves the pre-Phase-3 in-memory
+   * regression baseline byte-for-byte.
+   */
+  persistence?: PersistenceConfig;
 }
 
 // --- Provider connection-test service (ORN-32) ---
@@ -218,7 +226,10 @@ function requestValidationMessage(error: unknown): string {
 
 export function createApp(manager: TaskManager, securityOptions: ApiSecurityOptions = {}): express.Application {
   const app = express();
-  const rectorStore = new InMemoryRectorStore();
+  // Select the store from the deployment persistence config (ORN-39). When no persistence config
+  // is supplied (or its driver is `memory`), `createRectorStore` returns the default
+  // InMemoryRectorStore, keeping the provider-free path the regression baseline and unchanged.
+  const rectorStore = createRectorStore(securityOptions.persistence);
   app.use(securityHeadersMiddleware);
   app.use(corsMiddleware(securityOptions));
   app.use(chatRateLimitMiddleware(securityOptions));

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { z } from "zod";
-import type { InMemoryRectorStore } from "../store/inMemoryRectorStore";
+import type { RectorStore } from "../store";
 import type { Artifact, Conversation, Message } from "../store/schemas";
 import { truthItemToArtifactHandle, type TruthLibraryReader } from "../memory";
 import { TriageResultSchema, type TriageResult } from "./triage";
@@ -81,7 +81,7 @@ export type ContextMaterialInput = {
 };
 
 export async function createContextMaterial(
-  store: InMemoryRectorStore,
+  store: RectorStore,
   input: ContextMaterialInput
 ): Promise<ContextMaterial> {
   const sizeBytes = Buffer.byteLength(input.content, "utf8");
@@ -137,7 +137,7 @@ export type BuildContextPackInput = {
 };
 
 export async function buildContextPack(
-  _store: InMemoryRectorStore,
+  _store: RectorStore,
   input: BuildContextPackInput
 ): Promise<ContextPack> {
   const materials = input.materials ?? [];
