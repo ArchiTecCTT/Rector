@@ -374,3 +374,317 @@ describe("Property 7: external mode records provider/model/cost on the PLANNING 
     );
   });
 });
+
+/**
+ * Task 9.2 — Control-plane recording and refusal (external chat runner).
+ *
+ * Validates Requirements 9.1–9.8 against `runExternalChatRun` (wired in task 9.1):
+ *   - 9.1 / 9.2: `ProviderCallMetadata` is recorded on the SKEPTIC_REVIEW and
+ *     SYNTHESIZING events whether the live step succeeds, blocks, or falls back.
+ *   - 9.3 / 9.4: a live skeptic blocker terminates the run FAILED, without an
+ *     unhandled throw, and the redacted blocker is recorded on SKEPTIC_REVIEW.
+ *   - 9.5: a live synthesizer provider failure resolves to a deterministic
+ *     fallback answer (run still reaches DONE), without an unhandled throw.
+ *   - 9.6 / 9.7: a healing NEEDS_DECISION outcome terminates the run
+ *     NEEDS_DECISION with the healing result and execution artifacts preserved.
+ *   - 9.6 / 9.8: a healing FAILED outcome terminates the run FAILED with the
+ *     final execution result preserved.
+ *
+ * Everything is in-memory and mock-only: the router returns a scripted spy
+ * provider, the workspace filesystem is injected via `fsImpl`, and the live
+ * repair agent is injected — so no API key, real network, or real disk is used.
+ */
+import nodePath from "node:path";
+import { createWorkspaceFs, makeNoRepairAgent } from "./support/byokArbitraries";
+import type { SandboxApproval, WorkspaceFs } from "../src/sandbox";
+
+/** Absolute, host-appropriate workspace root for the file-operation fixtures. */
+const CHAT_RUNNER_WORKSPACE_ROOT = nodePath.resolve("chat-runner-fixture-root");
+
+/**
+ * A deterministic, schema-valid plan whose single task compiles to a
+ * `FILE_OPERATION` DAG node (its title contains "edit"/"file"), mapped by the
+ * safe executor to a `PROPOSE_PATCH` against the safe relative path
+ * `src/app.ts`. With no matching `FILE_WRITE` approval the patch resolves to
+ * `NEEDS_APPROVAL` → a `PERMISSION` failure → healing `NEEDS_DECISION`. With an
+ * approval but a write-failing `fsImpl` it surfaces as a non-permission failure
+ * the repair agent cannot resolve → healing `FAILED`.
+ */
+const FILE_OPERATION_PLAN = PlannerOutputSchema.parse({
+  goal: "Edit the application source file to fix a defect",
+  assumptions: ["The defect is isolated to a single source file."],
+  tasks: [
+    {
+      id: "edit.source",
+      title: "Edit source file src/app.ts",
+      description: "Apply a small code change to the source file to fix the defect.",
+      dependencies: [],
+      expectedArtifacts: ["src/app.ts"],
+      validation: ["The edited file compiles"],
+      risk: "low",
+      approvalRequired: false,
+    },
+  ],
+  dependencies: [],
+  validation: { summary: "Single-file edit plan", checks: ["Confirm the change compiles"] },
+  riskLevel: "low",
+  approvalGates: [],
+});
+
+/** Scripted skeptic draft that yields a SOUND review so the crucible ACCEPTS. */
+const SOUND_SKEPTIC_DRAFT = skepticDraftToJson({ verdict: "SOUND", findings: [] });
+
+/** Scripted synthesizer draft with one execution-evidence citation. */
+const CITED_SYNTHESIS_DRAFT = synthesisDraftToJson({
+  response: "Completed the task; see cited evidence for details.",
+  citations: [{ kind: "artifact", ref: "task:answer.synthesize", detail: "no-op execution node succeeded" }],
+});
+
+/** Finds the first event of `phase` whose payload carries a `providerCall`. */
+function findProviderCallEvent(
+  events: Array<{ phase: string; payload: unknown }>,
+  phase: string,
+): Record<string, unknown> | undefined {
+  const event = events.find(
+    (candidate) => candidate.phase === phase && (candidate.payload as Record<string, unknown>)[PROVIDER_CALL_KEY] !== undefined,
+  );
+  return event ? ((event.payload as Record<string, unknown>)[PROVIDER_CALL_KEY] as Record<string, unknown>) : undefined;
+}
+
+/** Finds the first event of `phase` (any payload). */
+function findEvent(
+  events: Array<{ phase: string; payload: unknown }>,
+  phase: string,
+): Record<string, unknown> | undefined {
+  const event = events.find((candidate) => candidate.phase === phase);
+  return event ? (event.payload as Record<string, unknown>) : undefined;
+}
+
+describe("Task 9.2: external control-plane recording and refusal", () => {
+  // Req 9.1 / 9.2: a fully successful external run records ProviderCallMetadata on
+  // BOTH the SKEPTIC_REVIEW and SYNTHESIZING events (alongside the PLANNING event).
+  it("records ProviderCallMetadata on the SKEPTIC_REVIEW and SYNTHESIZING events", async () => {
+    const store = new InMemoryRectorStore();
+    const args = await buildArgs(store, "Explain the deterministic orchestration pipeline.");
+
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [
+        { content: planToJson(NON_FILE_OPERATION_PLAN) },
+        { content: SOUND_SKEPTIC_DRAFT },
+        { content: CITED_SYNTHESIS_DRAFT },
+      ],
+    });
+
+    const { run } = await runChat(store, args, {
+      mode: "external",
+      router: spyRouter(provider),
+      budget: generousBudget({ maxUsd: 10_000 }),
+    });
+
+    expect(run.phase).toBe("DONE");
+    expect(run.status).toBe("completed");
+    expect(provider.invokeCount).toBe(3);
+
+    const events = await store.listEvents(run.id);
+
+    // SKEPTIC_REVIEW carries the skeptic's provider/model/cost metadata (Req 9.1).
+    const skepticCall = findProviderCallEvent(events, "SKEPTIC_REVIEW");
+    expect(skepticCall).toBeDefined();
+    expect(skepticCall!.mode).toBe("external");
+    expect(skepticCall!.provider).toBe(provider.metadata.id);
+    expect(skepticCall!.model).toBe(provider.metadata.models.flagship);
+    expect(skepticCall!.modelRoute).toBe("flagship");
+
+    // SYNTHESIZING carries the synthesizer's provider/model/cost metadata (Req 9.2).
+    const synthCall = findProviderCallEvent(events, "SYNTHESIZING");
+    expect(synthCall).toBeDefined();
+    expect(synthCall!.mode).toBe("external");
+    expect(synthCall!.provider).toBe(provider.metadata.id);
+    expect(synthCall!.model).toBe(provider.metadata.models.flagship);
+    expect(synthCall!.modelRoute).toBe("flagship");
+  });
+
+  // Req 9.3 / 9.4: a live skeptic blocker terminates the run FAILED — without an
+  // unhandled throw — and records the redacted blocker plus ProviderCallMetadata
+  // on the SKEPTIC_REVIEW event.
+  it("terminates the run FAILED when the live skeptic returns a blocker, without throwing", async () => {
+    const store = new InMemoryRectorStore();
+    const args = await buildArgs(store, "Add pagination to the /users endpoint and update the tests.");
+
+    // Planner succeeds; the skeptic provider call throws → PROVIDER_ERROR blocker.
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [
+        { content: planToJson(NON_FILE_OPERATION_PLAN) },
+        { error: new Error("skeptic upstream returned 503") },
+      ],
+    });
+
+    const result = await runChat(store, args, {
+      mode: "external",
+      router: spyRouter(provider),
+      budget: generousBudget({ maxUsd: 10_000 }),
+    });
+
+    // Req 9.3: terminal FAILED rather than an unhandled error.
+    expect(result.run.phase).toBe("FAILED");
+    expect(result.run.status).toBe("failed");
+    // Skeptic was invoked once (planner #1, skeptic #2); the synthesizer never ran.
+    expect(provider.invokeCount).toBe(2);
+
+    const events = await store.listEvents(result.run.id);
+
+    // The SKEPTIC_REVIEW event carries the (redacted) blocker and the skeptic metadata (Req 9.1/9.4).
+    const skepticEvent = events.find(
+      (event) => event.phase === "SKEPTIC_REVIEW" && (event.payload as Record<string, unknown>).blocker !== undefined,
+    );
+    expect(skepticEvent).toBeDefined();
+    const blocker = (skepticEvent!.payload as Record<string, unknown>).blocker as { code: string; message: string };
+    expect(blocker.code).toBe("PROVIDER_ERROR");
+    expect((skepticEvent!.payload as Record<string, unknown>)[PROVIDER_CALL_KEY]).toBeDefined();
+
+    // No SYNTHESIZING provider metadata was recorded because the run never synthesized.
+    expect(findProviderCallEvent(events, "SYNTHESIZING")).toBeUndefined();
+  });
+
+  // Req 9.5: a live synthesizer provider failure resolves to the deterministic
+  // fallback answer (run still reaches DONE), without an unhandled throw.
+  it("falls back to a deterministic synthesis when the synthesizer provider fails, without throwing", async () => {
+    const store = new InMemoryRectorStore();
+    const args = await buildArgs(store, "What is Rector and how does it work?");
+
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [
+        { content: planToJson(NON_FILE_OPERATION_PLAN) },
+        { content: SOUND_SKEPTIC_DRAFT },
+        { error: new Error("synthesizer upstream returned 500") },
+      ],
+    });
+
+    const { run, synthesis } = await runChat(store, args, {
+      mode: "external",
+      router: spyRouter(provider),
+      budget: generousBudget({ maxUsd: 10_000 }),
+    });
+
+    // The synthesizer failure was absorbed into a fallback: the run still completes.
+    expect(run.phase).toBe("DONE");
+    expect(run.status).toBe("completed");
+    expect(provider.invokeCount).toBe(3);
+    expect(synthesis).toBeDefined();
+    expect(synthesis.response.length).toBeGreaterThan(0);
+
+    // ProviderCallMetadata is still recorded on SYNTHESIZING even on a fallback (Req 9.2).
+    const events = await store.listEvents(run.id);
+    expect(findProviderCallEvent(events, "SYNTHESIZING")).toBeDefined();
+  });
+
+  // Req 9.6 / 9.7: a healing NEEDS_DECISION outcome terminates the run
+  // NEEDS_DECISION with the healing result and execution artifacts preserved.
+  it("terminates the run NEEDS_DECISION when healing requires a decision, preserving artifacts", async () => {
+    const store = new InMemoryRectorStore();
+    const args = await buildArgs(store, "Fix the TypeScript bug in src/app.ts and update tests.");
+
+    // Planner emits a FILE_OPERATION plan; the skeptic is SOUND so the crucible
+    // ACCEPTS and the DAG compiles. With NO approval, the PROPOSE_PATCH resolves
+    // to NEEDS_APPROVAL → a PERMISSION failure → healing NEEDS_DECISION (the
+    // injected repair agent is never consulted for a permission failure).
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [{ content: planToJson(FILE_OPERATION_PLAN) }, { content: SOUND_SKEPTIC_DRAFT }],
+    });
+    const noRepair = makeNoRepairAgent();
+
+    const { run } = await runChat(store, args, {
+      mode: "external",
+      router: spyRouter(provider),
+      budget: generousBudget({ maxUsd: 10_000 }),
+      workspaceRoot: CHAT_RUNNER_WORKSPACE_ROOT,
+      fsImpl: createWorkspaceFs({ root: CHAT_RUNNER_WORKSPACE_ROOT }),
+      allowlistedCommands: [],
+      approvals: [],
+      repairAgent: noRepair.agent,
+    });
+
+    // Req 9.7: terminal NEEDS_DECISION, no synthesizer call.
+    expect(run.phase).toBe("NEEDS_DECISION");
+    expect(run.status).toBe("needs_decision");
+    expect(provider.invokeCount).toBe(2);
+
+    const events = await store.listEvents(run.id);
+    const decisionPayload = findEvent(events, "NEEDS_DECISION");
+    expect(decisionPayload).toBeDefined();
+
+    // The healing result is preserved and reports the decision outcome (Req 9.7).
+    const healing = decisionPayload!.validationHealingResult as { status: string } | undefined;
+    expect(healing?.status).toBe("NEEDS_DECISION");
+
+    // Execution artifacts are preserved on the terminal event (Req 9.7).
+    const artifacts = decisionPayload!.executionArtifacts;
+    expect(Array.isArray(artifacts)).toBe(true);
+    expect((artifacts as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  // Req 9.6 / 9.8: a healing FAILED outcome terminates the run FAILED with the
+  // final execution result and node results preserved.
+  it("terminates the run FAILED when healing exhausts, preserving the final execution result", async () => {
+    const store = new InMemoryRectorStore();
+    const args = await buildArgs(store, "Fix the TypeScript bug in src/app.ts and update tests.");
+
+    // An approved PROPOSE_PATCH whose underlying write throws surfaces as a
+    // non-permission node failure; the no-repair agent offers no safe patch, so
+    // the bounded healing loop terminates FAILED (req 5.9) → run FAILED.
+    const baseFs = createWorkspaceFs({ root: CHAT_RUNNER_WORKSPACE_ROOT });
+    const writeFailingFs: WorkspaceFs = {
+      realpathSync: (path) => baseFs.realpathSync(path),
+      readFileSync: (path) => baseFs.readFileSync(path),
+      readdirSync: (path) => baseFs.readdirSync(path),
+      writeFileSync: () => {
+        throw new Error("workspace disk write failed (injected)");
+      },
+    };
+    const approvals: SandboxApproval[] = [
+      { id: "approval:file-write:src/app.ts", scope: "FILE_WRITE", target: "src/app.ts", approvedBy: "test" },
+    ];
+
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [{ content: planToJson(FILE_OPERATION_PLAN) }, { content: SOUND_SKEPTIC_DRAFT }],
+    });
+    const noRepair = makeNoRepairAgent();
+
+    const { run } = await runChat(store, args, {
+      mode: "external",
+      router: spyRouter(provider),
+      budget: generousBudget({ maxUsd: 10_000 }),
+      workspaceRoot: CHAT_RUNNER_WORKSPACE_ROOT,
+      fsImpl: writeFailingFs,
+      allowlistedCommands: [],
+      approvals,
+      repairAgent: noRepair.agent,
+    });
+
+    // Req 9.8: terminal FAILED, no synthesizer call.
+    expect(run.phase).toBe("FAILED");
+    expect(run.status).toBe("failed");
+    expect(provider.invokeCount).toBe(2);
+
+    const events = await store.listEvents(run.id);
+    const failedPayload = findEvent(events, "FAILED");
+    expect(failedPayload).toBeDefined();
+
+    // The healing result and the final execution result (with node results) are
+    // preserved on the terminal FAILED event (Req 9.8).
+    const healing = failedPayload!.validationHealingResult as
+      | { status: string; finalExecutionResult: { status: string; nodeResults: unknown[] } }
+      | undefined;
+    expect(healing?.status).toBe("FAILED");
+    expect(healing?.finalExecutionResult.status).toBe("FAILED");
+    expect(Array.isArray(healing?.finalExecutionResult.nodeResults)).toBe(true);
+    expect((healing!.finalExecutionResult.nodeResults as unknown[]).length).toBeGreaterThan(0);
+    // The execution-artifacts array is present on the terminal event (preserved, even when empty).
+    expect(Array.isArray(failedPayload!.executionArtifacts)).toBe(true);
+  });
+});
