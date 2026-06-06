@@ -65,6 +65,7 @@ const liveRun = {
   traceId: null,
   events: [],
   eventIds: new Set(),
+  cost: null, // latest RunCostAggregate from a `cost` SSE frame (cumulative, replace-not-accumulate)
   source: null, // EventSource
   pollTimer: null,
   closed: true,
@@ -101,6 +102,14 @@ function cacheEls() {
     "obs-duration",
     "obs-calls",
     "obs-cost",
+    "cost-section",
+    "cost-usd",
+    "cost-total-tokens",
+    "cost-input-tokens",
+    "cost-output-tokens",
+    "cost-model-calls",
+    "cost-providers",
+    "cost-models",
     "timeline",
     "decision-section",
     "decision-card",
@@ -326,9 +335,11 @@ function beginLiveRun({ runId, traceId }) {
   liveRun.traceId = traceId || null;
   liveRun.events = [];
   liveRun.eventIds = new Set();
+  liveRun.cost = null;
   liveRun.source = null;
   liveRun.pollTimer = null;
   liveRun.closed = false;
+  resetCostPanel(); // a fresh run must never show the previous run's totals
 }
 
 // Close the EventSource and clear the poll timer so neither transport keeps running. Idempotent.
@@ -377,6 +388,57 @@ function renderLiveTimeline() {
   renderEvents(events);
 }
 
+// --- Live cost / token panel (ORN-41) ---
+
+// Format a USD estimate. BYOK per-run costs are small, so keep 4 decimals for a stable readout.
+function formatUsd(value) {
+  const n = Number(value);
+  return `$${(Number.isFinite(n) ? n : 0).toFixed(4)}`;
+}
+
+// Format an integer token/count with thousands separators; non-numeric inputs read as 0.
+function formatCount(value) {
+  const n = Number(value);
+  return (Number.isFinite(n) ? n : 0).toLocaleString();
+}
+
+// Format a string list (providers/models) as a comma-separated readout, or an em dash when empty.
+function formatList(values) {
+  return Array.isArray(values) && values.length ? values.join(", ") : "—";
+}
+
+// Reset and hide the cost panel (new run begins or conversation switches) so no stale total shows.
+function resetCostPanel() {
+  if (els["cost-section"]) els["cost-section"].hidden = true;
+  if (els["cost-usd"]) els["cost-usd"].textContent = "$0.0000";
+  if (els["cost-total-tokens"]) els["cost-total-tokens"].textContent = "0";
+  if (els["cost-input-tokens"]) els["cost-input-tokens"].textContent = "0";
+  if (els["cost-output-tokens"]) els["cost-output-tokens"].textContent = "0";
+  if (els["cost-model-calls"]) els["cost-model-calls"].textContent = "0";
+  if (els["cost-providers"]) els["cost-providers"].textContent = "—";
+  if (els["cost-models"]) els["cost-models"].textContent = "—";
+}
+
+// Render a RunCostAggregate into the cost panel. Each aggregate is the cumulative running total, so
+// values are replaced, not accumulated. Defensive against missing fields.
+function renderCostPanel(cost) {
+  if (!cost || typeof cost !== "object") return;
+  if (els["cost-section"]) els["cost-section"].hidden = false;
+  if (els["cost-usd"]) els["cost-usd"].textContent = formatUsd(cost.estimatedUsd);
+  if (els["cost-total-tokens"]) els["cost-total-tokens"].textContent = formatCount(cost.totalTokens);
+  if (els["cost-input-tokens"]) els["cost-input-tokens"].textContent = formatCount(cost.inputTokens);
+  if (els["cost-output-tokens"]) els["cost-output-tokens"].textContent = formatCount(cost.outputTokens);
+  if (els["cost-model-calls"]) els["cost-model-calls"].textContent = formatCount(cost.modelCalls);
+  if (els["cost-providers"]) els["cost-providers"].textContent = formatList(cost.providers);
+  if (els["cost-models"]) els["cost-models"].textContent = formatList(cost.models);
+}
+
+// Apply a `cost` SSE frame's aggregate to the panel while the run is live.
+function applyCostFrame(cost) {
+  if (!cost || liveRun.closed) return;
+  liveRun.cost = cost;
+  renderCostPanel(cost);
+}
 // Stream a run to completion. Opens an EventSource and applies `run-event` frames to the timeline,
 // closing on a `done`/`error` frame. If `EventSource` is unavailable or the stream errors, falls
 // back to polling the events endpoint every 2s until a Terminal_Phase (Requirement 2.8). Resolves
@@ -445,8 +507,17 @@ function streamRun({ runId }) {
       finishTerminal(phase);
     });
 
-    // Unknown frame types (e.g. `cost`, landing with task 11.2/12.1) are intentionally not handled
-    // here, so they are ignored gracefully without breaking the stream.
+    // `cost` frames carry the current cumulative RunCostAggregate; apply the latest to the panel.
+    source.addEventListener("cost", (e) => {
+      try {
+        const frame = JSON.parse(e.data); // { type, runId, cost }
+        if (frame && frame.cost) applyCostFrame(frame.cost);
+      } catch {
+        /* ignore malformed frame */
+      }
+    });
+
+    // Any other unknown frame types are ignored gracefully without breaking the stream.
 
     // `onerror` fires both for transport failures and for the normal server close after `done`.
     // If the run already finished, ignore it; otherwise the stream errored mid-run, so per
@@ -498,6 +569,16 @@ async function finalizeRun({ conversationId, runId, pending, phase }) {
   const assistant = await findAssistantMessage(conversationId, runId);
   pending.remove();
 
+  // Fetch the authoritative final cost aggregate so the panel shows the correct final total even if
+  // the last live `cost` frame was missed (e.g. on the polling fallback). Defensive: a missing
+  // endpoint or payload must not break finalize — we keep whatever the last live frame rendered.
+  try {
+    const cost = await api(`/runs/${runId}/cost`);
+    if (cost && typeof cost === "object") renderCostPanel(cost);
+  } catch {
+    if (liveRun.cost) renderCostPanel(liveRun.cost);
+  }
+
   // Observability/cost panel population is handled by tasks 11.2 / 12.1; the events endpoint does
   // not carry the in-process observability summary, so the cost stats stay at their defaults here.
   const result = { run: run || { phase, traceId: liveRun.traceId }, events };
@@ -523,6 +604,7 @@ async function sendMessage(content) {
   if (!trimmed) return;
 
   teardownLiveRun(); // clean up any previous in-flight stream
+  resetCostPanel(); // a new send starts with no cost shown until frames/finalize arrive
   els["composer-send"].disabled = true;
   renderMessage("user", trimmed);
   const pending = renderMessage("assistant", "Running local pipeline…", { pending: true });
@@ -598,6 +680,7 @@ function toggleTrace() {
 
 function resetTrace() {
   teardownLiveRun(); // stop any in-flight stream/poll when switching away
+  resetCostPanel(); // clear any prior run's cost totals so a new/empty trace shows none
   els["trace-empty"].hidden = false;
   els["trace-body"].hidden = true;
 }

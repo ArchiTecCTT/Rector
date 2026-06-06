@@ -152,6 +152,43 @@
             </div>
           </section>
 
+          <!-- Live cost / token panel (ORN-41) -->
+          <section class="trace-section cost-panel" id="cost-section" hidden>
+            <h3 class="trace-section__title">Cost &amp; tokens</h3>
+            <div class="cost-grid">
+              <div class="cost-stat cost-stat--accent">
+                <span class="cost-stat__value" id="cost-usd">$0.0000</span>
+                <span class="cost-stat__label">estimated</span>
+              </div>
+              <div class="cost-stat">
+                <span class="cost-stat__value" id="cost-total-tokens">0</span>
+                <span class="cost-stat__label">total tokens</span>
+              </div>
+              <div class="cost-stat">
+                <span class="cost-stat__value" id="cost-input-tokens">0</span>
+                <span class="cost-stat__label">input tokens</span>
+              </div>
+              <div class="cost-stat">
+                <span class="cost-stat__value" id="cost-output-tokens">0</span>
+                <span class="cost-stat__label">output tokens</span>
+              </div>
+              <div class="cost-stat">
+                <span class="cost-stat__value" id="cost-model-calls">0</span>
+                <span class="cost-stat__label">model calls</span>
+              </div>
+            </div>
+            <div class="cost-meta">
+              <div class="cost-meta__row">
+                <span class="cost-meta__k">Providers</span>
+                <span class="cost-meta__v" id="cost-providers">—</span>
+              </div>
+              <div class="cost-meta__row">
+                <span class="cost-meta__k">Models</span>
+                <span class="cost-meta__v" id="cost-models">—</span>
+              </div>
+            </div>
+          </section>
+
           <!-- Phase timeline -->
           <section class="trace-section">
             <h3 class="trace-section__title">Phase timeline</h3>

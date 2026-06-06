@@ -613,6 +613,79 @@ body {
   letter-spacing: 0.05em;
 }
 
+/* --- Live cost / token panel (ORN-41) --- */
+.cost-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* The estimated-cost tile spans the full row so it reads as the headline figure. */
+.cost-stat--accent {
+  grid-column: 1 / -1;
+}
+
+.cost-stat {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cost-stat--accent {
+  border-color: var(--accent-dim);
+  background: rgba(110, 168, 254, 0.08);
+}
+
+.cost-stat__value {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cost-stat--accent .cost-stat__value {
+  color: var(--accent);
+  font-size: 19px;
+}
+
+.cost-stat__label {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.cost-meta {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cost-meta__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.cost-meta__k {
+  color: var(--text-dim);
+  flex: none;
+}
+
+.cost-meta__v {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  text-align: right;
+  word-break: break-word;
+}
+
 /* --- Phase timeline --- */
 .timeline {
   list-style: none;
