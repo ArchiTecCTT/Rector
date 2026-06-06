@@ -29,8 +29,10 @@ import { resolveWithinWorkspace, WorkspaceSandboxAdapter, type CommandRunner } f
 import {
   ALLOWLISTED_COMMANDS,
   arbAdversarialPathCase,
+  arbAllowlistedCommand,
   arbDestructiveCommand,
   arbSafeRelativePathCase,
+  arbShellMetacharacterCommand,
   arbSymlinkEscapeCase,
   arbWorkspacePathCase,
   createWorkspaceFs,
@@ -236,6 +238,105 @@ describe("Property 3: destructive commands are always blocked", () => {
           expect(result.resolvedPath).toBeUndefined();
         },
       ),
+      { numRuns: 500 },
+    );
+  });
+});
+
+/**
+ * Property 4: Arbitrary shell is denied by default.
+ *
+ * Validates: Requirements 4.1
+ *
+ * Arbitrary shell execution is refused by `WorkspaceSandboxAdapter.operate`
+ * before any process is spawned. A `RUN_COMMAND` is treated as an arbitrary
+ * shell request in two ways: an explicit shell kind carried on the operation
+ * metadata (`metadata.kind === "shell"` or `metadata.shell === true`), or a
+ * command string containing shell metacharacters (`;`, `|`, `&`, `$(...)`,
+ * backticks, redirects, globs, ...). The design invariant asserted here is:
+ *
+ *   ∀ RUN_COMMAND operation o that requests shell interpretation
+ *   (explicit shell kind ∨ shell metacharacters in the command string):
+ *     operate(o) ⟹ status = "DENIED"
+ *                ∧ denialReason = "ARBITRARY_SHELL_DISABLED"
+ *                ∧ the injected command runner ran 0 times (no process spawned)
+ *                ∧ no resolved path is leaked
+ *                ∧ networkCalls = 0.
+ *
+ * The explicit-shell channel uses commands whose program token is on the
+ * allowlist, so denial is driven solely by the shell request ("denied by
+ * default") and not by allowlist membership. A counting `CommandRunner` double
+ * is injected so the "spawn no process" guarantee (Req 4.1) is directly
+ * observable.
+ */
+describe("Property 4: arbitrary shell is denied by default", () => {
+  // Validates: Requirement 4.1 — an explicit shell-kind request is denied even
+  // when the underlying program is otherwise allowlisted.
+  it("denies any explicit shell-kind operation with ARBITRARY_SHELL_DISABLED and never spawns a process", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        arbAllowlistedCommand(),
+        // Both ways the design signals an explicit shell invocation.
+        fc.constantFrom<Record<string, unknown>>({ kind: "shell" }, { shell: true }),
+        async (commandCase, shellMetadata) => {
+          const counting = createCountingCommandRunner();
+          const adapter = new WorkspaceSandboxAdapter({
+            workspaceRoot: WORKSPACE_ROOT,
+            // Fully allowlisted: only the shell request can cause the denial.
+            allowlistedCommands: [...ALLOWLISTED_COMMANDS],
+            commandRunner: counting.runner,
+            now: () => "2026-01-01T00:00:00.000Z",
+          });
+
+          const result = await adapter.operate({
+            kind: "RUN_COMMAND",
+            command: commandCase.command,
+            args: commandCase.args,
+            metadata: shellMetadata,
+          });
+
+          // Req 4.1: arbitrary shell is denied by default.
+          expect(result.status).toBe("DENIED");
+          expect(result.denialReason).toBe("ARBITRARY_SHELL_DISABLED");
+          // Req 4.1: no process is spawned — the injected runner ran 0 times.
+          expect(counting.calls).toBe(0);
+          // The denied result is contained and network-free; no resolved path leaks.
+          expect(result.networkCalls).toBe(0);
+          expect(result.resolvedPath).toBeUndefined();
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
+
+  // Validates: Requirement 4.1 — a command string carrying shell metacharacters
+  // is treated as an arbitrary shell request and denied.
+  it("denies any command string carrying shell metacharacters with ARBITRARY_SHELL_DISABLED and never spawns a process", async () => {
+    await fc.assert(
+      fc.asyncProperty(arbShellMetacharacterCommand(), async (commandCase) => {
+        const counting = createCountingCommandRunner();
+        const adapter = new WorkspaceSandboxAdapter({
+          workspaceRoot: WORKSPACE_ROOT,
+          allowlistedCommands: [...ALLOWLISTED_COMMANDS],
+          commandRunner: counting.runner,
+          now: () => "2026-01-01T00:00:00.000Z",
+        });
+
+        const result = await adapter.operate({
+          kind: "RUN_COMMAND",
+          command: commandCase.command,
+          args: commandCase.args,
+        });
+
+        // Req 4.1: a metacharacter-laced command implies shell interpretation
+        // and is denied.
+        expect(result.status).toBe("DENIED");
+        expect(result.denialReason).toBe("ARBITRARY_SHELL_DISABLED");
+        // Req 4.1: no process is spawned — the injected runner ran 0 times.
+        expect(counting.calls).toBe(0);
+        expect(result.networkCalls).toBe(0);
+        expect(result.resolvedPath).toBeUndefined();
+      }),
       { numRuns: 500 },
     );
   });
