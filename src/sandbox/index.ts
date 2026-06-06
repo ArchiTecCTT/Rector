@@ -2,6 +2,8 @@ import nodeFs from "node:fs";
 import nodePath from "node:path";
 import { z } from "zod";
 
+import { redactSecrets, redactString } from "../security/redaction";
+
 export const SANDBOX_ADAPTER_API_VERSION = "rector.sandbox.v1alpha1";
 
 export const SandboxCommandKindSchema = z.enum(["fake", "local", "shell"]);
@@ -159,7 +161,7 @@ export interface WorkspaceFs {
   readFileSync(path: string): string;
   readdirSync(path: string): string[];
   writeFileSync(path: string, data: string): void;
-  existsSync(path: string): boolean;
+  existsSync?(path: string): boolean;
 }
 
 export type ResolveWithinWorkspaceResult =
@@ -556,4 +558,432 @@ function recordFrom(value: unknown): Record<string, unknown> | undefined {
     return value as Record<string, unknown>;
   }
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Workspace sandbox adapter (ORN-37)
+// ---------------------------------------------------------------------------
+
+/** Default command timeout (60s) applied when an operation omits `timeoutMs`. */
+export const WORKSPACE_COMMAND_TIMEOUT_MS = 60_000;
+
+/** Hard upper bound (256 KiB) on each captured stdout/stderr stream. */
+export const MAX_CAPTURED_STREAM_BYTES = 262_144;
+
+/** Result returned by an injected {@link CommandRunner}. */
+export interface CommandRunResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  /** True when the runner terminated the process because it exceeded the timeout. */
+  timedOut?: boolean;
+}
+
+/**
+ * Injectable command runner. Receives an already-validated (allowlisted,
+ * non-shell, non-destructive, approved) command plus the contained working
+ * directory and the enforced timeout, and returns the captured streams. Tests
+ * inject a deterministic/counting double so no real process is ever spawned and
+ * the "ran 0 times" denial invariants are observable.
+ */
+export type CommandRunner = (input: {
+  command: string;
+  args: string[];
+  cwd: string;
+  timeoutMs: number;
+}) => Promise<CommandRunResult>;
+
+export interface WorkspaceSandboxOptions {
+  /** Absolute workspace root; the containment boundary for every operation. */
+  workspaceRoot: string;
+  /** Commands permitted for `RUN_COMMAND` (exact match). Defaults to none. */
+  allowlistedCommands?: string[];
+  /**
+   * Commands that, even when allowlisted, require a matching `COMMAND`
+   * approval before they run. Read-only/idempotent commands are not risky and
+   * run without an approval. Defaults to none.
+   */
+  riskyCommands?: string[];
+  /** Explicit approvals authorizing risky writes/commands. */
+  approvals?: SandboxApproval[];
+  now?: () => string;
+  /** Injected filesystem surface; defaults to `node:fs`. */
+  fsImpl?: WorkspaceFs;
+  /** Injected command runner; defaults to a deterministic local stub. */
+  commandRunner?: CommandRunner;
+}
+
+/**
+ * Deterministic, network-free default command runner. Real subprocess
+ * execution is wired up by the DAG-to-sandbox bridge (a later task); here a
+ * command that has already cleared every policy gate reports a contained
+ * success so the local default never spawns a process or touches the network.
+ */
+const defaultCommandRunner: CommandRunner = async ({ command, args }) => ({
+  exitCode: 0,
+  stdout: `${[command, ...args].join(" ").trim()} completed`,
+  stderr: "",
+});
+
+const defaultWorkspaceFs: WorkspaceFs = {
+  realpathSync: (p) => nodeFs.realpathSync(p),
+  readFileSync: (p) => nodeFs.readFileSync(p, "utf8"),
+  readdirSync: (p) => nodeFs.readdirSync(p),
+  writeFileSync: (p, data) => nodeFs.writeFileSync(p, data, "utf8"),
+  existsSync: (p) => nodeFs.existsSync(p),
+};
+
+/**
+ * Workspace-anchored sandbox adapter (ORN-37). Funnels every file and command
+ * operation through `resolveWithinWorkspace` and a command allowlist /
+ * destructive-denylist / approval gate before any I/O, captures and redacts
+ * stdout/stderr/file content, and never performs network access.
+ */
+export class WorkspaceSandboxAdapter implements SandboxAdapter {
+  readonly metadata: SandboxProviderMetadata;
+  private readonly workspaceRoot: string;
+  private readonly allowlistedCommands: string[];
+  private readonly riskyCommands: string[];
+  private readonly approvals: SandboxApproval[];
+  private readonly now: () => string;
+  private readonly fsImpl: WorkspaceFs;
+  private readonly commandRunner: CommandRunner;
+
+  constructor(options: WorkspaceSandboxOptions) {
+    this.workspaceRoot = options.workspaceRoot;
+    this.allowlistedCommands = options.allowlistedCommands ?? [];
+    this.riskyCommands = options.riskyCommands ?? [];
+    this.approvals = options.approvals ?? [];
+    this.now = options.now ?? (() => new Date().toISOString());
+    this.fsImpl = options.fsImpl ?? defaultWorkspaceFs;
+    this.commandRunner = options.commandRunner ?? defaultCommandRunner;
+    this.metadata = SandboxProviderMetadataSchema.parse({
+      id: "workspace",
+      name: "Workspace Sandbox",
+      apiVersion: SANDBOX_ADAPTER_API_VERSION,
+      localOnly: true,
+      networkAccess: false,
+      arbitraryShell: false,
+      supportedCommands: [...this.allowlistedCommands],
+      stub: false,
+    });
+  }
+
+  /**
+   * Bridges the legacy `SandboxAdapter.execute` contract onto `operate`: a
+   * command invocation maps to a `RUN_COMMAND` operation. The richer entry
+   * point is `operate`.
+   */
+  async execute(commandInput: SandboxCommandInput): Promise<SandboxExecutionResult> {
+    const command = SandboxCommandSchema.parse(commandInput);
+    const startedAt = this.safeNow();
+    const result = await this.operate({
+      kind: "RUN_COMMAND",
+      command: command.command,
+      args: command.args,
+      timeoutMs: command.timeoutMs,
+      metadata: command.kind === "shell" ? { kind: "shell" } : {},
+    });
+    const completedAt = this.safeNow();
+    return SandboxExecutionResultSchema.parse({
+      adapter: this.metadata,
+      status: result.status,
+      exitCode: result.status === "SUCCEEDED" ? 0 : 126,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      startedAt,
+      completedAt,
+      durationMs: durationMs(startedAt, completedAt),
+      networkCalls: 0,
+      artifacts: result.artifacts,
+      approvalGates: result.approvalGates,
+      metadata: result.denialReason ? { deniedReason: result.denialReason } : {},
+    });
+  }
+
+  async operate(operationInput: SandboxOperationInput): Promise<SandboxOperationResult> {
+    const operation = SandboxOperationSchema.parse(operationInput);
+    const startedAt = this.safeNow();
+
+    if (operation.kind === "RUN_COMMAND") {
+      return this.runCommand(operation, startedAt);
+    }
+
+    // READ_FILE / LIST_DIR / PROPOSE_PATCH share the containment gate.
+    const candidatePath = operation.path ?? "";
+    const resolved = resolveWithinWorkspace(this.workspaceRoot, candidatePath, this.fsImpl);
+    if (!resolved.ok) {
+      return this.denied(operation.kind, resolved.reason, startedAt);
+    }
+
+    if (operation.kind === "READ_FILE") {
+      const content = redactString(this.fsImpl.readFileSync(resolved.absolutePath));
+      return this.result({
+        kind: operation.kind,
+        status: "SUCCEEDED",
+        startedAt,
+        resolvedPath: resolved.absolutePath,
+        fileContent: content,
+      });
+    }
+
+    if (operation.kind === "LIST_DIR") {
+      const entries = this.fsImpl.readdirSync(resolved.absolutePath);
+      return this.result({
+        kind: operation.kind,
+        status: "SUCCEEDED",
+        startedAt,
+        resolvedPath: resolved.absolutePath,
+        entries,
+      });
+    }
+
+    // PROPOSE_PATCH — never writes without a matching FILE_WRITE approval.
+    return this.proposePatch(operation, resolved.absolutePath, startedAt);
+  }
+
+  private proposePatch(operation: SandboxOperation, absolutePath: string, startedAt: string): SandboxOperationResult {
+    const targetPath = operation.path as string;
+    const operationKind = operation.operation ?? "update";
+    const content = operation.content ?? "";
+    const approved = this.hasApproval("FILE_WRITE", targetPath, absolutePath);
+
+    const gate = ApprovalGateSchema.parse({
+      id: `approval:file-write:${targetPath}`,
+      type: "FILE_WRITE",
+      required: true,
+      approved,
+      reason: FILE_WRITE_APPROVAL_REASON,
+      metadata: { path: targetPath, operation: operationKind },
+    });
+    const artifact = redactSecrets(
+      PatchArtifactSchema.parse({
+        kind: "PATCH",
+        id: `patch:${stableId(targetPath)}`,
+        path: targetPath,
+        operation: operationKind,
+        unifiedDiff: unifiedDiffFor(targetPath, content, operationKind),
+        createdAt: startedAt,
+        approval: { required: true, approved },
+        metadata: { applied: approved, workspaceSandbox: true },
+      }),
+    );
+
+    if (!approved) {
+      return this.result({
+        kind: "PROPOSE_PATCH",
+        status: "NEEDS_APPROVAL",
+        denialReason: "NEEDS_APPROVAL",
+        startedAt,
+        resolvedPath: absolutePath,
+        artifacts: [artifact],
+        approvalGates: [gate],
+      });
+    }
+
+    this.fsImpl.writeFileSync(absolutePath, content);
+    return this.result({
+      kind: "PROPOSE_PATCH",
+      status: "SUCCEEDED",
+      startedAt,
+      resolvedPath: absolutePath,
+      artifacts: [artifact],
+      approvalGates: [gate],
+    });
+  }
+
+  private async runCommand(operation: SandboxOperation, startedAt: string): Promise<SandboxOperationResult> {
+    const command = operation.command ?? "";
+    const args = operation.args;
+
+    // Destructive denylist has the highest precedence — it beats the allowlist
+    // AND the arbitrary-shell gate so a known-destructive signature is always
+    // reported as such.
+    if (matchesDestructiveDenylist(command, args)) {
+      return this.denied("RUN_COMMAND", "DESTRUCTIVE_COMMAND_BLOCKED", startedAt);
+    }
+
+    // Arbitrary shell (an explicit shell kind, or metacharacters in the program
+    // string) is denied by default.
+    if (isShellInvocation(operation)) {
+      return this.denied("RUN_COMMAND", "ARBITRARY_SHELL_DISABLED", startedAt);
+    }
+
+    if (!this.allowlistedCommands.includes(command)) {
+      return this.denied("RUN_COMMAND", "COMMAND_NOT_ALLOWLISTED", startedAt);
+    }
+
+    if (this.isRisky(operation) && !this.hasApproval("COMMAND", command)) {
+      return this.result({
+        kind: "RUN_COMMAND",
+        status: "NEEDS_APPROVAL",
+        denialReason: "NEEDS_APPROVAL",
+        startedAt,
+        approvalGates: [
+          ApprovalGateSchema.parse({
+            id: `approval:command:${stableId(command)}`,
+            // ApprovalGateTypeSchema only models FILE_WRITE today; the command
+            // approval is surfaced through status + denialReason instead.
+            type: "FILE_WRITE",
+            required: true,
+            approved: false,
+            reason: "Risky command execution requires an explicit approval.",
+            metadata: { command },
+          }),
+        ],
+      });
+    }
+
+    const timeoutMs = operation.timeoutMs ?? WORKSPACE_COMMAND_TIMEOUT_MS;
+    const run = await this.commandRunner({ command, args, cwd: this.workspaceRoot, timeoutMs });
+    const stdout = redactString(truncateToBytes(run.stdout, MAX_CAPTURED_STREAM_BYTES));
+    const stderr = redactString(truncateToBytes(run.stderr, MAX_CAPTURED_STREAM_BYTES));
+
+    if (run.timedOut) {
+      // Partial output produced before termination is preserved.
+      return this.result({
+        kind: "RUN_COMMAND",
+        status: "DENIED",
+        denialReason: "COMMAND_TIMEOUT",
+        startedAt,
+        stdout,
+        stderr,
+      });
+    }
+
+    return this.result({
+      kind: "RUN_COMMAND",
+      status: run.exitCode === 0 ? "SUCCEEDED" : "FAILED",
+      startedAt,
+      stdout,
+      stderr,
+    });
+  }
+
+  private isRisky(operation: SandboxOperation): boolean {
+    if (operation.metadata.requiresApproval === true) return true;
+    return this.riskyCommands.includes(operation.command ?? "");
+  }
+
+  private hasApproval(scope: "FILE_WRITE" | "COMMAND", target: string, alternateTarget?: string): boolean {
+    return this.approvals.some(
+      (approval) =>
+        approval.scope === scope &&
+        (approval.target === target || (alternateTarget !== undefined && approval.target === alternateTarget)),
+    );
+  }
+
+  private denied(kind: SandboxOperationKind, reason: SandboxDenialReason, startedAt: string): SandboxOperationResult {
+    // resolvedPath is withheld on denial.
+    return this.result({ kind, status: "DENIED", denialReason: reason, startedAt });
+  }
+
+  private result(input: {
+    kind: SandboxOperationKind;
+    status: SandboxExecutionStatus;
+    startedAt: string;
+    denialReason?: SandboxDenialReason;
+    resolvedPath?: string;
+    stdout?: string;
+    stderr?: string;
+    entries?: string[];
+    fileContent?: string;
+    artifacts?: SandboxArtifact[];
+    approvalGates?: ApprovalGate[];
+  }): SandboxOperationResult {
+    const completedAt = this.safeNow();
+    return SandboxOperationResultSchema.parse({
+      kind: input.kind,
+      status: input.status,
+      denialReason: input.denialReason,
+      resolvedPath: input.status === "DENIED" ? undefined : input.resolvedPath,
+      stdout: input.stdout ?? "",
+      stderr: input.stderr ?? "",
+      entries: input.entries,
+      fileContent: input.fileContent,
+      artifacts: input.artifacts ?? [],
+      approvalGates: input.approvalGates ?? [],
+      networkCalls: 0,
+      startedAt: input.startedAt,
+      completedAt,
+    });
+  }
+
+  private safeNow(): string {
+    const value = this.now();
+    return Number.isFinite(Date.parse(value)) ? value : new Date().toISOString();
+  }
+}
+
+// Characters that imply shell interpretation when present in the program string.
+const SHELL_METACHARACTER_PATTERN = /[;&|`$<>(){}*?!\n\r]/;
+
+/**
+ * True when an operation requests arbitrary shell execution: an explicit
+ * `kind: "shell"` (carried on operation metadata) or shell metacharacters in
+ * the program string. Metacharacters inside `args` are treated as literal argv
+ * entries (no shell interprets them), so only the `command` string is scanned.
+ */
+function isShellInvocation(operation: SandboxOperation): boolean {
+  if (operation.metadata.kind === "shell" || operation.metadata.shell === true) return true;
+  return SHELL_METACHARACTER_PATTERN.test(operation.command ?? "");
+}
+
+/** Returns the final path segment of a token, independent of separator style. */
+function commandBaseName(token: string): string {
+  const normalized = token.replace(/\\/g, "/");
+  const segments = normalized.split("/");
+  return segments[segments.length - 1] ?? token;
+}
+
+/**
+ * Matches a structured command invocation against the destructive denylist. The
+ * full argv (`command` + `args`) is inspected as discrete tokens so a
+ * destructive signature is detected whether it appears as the program or among
+ * its arguments (e.g. an allowlisted program followed by `&& rm -rf .`).
+ */
+function matchesDestructiveDenylist(command: string, args: string[]): boolean {
+  const tokens = [command, ...args].map((token) => token.trim()).filter((token) => token.length > 0);
+  const joined = tokens.join(" ").toLowerCase();
+
+  // Fork-bomb signature.
+  if (joined.includes(":(){") || joined.replace(/\s+/g, "").includes(":|:&")) return true;
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const base = commandBaseName(tokens[i]).toLowerCase();
+    const rest = tokens.slice(i + 1).map((token) => token.toLowerCase());
+
+    if (base === "rm") {
+      if (rest.some((arg) => /^-(?=[a-z]*r)(?=[a-z]*f)[a-z]+$/.test(arg))) return true;
+    }
+    if (base === "del" || base === "erase") {
+      if (rest.some((arg) => arg === "/f" || arg === "/s" || arg === "/q")) return true;
+    }
+    if (base === "rmdir" && rest.some((arg) => arg === "/s")) return true;
+    if (base === "format") return true;
+    if (base === "mkfs" || base.startsWith("mkfs.")) return true;
+    if (base === "dd") return true;
+    if (base === "shutdown" || base === "reboot" || base === "halt" || base === "poweroff") return true;
+    if (base === "git" && rest[0] === "clean" && rest.some((arg) => arg.startsWith("-") && arg.includes("f") && arg.includes("d"))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/** Truncates `value` so its UTF-8 byte length does not exceed `maxBytes`. */
+function truncateToBytes(value: string, maxBytes: number): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(value).length <= maxBytes) return value;
+
+  // Trim by characters until the byte budget is satisfied (handles multi-byte
+  // characters without splitting a code point).
+  let result = value;
+  while (encoder.encode(result).length > maxBytes && result.length > 0) {
+    const overflowBytes = encoder.encode(result).length - maxBytes;
+    const dropChars = Math.max(1, Math.ceil(overflowBytes / 4));
+    result = result.slice(0, Math.max(0, result.length - dropChars));
+  }
+  return result;
 }

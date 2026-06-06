@@ -45,14 +45,14 @@ provider interactions are mocked and the workspace filesystem is injected via `f
       descendant of the workspace root; perform no I/O on a denied path
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
 
-  - [ ] 2.2 Write property test for workspace-root containment
+  - [x] 2.2 Write property test for workspace-root containment
     - **Property 2: No path escapes the workspace root**
     - **Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7**
     - Add to `tests/workspaceSandbox.test.ts`; generate adversarial paths and injected `fsImpl`
       symlinks; assert each is denied with the correct `denialReason`, the resolved path (when ok) is
       contained, and no read/list/write touched an out-of-root path
 
-  - [ ] 2.3 Implement `WorkspaceSandboxAdapter.operate`
+  - [x] 2.3 Implement `WorkspaceSandboxAdapter.operate`
     - In `src/sandbox/index.ts`: add `WorkspaceSandboxOptions` and `WorkspaceSandboxAdapter`
       (`metadata.localOnly = true`, `networkAccess = false`) with `operate(operation)`
     - Support `READ_FILE`, `LIST_DIR`, `PROPOSE_PATCH` (emit a `PatchArtifact`, never write without a
@@ -145,7 +145,7 @@ provider interactions are mocked and the workspace filesystem is injected via `f
     - _Requirements: 1.2, 1.3, 1.4, 1.7, 1.8, 1.9, 6.5, 7.1_
 
 - [ ] 6. Live synthesizer agent with evidence citations and fallback (ORN-36)
-  - [ ] 6.1 Implement synthesizer prompt builders and synthesis schema relaxation
+  - [x] 6.1 Implement synthesizer prompt builders and synthesis schema relaxation
     - In `src/orchestration/prompts.ts`: add `buildSynthesizerPrompt(input)` and
       `buildSynthesizerRepairPrompt(input, priorContent, errorSummary)`
     - Relax `BrainstemSynthesis.providerCalls` from the literal `0` to a non-negative integer

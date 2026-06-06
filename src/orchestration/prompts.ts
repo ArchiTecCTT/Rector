@@ -3,6 +3,7 @@ import type { LLMMessage } from "../providers/llm";
 import { PlannerInputSchema, PlannerOutputSchema, type PlannerInput, type PlannerOutput } from "./planner";
 import { ContextPackSchema, type ContextPack } from "./contextBuilder";
 import { TriageResultSchema, type TriageResult } from "./triage";
+import type { BrainstemSynthesisInput } from "./synthesizer";
 import { redactSecrets } from "../security/redaction";
 
 /**
@@ -309,5 +310,272 @@ function buildSkepticContextMessage(input: SkepticPromptInput): string {
     JSON.stringify(payload, null, 2),
     "",
     "Respond with ONLY the critique JSON object described in the system instructions.",
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Live synthesizer prompts (ORN-36)
+// ---------------------------------------------------------------------------
+
+/**
+ * System rules that anchor the live synthesizer. The model only *proposes* a final answer draft
+ * (`response` + `citations`); the symbolic control plane validates it against `SynthesisDraftSchema`,
+ * requires non-empty citations whenever the run carried execution/validation evidence, re-redacts
+ * the assembled answer, and falls back to the deterministic `synthesizeChatBrainstemResponse` on any
+ * budget/provider/validation failure. These rules make the safety and grounding bar explicit so the
+ * model's first attempt is as likely as possible to pass validation.
+ */
+export const SYNTHESIZER_SYSTEM_RULES = [
+  "You are Rector's synthesis agent. You write the final answer to a single user request from the run state.",
+  "You do NOT execute, edit, or approve anything: a deterministic control plane validates your answer and may fall back to a deterministic answer.",
+  "Ground every claim in the run state below. Do not invent files, commands, tests, results, or risks that are not present in it.",
+  "Cite your evidence: each citation must reference a concrete execution artifact or validation result from the run state (a file path, command, test/node id, failure, risk, or artifact id).",
+  "When the run carried any execution or validation evidence, you MUST include at least one citation.",
+  "Never hide or omit failed validation output; report failures honestly and surface unresolved risks.",
+  "Return ONLY a single JSON object that conforms exactly to the contract below.",
+  "Do not wrap the JSON in markdown code fences, prose, comments, or trailing text.",
+  "Never include secrets, API keys, credentials, tokens, or environment variable values in any field.",
+].join("\n");
+
+/**
+ * The JSON contract the synthesizer must produce. Mirrors `SynthesisDraftSchema`
+ * (`{ response, citations }`) and the `SynthesisCitationSchema` shape so the model is held to the
+ * same structural bar the control plane validates against.
+ */
+export const SYNTHESIZER_JSON_CONTRACT = `Output a JSON object with this exact shape:
+
+{
+  "response": string,                                  // non-empty; the final answer to the user request
+  "citations": [
+    {
+      "kind": "file" | "command" | "test" | "failure" | "risk" | "artifact",
+      "ref": string,                                   // non-empty; a path, command name, node id, or artifact id present in the run state
+      "detail": string                                 // non-empty; the concrete evidence drawn from the run state
+    }
+  ]
+}
+
+Citation rules (the control plane enforces these):
+- Each "ref" MUST reference an execution artifact or validation result that appears in the run state
+  below (e.g. an execution node id, a validation/healing failure, a planned file, or an artifact id).
+- Provide at least one citation whenever the run state contains any execution or validation evidence;
+  an empty "citations" array is only valid when no execution or validation was performed.
+- Use "kind": "failure" to cite a failed command or validation result, and "kind": "risk" to cite an
+  unresolved risk or a needed human decision. Do not omit failed validation output.`;
+
+/**
+ * Input accepted by {@link buildSynthesizerPrompt}. Reuses the existing `BrainstemSynthesisInput`
+ * shape unchanged (the same input the deterministic `synthesizeChatBrainstemResponse` consumes).
+ */
+export type SynthesizerPromptInput = BrainstemSynthesisInput;
+
+/**
+ * Validation schema for the synthesizer prompt input. Reuses the planner/context/triage schemas
+ * (as the skeptic prompt input does) and validates the run-state evidence the prompt consumes with
+ * focused, permissive (`.passthrough()`) sub-schemas. Those sub-schemas are defined inline rather
+ * than imported from the crucible/DAG/execution/healing/observability modules on purpose: `prompts`
+ * sits inside the planner import cycle, so eagerly importing those planner-dependent schemas here
+ * would read them before their modules finish initializing.
+ */
+export const SynthesizerPromptInputSchema = z.object({
+  traceId: z.string().min(1),
+  triage: TriageResultSchema,
+  contextPack: ContextPackSchema,
+  plannerOutput: PlannerOutputSchema,
+  skepticReview: z
+    .object({
+      verdict: z.string().min(1),
+      findings: z.array(z.unknown()),
+    })
+    .passthrough(),
+  crucibleDecision: z
+    .object({
+      verdict: z.string().min(1),
+      reason: z.string().min(1),
+    })
+    .passthrough(),
+  compiledDag: z
+    .object({ nodes: z.array(z.unknown()) })
+    .passthrough()
+    .optional(),
+  executionResult: z
+    .object({ status: z.string().min(1), nodeResults: z.array(z.unknown()) })
+    .passthrough()
+    .optional(),
+  validationHealingResult: z
+    .object({
+      status: z.string().min(1),
+      attempts: z.number(),
+      failures: z.array(z.unknown()),
+      actions: z.array(z.unknown()),
+    })
+    .passthrough()
+    .optional(),
+  observabilitySummary: z
+    .object({
+      spanCount: z.number(),
+      durationMs: z.number(),
+      modelCallCount: z.number(),
+      estimatedCostUsd: z.number(),
+    })
+    .passthrough()
+    .optional(),
+});
+
+/**
+ * Builds the initial synthesizer prompt: system rules + JSON contract, then a user message carrying
+ * the redacted run state the model must answer from. Validates `input` against
+ * `SynthesizerPromptInputSchema` so callers cannot construct a prompt from malformed input, and runs
+ * the assembled payload through `redactSecrets` so no configured secret reaches the provider.
+ */
+export function buildSynthesizerPrompt(input: SynthesizerPromptInput): LLMMessage[] {
+  SynthesizerPromptInputSchema.parse(input);
+  return [
+    { role: "system", content: `${SYNTHESIZER_SYSTEM_RULES}\n\n${SYNTHESIZER_JSON_CONTRACT}` },
+    { role: "user", content: buildSynthesizerContextMessage(input) },
+  ];
+}
+
+/**
+ * Builds the single synthesizer repair prompt. Replays the original system + user messages, shows
+ * the model its previous (rejected) draft, and appends a focused instruction containing the
+ * validation error summary. The control plane allows exactly one repair attempt before falling back
+ * to the deterministic synthesizer.
+ */
+export function buildSynthesizerRepairPrompt(
+  input: SynthesizerPromptInput,
+  priorContent: string,
+  errorSummary: string
+): LLMMessage[] {
+  const [systemMessage, userMessage] = buildSynthesizerPrompt(input);
+  return [
+    systemMessage,
+    userMessage,
+    { role: "assistant", content: priorContent },
+    {
+      role: "user",
+      content: [
+        "Your previous response was rejected by the validator.",
+        `Validation error: ${errorSummary}`,
+        "",
+        "Fix every issue above and reply again with ONLY the corrected JSON object.",
+        "Cite only evidence that appears in the run state, and include at least one citation when execution or validation evidence exists.",
+        "Do not include markdown fences, explanations, or any text outside the JSON object.",
+      ].join("\n"),
+    },
+  ];
+}
+
+function buildSynthesizerContextMessage(input: SynthesizerPromptInput): string {
+  const {
+    triage,
+    contextPack,
+    plannerOutput,
+    skepticReview,
+    crucibleDecision,
+    compiledDag,
+    executionResult,
+    validationHealingResult,
+    observabilitySummary,
+  } = input;
+
+  // Redact the entire payload so no configured secret can reach the provider, even if a plan field,
+  // context summary, command output, or failure message echoed one.
+  const payload = redactSecrets({
+    request: contextPack.userIntentSummary,
+    triage: {
+      route: triage.route,
+      confidence: triage.confidence,
+      complexity: triage.complexity,
+      reasons: triage.reasons,
+      riskFlags: triage.riskFlags,
+    },
+    context: {
+      userIntentSummary: contextPack.userIntentSummary,
+      constraints: contextPack.constraints,
+      riskFlags: contextPack.riskFlags,
+      relevantDocs: contextPack.relevantDocs.map((doc) => ({ kind: doc.kind, summary: doc.summary })),
+      relevantMemory: contextPack.relevantMemory.map((item) => ({ kind: item.kind, summary: item.summary })),
+      artifactHandles: contextPack.artifactHandles.map((handle) => ({ kind: handle.kind, summary: handle.summary })),
+      inlineContext: contextPack.inlineContext.map((entry) => ({ kind: entry.kind, summary: entry.summary })),
+    },
+    plan: {
+      goal: plannerOutput.goal,
+      riskLevel: plannerOutput.riskLevel,
+      tasks: plannerOutput.tasks.map((task) => ({
+        id: task.id,
+        title: task.title,
+        expectedArtifacts: task.expectedArtifacts,
+        validation: task.validation,
+        risk: task.risk,
+        approvalRequired: task.approvalRequired,
+      })),
+      validation: plannerOutput.validation,
+    },
+    skeptic: {
+      verdict: skepticReview.verdict,
+      findings: skepticReview.findings.map((finding) => ({
+        id: finding.id,
+        severity: finding.severity,
+        taskId: finding.taskId,
+        category: finding.category,
+        message: finding.message,
+        recommendation: finding.recommendation,
+      })),
+    },
+    crucible: {
+      verdict: crucibleDecision.verdict,
+      reason: crucibleDecision.reason,
+    },
+    dag: compiledDag
+      ? {
+          nodes: compiledDag.nodes.map((node) => ({ id: node.id, type: node.type, label: node.label })),
+        }
+      : undefined,
+    execution: executionResult
+      ? {
+          status: executionResult.status,
+          nodeResults: executionResult.nodeResults.map((result) => ({
+            nodeId: result.nodeId,
+            status: result.status,
+            attempts: result.attempts,
+            error: result.error ? { code: result.error.code, message: result.error.message } : undefined,
+          })),
+        }
+      : undefined,
+    validation: validationHealingResult
+      ? {
+          status: validationHealingResult.status,
+          attempts: validationHealingResult.attempts,
+          failures: validationHealingResult.failures.map((failure) => ({
+            nodeId: failure.nodeId,
+            classification: failure.classification,
+            errorCode: failure.errorCode,
+            message: failure.message,
+          })),
+          actions: validationHealingResult.actions.map((action) => ({
+            type: action.type,
+            nodeId: action.nodeId,
+            reason: action.reason,
+          })),
+        }
+      : undefined,
+    observability: observabilitySummary
+      ? {
+          spanCount: observabilitySummary.spanCount,
+          durationMs: observabilitySummary.durationMs,
+          modelCallCount: observabilitySummary.modelCallCount,
+          estimatedCostUsd: observabilitySummary.estimatedCostUsd,
+        }
+      : undefined,
+  });
+
+  return [
+    "Write the final answer to the request below. Use the run state as the source of truth and cite your evidence.",
+    "",
+    "RUN STATE (JSON):",
+    JSON.stringify(payload, null, 2),
+    "",
+    "Respond with ONLY the answer JSON object described in the system instructions.",
   ].join("\n");
 }

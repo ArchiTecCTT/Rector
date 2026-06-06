@@ -28,7 +28,13 @@ export interface BrainstemSynthesis {
   route: string;
   traceId: string;
   evidence: string[];
-  providerCalls: 0;
+  /**
+   * Count of provider calls made while producing this synthesis. Relaxed from the literal `0`
+   * (Phase 1) to a non-negative integer (additive, backward-compatible) so the live synthesizer
+   * (ORN-36) can record real provider usage. Local/provider-free and deterministic-fallback paths
+   * keep reporting `0`.
+   */
+  providerCalls: number;
   observability?: ObservabilitySummary;
   response: string;
 }
