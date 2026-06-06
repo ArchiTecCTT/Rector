@@ -1,5 +1,20 @@
 import { z } from "zod";
 import type { ContextPack } from "./contextBuilder";
+import type { PlannerOutput } from "./planner";
+import type { TriageResult } from "./triage";
+import { buildSkepticPrompt, buildSkepticRepairPrompt, type SkepticPromptInput } from "./prompts";
+import {
+  invokeWithBudget,
+  LLMUsageSchema,
+  ProviderError,
+  type LLMProvider,
+  type LLMRequest,
+  type LLMResponse,
+  type LLMUsage,
+} from "../providers/llm";
+import { evaluateBudget, type BudgetUsage } from "../security/budget";
+import { redactSecrets, redactString } from "../security/redaction";
+import type { Run } from "../store";
 
 export const SkepticFindingSeveritySchema = z.enum(["BLOCKER", "MAJOR", "MINOR", "INFO"]);
 export type SkepticFindingSeverity = z.infer<typeof SkepticFindingSeveritySchema>;
@@ -295,4 +310,416 @@ function formatEvidence(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Live skeptic agent (ORN-35)
+// ---------------------------------------------------------------------------
+
+/** Result status of a live skeptic invocation. Mirrors {@link LivePlannerStatus}. */
+export type LiveSkepticStatus = "ok" | "blocked";
+
+/**
+ * The draft the model is asked to return. The model proposes only a critique
+ * (`verdict` + `findings`); the control plane supplies the deterministic fields
+ * (`reviewedPlanId`/`planGoal` from the plan, `createdAt` from the clock) and
+ * **recomputes** the verdict from finding severities, so a model can never claim
+ * `SOUND` while emitting a `BLOCKER`.
+ */
+export const SkepticReviewDraftSchema = z.object({
+  verdict: SkepticReviewVerdictSchema,
+  findings: z.array(SkepticFindingSchema),
+});
+export type SkepticReviewDraft = z.infer<typeof SkepticReviewDraftSchema>;
+
+/**
+ * Structured, redacted blocker emitted when the live skeptic cannot return a
+ * valid review. Never carries a provider secret, API key, or raw model output;
+ * `details` for `SKEPTIC_INVALID` carries only Zod issue paths (schema field
+ * identifiers).
+ */
+export const SkepticBlockerSchema = z.object({
+  code: z.enum(["BUDGET_DENIED", "SKEPTIC_INVALID", "PROVIDER_ERROR"]),
+  message: z.string().min(1),
+  details: z.unknown().optional(),
+});
+export type SkepticBlocker = z.infer<typeof SkepticBlockerSchema>;
+
+/**
+ * Outcome of {@link runLiveSkeptic}. `status === "ok"` carries a schema-valid
+ * `review` (consumed by `arbitratePlanWithCrucible` with no special-casing);
+ * `status === "blocked"` carries a redacted `blocker`. `usage` is the accumulated
+ * token/cost record across every provider call performed and `attempts` is the
+ * number of provider calls initiated (0–2).
+ */
+export interface LiveSkepticResult {
+  status: LiveSkepticStatus;
+  review?: SkepticReview;
+  blocker?: SkepticBlocker;
+  usage: LLMUsage;
+  provider: string;
+  model: string;
+  attempts: number;
+}
+
+/** Input for {@link runLiveSkeptic}. */
+export interface LiveSkepticInput {
+  plannerOutput: PlannerOutput;
+  contextPack: ContextPack;
+  triage?: TriageResult;
+  now?: () => string;
+}
+
+/** Dependencies for {@link runLiveSkeptic}. The provider is mocked in tests. */
+export interface LiveSkepticDeps {
+  provider: LLMProvider;
+  run: Run;
+  buildPrompt?: typeof buildSkepticPrompt;
+  buildRepairPrompt?: typeof buildSkepticRepairPrompt;
+  /**
+   * Per-invocation timeout in milliseconds. Defaults to 60_000 (Req 1.8). Exposed
+   * so tests can exercise the timeout path without waiting a real minute; a
+   * timed-out invocation counts as one attempt within the two-attempt maximum.
+   */
+  timeoutMs?: number;
+}
+
+/** Req 1.8: each single provider invocation is bounded to 60 seconds. */
+const SKEPTIC_INVOCATION_TIMEOUT_MS = 60_000;
+
+const ZERO_SKEPTIC_USAGE: LLMUsage = LLMUsageSchema.parse({
+  inputTokens: 0,
+  outputTokens: 0,
+  totalTokens: 0,
+  estimatedUsd: 0,
+  modelCalls: 0,
+});
+
+/**
+ * Prompts a configured provider for a plan critique, assembles a review that
+ * conforms to the **existing** `SkepticReviewSchema` (stamping the deterministic
+ * fields and recomputing the verdict from finding severities), retries exactly
+ * once with a repair prompt on malformed/invalid output, and otherwise resolves
+ * with a structured, redacted `SkepticBlocker`. A budget preflight runs before
+ * every provider call (including the repair call), so a denied budget yields a
+ * `BUDGET_DENIED` blocker with zero provider invocations and 0 USD cost. Each
+ * invocation is bounded to a 60-second timeout counted as one attempt. No
+ * exception escapes for budget/provider/validation/timeout failures.
+ */
+export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticDeps): Promise<LiveSkepticResult> {
+  const { plannerOutput, contextPack } = input;
+  const triage = input.triage ?? contextPack.triage;
+  const now = input.now ?? (() => new Date().toISOString());
+
+  const { provider, run } = deps;
+  const buildPrompt = deps.buildPrompt ?? buildSkepticPrompt;
+  const buildRepairPrompt = deps.buildRepairPrompt ?? buildSkepticRepairPrompt;
+  const timeoutMs = deps.timeoutMs ?? SKEPTIC_INVOCATION_TIMEOUT_MS;
+  const model = skepticModel(provider);
+
+  const promptInput: SkepticPromptInput = { plannerOutput, contextPack, triage };
+
+  let totalUsage = ZERO_SKEPTIC_USAGE;
+  let messages = buildPrompt(promptInput);
+  let lastFailure: SkepticValidationFailure = {
+    repairSummary: "Skeptic review was not produced",
+    issuePaths: [],
+  };
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    // Req 1.5 (json_object) + Req 6.1/6.6 (budget preflight before EVERY call, incl. repair).
+    const request: LLMRequest = {
+      messages,
+      modelRoute: "flagship",
+      responseFormat: { type: "json_object" },
+      task: "skeptic",
+    };
+
+    const estimate = provider.estimateRequest(request);
+    const decision = evaluateBudget(run, buildSkepticPreflightUsage(provider, estimate, run, totalUsage));
+    if (decision.status !== "allowed") {
+      // Req 6.3: zero provider calls, BUDGET_DENIED blocker, 0 USD cost for this step.
+      const reason = decision.reasons.join("; ") || "budget preflight denied the skeptic call";
+      return skepticBlockedResult(
+        makeSkepticBlocker("BUDGET_DENIED", `Skeptic call denied by budget preflight: ${reason}`),
+        totalUsage,
+        provider,
+        model,
+        attempt - 1
+      );
+    }
+
+    // Req 1.8: bound the single invocation to a 60s timeout; a timeout counts as this attempt.
+    const outcome = await invokeBounded(invokeWithBudget(provider, request, run), timeoutMs);
+
+    if (outcome.kind === "timeout") {
+      // Req 1.8/1.9: a timed-out invocation is a transport-level failure -> PROVIDER_ERROR, no
+      // further call. The attempt is counted.
+      return skepticBlockedResult(
+        makeSkepticBlocker("PROVIDER_ERROR", `Provider call timed out after ${timeoutMs}ms`),
+        totalUsage,
+        provider,
+        model,
+        attempt
+      );
+    }
+
+    if (outcome.kind === "error") {
+      // Req 1.9 / 6.5: map any provider error to a redacted PROVIDER_ERROR blocker; preserve usage;
+      // exclude the raw provider response body.
+      const error = outcome.error;
+      const rawMessage = error instanceof ProviderError || error instanceof Error ? error.message : String(error);
+      return skepticBlockedResult(
+        makeSkepticBlocker("PROVIDER_ERROR", `Provider call failed: ${rawMessage}`),
+        totalUsage,
+        provider,
+        model,
+        attempt
+      );
+    }
+
+    const response = outcome.response;
+    // Req 1.7: accumulate LLM usage across every provider call performed.
+    totalUsage = addSkepticUsage(totalUsage, response.usage);
+
+    const parsed = tryParseSkepticJson(response.content);
+    if (parsed.ok) {
+      const assembled = assembleSkepticReview(parsed.value, plannerOutput, now);
+      if (assembled.ok) {
+        // Req 1.1/1.2/1.3: schema-valid review with stamped deterministic fields + recomputed verdict.
+        return skepticOkResult(assembled.review, totalUsage, provider, response.model, attempt);
+      }
+      lastFailure = assembled;
+    } else {
+      lastFailure = {
+        repairSummary: `Response was not valid JSON: ${parsed.error}`,
+        issuePaths: [],
+      };
+    }
+
+    // Req 1.5: issue exactly one repair prompt on the first failure, then stop.
+    if (attempt === 1) {
+      messages = buildRepairPrompt(promptInput, response.content, lastFailure.repairSummary);
+    }
+  }
+
+  // Req 1.6: still invalid after one repair -> SKEPTIC_INVALID blocker, attempts = 2, no third call.
+  return skepticBlockedResult(
+    makeSkepticBlocker("SKEPTIC_INVALID", skepticInvalidMessage(lastFailure.issuePaths), { issues: lastFailure.issuePaths }),
+    totalUsage,
+    provider,
+    model,
+    2
+  );
+}
+
+interface SkepticValidationFailure {
+  /** Rich, model-facing summary used only in the repair prompt (round-trips to the provider). */
+  repairSummary: string;
+  /** Safe schema-field identifiers (Zod issue paths) for the returned blocker details. */
+  issuePaths: string[];
+}
+
+type SkepticAssembly =
+  | { ok: true; review: SkepticReview }
+  | ({ ok: false } & SkepticValidationFailure);
+
+/**
+ * Validates the model's draft against {@link SkepticReviewDraftSchema}, stamps the
+ * deterministic fields (`reviewedPlanId`/`planGoal` from the plan, `createdAt` from
+ * the clock), recomputes the verdict from finding severities (Req 1.3), and parses
+ * the assembled object with {@link SkepticReviewSchema}. Never throws: returns the
+ * schema-field identifiers on failure so the blocker can report them without
+ * echoing raw model output.
+ */
+function assembleSkepticReview(value: unknown, plannerOutput: PlannerOutput, now: () => string): SkepticAssembly {
+  const draft = SkepticReviewDraftSchema.safeParse(value);
+  if (!draft.success) {
+    return {
+      ok: false,
+      repairSummary: draft.error.issues
+        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+        .join("; "),
+      issuePaths: uniqueSkepticIssuePaths(draft.error.issues),
+    };
+  }
+
+  const verdict = recomputeSkepticVerdict(draft.data.findings);
+  const reviewedPlanId = planIdOf(plannerOutput);
+  const planGoal = typeof plannerOutput.goal === "string" && plannerOutput.goal.trim().length > 0 ? plannerOutput.goal : undefined;
+
+  const candidate = {
+    verdict,
+    findings: draft.data.findings,
+    ...(reviewedPlanId !== undefined ? { reviewedPlanId } : {}),
+    ...(planGoal !== undefined ? { planGoal } : {}),
+    createdAt: now(),
+  };
+
+  const review = SkepticReviewSchema.safeParse(candidate);
+  if (!review.success) {
+    return {
+      ok: false,
+      repairSummary: review.error.issues
+        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+        .join("; "),
+      issuePaths: uniqueSkepticIssuePaths(review.error.issues),
+    };
+  }
+
+  return { ok: true, review: review.data };
+}
+
+/**
+ * Req 1.3: derive the verdict from finding severities. Any `BLOCKER` finding ->
+ * `BLOCKED`; any other non-empty findings -> `NEEDS_REVISION`; no findings ->
+ * `SOUND`. The model's advisory verdict is never trusted directly.
+ */
+function recomputeSkepticVerdict(findings: SkepticFinding[]): SkepticReviewVerdict {
+  if (findings.some((finding) => finding.severity === "BLOCKER")) return "BLOCKED";
+  return findings.length > 0 ? "NEEDS_REVISION" : "SOUND";
+}
+
+/** Reads an optional plan id without assuming `PlannerOutput` carries one. */
+function planIdOf(plannerOutput: PlannerOutput): string | undefined {
+  const candidate = (plannerOutput as { id?: unknown }).id;
+  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
+}
+
+function skepticModel(provider: LLMProvider): string {
+  const models = provider.metadata.models;
+  return (
+    models.flagship ??
+    models.fast ??
+    models.research ??
+    models.cheap ??
+    Object.values(models)[0] ??
+    provider.metadata.id
+  );
+}
+
+function buildSkepticPreflightUsage(
+  provider: LLMProvider,
+  estimate: LLMUsage,
+  run: Run,
+  totalUsage: LLMUsage
+): BudgetUsage {
+  return {
+    provider: provider.metadata.id,
+    estimatedUsd: committedSkepticNumber(run.actualCost?.usd, run.costEstimate.usd) + totalUsage.estimatedUsd + estimate.estimatedUsd,
+    inputTokens: committedSkepticNumber(run.actualTokens?.input, run.tokenEstimate.input) + totalUsage.inputTokens + estimate.inputTokens,
+    outputTokens: committedSkepticNumber(run.actualTokens?.output, run.tokenEstimate.output) + totalUsage.outputTokens + estimate.outputTokens,
+    modelCalls: committedSkepticNumber(run.actualCost?.modelCalls, run.costEstimate.modelCalls) + totalUsage.modelCalls + estimate.modelCalls,
+    runtimeMs: committedSkepticNumber(run.actualCost?.runtimeMs, run.costEstimate.runtimeMs),
+    healingAttempts: run.healingAttempts,
+  };
+}
+
+function addSkepticUsage(left: LLMUsage, right: LLMUsage): LLMUsage {
+  return LLMUsageSchema.parse({
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+    estimatedUsd: left.estimatedUsd + right.estimatedUsd,
+    modelCalls: left.modelCalls + right.modelCalls,
+  });
+}
+
+type BoundedInvocation =
+  | { kind: "ok"; response: LLMResponse }
+  | { kind: "error"; error: unknown }
+  | { kind: "timeout" };
+
+/**
+ * Races a provider invocation against a timeout. The invocation promise is wrapped
+ * so it never rejects unhandled (even when the timeout wins), and the timer is
+ * always cleared, so a fast response never leaves a 60s timer holding the event
+ * loop open.
+ */
+async function invokeBounded(invocation: Promise<LLMResponse>, timeoutMs: number): Promise<BoundedInvocation> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<BoundedInvocation>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  const wrapped: Promise<BoundedInvocation> = invocation.then(
+    (response) => ({ kind: "ok", response }),
+    (error) => ({ kind: "error", error })
+  );
+
+  try {
+    return await Promise.race([wrapped, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function tryParseSkepticJson(content: string): { ok: true; value: unknown } | { ok: false; error: string } {
+  try {
+    return { ok: true, value: JSON.parse(content) as unknown };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function uniqueSkepticIssuePaths(issues: z.ZodIssue[]): string[] {
+  const paths = issues.map((issue) => issue.path.map((segment) => String(segment)).join(".") || "(root)");
+  return Array.from(new Set(paths));
+}
+
+function skepticInvalidMessage(issuePaths: string[]): string {
+  if (issuePaths.length === 0) {
+    return "Skeptic review was invalid after one repair attempt";
+  }
+  return `Skeptic review failed validation after one repair attempt at fields: ${issuePaths.join(", ")}`;
+}
+
+/** Builds a redacted blocker. `message` runs through redactString; `details` through redactSecrets. */
+function makeSkepticBlocker(code: SkepticBlocker["code"], message: string, details?: unknown): SkepticBlocker {
+  const redactedMessage = redactString(message).trim();
+  return SkepticBlockerSchema.parse({
+    code,
+    message: redactedMessage.length > 0 ? redactedMessage : code,
+    ...(details !== undefined ? { details: redactSecrets(details) } : {}),
+  });
+}
+
+function skepticBlockedResult(
+  blocker: SkepticBlocker,
+  usage: LLMUsage,
+  provider: LLMProvider,
+  model: string,
+  attempts: number
+): LiveSkepticResult {
+  return {
+    status: "blocked",
+    blocker,
+    usage,
+    provider: provider.metadata.id,
+    model,
+    attempts,
+  };
+}
+
+function skepticOkResult(
+  review: SkepticReview,
+  usage: LLMUsage,
+  provider: LLMProvider,
+  model: string,
+  attempts: number
+): LiveSkepticResult {
+  return {
+    status: "ok",
+    review,
+    usage,
+    provider: provider.metadata.id,
+    model,
+    attempts,
+  };
+}
+
+function committedSkepticNumber(primary: unknown, fallback: unknown): number {
+  if (typeof primary === "number" && Number.isFinite(primary)) return primary;
+  if (typeof fallback === "number" && Number.isFinite(fallback)) return fallback;
+  return 0;
 }
