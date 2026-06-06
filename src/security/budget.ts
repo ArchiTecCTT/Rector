@@ -36,6 +36,65 @@ export function evaluateBudget(run: Run, usage: BudgetUsage = {}): BudgetDecisio
   return { status: "allowed", reasons: [], usage: normalized };
 }
 
+/**
+ * Pre-flight per-run ceiling input. Carries only the two fields the per-run ceiling gates on
+ * (`estimatedUsd`, `modelCalls`); absent fields are treated as 0. Structurally satisfied by both
+ * `RunCostAggregate` (accumulated run cost) and `LLMUsage` (next-call estimate), so callers can pass
+ * either without coupling this module to the cost/observability layer (which imports `evaluateBudget`
+ * from here).
+ */
+export interface BudgetProjectionInput {
+  estimatedUsd?: number;
+  modelCalls?: number;
+}
+
+/**
+ * Per-run budget ceiling gate, layered on `evaluateBudget`. This is the PRE-FLIGHT check that gates
+ * the NEXT provider call BEFORE it happens: it projects `accumulated + nextEstimate` and denies the
+ * call when the projected total would breach the run's per-run ceiling.
+ *
+ * - DENY (status `"denied"`) when projected `estimatedUsd` is STRICTLY greater than `budget.maxUsd`,
+ *   OR projected `modelCalls` is STRICTLY greater than `budget.maxModelCalls` (matches the strict
+ *   `>` convention used by `evaluateBudget`'s hard-limit checks). Requirement 3.4.
+ * - ALLOW (status `"allowed"`) when the projected total is at-or-below both ceilings (`<=`).
+ *   Requirement 3.9.
+ *
+ * "Layers on `evaluateBudget`": the projected pre-flight totals are fed through `evaluateBudget` to
+ * reuse its usage normalization and preserve existing budget semantics, while the projected usd /
+ * model-call ceilings (computed from the supplied accumulated + next estimate, not the run's recorded
+ * actuals) remain the authority for the allow/deny status.
+ */
+export function enforceMaxPerRunBudget(
+  run: Run,
+  accumulated: BudgetProjectionInput = {},
+  nextEstimate: BudgetProjectionInput = {},
+): BudgetDecision {
+  const budget = run.budget;
+
+  // Treat absent accumulated/next fields as 0.
+  const projectedUsd = numberFrom(accumulated.estimatedUsd, 0) + numberFrom(nextEstimate.estimatedUsd, 0);
+  const projectedModelCalls = intFrom(accumulated.modelCalls, 0) + intFrom(nextEstimate.modelCalls, 0);
+
+  // Layer on evaluateBudget: feed the projected pre-flight totals so the returned usage is normalized
+  // through the same machinery and existing budget semantics are preserved.
+  const base = evaluateBudget(run, { estimatedUsd: projectedUsd, modelCalls: projectedModelCalls });
+
+  // Per-run ceiling check on the projected totals (strict `>`, identifying the exceeded ceiling).
+  const reasons: string[] = [];
+  if (projectedUsd > budget.maxUsd) {
+    reasons.push(`projected cost ${projectedUsd} exceeds maxUsd ${budget.maxUsd}`);
+  }
+  if (projectedModelCalls > budget.maxModelCalls) {
+    reasons.push(`projected model calls ${projectedModelCalls} exceed maxModelCalls ${budget.maxModelCalls}`);
+  }
+
+  if (reasons.length > 0) {
+    return { status: "denied", reasons, usage: base.usage };
+  }
+
+  return { status: "allowed", reasons: [], usage: base.usage };
+}
+
 function normalizeUsage(run: Run, usage: BudgetUsage): BudgetDecision["usage"] {
   return {
     estimatedUsd: numberFrom(usage.estimatedUsd, run.costEstimate.usd, 0),
