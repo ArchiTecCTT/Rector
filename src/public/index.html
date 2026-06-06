@@ -46,6 +46,10 @@
           <div class="chat__title">
             <h1 id="chat-title">New conversation</h1>
             <span class="status-pill status-pill--idle" id="run-status" title="Current run phase">Idle</span>
+            <span class="live-badge" id="live-indicator" data-mode="off" aria-live="polite" hidden>
+              <span class="live-badge__dot" aria-hidden="true"></span>
+              <span class="live-badge__text">LIVE</span>
+            </span>
           </div>
           <button class="btn btn--ghost btn--sm" id="toggle-trace" type="button" aria-pressed="false">
             Trace

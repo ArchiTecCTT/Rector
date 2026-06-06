@@ -251,6 +251,72 @@ body {
   background: rgba(248, 113, 113, 0.08);
 }
 
+/* --- Live connection badge (SSE stream / polling fallback) --- */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  white-space: nowrap;
+  flex: none;
+}
+
+.live-badge[hidden] {
+  display: none;
+}
+
+.live-badge__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex: none;
+}
+
+/* Streaming: a live, pulsing green dot. */
+.live-badge[data-mode="sse"] {
+  color: var(--ok);
+  border-color: rgba(74, 222, 128, 0.4);
+  background: rgba(74, 222, 128, 0.08);
+}
+.live-badge[data-mode="sse"] .live-badge__dot {
+  background: var(--ok);
+  box-shadow: 0 0 6px var(--ok);
+  animation: live-pulse 1.4s ease-in-out infinite;
+}
+
+/* Polling fallback: a steady amber dot. */
+.live-badge[data-mode="polling"] {
+  color: var(--warn);
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.08);
+}
+.live-badge[data-mode="polling"] .live-badge__dot {
+  background: var(--warn);
+  box-shadow: 0 0 6px var(--warn);
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-badge[data-mode="sse"] .live-badge__dot {
+    animation: none;
+  }
+}
+
 /* --- Messages --- */
 .messages {
   flex: 1;

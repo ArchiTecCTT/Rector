@@ -23,6 +23,13 @@ const RUN_PHASES = [
   "DONE",
 ];
 
+// Terminal run phases — a stream/poll stops once one of these is observed.
+// Mirror of TERMINAL_RUN_PHASES in src/protocol/phases.ts (the server source of truth).
+const TERMINAL_PHASES = new Set(["DONE", "NEEDS_DECISION", "FAILED", "ABORTED"]);
+
+// Poll the fallback events endpoint every 2s (Requirement 2.8).
+const POLL_INTERVAL_MS = 2000;
+
 // User-facing status labels per phase (mirror of RUN_PHASE_STATUS_LABELS).
 const PHASE_STATUS_LABELS = {
   CHAT_RECEIVED: "Thinking",
@@ -49,6 +56,20 @@ const state = {
   lastResultByMessage: new Map(), // assistantMessageId -> result payload (for trace)
 };
 
+// --- Live run state (SSE stream with polling fallback, ORN-40) ---
+// Holds the in-flight run's transport (EventSource or poll timer) and the events seen so far so the
+// timeline can render incrementally. Only one run streams at a time; starting a new run or switching
+// conversations tears the previous one down.
+const liveRun = {
+  runId: null,
+  traceId: null,
+  events: [],
+  eventIds: new Set(),
+  source: null, // EventSource
+  pollTimer: null,
+  closed: true,
+};
+
 // --- DOM refs ---
 const els = {};
 
@@ -60,6 +81,7 @@ function cacheEls() {
     "health-indicator",
     "chat-title",
     "run-status",
+    "live-indicator",
     "toggle-trace",
     "close-trace",
     "messages",
@@ -127,6 +149,26 @@ function statusPillClass(phase, runStatus) {
 function setRunStatus(label, pillClass) {
   els["run-status"].textContent = label;
   els["run-status"].className = `status-pill ${pillClass}`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Show/hide the live connection indicator. mode: "sse" (streaming), "polling" (fallback), or "off".
+function setLiveIndicator(mode) {
+  const el = els["live-indicator"];
+  if (!el) return;
+  if (mode === "off") {
+    el.hidden = true;
+    el.dataset.mode = "off";
+    return;
+  }
+  el.hidden = false;
+  el.dataset.mode = mode;
+  const text = el.querySelector(".live-badge__text");
+  if (text) text.textContent = mode === "polling" ? "POLLING" : "LIVE";
+  el.title = mode === "polling" ? "Live updates via polling fallback" : "Live updates via streaming";
 }
 
 // --- Health check ---
@@ -276,11 +318,211 @@ function renderMessage(role, content, opts = {}) {
   return wrap;
 }
 
+// --- Live run streaming (EventSource primary, polling fallback) — ORN-40 ---
+
+// Reset live-run state for a freshly created run. Any prior stream must be torn down first.
+function beginLiveRun({ runId, traceId }) {
+  liveRun.runId = runId;
+  liveRun.traceId = traceId || null;
+  liveRun.events = [];
+  liveRun.eventIds = new Set();
+  liveRun.source = null;
+  liveRun.pollTimer = null;
+  liveRun.closed = false;
+}
+
+// Close the EventSource and clear the poll timer so neither transport keeps running. Idempotent.
+function teardownLiveRun() {
+  if (liveRun.source) {
+    try {
+      liveRun.source.close();
+    } catch {
+      /* ignore */
+    }
+    liveRun.source = null;
+  }
+  if (liveRun.pollTimer) {
+    clearInterval(liveRun.pollTimer);
+    liveRun.pollTimer = null;
+  }
+  liveRun.closed = true;
+  setLiveIndicator("off");
+}
+
+// Apply one persisted RunEvent to the live timeline, de-duplicating by event id (the catch-up
+// replay and the polling fallback can both surface the same event).
+function applyLiveEvent(event) {
+  if (!event || !event.id || liveRun.closed) return;
+  if (liveRun.eventIds.has(event.id)) return;
+  liveRun.eventIds.add(event.id);
+  liveRun.events.push(event);
+  renderLiveTimeline();
+}
+
+// Render the timeline from the events seen so far, reusing the existing trace render helpers.
+function renderLiveTimeline() {
+  const events = liveRun.events;
+  const lastPhase = events.length ? events[events.length - 1].phase : null;
+  const run = { phase: lastPhase, traceId: liveRun.traceId };
+
+  if (lastPhase) {
+    setRunStatus(PHASE_STATUS_LABELS[lastPhase] || lastPhase, statusPillClass(lastPhase));
+  }
+
+  els["trace-empty"].hidden = true;
+  els["trace-body"].hidden = false;
+  els["trace-id"].textContent = liveRun.traceId || "—";
+  renderTimeline(run, events);
+  renderDecision(run, events);
+  renderEvents(events);
+}
+
+// Stream a run to completion. Opens an EventSource and applies `run-event` frames to the timeline,
+// closing on a `done`/`error` frame. If `EventSource` is unavailable or the stream errors, falls
+// back to polling the events endpoint every 2s until a Terminal_Phase (Requirement 2.8). Resolves
+// with the terminal phase (best-effort) once the run finishes.
+function streamRun({ runId }) {
+  return new Promise((resolve) => {
+    let resolved = false;
+
+    const finishTerminal = (phase) => {
+      if (resolved) return;
+      resolved = true;
+      teardownLiveRun();
+      resolve(phase);
+    };
+
+    const startPolling = () => {
+      if (liveRun.pollTimer || resolved) return;
+      setLiveIndicator("polling");
+      const tick = async () => {
+        if (liveRun.closed || resolved) return;
+        try {
+          const data = await api(`/runs/${runId}/events`);
+          for (const ev of data.events || []) applyLiveEvent(ev);
+          const phase = data.run?.phase;
+          if (phase && TERMINAL_PHASES.has(phase)) finishTerminal(phase);
+        } catch {
+          // Transient poll failure (e.g. the run row not yet visible): keep polling.
+        }
+      };
+      liveRun.pollTimer = setInterval(tick, POLL_INTERVAL_MS);
+      void tick(); // poll immediately, don't wait the first interval
+    };
+
+    // No EventSource support -> polling fallback (Requirement 2.8).
+    if (!window.EventSource) {
+      startPolling();
+      return;
+    }
+
+    let source;
+    try {
+      source = new EventSource(`${API}/runs/${runId}/stream`);
+    } catch {
+      startPolling();
+      return;
+    }
+    liveRun.source = source;
+    setLiveIndicator("sse");
+
+    source.addEventListener("run-event", (e) => {
+      try {
+        const frame = JSON.parse(e.data); // { type, runId, event }
+        if (frame && frame.event) applyLiveEvent(frame.event);
+      } catch {
+        /* ignore malformed frame */
+      }
+    });
+
+    source.addEventListener("done", (e) => {
+      let phase;
+      try {
+        phase = JSON.parse(e.data).phase; // { type, runId, phase }
+      } catch {
+        /* phase stays undefined */
+      }
+      finishTerminal(phase);
+    });
+
+    // Unknown frame types (e.g. `cost`, landing with task 11.2/12.1) are intentionally not handled
+    // here, so they are ignored gracefully without breaking the stream.
+
+    // `onerror` fires both for transport failures and for the normal server close after `done`.
+    // If the run already finished, ignore it; otherwise the stream errored mid-run, so per
+    // Requirement 2.8 tear the stream down and fall back to polling.
+    source.onerror = () => {
+      if (resolved) return;
+      try {
+        source.close();
+      } catch {
+        /* ignore */
+      }
+      liveRun.source = null;
+      startPolling();
+    };
+  });
+}
+
+// The assistant message is created by the background run just after the terminal event is persisted,
+// so retry briefly until it appears for this runId.
+async function findAssistantMessage(conversationId, runId) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      const data = await api(`/chat/conversations/${conversationId}`);
+      const messages = data.messages || [];
+      const found = [...messages].reverse().find((m) => m.role === "assistant" && m.runId === runId);
+      if (found) return found;
+    } catch {
+      /* retry */
+    }
+    await delay(300);
+  }
+  return null;
+}
+
+// After a streamed run reaches a Terminal_Phase, render the authoritative final result: replace the
+// pending bubble with the assistant message and render the final trace from the persisted run/events.
+async function finalizeRun({ conversationId, runId, pending, phase }) {
+  let run = null;
+  let events = [];
+  try {
+    const data = await api(`/runs/${runId}/events`);
+    run = data.run || null;
+    events = data.events || [];
+  } catch {
+    // Fall back to whatever the live stream collected.
+    events = liveRun.events;
+  }
+
+  const assistant = await findAssistantMessage(conversationId, runId);
+  pending.remove();
+
+  // Observability/cost panel population is handled by tasks 11.2 / 12.1; the events endpoint does
+  // not carry the in-process observability summary, so the cost stats stay at their defaults here.
+  const result = { run: run || { phase, traceId: liveRun.traceId }, events };
+
+  if (assistant) {
+    state.lastResultByMessage.set(assistant.id, result);
+    renderMessage("assistant", assistant.content, { messageId: assistant.id, withTraceLink: true });
+  } else {
+    renderMessage("assistant", "Run finished, but its response could not be loaded.", {});
+  }
+
+  const finalPhase = (run && run.phase) || phase;
+  setRunStatus(
+    PHASE_STATUS_LABELS[finalPhase] || finalPhase || "Done",
+    statusPillClass(finalPhase, run?.status)
+  );
+  renderTrace(result);
+}
+
 // --- Send flow ---
 async function sendMessage(content) {
   const trimmed = content.trim();
   if (!trimmed) return;
 
+  teardownLiveRun(); // clean up any previous in-flight stream
   els["composer-send"].disabled = true;
   renderMessage("user", trimmed);
   const pending = renderMessage("assistant", "Running local pipeline…", { pending: true });
@@ -288,7 +530,11 @@ async function sendMessage(content) {
 
   try {
     const conversationId = await ensureConversation();
-    const result = await api(`/chat/conversations/${conversationId}/messages`, {
+
+    // Primary path: stream the run. The streaming branch creates the run and returns
+    // { runId, traceId } with 202 before any Terminal_Phase, then runs the pipeline in the
+    // background while events are published to the SSE broker.
+    const response = await api(`/chat/conversations/${conversationId}/messages?stream=1`, {
       method: "POST",
       body: JSON.stringify({ content: trimmed }),
     });
@@ -301,23 +547,29 @@ async function sendMessage(content) {
       renderConversationList();
     }
 
-    // Replace pending bubble with the real assistant message.
-    pending.remove();
-    const assistantId = result.assistantMessage?.id;
-    if (assistantId) {
-      state.lastResultByMessage.set(assistantId, result);
+    if (response && response.runId) {
+      // Streaming/polling path.
+      beginLiveRun({ runId: response.runId, traceId: response.traceId });
+      const phase = await streamRun({ runId: response.runId });
+      await finalizeRun({ conversationId, runId: response.runId, pending, phase });
+    } else if (response && response.assistantMessage) {
+      // Synchronous fallback: the server returned the full result (no streaming branch). Render it
+      // directly, preserving the original behavior.
+      pending.remove();
+      const assistantId = response.assistantMessage.id;
+      if (assistantId) state.lastResultByMessage.set(assistantId, response);
+      renderMessage("assistant", response.assistantMessage.content, {
+        messageId: assistantId,
+        withTraceLink: true,
+      });
+      const phase = response.run?.phase;
+      setRunStatus(PHASE_STATUS_LABELS[phase] || phase || "Done", statusPillClass(phase, response.run?.status));
+      renderTrace(response);
+    } else {
+      throw new Error("Unexpected response from server");
     }
-    renderMessage("assistant", result.assistantMessage.content, {
-      messageId: assistantId,
-      withTraceLink: true,
-    });
-
-    const phase = result.run?.phase;
-    const runStatus = result.run?.status;
-    setRunStatus(PHASE_STATUS_LABELS[phase] || phase || "Done", statusPillClass(phase, runStatus));
-
-    renderTrace(result);
   } catch (err) {
+    teardownLiveRun();
     pending.remove();
     renderMessage("assistant", `Error: ${err.message}`, {});
     setRunStatus("Failed", "status-pill--failed");
@@ -345,6 +597,7 @@ function toggleTrace() {
 }
 
 function resetTrace() {
+  teardownLiveRun(); // stop any in-flight stream/poll when switching away
   els["trace-empty"].hidden = false;
   els["trace-body"].hidden = true;
 }
