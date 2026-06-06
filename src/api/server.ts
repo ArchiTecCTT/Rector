@@ -25,7 +25,9 @@ import {
 } from "../providers/llm";
 import type { OrchestratorMode } from "../deployment";
 import { createRectorStore, type PersistenceConfig, type RectorStore } from "../store";
+import { RunEventSchema } from "../store/schemas";
 import type { Artifact, Run, RunEvent } from "../store/schemas";
+import { RunPhaseSchema } from "../protocol/phases";
 
 export interface ApiSecurityOptions {
   corsAllowedOrigins?: string[];
@@ -343,6 +345,56 @@ export function withEventBroadcast(store: RectorStore, broker: RunEventBroker): 
     deleteArtifact: (id) => store.deleteArtifact(id),
   };
 }
+
+// --- SSE frame contract (ORN-40, task 7.1) ---
+
+/**
+ * Minimal, forward-compatible payload carried by a `cost` SSE frame.
+ *
+ * The canonical per-run cost aggregate (`RunCostAggregateSchema`/`RunCostAggregate`) is introduced
+ * by the cost dashboard work (task 10.1 in `src/observability`) and surfaced live over the stream
+ * by task 11.2. Until that schema exists, the `cost` frame models exactly the design's live cost
+ * frame shape — numeric totals plus de-duplicated, non-secret provider/model identifiers only — so
+ * downstream tasks can swap in the imported `RunCostAggregateSchema` with no change to the frame
+ * shape. It deliberately carries no secret-bearing field (no keys, headers, or raw model output).
+ *
+ * NOTE: task 10.1/11.2 will refine this to import the canonical `RunCostAggregateSchema` once it is
+ * defined; the field set here is kept identical to that design shape to make the swap mechanical.
+ */
+const SseCostPayloadSchema = z.object({
+  runId: z.string().min(1),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  estimatedUsd: z.number().nonnegative(),
+  modelCalls: z.number().int().nonnegative(),
+  providers: z.array(z.string().min(1)), // distinct provider ids, never secrets
+  models: z.array(z.string().min(1)), // distinct model ids, never secrets
+});
+
+/**
+ * The Server-Sent Events frame contract for the run stream (ORN-40). A discriminated union over a
+ * `type` field with four variants, each carrying ONLY persisted, redaction-applied data:
+ *
+ * - `run-event`: carries the already-persisted, already-redacted {@link RunEvent} (validated by the
+ *   store's `RunEventSchema` before persistence), replayed during catch-up and streamed live.
+ * - `cost`: carries the live per-run cost aggregate ({@link SseCostPayloadSchema}) — numbers and
+ *   non-secret provider/model ids only. Emitted by task 11.2; see the note on `SseCostPayloadSchema`.
+ * - `done`: the terminal frame carrying only the terminal run `phase` (one of the terminal phases).
+ * - `error`: carries a `message: string` that MUST be passed through `redactString` at construction
+ *   time. The schema field is a plain string; redaction is a construction-time invariant, not a
+ *   schema transform, because the same redaction boundary applies to every streamed surface.
+ *
+ * Every frame is derived from persisted, redacted data, so no secret value can appear in any frame.
+ */
+export const SseFrameSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("run-event"), runId: z.string().min(1), event: RunEventSchema }),
+  z.object({ type: z.literal("cost"), runId: z.string().min(1), cost: SseCostPayloadSchema }),
+  z.object({ type: z.literal("done"), runId: z.string().min(1), phase: RunPhaseSchema }),
+  // `message` is redacted via `redactString` at construction time (see doc above).
+  z.object({ type: z.literal("error"), runId: z.string().min(1), message: z.string() }),
+]);
+export type SseFrame = z.infer<typeof SseFrameSchema>;
 
 export function createApp(manager: TaskManager, securityOptions: ApiSecurityOptions = {}): express.Application {
   const app = express();
