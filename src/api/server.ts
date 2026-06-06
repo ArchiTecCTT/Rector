@@ -483,6 +483,10 @@ export async function handleRunStream(options: RunStreamHandlerOptions): Promise
   let replaying = true;
   const emittedIds = new Set<string>();
   const liveBuffer: RunEvent[] = [];
+  // Every event emitted as a `run-event` frame (catch-up + live), in order, so the live `cost`
+  // frame can be recomputed from the full set of events seen so far via `aggregateRunCost` — the
+  // exact same fold the `GET /api/runs/:id/cost` endpoint uses, so the live total always matches.
+  const seenEvents: RunEvent[] = [];
   let unsubscribe: (() => void) | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
 
@@ -497,14 +501,40 @@ export async function handleRunStream(options: RunStreamHandlerOptions): Promise
   };
 
   /**
+   * Does this persisted event carry provider-call/usage metadata? `chatRunner` records a
+   * `providerCall` object on the event payload for the live PLANNING / SKEPTIC_REVIEW /
+   * SYNTHESIZING transitions; local-mode events carry none. Gating the live `cost` frame on this
+   * (Requirement 3.7 — "after each published provider-call event") means non-provider events do not
+   * spam identical cost frames. Read defensively, mirroring `aggregateRunCost`'s own extraction.
+   */
+  const carriesProviderCall = (event: RunEvent): boolean => {
+    const payload = event.payload;
+    if (payload === null || typeof payload !== "object") return false;
+    const providerCall = (payload as Record<string, unknown>).providerCall;
+    return providerCall !== null && typeof providerCall === "object";
+  };
+
+  /**
    * Emit one persisted event as a `run-event` frame (de-duplicated by id). Returns true when the
    * event is terminal — in which case it has already emitted the single `done` frame and torn down.
+   *
+   * Frame ordering per event: `run-event` first; then, when the event carries provider-call usage,
+   * a live `cost` frame with the current {@link RunCostAggregate} recomputed from all events seen so
+   * far; then, when the event is terminal, the single `done` frame (so a terminal provider-call
+   * event yields run-event → cost → done, with `done` still emitted exactly once and last).
    */
   const emitEvent = (event: RunEvent): boolean => {
     if (closed) return false;
     if (emittedIds.has(event.id)) return false; // boundary de-dup: never emit the same event twice
     emittedIds.add(event.id);
+    seenEvents.push(event);
     res.write(serializeSseFrame({ type: "run-event", runId, event }));
+    // Live running total: after a provider-call event, surface the current RunCostAggregate so the
+    // UI shows a live cost/token total. The aggregate is numbers + non-secret provider/model ids
+    // only and is validated by SseFrameSchema before it is written, preserving the no-secret guard.
+    if (carriesProviderCall(event)) {
+      res.write(serializeSseFrame({ type: "cost", runId, cost: aggregateRunCost(runId, seenEvents) }));
+    }
     if (isTerminalRunPhase(event.phase)) {
       teardown({ type: "done", runId, phase: event.phase });
       return true;
