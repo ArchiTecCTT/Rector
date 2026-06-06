@@ -18,6 +18,7 @@ import {
   type UpdateMessageInput,
   type UpdateRunInput,
 } from "./schemas";
+import type { RectorStore } from "./index";
 
 type IdPrefix = "conv" | "msg" | "run" | "art";
 
@@ -29,7 +30,7 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
-export class InMemoryRectorStore {
+export class InMemoryRectorStore implements RectorStore {
   private conversations = new Map<string, Conversation>();
   private messages = new Map<string, Message>();
   private runs = new Map<string, Run>();
