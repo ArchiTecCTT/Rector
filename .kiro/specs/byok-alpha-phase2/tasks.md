@@ -65,7 +65,7 @@ provider interactions are mocked and the workspace filesystem is injected via `f
       withhold `resolvedPath` on denial; redact `stdout`/`stderr`/`fileContent` and every artifact
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 7.2_
 
-  - [ ] 2.4 Write property test for destructive-command precedence
+  - [-] 2.4 Write property test for destructive-command precedence
     - **Property 3: Destructive commands are always blocked**
     - **Validates: Requirements 4.3**
     - Add to `tests/workspaceSandbox.test.ts`; generate destructive command/arg combinations
@@ -89,7 +89,7 @@ provider interactions are mocked and the workspace filesystem is injected via `f
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 4. DAG-to-sandbox execution bridge (ORN-37)
-  - [ ] 4.1 Implement `executeDagThroughSandbox` and `ExecutionArtifact`
+  - [-] 4.1 Implement `executeDagThroughSandbox` and `ExecutionArtifact`
     - Create `src/orchestration/sandboxExecutor.ts` mapping DAG nodes to `SandboxOperationInput`s and
       driving them through `WorkspaceSandboxAdapter.operate` (the only bridge to real I/O); add
       `ExecutionArtifactSchema` and record redacted, length-bounded `preview`s on EXECUTING/VALIDATING
@@ -103,13 +103,13 @@ provider interactions are mocked and the workspace filesystem is injected via `f
     - _Requirements: 4.7, 4.8_
 
 - [ ] 5. Live skeptic agent with budget preflight and single repair (ORN-35)
-  - [ ] 5.1 Implement skeptic prompt builders
+  - [x] 5.1 Implement skeptic prompt builders
     - In `src/orchestration/prompts.ts`: add `buildSkepticPrompt(input)` (system rules + JSON contract
       for `{ verdict, findings }` + redacted plan/context) and
       `buildSkepticRepairPrompt(input, priorContent, errorSummary)`
     - _Requirements: 1.1, 1.5_
 
-  - [ ] 5.2 Implement `runLiveSkeptic`
+  - [-] 5.2 Implement `runLiveSkeptic`
     - In `src/orchestration/skeptic.ts`: add `LiveSkepticStatus`, `SkepticReviewDraftSchema`,
       `SkepticBlockerSchema`, `LiveSkepticResult`, `LiveSkepticInput`, `LiveSkepticDeps`, and
       `runLiveSkeptic`; keep `reviewPlanWithSkeptic`

@@ -25,9 +25,11 @@ import nodePath from "node:path";
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
 
-import { resolveWithinWorkspace } from "../src/sandbox";
+import { resolveWithinWorkspace, WorkspaceSandboxAdapter, type CommandRunner } from "../src/sandbox";
 import {
+  ALLOWLISTED_COMMANDS,
   arbAdversarialPathCase,
+  arbDestructiveCommand,
   arbSafeRelativePathCase,
   arbSymlinkEscapeCase,
   arbWorkspacePathCase,
@@ -157,6 +159,84 @@ describe("Property 2: no path escapes the workspace root", () => {
         expect(fs.accessedOutsideRoot()).toEqual([]);
       }),
       { numRuns: 300 }
+    );
+  });
+});
+
+/**
+ * Property 3: Destructive commands are always blocked.
+ *
+ * Validates: Requirements 4.3
+ *
+ * The destructive denylist is the highest-precedence gate in
+ * `WorkspaceSandboxAdapter.operate`: a known-destructive command/arg signature
+ * (rm -rf, del /f, format, mkfs, dd, git clean -fdx, a fork bomb, ...) is denied
+ * before the allowlist, the arbitrary-shell gate, and the approval gate are even
+ * consulted. The design invariant asserted here is:
+ *
+ *   ∀ destructive command/arg signature d (including one whose program token is
+ *   also on the allowlist):
+ *     operate({ kind: "RUN_COMMAND", command: d.command, args: d.args })
+ *       ⟹ status = "DENIED"
+ *        ∧ denialReason = "DESTRUCTIVE_COMMAND_BLOCKED"
+ *        ∧ the injected command runner ran 0 times (no process is spawned).
+ *
+ * A counting `CommandRunner` double is injected so the "spawn no process"
+ * guarantee (Req 4.3) is directly observable; the adapter is configured with the
+ * full allowlist so the denylist's precedence over the allowlist is exercised.
+ */
+
+/** A `CommandRunner` double that records how many times it was invoked. */
+function createCountingCommandRunner(): { runner: CommandRunner; readonly calls: number } {
+  let calls = 0;
+  const handle = {
+    runner: (async ({ command, args }) => {
+      calls += 1;
+      return { exitCode: 0, stdout: [command, ...args].join(" "), stderr: "" };
+    }) as CommandRunner,
+    get calls() {
+      return calls;
+    },
+  };
+  return handle;
+}
+
+describe("Property 3: destructive commands are always blocked", () => {
+  // Validates: Requirement 4.3
+  it("denies every destructive command with DESTRUCTIVE_COMMAND_BLOCKED and never spawns a process, even on the allowlist", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        // Mix plain destructive signatures with ones whose program token is also
+        // allowlisted, so the denylist's precedence over the allowlist is proven.
+        fc.oneof(arbDestructiveCommand(), arbDestructiveCommand({ alsoAllowlisted: true })),
+        async (commandCase) => {
+          const counting = createCountingCommandRunner();
+          const adapter = new WorkspaceSandboxAdapter({
+            workspaceRoot: WORKSPACE_ROOT,
+            // Full allowlist + every destructive program token allowlisted: the
+            // destructive gate must still win.
+            allowlistedCommands: [...ALLOWLISTED_COMMANDS, commandCase.command],
+            commandRunner: counting.runner,
+            now: () => "2026-01-01T00:00:00.000Z",
+          });
+
+          const result = await adapter.operate({
+            kind: "RUN_COMMAND",
+            command: commandCase.command,
+            args: commandCase.args,
+          });
+
+          // Req 4.3: the destructive denylist denies the operation outright.
+          expect(result.status).toBe("DENIED");
+          expect(result.denialReason).toBe("DESTRUCTIVE_COMMAND_BLOCKED");
+          // Req 4.3: no process is spawned — the injected runner ran 0 times.
+          expect(counting.calls).toBe(0);
+          // The denied result is contained and network-free; no resolved path leaks.
+          expect(result.networkCalls).toBe(0);
+          expect(result.resolvedPath).toBeUndefined();
+        },
+      ),
+      { numRuns: 500 },
     );
   });
 });
