@@ -25,7 +25,10 @@ import {
   SpyLLMProvider,
   makeContextPack,
   planToJson,
+  skepticDraftToJson,
+  synthesisDraftToJson,
 } from "./support/byokArbitraries";
+import { PlannerOutputSchema } from "../src/orchestration/planner";
 import type { Budget } from "../src/store/schemas";
 
 function makeManager() {
@@ -357,6 +360,46 @@ function validPlanJsonFor(args: ChatRunArgs): string {
   );
 }
 
+/**
+ * A deterministic, schema-valid plan whose single task compiles to a
+ * NON-FILE-OPERATION DAG node (an `LLM_EXECUTION` task plus its `VALIDATION`
+ * node — both no-op successes in the safe executor). Used by the success-path
+ * external tests so the full pipeline (planner -> live skeptic -> crucible ->
+ * DAG -> safe executor -> bounded healing -> live synthesizer) executes cleanly
+ * and reaches DONE without any real workspace I/O or approval gate.
+ */
+const NON_FILE_OPERATION_PLAN_JSON = planToJson(
+  PlannerOutputSchema.parse({
+    goal: "Answer the user question from available conversation context",
+    assumptions: ["User expects a concise synthesis, not changes."],
+    tasks: [
+      {
+        id: "answer.synthesize",
+        title: "Synthesize direct answer",
+        description: "Use available conversation context to produce a concise response.",
+        dependencies: [],
+        expectedArtifacts: ["Assistant answer"],
+        validation: ["Answer addresses the stated question"],
+        risk: "low",
+        approvalRequired: false,
+      },
+    ],
+    dependencies: [],
+    validation: { summary: "Direct answer plan stays non-executing", checks: ["Confirm response is grounded in context"] },
+    riskLevel: "low",
+    approvalGates: [],
+  })
+);
+
+/** A SOUND/empty skeptic draft so the crucible ACCEPTS the plan unchanged. */
+const SOUND_SKEPTIC_JSON = skepticDraftToJson({ verdict: "SOUND", findings: [] });
+
+/** A synthesizer draft with one evidence citation (the DAG carried execution evidence). */
+const CITED_SYNTHESIS_JSON = synthesisDraftToJson({
+  response: "Completed the task; see cited evidence for details.",
+  citations: [{ kind: "artifact", ref: "task:answer.synthesize", detail: "no-op execution node succeeded" }],
+});
+
 /** Finds the persisted PLANNING-phase run event. */
 function findPlanningEvent(events: Array<{ phase: string; payload?: any }>) {
   return events.find((event) => event.phase === "PLANNING");
@@ -366,20 +409,22 @@ describe("external chat runner (ORN-33)", () => {
   const EDIT_PROMPT = "Fix the TypeScript bug in src/api/server.ts and update tests.";
 
   it("records provider/cost metadata on the PLANNING event in external mode, but not in local mode", async () => {
-    // External run with a spy scripted to return a single VALID plan.
+    // External run with a spy scripted for the three live steps (planner -> skeptic -> synthesizer).
     const externalStore = new InMemoryRectorStore();
     const externalArgs = await buildChatArgs(externalStore, EDIT_PROMPT);
-    const spy = new SpyLLMProvider({ responses: [validPlanJsonFor(externalArgs)] });
+    const spy = new SpyLLMProvider({
+      responses: [NON_FILE_OPERATION_PLAN_JSON, SOUND_SKEPTIC_JSON, CITED_SYNTHESIS_JSON],
+    });
 
     const externalResult = await runChat(externalStore, externalArgs, {
       mode: "external",
       router: makeRouter(spy),
     });
 
-    // The external run completes through the deterministic phases.
+    // The external run completes through the full pipeline (three provider calls).
     expect(externalResult.run.phase).toBe("DONE");
     expect(externalResult.run.status).toBe("completed");
-    expect(spy.invokeCount).toBe(1);
+    expect(spy.invokeCount).toBe(3);
 
     const externalEvents = await externalStore.listEvents(externalResult.run.id);
     const externalPlanning = findPlanningEvent(externalEvents);
@@ -416,7 +461,11 @@ describe("external chat runner (ORN-33)", () => {
       modelCalls: 1,
     };
     const spy = new SpyLLMProvider({
-      responses: [{ content: validPlanJsonFor(args), usage: reportedUsage }],
+      responses: [
+        { content: NON_FILE_OPERATION_PLAN_JSON, usage: reportedUsage },
+        SOUND_SKEPTIC_JSON,
+        CITED_SYNTHESIS_JSON,
+      ],
     });
 
     const result = await runExternalChatRun(store, args, { mode: "external", router: makeRouter(spy) });

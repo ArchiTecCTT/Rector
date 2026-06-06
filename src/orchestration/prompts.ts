@@ -587,3 +587,85 @@ function buildSynthesizerContextMessage(input: SynthesizerPromptInput): string {
     "Respond with ONLY the answer JSON object described in the system instructions.",
   ].join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// Live repair-agent prompt (ORN-38)
+// ---------------------------------------------------------------------------
+
+/**
+ * System rules that anchor the live repair agent. The model only *proposes* a single patch from the
+ * already-redacted failed output; the symbolic control plane validates the proposal against
+ * `RepairPatchProposalSchema`, applies it ONLY through the safe workspace executor (which re-enforces
+ * workspace containment, the allowlist/denylist, and an explicit approval), re-runs validation, and
+ * bounds the number of healing rounds. These rules make the safety bar explicit so the model's
+ * proposal is as likely as possible to be applicable.
+ */
+export const REPAIR_SYSTEM_RULES = [
+  "You are Rector's repair agent. You propose a single file patch that fixes one failed execution step.",
+  "You do NOT execute, write, or approve anything: a deterministic control plane validates your proposal,",
+  "applies it only through a contained safe executor, and re-runs validation.",
+  "Propose the smallest safe patch that addresses the failure; do not invent unrelated changes.",
+  "Target only a safe relative path inside the workspace (no absolute paths, no '..' segments, no leading slash).",
+  "Return ONLY a single JSON object that conforms exactly to the contract below.",
+  "Do not wrap the JSON in markdown code fences, prose, comments, or trailing text.",
+  "Never include secrets, API keys, credentials, tokens, or environment variable values in any field.",
+].join("\n");
+
+/**
+ * The JSON contract the repair agent must produce. Mirrors the live healing loop's
+ * `RepairPatchProposal` shape (`{ path, operation, content, rationale }`).
+ */
+export const REPAIR_JSON_CONTRACT = `Output a JSON object with this exact shape:
+
+{
+  "path": string,                       // non-empty; a safe relative path inside the workspace
+  "operation": "add" | "update" | "delete",
+  "content": string,                    // the full proposed file content (may be empty for "delete")
+  "rationale": string                   // non-empty; why this patch fixes the failure
+}`;
+
+/**
+ * Input accepted by {@link buildRepairPrompt}. The `failedOutput` is the already-redacted stdout /
+ * stderr / failure message of the failed step; `contextPack` provides the grounding context.
+ */
+export interface RepairPromptInput {
+  classification: string;
+  failedOutput: string;
+  nodeId?: string;
+  contextPack: ContextPack;
+}
+
+/**
+ * Builds the repair-agent prompt: system rules + JSON contract, then a user message carrying the
+ * redacted failed output and context. The assembled payload runs through `redactSecrets` so no
+ * configured secret reaches the provider even if the failed output or context echoed one.
+ */
+export function buildRepairPrompt(input: RepairPromptInput): LLMMessage[] {
+  const payload = redactSecrets({
+    failure: {
+      classification: input.classification,
+      nodeId: input.nodeId,
+      failedOutput: input.failedOutput,
+    },
+    context: {
+      userIntentSummary: input.contextPack.userIntentSummary,
+      constraints: input.contextPack.constraints,
+      riskFlags: input.contextPack.riskFlags,
+    },
+  });
+
+  return [
+    { role: "system", content: `${REPAIR_SYSTEM_RULES}\n\n${REPAIR_JSON_CONTRACT}` },
+    {
+      role: "user",
+      content: [
+        "Propose a single patch that fixes the failed execution step below.",
+        "",
+        "FAILURE AND CONTEXT (JSON):",
+        JSON.stringify(payload, null, 2),
+        "",
+        "Respond with ONLY the patch JSON object described in the system instructions.",
+      ].join("\n"),
+    },
+  ];
+}

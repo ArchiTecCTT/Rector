@@ -191,13 +191,45 @@ import type { LLMUsage, ModelRouter, ModelSelection } from "../src/providers/llm
 import {
   DEFAULT_SPY_USAGE,
   SpyLLMProvider,
-  arbValidPlan,
   generousBudget,
   planToJson,
+  skepticDraftToJson,
+  synthesisDraftToJson,
 } from "./support/byokArbitraries";
+import { PlannerOutputSchema } from "../src/orchestration/planner";
 
 /** The PLANNING-event payload key the external runner writes its metadata to. */
 const PROVIDER_CALL_KEY = "providerCall";
+
+/**
+ * A deterministic, schema-valid plan whose single task compiles to a
+ * NON-FILE-OPERATION DAG node. The task text contains no "edit"/"file"/"code
+ * change" trigger, so the DAG compiler maps it to an `LLM_EXECUTION` node, and
+ * its per-task validation node is a `VALIDATION` node with no command — both
+ * map to no-op successes in the safe executor. The DAG therefore executes
+ * cleanly (status VALIDATED) with no real workspace I/O, so a successful
+ * skeptic + synthesizer drive the run all the way to DONE.
+ */
+const NON_FILE_OPERATION_PLAN = PlannerOutputSchema.parse({
+  goal: "Answer the user question from available conversation context",
+  assumptions: ["User expects a concise synthesis, not changes."],
+  tasks: [
+    {
+      id: "answer.synthesize",
+      title: "Synthesize direct answer",
+      description: "Use available conversation context to produce a concise response.",
+      dependencies: [],
+      expectedArtifacts: ["Assistant answer"],
+      validation: ["Answer addresses the stated question"],
+      risk: "low",
+      approvalRequired: false,
+    },
+  ],
+  dependencies: [],
+  validation: { summary: "Direct answer plan stays non-executing", checks: ["Confirm response is grounded in context"] },
+  riskLevel: "low",
+  approvalGates: [],
+});
 
 /**
  * Arbitrary positive usage the spy provider reports on its response. These are
@@ -229,31 +261,48 @@ function spyRouter(provider: SpyLLMProvider): ModelRouter {
 }
 
 describe("Property 7: external mode records provider/model/cost on the PLANNING event", () => {
-  // Validates: Requirements 3.4, 4.9.
+  // Validates: Requirements 3.4, 4.9 (PLANNING metadata + usage reflection) and the Phase 2 wiring
+  // (9.1/9.2/9.7/9.8): a full external run now drives planner -> live skeptic -> crucible -> DAG ->
+  // safe executor -> bounded healing -> live synthesizer, so three provider calls are made.
   it("records schema-shaped ProviderCallMetadata and reflects reported usage into run cost/token fields", async () => {
     await fc.assert(
-      fc.asyncProperty(arbPrompt(), arbValidPlan(), arbReportedUsage(), async (prompt, plan, reported) => {
+      fc.asyncProperty(arbPrompt(), arbReportedUsage(), async (prompt, reported) => {
         const store = new InMemoryRectorStore();
         const args = await buildArgs(store, prompt);
 
-        // Spy returns a valid plan with arbitrary positive usage on its response.
-        // A small fixed estimate keeps the budget preflight permissive.
+        // The spy scripts the three live steps in order: (a) the planner plan with arbitrary positive
+        // usage on its response, (b) a SOUND/empty skeptic draft (so the crucible ACCEPTS), and (c) a
+        // synthesizer draft with one evidence citation (the DAG carried execution evidence). A small
+        // fixed estimate keeps every budget preflight permissive.
         const provider = new SpyLLMProvider({
           estimate: DEFAULT_SPY_USAGE,
-          responses: [{ content: planToJson(plan), usage: reported }],
+          responses: [
+            { content: planToJson(NON_FILE_OPERATION_PLAN), usage: reported },
+            { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
+            {
+              content: synthesisDraftToJson({
+                response: "Completed the task; see cited evidence for details.",
+                citations: [
+                  { kind: "artifact", ref: "task:answer.synthesize", detail: "no-op execution node succeeded" },
+                ],
+              }),
+            },
+          ],
         });
         const router = spyRouter(provider);
 
         const { run } = await runChat(store, args, {
           mode: "external",
           router,
-          budget: generousBudget(),
+          // maxUsd is raised above the arbitrary planner cost so the skeptic/synthesizer preflights
+          // (which see the planner's committed cost) are not denied; the run must reach DONE.
+          budget: generousBudget({ maxUsd: 10_000 }),
         });
 
-        // The run completed the external pipeline (single committed provider call).
+        // The run completed the full external pipeline: planner + live skeptic + live synthesizer.
         expect(run.phase).toBe("DONE");
         expect(run.status).toBe("completed");
-        expect(provider.invokeCount).toBe(1);
+        expect(provider.invokeCount).toBe(3);
 
         // --- (1) PLANNING event carries the provider-call metadata. ---
         const events = await store.listEvents(run.id);

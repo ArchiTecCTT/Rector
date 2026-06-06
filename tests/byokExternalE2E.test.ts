@@ -37,6 +37,8 @@ import {
   SpyLLMProvider,
   makeContextPack,
   planToJson,
+  skepticDraftToJson,
+  synthesisDraftToJson,
 } from "./support/byokArbitraries";
 
 async function withServer<T>(app: express.Application, fn: (base: string) => Promise<T>): Promise<T> {
@@ -113,12 +115,23 @@ describe("BYOK external-mode end-to-end", () => {
   it("runs a full external brainstem run through createApp, records provider/cost metadata, and reaches DONE", async () => {
     const prompt = "Explain the Rector vertical slice.";
 
-    // Spy returns a valid plan with a known reported usage; a small fixed
-    // estimate keeps the budget preflight permissive. No network, no API key.
+    // The spy scripts the three live steps in order: (a) the planner plan with a known reported
+    // usage, (b) a SOUND/empty skeptic draft (so the crucible ACCEPTS), and (c) a synthesizer draft
+    // with one evidence citation. A small fixed estimate keeps every budget preflight permissive.
+    // No network, no API key.
     const reportedUsage = { inputTokens: 321, outputTokens: 123, totalTokens: 444, estimatedUsd: 0.0456, modelCalls: 1 };
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
-      responses: [{ content: fakePlanJsonFor(prompt), usage: reportedUsage }],
+      responses: [
+        { content: fakePlanJsonFor(prompt), usage: reportedUsage },
+        { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
+        {
+          content: synthesisDraftToJson({
+            response: "The Rector vertical slice runs a deterministic brainstem loop; see cited evidence.",
+            citations: [{ kind: "artifact", ref: "task:answer.synthesize", detail: "no-op execution node succeeded" }],
+          }),
+        },
+      ],
     });
 
     const app = createApp(new TaskManager(), {
@@ -140,8 +153,8 @@ describe("BYOK external-mode end-to-end", () => {
       expect(sent.status).toBe(201);
       const body = sent.data as any;
 
-      // Exactly one provider call was made (single committed planner call).
-      expect(provider.invokeCount).toBe(1);
+      // Three provider calls were made: planner + live skeptic + live synthesizer.
+      expect(provider.invokeCount).toBe(3);
 
       // --- (1) Run reaches DONE/completed via the external path. ---
       expect(body.run.status).toBe("completed");
