@@ -209,7 +209,12 @@ Severity guidance (the control plane derives the final verdict from these):
  * (the context pack already carries one; an explicit `triage` overrides it in the prompt).
  */
 export const SkepticPromptInputSchema = z.object({
-  plannerOutput: PlannerOutputSchema,
+  // `plannerOutput` is referenced lazily: `prompts` sits inside the planner import
+  // cycle, so when planner is the cycle entry `PlannerOutputSchema` is still
+  // undefined while this module initializes. `z.lazy` resolves the binding at
+  // parse time (after the cycle settles) instead of capturing it at construction,
+  // which would otherwise make every `buildSkepticPrompt` call throw.
+  plannerOutput: z.lazy(() => PlannerOutputSchema),
   contextPack: ContextPackSchema,
   triage: TriageResultSchema.optional(),
 });
@@ -381,7 +386,10 @@ export const SynthesizerPromptInputSchema = z.object({
   traceId: z.string().min(1),
   triage: TriageResultSchema,
   contextPack: ContextPackSchema,
-  plannerOutput: PlannerOutputSchema,
+  // Referenced lazily for the same reason as `SkepticPromptInputSchema`: `prompts`
+  // is inside the planner import cycle, so capturing `PlannerOutputSchema` eagerly
+  // here would store `undefined` when planner is the cycle entry.
+  plannerOutput: z.lazy(() => PlannerOutputSchema),
   skepticReview: z
     .object({
       verdict: z.string().min(1),
