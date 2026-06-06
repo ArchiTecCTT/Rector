@@ -25,7 +25,15 @@ import nodePath from "node:path";
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
 
-import { resolveWithinWorkspace, WorkspaceSandboxAdapter, type CommandRunner } from "../src/sandbox";
+import {
+  MAX_CAPTURED_STREAM_BYTES,
+  WORKSPACE_COMMAND_TIMEOUT_MS,
+  resolveWithinWorkspace,
+  WorkspaceSandboxAdapter,
+  type CommandRunner,
+  type CommandRunResult,
+  type SandboxApproval,
+} from "../src/sandbox";
 import {
   ALLOWLISTED_COMMANDS,
   arbAdversarialPathCase,
@@ -339,5 +347,302 @@ describe("Property 4: arbitrary shell is denied by default", () => {
       }),
       { numRuns: 500 },
     );
+  });
+});
+
+/**
+ * Unit tests for the WorkspaceSandboxAdapter policy gates (ORN-37, task 2.6).
+ *
+ * Validates: Requirements 4.2, 4.4, 4.5, 4.6, 4.7, 4.8
+ *
+ * These example-based tests complement the Property 2/3/4 tests above by
+ * pinning down the remaining `operate()` outcomes that the properties do not
+ * exhaustively cover:
+ *   - off-allowlist denial (Req 4.2) with no process spawned,
+ *   - `NEEDS_APPROVAL` for an unapproved write and an unapproved risky command,
+ *     plus the unapproved `PatchArtifact` shape (Reqs 4.4, 4.5),
+ *   - the 60s command timeout with partial-output capture (Req 4.6),
+ *   - stdout/stderr truncation at 262144 bytes (Req 4.7),
+ *   - `networkCalls: 0` on every command result (Req 4.8),
+ *   - the `READ_FILE` / `LIST_DIR` success paths.
+ *
+ * Everything is mock-only: the workspace filesystem is injected via the
+ * in-memory `WorkspaceFs` double and the command runner is a deterministic
+ * double, so no real disk, process, API key, or network is used.
+ */
+const FIXED_NOW = () => "2026-01-01T00:00:00.000Z";
+
+/**
+ * A configurable `CommandRunner` double that records its call count and the
+ * arguments of the most recent invocation, and returns a scripted result.
+ */
+function createScriptedCommandRunner(result: CommandRunResult): {
+  runner: CommandRunner;
+  readonly calls: number;
+  readonly lastInput: { command: string; args: string[]; cwd: string; timeoutMs: number } | undefined;
+} {
+  let calls = 0;
+  let lastInput: { command: string; args: string[]; cwd: string; timeoutMs: number } | undefined;
+  return {
+    runner: (async (input) => {
+      calls += 1;
+      lastInput = input;
+      return result;
+    }) as CommandRunner,
+    get calls() {
+      return calls;
+    },
+    get lastInput() {
+      return lastInput;
+    },
+  };
+}
+
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+describe("WorkspaceSandboxAdapter: allowlist enforcement (Req 4.2)", () => {
+  it("denies a command that is not on the allowlist with COMMAND_NOT_ALLOWLISTED and spawns no process", async () => {
+    const counting = createScriptedCommandRunner({ exitCode: 0, stdout: "", stderr: "" });
+    const adapter = new WorkspaceSandboxAdapter({
+      workspaceRoot: WORKSPACE_ROOT,
+      allowlistedCommands: ["npm:test"],
+      commandRunner: counting.runner,
+      now: FIXED_NOW,
+    });
+
+    const result = await adapter.operate({ kind: "RUN_COMMAND", command: "python", args: ["script.py"] });
+
+    expect(result.status).toBe("DENIED");
+    expect(result.denialReason).toBe("COMMAND_NOT_ALLOWLISTED");
+    // No process is spawned for an off-allowlist command.
+    expect(counting.calls).toBe(0);
+    // Denied results are contained and network-free; no resolved path leaks.
+    expect(result.networkCalls).toBe(0);
+    expect(result.resolvedPath).toBeUndefined();
+  });
+
+  it("runs an allowlisted, non-risky command and captures its streams", async () => {
+    const counting = createScriptedCommandRunner({ exitCode: 0, stdout: "build ok", stderr: "" });
+    const adapter = new WorkspaceSandboxAdapter({
+      workspaceRoot: WORKSPACE_ROOT,
+      allowlistedCommands: [...ALLOWLISTED_COMMANDS],
+      commandRunner: counting.runner,
+      now: FIXED_NOW,
+    });
+
+    const result = await adapter.operate({ kind: "RUN_COMMAND", command: "npm:build", args: ["--ci"] });
+
+    expect(result.status).toBe("SUCCEEDED");
+    expect(result.denialReason).toBeUndefined();
+    expect(result.stdout).toBe("build ok");
+    expect(counting.calls).toBe(1);
+    // Req 4.8: every command result reports zero network calls.
+    expect(result.networkCalls).toBe(0);
+  });
+});
+
+describe("WorkspaceSandboxAdapter: approval gating (Reqs 4.4, 4.5)", () => {
+  it("returns NEEDS_APPROVAL and an unapproved PatchArtifact for an unapproved write, performing no write", async () => {
+    const fs = createWorkspaceFs({ root: WORKSPACE_ROOT });
+    const adapter = new WorkspaceSandboxAdapter({
+      workspaceRoot: WORKSPACE_ROOT,
+      fsImpl: fs,
+      now: FIXED_NOW,
+    });
+
+    const result = await adapter.operate({
+      kind: "PROPOSE_PATCH",
+      path: "src/new-file.ts",
+      operation: "add",
+      content: "export const added = true;\n",
+    });
+
+    // Req 4.4: a mutating write without a matching approval is not performed.
+    expect(result.status).toBe("NEEDS_APPROVAL");
+    expect(result.denialReason).toBe("NEEDS_APPROVAL");
+    // Req 4.5: an unapproved PatchArtifact is emitted (no write).
+    expect(result.artifacts).toHaveLength(1);
+    const artifact = result.artifacts[0];
+    expect(artifact.kind).toBe("PATCH");
+    expect(artifact.approval.approved).toBe(false);
+    expect(artifact.path).toBe("src/new-file.ts");
+    // The unapproved gate is surfaced and no file was written.
+    expect(result.approvalGates).toHaveLength(1);
+    expect(result.approvalGates[0]?.approved).toBe(false);
+    expect(fs.writes).toEqual([]);
+  });
+
+  it("applies the write when a matching FILE_WRITE approval is present", async () => {
+    const fs = createWorkspaceFs({ root: WORKSPACE_ROOT });
+    const approvals: SandboxApproval[] = [
+      { id: "approval-write-1", scope: "FILE_WRITE", target: "src/new-file.ts", approvedBy: "tester" },
+    ];
+    const adapter = new WorkspaceSandboxAdapter({
+      workspaceRoot: WORKSPACE_ROOT,
+      fsImpl: fs,
+      approvals,
+      now: FIXED_NOW,
+    });
+
+    const result = await adapter.operate({
+      kind: "PROPOSE_PATCH",
+      path: "src/new-file.ts",
+      operation: "add",
+      content: "export const added = true;\n",
+    });
+
+    expect(result.status).toBe("SUCCEEDED");
+    expect(result.artifacts[0]?.approval.approved).toBe(true);
+    // The contained write was performed exactly once.
+    expect(fs.writes).toHaveLength(1);
+    expect(isWithinRoot(WORKSPACE_ROOT, fs.writes[0]!.path)).toBe(true);
+    expect(fs.writes[0]!.data).toBe("export const added = true;\n");
+  });
+
+  it("returns NEEDS_APPROVAL for an unapproved risky command and spawns no process", async () => {
+    const counting = createScriptedCommandRunner({ exitCode: 0, stdout: "", stderr: "" });
+    const adapter = new WorkspaceSandboxAdapter({
+      workspaceRoot: WORKSPACE_ROOT,
+      allowlistedCommands: [...ALLOWLISTED_COMMANDS],
+      riskyCommands: ["npm:test"],
+      commandRunner: counting.runner,
+      now: FIXED_NOW,
+    });
+
+    const result = await adapter.operate({ kind: "RUN_COMMAND", command: "npm:test", args: [] });
+
+    // Req 4.4: a risky command lacking a matching COMMAND approval is gated.
+    expect(result.status).toBe("NEEDS_APPROVAL");
+    expect(result.denialReason).toBe("NEEDS_APPROVAL");
+    expect(counting.calls).toBe(0);
+    expect(result.networkCalls).toBe(0);
+  });
+
+  it("runs a risky command when a matching COMMAND approval is present", async () => {
+    const counting = createScriptedCommandRunner({ exitCode: 0, stdout: "tests passed", stderr: "" });
+    const approvals: SandboxApproval[] = [
+      { id: "approval-cmd-1", scope: "COMMAND", target: "npm:test", approvedBy: "tester" },
+    ];
+    const adapter = new WorkspaceSandboxAdapter({
+      workspaceRoot: WORKSPACE_ROOT,
+      allowlistedCommands: [...ALLOWLISTED_COMMANDS],
+      riskyCommands: ["npm:test"],
+      approvals,
+      commandRunner: counting.runner,
+      now: FIXED_NOW,
+    });
+
+    const result = await adapter.operate({ kind: "RUN_COMMAND", command: "npm:test", args: [] });
+
+    expect(result.status).toBe("SUCCEEDED");
+    expect(result.stdout).toBe("tests passed");
+    expect(counting.calls).toBe(1);
+  });
+});
+
+describe("WorkspaceSandboxAdapter: command timeout and capture (Reqs 4.6, 4.7, 4.8)", () => {
+  it("denies a timed-out command with COMMAND_TIMEOUT and captures the partial output", async () => {
+    const counting = createScriptedCommandRunner({
+      exitCode: 124,
+      stdout: "partial stdout before termination",
+      stderr: "partial stderr before termination",
+      timedOut: true,
+    });
+    const adapter = new WorkspaceSandboxAdapter({
+      workspaceRoot: WORKSPACE_ROOT,
+      allowlistedCommands: [...ALLOWLISTED_COMMANDS],
+      commandRunner: counting.runner,
+      now: FIXED_NOW,
+    });
+
+    const result = await adapter.operate({ kind: "RUN_COMMAND", command: "npm:test", args: [] });
+
+    // Req 4.6: a timeout terminates the process and denies the operation.
+    expect(result.status).toBe("DENIED");
+    expect(result.denialReason).toBe("COMMAND_TIMEOUT");
+    // Req 4.6: the partial output produced before termination is preserved.
+    expect(result.stdout).toBe("partial stdout before termination");
+    expect(result.stderr).toBe("partial stderr before termination");
+    expect(result.networkCalls).toBe(0);
+  });
+
+  it("defaults to the 60s timeout when the operation omits timeoutMs", async () => {
+    const counting = createScriptedCommandRunner({ exitCode: 0, stdout: "", stderr: "" });
+    const adapter = new WorkspaceSandboxAdapter({
+      workspaceRoot: WORKSPACE_ROOT,
+      allowlistedCommands: [...ALLOWLISTED_COMMANDS],
+      commandRunner: counting.runner,
+      now: FIXED_NOW,
+    });
+
+    await adapter.operate({ kind: "RUN_COMMAND", command: "npm:build", args: [] });
+
+    expect(counting.lastInput?.timeoutMs).toBe(WORKSPACE_COMMAND_TIMEOUT_MS);
+    expect(WORKSPACE_COMMAND_TIMEOUT_MS).toBe(60_000);
+  });
+
+  it("truncates captured stdout and stderr to 262144 bytes (Req 4.7)", async () => {
+    const oversized = "a".repeat(MAX_CAPTURED_STREAM_BYTES + 50_000);
+    const counting = createScriptedCommandRunner({ exitCode: 0, stdout: oversized, stderr: oversized });
+    const adapter = new WorkspaceSandboxAdapter({
+      workspaceRoot: WORKSPACE_ROOT,
+      allowlistedCommands: [...ALLOWLISTED_COMMANDS],
+      commandRunner: counting.runner,
+      now: FIXED_NOW,
+    });
+
+    const result = await adapter.operate({ kind: "RUN_COMMAND", command: "npm:build", args: [] });
+
+    expect(result.status).toBe("SUCCEEDED");
+    // Each captured stream is bounded to the hard 256 KiB cap.
+    expect(byteLength(result.stdout)).toBeLessThanOrEqual(MAX_CAPTURED_STREAM_BYTES);
+    expect(byteLength(result.stderr)).toBeLessThanOrEqual(MAX_CAPTURED_STREAM_BYTES);
+    // The excess was actually truncated, not passed through.
+    expect(result.stdout.length).toBeLessThan(oversized.length);
+    expect(result.networkCalls).toBe(0);
+  });
+});
+
+describe("WorkspaceSandboxAdapter: read and list success paths", () => {
+  it("reads a contained file and returns its (redacted) content with a contained resolvedPath", async () => {
+    const fs = createWorkspaceFs({
+      root: WORKSPACE_ROOT,
+      files: { "src/index.ts": "export const value = 42;\n" },
+    });
+    const adapter = new WorkspaceSandboxAdapter({
+      workspaceRoot: WORKSPACE_ROOT,
+      fsImpl: fs,
+      now: FIXED_NOW,
+    });
+
+    const result = await adapter.operate({ kind: "READ_FILE", path: "src/index.ts" });
+
+    expect(result.status).toBe("SUCCEEDED");
+    expect(result.fileContent).toBe("export const value = 42;\n");
+    expect(result.resolvedPath).toBeDefined();
+    expect(isWithinRoot(WORKSPACE_ROOT, result.resolvedPath!)).toBe(true);
+    expect(result.networkCalls).toBe(0);
+  });
+
+  it("lists a contained directory and returns its entries", async () => {
+    const fs = createWorkspaceFs({
+      root: WORKSPACE_ROOT,
+      dirs: { src: ["index.ts", "util.ts", "types.ts"] },
+    });
+    const adapter = new WorkspaceSandboxAdapter({
+      workspaceRoot: WORKSPACE_ROOT,
+      fsImpl: fs,
+      now: FIXED_NOW,
+    });
+
+    const result = await adapter.operate({ kind: "LIST_DIR", path: "src" });
+
+    expect(result.status).toBe("SUCCEEDED");
+    expect(result.entries).toEqual(["index.ts", "util.ts", "types.ts"]);
+    expect(result.resolvedPath).toBeDefined();
+    expect(isWithinRoot(WORKSPACE_ROOT, result.resolvedPath!)).toBe(true);
+    expect(result.networkCalls).toBe(0);
   });
 });
