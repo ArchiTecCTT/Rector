@@ -70,7 +70,99 @@
     </script>
   </head>
   <body>
+    <!--
+      Inline SVG icon sprite (design "Iconography", Req 11.2): all glyphs are
+      defined once here and referenced via <use href="#…">. No icon font, no
+      remote fetch. Icons are decorative (aria-hidden); every control keeps a
+      visible text label or accessible name so a missing symbol never makes an
+      action unreachable (Req 11.4).
+    -->
+    <svg width="0" height="0" aria-hidden="true" focusable="false" style="position: absolute">
+      <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </symbol>
+      <symbol id="i-cmd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z" />
+      </symbol>
+      <symbol id="i-trace" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 5v14M5 12h14" />
+      </symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m6 9 6 6 6-6" />
+      </symbol>
+    </svg>
+
     <div class="app">
+      <!--
+        TOP BAR (Req 2.1, 2.2): the slim full-width region. Hosts the moved
+        conversation title, run-status pill, and live-connection badge in
+        .topbar__lead (relocated from the old .chat__head, ids preserved), and
+        the global action launchers in .topbar__actions: the command palette,
+        the (moved) trace toggle, and the settings gear + anchored menu popover.
+      -->
+      <header class="topbar" aria-label="Application bar">
+        <div class="topbar__lead">
+          <span class="brand__mark" aria-hidden="true"></span>
+          <h1 class="topbar__title" id="chat-title">New conversation</h1>
+          <span class="status-pill status-pill--idle" id="run-status" title="Current run phase">Idle</span>
+          <span class="live-badge" id="live-indicator" data-mode="off" aria-live="polite" hidden>
+            <span class="live-badge__dot" aria-hidden="true"></span>
+            <span class="live-badge__text">LIVE</span>
+          </span>
+        </div>
+        <div class="topbar__actions">
+          <button
+            class="btn btn--ghost btn--sm"
+            id="open-command-palette"
+            type="button"
+            aria-haspopup="dialog"
+            aria-label="Command palette"
+            title="Command palette (Ctrl/Cmd+K)"
+          >
+            <svg class="icon" aria-hidden="true"><use href="#i-cmd" /></svg>
+            <span class="topbar__kbd">⌘K</span>
+          </button>
+          <button class="btn btn--ghost btn--sm" id="toggle-trace" type="button" aria-pressed="false">
+            <svg class="icon" aria-hidden="true"><use href="#i-trace" /></svg> Trace
+          </button>
+          <div class="menu" id="settings-menu-wrap">
+            <button
+              class="btn btn--ghost btn--sm"
+              id="open-settings-menu"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="settings-menu"
+            >
+              <svg class="icon" aria-hidden="true"><use href="#i-gear" /></svg> Settings
+              <span class="topbar__approval-dot" id="settings-approval-dot" aria-hidden="true" hidden></span>
+            </button>
+            <!--
+              Anchored settings popover (Req 6.2, 8.1): one menu item per
+              System_Action, ids preserved from the former sidebar cluster so
+              every existing bind*() handler attaches unchanged. Hidden by
+              default; opened by the settings-menu controller (task 4.1).
+            -->
+            <div class="menu__popover" id="settings-menu" role="menu" aria-label="System actions" hidden>
+              <button class="menu__item" id="open-setup-wizard" role="menuitem" type="button">Setup status</button>
+              <button class="menu__item" id="open-provider-config" role="menuitem" type="button">Provider configuration</button>
+              <button class="menu__item" id="open-provider-test" role="menuitem" type="button">Test provider connection</button>
+              <button class="menu__item" id="open-workspace-safety" role="menuitem" type="button">Workspace safety</button>
+              <button class="menu__item" id="open-appearance" role="menuitem" type="button">Appearance</button>
+              <div class="menu__sep" role="separator"></div>
+              <button class="menu__item menu__item--badged" id="open-approval" role="menuitem" type="button">
+                <span>Pending approvals</span>
+                <span class="menu__badge" id="approval-badge" hidden>1</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
       <!-- Sidebar: conversations -->
       <aside class="sidebar" aria-label="Conversations">
         <div class="sidebar__head">
@@ -90,37 +182,11 @@
         </div>
 
         <!--
-          System cluster (Req 6.6 / design B2): the system-status actions —
-          setup status, provider configuration, workspace safety, pending
-          approvals — plus Appearance are grouped under one labelled heading
-          so they read as a coherent cluster. Pending approvals carries a
-          count badge (#approval-badge) that app.js shows when any operation
-          is awaiting a decision. Button ids/handlers are unchanged.
+          System actions (setup status, provider configuration, test provider
+          connection, workspace safety, appearance, pending approvals) have
+          moved out of the rail into the top-bar settings menu (#settings-menu);
+          their ids and handlers are preserved there. See task 2.1 / Req 3.3.
         -->
-        <section class="sidebar__section sidebar__cluster" aria-labelledby="sidebar-system-title">
-          <h2 class="sidebar__cluster-title" id="sidebar-system-title">System</h2>
-          <div class="sidebar__cluster-actions">
-            <button class="btn btn--ghost btn--sm sidebar__action" id="open-setup-wizard" type="button">
-              Setup status
-            </button>
-            <button class="btn btn--ghost btn--sm sidebar__action" id="open-provider-config" type="button">
-              Provider configuration
-            </button>
-            <button class="btn btn--ghost btn--sm sidebar__action" id="open-provider-test" type="button">
-              Test provider connection
-            </button>
-            <button class="btn btn--ghost btn--sm sidebar__action" id="open-workspace-safety" type="button">
-              Workspace safety
-            </button>
-            <button class="btn btn--ghost btn--sm sidebar__action" id="open-appearance" type="button">
-              Appearance
-            </button>
-            <button class="btn btn--ghost btn--sm sidebar__action sidebar__action--badged" id="open-approval" type="button">
-              <span class="sidebar__action-label">Pending approvals</span>
-              <span class="sidebar__badge" id="approval-badge" hidden>1</span>
-            </button>
-          </div>
-        </section>
 
         <nav class="conversation-list" id="conversation-list" aria-live="polite">
           <p class="conversation-list__empty" id="conversation-empty">No conversations yet. Send a message to start one.</p>
@@ -134,19 +200,12 @@
 
       <!-- Main chat column -->
       <main class="chat" aria-label="Chat">
-        <header class="chat__head">
-          <div class="chat__title">
-            <h1 id="chat-title">New conversation</h1>
-            <span class="status-pill status-pill--idle" id="run-status" title="Current run phase">Idle</span>
-            <span class="live-badge" id="live-indicator" data-mode="off" aria-live="polite" hidden>
-              <span class="live-badge__dot" aria-hidden="true"></span>
-              <span class="live-badge__text">LIVE</span>
-            </span>
-          </div>
-          <button class="btn btn--ghost btn--sm" id="toggle-trace" type="button" aria-pressed="false">
-            Trace
-          </button>
-        </header>
+        <!--
+          The per-column chat header (title, run-status, live badge, trace
+          toggle) has moved into the top bar (task 2.1, Req 2.1/2.2). This empty
+          shell is removed when the content row is restructured in task 2.2.
+        -->
+        <header class="chat__head"></header>
 
         <section class="messages" id="messages" aria-live="polite">
           <div class="empty-state" id="empty-state">
