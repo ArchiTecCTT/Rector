@@ -807,6 +807,42 @@
       </div>
     </div>
 
+    <!--
+      COMMAND PALETTE (Req 7.1, 11.1): centered, keyboard-driven overlay opened
+      with Cmd/Ctrl+K (or the top-bar ⌘K launcher). Hidden by default; the
+      command-palette controller (task 4.3) unhides it, populates
+      #command-palette-list with .palette__option items (role="option" +
+      aria-selected), and wires filter/navigation/invoke behavior. The input is
+      an ARIA combobox owning the listbox via aria-controls; the list is the
+      empty listbox container rendered dynamically by JS. All markup is local —
+      no remote assets.
+    -->
+    <div
+      class="palette"
+      id="command-palette"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
+    >
+      <div class="palette__backdrop" id="command-palette-backdrop"></div>
+      <div class="palette__panel" role="document">
+        <input
+          class="palette__input"
+          id="command-palette-input"
+          type="text"
+          role="combobox"
+          aria-expanded="false"
+          aria-controls="command-palette-list"
+          aria-autocomplete="list"
+          aria-label="Type a command"
+          placeholder="Type a command…"
+          autocomplete="off"
+        />
+        <ul class="palette__list" id="command-palette-list" role="listbox" aria-label="Commands"></ul>
+      </div>
+    </div>
+
     <script src="theme.js"></script>
     <script src="markdown.js"></script>
     <script src="app.js"></script>
