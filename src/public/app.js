@@ -193,6 +193,17 @@ function cacheEls() {
     "approval-loading",
     "approval-deny",
     "approval-approve",
+    "open-appearance",
+    "close-appearance",
+    "appearance-modal",
+    "appearance-backdrop",
+    "appearance-theme-list",
+    "appearance-accent-list",
+    "appearance-accent-warning",
+    "appearance-density",
+    "appearance-fontscale",
+    "appearance-reduced-motion",
+    "appearance-reset",
   ];
   for (const id of ids) {
     els[id] = document.getElementById(id);
@@ -1636,6 +1647,307 @@ function bindApproval() {
   setApprovalBadge(false);
 }
 
+// --- Appearance settings panel (Appearance_Settings, Req 1.2/1.4, 3.3–3.10) ---
+//
+// A customization surface rendered as a modal overlay so the chat + trace UI stay mounted at all
+// times (parity with the other panels). Every control is wired to window.RectorTheme so changes
+// apply at runtime and persist to localStorage["rector.appearance"]; no secret is ever read or
+// written here (Req 3.3). On open, the panel reflects the persisted appearance via
+// RectorTheme.getAppearance() so the controls never drift from the applied state.
+
+// The five selectable themes (Req 1.2). Ids mirror RectorTheme.THEMES; the note is a static,
+// non-secret display hint describing each theme's character (Req 1.4 — themes differ by more than
+// color).
+const APPEARANCE_THEMES = [
+  { id: "halo", label: "Halo", note: "Dark · indigo" },
+  { id: "aether", label: "Aether", note: "Near-black · prism" },
+  { id: "cairn", label: "Cairn", note: "Near-black · mint" },
+  { id: "penumbra", label: "Penumbra", note: "Monochrome" },
+  { id: "vellum", label: "Vellum Tessera", note: "Light · cream" },
+];
+
+// Curated accent palette (Req 3.5). The empty value reverts to the active theme's own accent token
+// (Req 3.8). The rest are theme-safe accents the user can apply; a chosen accent that fails contrast
+// against the active theme's surfaces is warned about but never blocked (Req 3.9).
+const APPEARANCE_ACCENTS = [
+  { value: "", label: "Theme default", swatch: null },
+  { value: "#5b6bff", label: "Indigo", swatch: "#5b6bff" },
+  { value: "#2dd4bf", label: "Teal", swatch: "#2dd4bf" },
+  { value: "#9fe7c7", label: "Mint", swatch: "#9fe7c7" },
+  { value: "#f59e0b", label: "Amber", swatch: "#f59e0b" },
+  { value: "#f472b6", label: "Pink", swatch: "#f472b6" },
+  { value: "#a78bfa", label: "Violet", swatch: "#a78bfa" },
+  { value: "#38bdf8", label: "Sky", swatch: "#38bdf8" },
+];
+
+// WCAG contrast threshold for body text (Req 9.1) reused for the accent-vs-surface warning (Req 3.9).
+const APPEARANCE_CONTRAST_MIN = 4.5;
+
+// The runtime Theme_System singleton (theme.js). Resolved lazily so app.js never throws if the
+// script load order changes; all calls are guarded.
+function rectorTheme() {
+  return typeof window !== "undefined" ? window.RectorTheme : undefined;
+}
+
+// Parse a CSS color string (#rgb, #rrggbb, or rgb()/rgba()) into {r,g,b}, or null if unparseable.
+function parseColor(input) {
+  const str = String(input || "").trim();
+  if (!str) return null;
+  if (str[0] === "#") {
+    let hex = str.slice(1);
+    if (hex.length === 3) {
+      hex = hex
+        .split("")
+        .map((c) => c + c)
+        .join("");
+    }
+    if (hex.length !== 6 || /[^0-9a-f]/i.test(hex)) return null;
+    return {
+      r: parseInt(hex.slice(0, 2), 16),
+      g: parseInt(hex.slice(2, 4), 16),
+      b: parseInt(hex.slice(4, 6), 16),
+    };
+  }
+  const match = str.match(/rgba?\(([^)]+)\)/i);
+  if (match) {
+    const parts = match[1].split(",").map((s) => parseFloat(s));
+    if (parts.length >= 3 && parts.slice(0, 3).every((n) => Number.isFinite(n))) {
+      return { r: parts[0], g: parts[1], b: parts[2] };
+    }
+  }
+  return null;
+}
+
+// Relative luminance per WCAG 2.x.
+function relativeLuminance(rgb) {
+  const channel = (value) => {
+    const c = value / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b);
+}
+
+// WCAG contrast ratio between two colors (1:1 .. 21:1).
+function contrastRatio(a, b) {
+  const la = relativeLuminance(a);
+  const lb = relativeLuminance(b);
+  const lighter = Math.max(la, lb);
+  const darker = Math.min(la, lb);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+// Read a resolved theme surface token from the document root (e.g. "--surface", "--bg").
+function readThemeToken(name) {
+  if (typeof window === "undefined" || !window.getComputedStyle) return "";
+  try {
+    return window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  } catch {
+    return "";
+  }
+}
+
+// Evaluate a chosen accent against the active theme's surfaces. Returns the worst contrast ratio
+// found (vs --bg and --surface), or null when it cannot be computed. Used to warn (not block) on a
+// low-contrast accent (Req 3.9).
+function accentWorstContrast(accentValue) {
+  const accent = parseColor(accentValue);
+  if (!accent) return null;
+  const surfaces = ["--bg", "--surface", "--elevated"]
+    .map((token) => parseColor(readThemeToken(token)))
+    .filter(Boolean);
+  if (!surfaces.length) return null;
+  let worst = Infinity;
+  for (const surface of surfaces) worst = Math.min(worst, contrastRatio(accent, surface));
+  return Number.isFinite(worst) ? worst : null;
+}
+
+// Show/hide the accent contrast warning for the currently chosen accent value. Empty accent (theme
+// default) never warns. The warning is advisory only — the choice still applies and persists.
+function refreshAccentWarning(accentValue) {
+  const box = els["appearance-accent-warning"];
+  if (!box) return;
+  if (!accentValue) {
+    box.hidden = true;
+    box.textContent = "";
+    return;
+  }
+  const ratio = accentWorstContrast(accentValue);
+  if (ratio !== null && ratio < APPEARANCE_CONTRAST_MIN) {
+    box.hidden = false;
+    box.textContent = `This accent has low contrast (${ratio.toFixed(
+      1,
+    )}:1) against this theme's surfaces. It's still applied, but text or controls using it may be hard to read.`;
+  } else {
+    box.hidden = true;
+    box.textContent = "";
+  }
+}
+
+// Render the theme picker as a radiogroup of cards reflecting the active theme.
+function renderAppearanceThemes(activeTheme) {
+  const list = els["appearance-theme-list"];
+  if (!list) return;
+  list.innerHTML = "";
+  for (const theme of APPEARANCE_THEMES) {
+    const option = document.createElement("label");
+    option.className = "appearance-theme" + (theme.id === activeTheme ? " is-active" : "");
+
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "appearance-theme";
+    input.value = theme.id;
+    input.checked = theme.id === activeTheme;
+    input.addEventListener("change", () => {
+      if (!input.checked) return;
+      const api = rectorTheme();
+      if (api) api.applyTheme(theme.id);
+      // Accent overrides are stored per theme, so re-render the accent row and warning for the
+      // newly active theme.
+      renderAppearancePanel();
+    });
+
+    const swatch = document.createElement("span");
+    swatch.className = `appearance-theme__swatch appearance-theme__swatch--${theme.id}`;
+    swatch.setAttribute("aria-hidden", "true");
+
+    const text = document.createElement("span");
+    text.className = "appearance-theme__text";
+    const name = document.createElement("span");
+    name.className = "appearance-theme__name";
+    name.textContent = theme.label;
+    const note = document.createElement("span");
+    note.className = "appearance-theme__note";
+    note.textContent = theme.note;
+    text.appendChild(name);
+    text.appendChild(note);
+
+    option.appendChild(input);
+    option.appendChild(swatch);
+    option.appendChild(text);
+    list.appendChild(option);
+  }
+}
+
+// Render the curated accent palette as a radiogroup reflecting the active theme's persisted accent
+// override (or "Theme default" when none).
+function renderAppearanceAccents(activeAccent) {
+  const list = els["appearance-accent-list"];
+  if (!list) return;
+  list.innerHTML = "";
+  const current = activeAccent || "";
+  for (const accent of APPEARANCE_ACCENTS) {
+    const option = document.createElement("label");
+    option.className = "appearance-accent" + (accent.value === current ? " is-active" : "");
+    option.title = accent.label;
+
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "appearance-accent";
+    input.value = accent.value;
+    input.checked = accent.value === current;
+    input.addEventListener("change", () => {
+      if (!input.checked) return;
+      const api = rectorTheme();
+      if (api) api.setAccent(accent.value);
+      renderAppearanceAccents(accent.value);
+      refreshAccentWarning(accent.value);
+    });
+
+    const swatch = document.createElement("span");
+    swatch.className = "appearance-accent__swatch";
+    swatch.setAttribute("aria-hidden", "true");
+    if (accent.swatch) {
+      swatch.style.background = accent.swatch;
+    } else {
+      swatch.classList.add("appearance-accent__swatch--default");
+    }
+
+    const label = document.createElement("span");
+    label.className = "appearance-accent__label";
+    label.textContent = accent.label;
+
+    option.appendChild(input);
+    option.appendChild(swatch);
+    option.appendChild(label);
+    list.appendChild(option);
+  }
+}
+
+// Reflect a value onto a named radiogroup, checking the matching input (or none when value is null).
+function setRadioGroupValue(containerId, value) {
+  const container = els[containerId];
+  if (!container) return;
+  const inputs = container.querySelectorAll("input[type=radio]");
+  for (const input of inputs) input.checked = input.value === value;
+}
+
+// Reflect the full persisted appearance onto the panel controls (Req: panel reflects current state
+// on open). Reads only from RectorTheme.getAppearance(); never mutates state.
+function renderAppearancePanel() {
+  const api = rectorTheme();
+  const appearance = api
+    ? api.getAppearance()
+    : { theme: "halo", accents: {}, density: null, fontScale: null, reducedMotion: false };
+
+  const activeTheme = appearance.theme;
+  const activeAccent = (appearance.accents && appearance.accents[activeTheme]) || "";
+
+  renderAppearanceThemes(activeTheme);
+  renderAppearanceAccents(activeAccent);
+  refreshAccentWarning(activeAccent);
+
+  // Density / font-scale default to the runtime defaults when nothing is persisted yet.
+  setRadioGroupValue("appearance-density", appearance.density || "comfortable");
+  setRadioGroupValue("appearance-fontscale", appearance.fontScale || "default");
+
+  const motion = els["appearance-reduced-motion"];
+  if (motion) motion.checked = appearance.reducedMotion === true;
+}
+
+function openAppearance() {
+  const modal = els["appearance-modal"];
+  if (!modal) return;
+  renderAppearancePanel();
+  modal.hidden = false;
+}
+
+function closeAppearance() {
+  const modal = els["appearance-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindAppearance() {
+  els["open-appearance"]?.addEventListener("click", openAppearance);
+  els["close-appearance"]?.addEventListener("click", closeAppearance);
+  els["appearance-backdrop"]?.addEventListener("click", closeAppearance);
+
+  els["appearance-density"]?.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!target || target.name !== "appearance-density" || !target.checked) return;
+    const api = rectorTheme();
+    if (api) api.setDensity(target.value);
+  });
+
+  els["appearance-fontscale"]?.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!target || target.name !== "appearance-fontscale" || !target.checked) return;
+    const api = rectorTheme();
+    if (api) api.setFontScale(target.value);
+  });
+
+  els["appearance-reduced-motion"]?.addEventListener("change", (event) => {
+    const api = rectorTheme();
+    if (api) api.setReducedMotion(event.target.checked);
+  });
+
+  els["appearance-reset"]?.addEventListener("click", () => {
+    const api = rectorTheme();
+    if (api) api.resetCustomizations();
+    // Reflect the reverted-to-theme-default state back onto the controls.
+    renderAppearancePanel();
+  });
+}
+
 // --- Composer behavior ---
 function autoGrow(textarea) {
   textarea.style.height = "auto";
@@ -1682,6 +1994,7 @@ function init() {
   bindSetupWizard();
   bindWorkspaceSafety();
   bindApproval();
+  bindAppearance();
 
   els["new-conversation"].addEventListener("click", startNewConversation);
   els["toggle-trace"].addEventListener("click", toggleTrace);

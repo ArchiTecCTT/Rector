@@ -99,6 +99,9 @@
           <button class="btn btn--ghost btn--sm sidebar__action" id="open-workspace-safety" type="button">
             Workspace safety
           </button>
+          <button class="btn btn--ghost btn--sm sidebar__action" id="open-appearance" type="button">
+            Appearance
+          </button>
           <button class="btn btn--ghost btn--sm sidebar__action" id="open-approval" type="button">
             Pending approvals
             <span class="sidebar__badge" id="approval-badge" hidden>1</span>
@@ -510,6 +513,96 @@
           </span>
           <button class="btn" id="approval-deny" type="button" disabled>Deny</button>
           <button class="btn btn--primary" id="approval-approve" type="button" disabled>Approve</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Appearance settings panel (Appearance_Settings, Requirement 1.2/1.4 + 3.3–3.10).
+         Modal overlay; chat + trace stay mounted and accessible (Req 3.x / 1.7 parity). Every
+         control is wired in app.js to window.RectorTheme so changes apply at runtime and persist
+         to localStorage["rector.appearance"]. No secret is ever read or written here (Req 3.3). The
+         panel reflects the persisted appearance (RectorTheme.getAppearance()) every time it opens. -->
+    <div
+      class="modal"
+      id="appearance-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="appearance-title"
+    >
+      <div class="modal__backdrop" id="appearance-backdrop"></div>
+      <div class="modal__panel modal__panel--wide" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="appearance-title">Appearance</h2>
+          <button class="btn btn--ghost btn--sm" id="close-appearance" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            Personalize Rector's look. Choices apply instantly and are remembered on this device.
+            No API keys or secrets are stored here.
+          </p>
+
+          <!-- Theme picker (Req 1.2, 1.4): the five distinct themes. -->
+          <fieldset class="appearance-group" aria-labelledby="appearance-theme-legend">
+            <legend class="appearance-group__legend" id="appearance-theme-legend">Theme</legend>
+            <div class="appearance-themes" id="appearance-theme-list" role="radiogroup" aria-label="Theme"></div>
+          </fieldset>
+
+          <!-- Accent override from a curated palette (Req 3.5, 3.8); contrast warning (Req 3.9). -->
+          <fieldset class="appearance-group" aria-labelledby="appearance-accent-legend">
+            <legend class="appearance-group__legend" id="appearance-accent-legend">Accent</legend>
+            <div class="appearance-accents" id="appearance-accent-list" role="radiogroup" aria-label="Accent color"></div>
+            <p class="appearance-warning" id="appearance-accent-warning" role="alert" hidden></p>
+          </fieldset>
+
+          <!-- Density (Req 3.6). -->
+          <fieldset class="appearance-group" aria-labelledby="appearance-density-legend">
+            <legend class="appearance-group__legend" id="appearance-density-legend">Density</legend>
+            <div class="appearance-segmented" id="appearance-density" role="radiogroup" aria-label="Interface density">
+              <label class="appearance-segment">
+                <input type="radio" name="appearance-density" value="comfortable" />
+                <span>Comfortable</span>
+              </label>
+              <label class="appearance-segment">
+                <input type="radio" name="appearance-density" value="compact" />
+                <span>Compact</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <!-- Font-size scale (Req 3.7). -->
+          <fieldset class="appearance-group" aria-labelledby="appearance-fontscale-legend">
+            <legend class="appearance-group__legend" id="appearance-fontscale-legend">Font size</legend>
+            <div class="appearance-segmented" id="appearance-fontscale" role="radiogroup" aria-label="Font size scale">
+              <label class="appearance-segment">
+                <input type="radio" name="appearance-fontscale" value="small" />
+                <span>Small</span>
+              </label>
+              <label class="appearance-segment">
+                <input type="radio" name="appearance-fontscale" value="default" />
+                <span>Default</span>
+              </label>
+              <label class="appearance-segment">
+                <input type="radio" name="appearance-fontscale" value="large" />
+                <span>Large</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <!-- Reduced-motion toggle (Req 3.4). -->
+          <fieldset class="appearance-group" aria-labelledby="appearance-motion-legend">
+            <legend class="appearance-group__legend" id="appearance-motion-legend">Motion</legend>
+            <label class="appearance-toggle">
+              <input type="checkbox" id="appearance-reduced-motion" />
+              <span class="appearance-toggle__label">Reduce motion</span>
+              <span class="appearance-toggle__hint">Disable non-essential animation</span>
+            </label>
+          </fieldset>
+        </div>
+
+        <div class="modal__foot">
+          <button class="btn" id="appearance-reset" type="button">Reset to theme defaults</button>
         </div>
       </div>
     </div>
