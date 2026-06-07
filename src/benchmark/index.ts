@@ -13,6 +13,14 @@ export {
   runBuildCommandTask,
 } from "./tasks";
 export {
+  REGRESSION_HARDENING_THRESHOLD,
+  runRegressionCase,
+  type RegressionCaseDefinition,
+  type RegressionCaseOptions,
+  type RegressionCaseReport,
+  type RegressionScenario,
+} from "./regressionCase";
+export {
   BENCHMARK_FINAL_STATUSES,
   DEFAULT_TASK_TIMEOUT_MS,
   type BenchmarkFinalStatus,
