@@ -30,6 +30,24 @@ const TERMINAL_PHASES = new Set(["DONE", "NEEDS_DECISION", "FAILED", "ABORTED"])
 // Poll the fallback events endpoint every 2s (Requirement 2.8).
 const POLL_INTERVAL_MS = 2000;
 
+// --- Provider connection test (Provider_Test_Panel, Requirement 2) ---
+
+// Client-side timeout for a connection test (Requirement 2.7). After this elapses the in-flight
+// request is aborted, the loading indicator is cleared, and a redaction-safe timeout message shows.
+const PROVIDER_TEST_TIMEOUT_MS = 30_000;
+
+// The configured providers the panel can test. Ids mirror `SUPPORTED_PROVIDER_IDS` in
+// src/api/server.ts (the server rejects any id outside this set before building a provider). Labels
+// are static, non-secret display names.
+const PROVIDERS = [
+  { id: "together", label: "Together AI" },
+  { id: "cloudflare", label: "Cloudflare Workers AI" },
+  { id: "azure-openai", label: "Azure OpenAI" },
+  { id: "perplexity", label: "Perplexity" },
+];
+
+const PROVIDER_LABELS = new Map(PROVIDERS.map((p) => [p.id, p.label]));
+
 // User-facing status labels per phase (mirror of RUN_PHASE_STATUS_LABELS).
 const PHASE_STATUS_LABELS = {
   CHAT_RECEIVED: "Thinking",
@@ -114,6 +132,14 @@ function cacheEls() {
     "decision-section",
     "decision-card",
     "events",
+    "open-provider-test",
+    "close-provider-test",
+    "provider-test-modal",
+    "provider-test-backdrop",
+    "provider-list",
+    "provider-test-result",
+    "provider-test-loading",
+    "run-provider-test",
   ];
   for (const id of ids) {
     els[id] = document.getElementById(id);
@@ -846,6 +872,214 @@ function renderEvents(events) {
   }
 }
 
+// --- Provider connection test panel (Provider_Test_Panel) ---
+
+// Panel state. `selected` is the set of currently-checked provider ids; `inFlight` guards against
+// concurrent tests; `abort` aborts the in-flight request on timeout/close; `timer` is the 30s
+// client-side timeout handle.
+const providerTest = {
+  selected: new Set(),
+  inFlight: false,
+  abort: null,
+  timer: null,
+};
+
+// Pure enablement rule (Requirement 2.1 / Property 5): the connection-test action is enabled if and
+// only if exactly one provider is selected. Kept side-effect free so it is trivially testable.
+function connectionTestEnabled(selectedIds) {
+  const count = Array.isArray(selectedIds) ? selectedIds.length : selectedIds.size;
+  return count === 1;
+}
+
+// Reflect the current selection onto the run button's disabled state. While a test is in flight the
+// action stays disabled regardless of selection (Requirement 2.6).
+function refreshProviderTestAction() {
+  const btn = els["run-provider-test"];
+  if (!btn) return;
+  const enabled = !providerTest.inFlight && connectionTestEnabled(providerTest.selected);
+  btn.disabled = !enabled;
+}
+
+// Build the selectable provider list once. Uses checkboxes so the selection can be empty, one, or
+// many — the action is gated to exactly one by `connectionTestEnabled` (Requirement 2.1).
+function renderProviderList() {
+  const list = els["provider-list"];
+  if (!list || list.dataset.ready === "1") return;
+  list.innerHTML = "";
+  for (const provider of PROVIDERS) {
+    const option = document.createElement("label");
+    option.className = "provider-option";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = provider.id;
+    input.name = "provider-test";
+    input.addEventListener("change", () => {
+      if (input.checked) providerTest.selected.add(provider.id);
+      else providerTest.selected.delete(provider.id);
+      refreshProviderTestAction();
+    });
+
+    const labelWrap = document.createElement("span");
+    labelWrap.className = "provider-option__label";
+    const name = document.createElement("span");
+    name.className = "provider-option__name";
+    name.textContent = provider.label;
+    const id = document.createElement("span");
+    id.className = "provider-option__id";
+    id.textContent = provider.id;
+    labelWrap.appendChild(name);
+    labelWrap.appendChild(id);
+
+    option.appendChild(input);
+    option.appendChild(labelWrap);
+    list.appendChild(option);
+  }
+  list.dataset.ready = "1";
+}
+
+// Enable/disable every provider checkbox (locked while a test is in flight, Requirement 2.6).
+function setProviderInputsDisabled(disabled) {
+  const inputs = els["provider-list"]?.querySelectorAll("input[type=checkbox]") ?? [];
+  for (const input of inputs) input.disabled = disabled;
+}
+
+// Render a result message. Server responses are already redacted at the boundary (runConnectionTest
+// passes every message through redactString); client-built strings carry only static text plus the
+// non-secret provider label/model id, so no API key material can appear (Requirements 2.3–2.5).
+function showProviderResult(kind, message) {
+  const box = els["provider-test-result"];
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+  box.className = `provider-result provider-result--${kind === "ok" ? "ok" : "err"}`;
+}
+
+function clearProviderResult() {
+  const box = els["provider-test-result"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+  box.className = "provider-result";
+}
+
+function setProviderLoading(loading) {
+  const indicator = els["provider-test-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+// Compose the human-language success message. The model id (when present) is a non-secret label.
+function providerSuccessMessage(providerId, model) {
+  const label = PROVIDER_LABELS.get(providerId) || providerId;
+  return model
+    ? `${label} is ready. Connected successfully (model: ${model}).`
+    : `${label} is ready. Connection succeeded.`;
+}
+
+// Compose the human-language failure message from the redacted server response.
+function providerFailureMessage(providerId, body) {
+  const label = PROVIDER_LABELS.get(providerId) || providerId;
+  const reason = (body && (body.error || body.code)) || "the provider rejected the request";
+  return `${label} connection failed: ${reason}`;
+}
+
+function providerTimeoutMessage(providerId) {
+  const label = PROVIDER_LABELS.get(providerId) || providerId;
+  return `${label} connection test timed out after 30 seconds. No result was received.`;
+}
+
+// Run the connection test for the single selected provider against the existing Connection_Test_API
+// (`POST /api/setup/test-connection`). Shows a loading indicator and disables the action while in
+// flight (2.6); applies a 30s aborting client timeout (2.7); renders a redacted success/failure
+// message and retains the selection on failure (2.3–2.5).
+async function runProviderTest() {
+  if (providerTest.inFlight) return;
+  const selectedIds = [...providerTest.selected];
+  if (!connectionTestEnabled(selectedIds)) return;
+  const providerId = selectedIds[0];
+
+  providerTest.inFlight = true;
+  clearProviderResult();
+  setProviderLoading(true);
+  setProviderInputsDisabled(true);
+  refreshProviderTestAction();
+
+  const controller = new AbortController();
+  providerTest.abort = controller;
+  let timedOut = false;
+  providerTest.timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, PROVIDER_TEST_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${API}/setup/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId }),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+
+    if (res.ok && body.ok) {
+      showProviderResult("ok", providerSuccessMessage(providerId, body.model));
+    } else {
+      // Failure path: keep the user's selection so they can retry (Requirement 2.4).
+      showProviderResult("err", providerFailureMessage(providerId, body));
+    }
+  } catch (err) {
+    if (timedOut || (err && err.name === "AbortError")) {
+      showProviderResult("err", providerTimeoutMessage(providerId));
+    } else {
+      showProviderResult("err", providerFailureMessage(providerId, { error: "could not reach the server" }));
+    }
+  } finally {
+    clearTimeout(providerTest.timer);
+    providerTest.timer = null;
+    providerTest.abort = null;
+    providerTest.inFlight = false;
+    setProviderLoading(false);
+    setProviderInputsDisabled(false);
+    refreshProviderTestAction();
+  }
+}
+
+function openProviderTest() {
+  renderProviderList();
+  const modal = els["provider-test-modal"];
+  if (!modal) return;
+  modal.hidden = false;
+  refreshProviderTestAction();
+}
+
+function closeProviderTest() {
+  // Abort any in-flight test so a background request never resolves against a closed panel.
+  if (providerTest.abort) {
+    try {
+      providerTest.abort.abort();
+    } catch {
+      /* ignore */
+    }
+  }
+  if (providerTest.timer) {
+    clearTimeout(providerTest.timer);
+    providerTest.timer = null;
+  }
+  providerTest.inFlight = false;
+  setProviderLoading(false);
+  setProviderInputsDisabled(false);
+  const modal = els["provider-test-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindProviderTest() {
+  els["open-provider-test"]?.addEventListener("click", openProviderTest);
+  els["close-provider-test"]?.addEventListener("click", closeProviderTest);
+  els["provider-test-backdrop"]?.addEventListener("click", closeProviderTest);
+  els["run-provider-test"]?.addEventListener("click", runProviderTest);
+}
+
 // --- Composer behavior ---
 function autoGrow(textarea) {
   textarea.style.height = "auto";
@@ -888,6 +1122,7 @@ function init() {
   cacheEls();
   bindComposer();
   bindSuggestions();
+  bindProviderTest();
 
   els["new-conversation"].addEventListener("click", startNewConversation);
   els["toggle-trace"].addEventListener("click", toggleTrace);

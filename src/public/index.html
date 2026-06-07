@@ -30,6 +30,12 @@
           Provider-free mode · no API keys · 0 network calls
         </div>
 
+        <div class="sidebar__section">
+          <button class="btn btn--ghost btn--sm sidebar__action" id="open-provider-test" type="button">
+            Test provider connection
+          </button>
+        </div>
+
         <nav class="conversation-list" id="conversation-list" aria-live="polite">
           <p class="conversation-list__empty" id="conversation-empty">No conversations yet. Send a message to start one.</p>
         </nav>
@@ -208,6 +214,51 @@
           </section>
         </div>
       </aside>
+    </div>
+
+    <!-- Provider connection-test panel (modal overlay; chat + trace stay mounted) -->
+    <div
+      class="modal"
+      id="provider-test-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="provider-test-title"
+    >
+      <div class="modal__backdrop" id="provider-test-backdrop"></div>
+      <div class="modal__panel" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="provider-test-title">Test provider connection</h2>
+          <button class="btn btn--ghost btn--sm" id="close-provider-test" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            Select one provider and run a connection test. Credentials are read from the server
+            environment — no API keys are entered, stored, or displayed here.
+          </p>
+
+          <fieldset class="provider-list" id="provider-list" aria-label="Configured providers"></fieldset>
+
+          <div
+            class="provider-result"
+            id="provider-test-result"
+            role="status"
+            aria-live="polite"
+            hidden
+          ></div>
+        </div>
+
+        <div class="modal__foot">
+          <span class="provider-test__loading" id="provider-test-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span class="provider-test__loading-text">Testing connection…</span>
+          </span>
+          <button class="btn btn--primary" id="run-provider-test" type="button" disabled>
+            Test connection
+          </button>
+        </div>
+      </div>
     </div>
 
     <script src="app.js"></script>
