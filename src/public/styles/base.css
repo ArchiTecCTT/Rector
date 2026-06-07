@@ -1110,6 +1110,227 @@ body {
 }
 
 /* ============================================================
+   Settings menu (anchored popover) — overlay surface
+   ------------------------------------------------------------
+   Anchored to the gear button in the Top_Bar; floats above the
+   shell at the --z-menu stacking level (Req 6, 13.1). Every
+   color / radius / elevation reference is a theme token, never a
+   literal, so all five themes drive the surface (Req 12.1).
+   ============================================================ */
+.menu {
+  position: relative;
+}
+
+.menu__popover {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  min-width: 240px;
+  padding: var(--space-2);
+  background: var(--elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: var(--z-menu);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menu__popover[hidden] {
+  display: none;
+}
+
+.menu__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.menu__item:hover {
+  background: var(--surface);
+}
+
+/* Visible keyboard focus indicator on menu items (Req 13.3). */
+.menu__item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.menu__sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border);
+}
+
+/* Pending-approvals count on the menu item (Req 9.1, 9.5). */
+.menu__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-inverse);
+  background: var(--warn);
+}
+
+.menu__badge[hidden] {
+  display: none;
+}
+
+/* Gear approval dot mirrored on the settings control (Req 9.1, 9.2). */
+.topbar__approval-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: var(--space-1);
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.topbar__approval-dot[hidden] {
+  display: none;
+}
+
+/* ============================================================
+   Command palette — centered overlay surface (topmost)
+   ------------------------------------------------------------
+   Floats above every other surface at the --z-palette stacking
+   level (Req 7, 13.1). Token-driven for full theme support.
+   ============================================================ */
+.palette {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-palette);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+}
+
+.palette[hidden] {
+  display: none;
+}
+
+.palette__backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay);
+}
+
+.palette__panel {
+  position: relative;
+  width: min(560px, 92vw);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.palette__input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  padding: var(--space-3) var(--space-4);
+}
+
+/* Visible keyboard focus indicator on the palette input (Req 13.3). */
+.palette__input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.palette__list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2);
+  max-height: 50vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.palette__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.palette__option:hover {
+  background: var(--elevated);
+  color: var(--text);
+}
+
+.palette__option[aria-selected="true"] {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.palette__empty {
+  padding: var(--space-3);
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+/* ============================================================
+   Overlay motion (settings menu + command palette)
+   ------------------------------------------------------------
+   Compositor-friendly entrance: animate only transform / opacity,
+   completing well under 300ms via motion tokens (Req 13.1). Gated
+   behind prefers-reduced-motion: no-preference and disabled under
+   the explicit [data-reduced-motion="true"] user hook (Req 13.2).
+   ============================================================ */
+@media (prefers-reduced-motion: no-preference) {
+  .menu__popover {
+    animation: pop-in var(--motion-fast) var(--easing-standard);
+  }
+  .palette__panel {
+    animation: pop-in var(--motion-base) var(--easing-standard);
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+[data-reduced-motion="true"] .menu__popover,
+[data-reduced-motion="true"] .palette__panel {
+  animation: none;
+}
+
+/* ============================================================
    Modal (provider test / setup / safety / approval overlays)
    ============================================================ */
 .modal {
@@ -1724,24 +1945,30 @@ body {
 }
 
 /* ============================================================
-   Responsive: collapse trace to overlay on narrow screens
+   Responsive: collapse rail + overlay trace on narrow screens
+   ------------------------------------------------------------
+   On wide windows the trace docks as a column (.app.trace-open
+   .content gains the --trace-w track above). At <=900px the
+   conversation rail collapses and the open trace becomes a fixed
+   overlay anchored below the Top_Bar at the --z-overlay-panel
+   stacking level (Req 5.3). Geometry uses structural tokens.
    ============================================================ */
 @media (max-width: 900px) {
-  .app,
-  .app.trace-open {
+  .content,
+  .app.trace-open .content {
     grid-template-columns: 0 1fr 0;
   }
-  .sidebar {
+  .rail {
     display: none;
   }
   .app.trace-open .trace {
     position: fixed;
+    top: var(--topbar-h);
     right: 0;
-    top: 0;
     bottom: 0;
-    width: min(380px, 90vw);
-    z-index: 20;
+    width: min(var(--trace-w), 100%);
     box-shadow: var(--shadow-lg);
+    z-index: var(--z-overlay-panel);
   }
 }
 
