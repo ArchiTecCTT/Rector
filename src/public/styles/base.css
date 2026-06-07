@@ -1303,7 +1303,7 @@ body {
    Compositor-friendly entrance: animate only transform / opacity,
    completing well under 300ms via motion tokens (Req 13.1). Gated
    behind prefers-reduced-motion: no-preference and disabled under
-   the explicit [data-reduced-motion="true"] user hook (Req 13.2).
+   the explicit reduced-motion user hook (Req 13.2).
    ============================================================ */
 @media (prefers-reduced-motion: no-preference) {
   .menu__popover {
@@ -1323,11 +1323,6 @@ body {
     opacity: 1;
     transform: none;
   }
-}
-
-[data-reduced-motion="true"] .menu__popover,
-[data-reduced-motion="true"] .palette__panel {
-  animation: none;
 }
 
 /* ============================================================
@@ -1988,6 +1983,15 @@ body {
   animation-iteration-count: 1 !important;
   transition-duration: 0.001ms !important;
   scroll-behavior: auto !important;
+}
+
+/* Explicitly disable the overlay entrance animation (settings menu + command
+   palette) under the user's reduced-motion choice. Declared after the global
+   rule so the global :root[data-reduced-motion="true"] block stays the first
+   match in this file. */
+[data-reduced-motion="true"] .menu__popover,
+[data-reduced-motion="true"] .palette__panel {
+  animation: none;
 }
 
 /* ============================================================
