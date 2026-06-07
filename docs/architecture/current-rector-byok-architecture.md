@@ -344,14 +344,21 @@ classDiagram
   class TogetherAIProvider
   class AzureOpenAIProvider
   class CloudflareWorkersAIProvider
+  class OpenAICompatibleProvider
   class FakeLLMProvider
 
   ModelRouter --> LLMProvider
   LLMProvider <|.. TogetherAIProvider
   LLMProvider <|.. AzureOpenAIProvider
   LLMProvider <|.. CloudflareWorkersAIProvider
+  LLMProvider <|.. OpenAICompatibleProvider
   LLMProvider <|.. FakeLLMProvider
 ```
+
+> Perplexity has been removed as a supported provider. The `openai-compatible`
+> adapter calls any user-supplied OpenAI-compatible `/chat/completions` endpoint
+> (base URL + API key + model id) and covers providers Rector does not ship a
+> dedicated adapter for.
 
 Provider responsibilities:
 
@@ -368,6 +375,76 @@ Rector responsibilities:
 - redact provider errors before persistence/UI
 - persist cost/tokens after every provider call
 - record provider metadata in run events
+
+## 10A. In-app BYOK provider configuration flow
+
+Providers can be configured, tested, and selected from the browser (Provider_Config_UI)
+without editing `.env` or restarting. The flow layers a configuration/secret
+resolution stage **above** the existing `ModelRouter` and provider adapters
+rather than rewriting them.
+
+```mermaid
+flowchart TB
+  ProvUI[Provider_Config_UI\nsrc/public] --> ProvAPI[Provider_Config_API\n/api/providers]
+  ProvUI --> TestAPI[Connection_Test_API\n/api/setup/test-connection]
+
+  ProvAPI -->|non-secret config| PCStore[Provider_Config_Store\n.rector/providers.json]
+  ProvAPI -->|API key only| SecStore[Secret_Store\n.rector/secrets.enc]
+
+  TestAPI --> Bridge[Config_Bridge\nsrc/providers/configBridge.ts]
+  Bridge --> PCStore
+  Bridge --> SecStore
+  Bridge --> Router[ModelRouter]
+  Router --> OAI[OpenAICompatibleProvider]
+```
+
+Components:
+
+- **Provider_Config_Store** (`src/providers/configStore.ts`, `.rector/providers.json`):
+  persists **non-secret** Provider_Config_Records only — `kind`, `label`, base URL,
+  model ids, optional headers, the per-role `activeRoutes` map, and a `secretRef`.
+  It **never** stores a secret value; atomic temp+rename writes keep prior state
+  intact on failure.
+- **Secret_Store** (`src/security/secretStore.ts`, `.rector/secrets.enc`): the existing
+  AES-256-GCM envelope store. API keys persist here keyed by the provider record id.
+  Reads expose values only through `getSecret` (used transiently at provider build)
+  and presence through `hasSecret`. The API surfaces a `secretPresent` boolean — never
+  the value.
+- **OpenAICompatibleProvider** (`src/providers/llm.ts`): an `LLMProvider` that calls any
+  OpenAI-compatible `/chat/completions` endpoint from a configured base URL + key + model.
+  Network access defaults off; `validateConfig()` requires a non-empty key, an absolute
+  http(s) base URL, and a non-empty model before any call; all errors are redacted.
+- **Config_Bridge** (`src/providers/configBridge.ts`): resolves persisted records + their
+  Secret_Store secrets into provider construction inputs, builds the External_Mode router
+  (`buildConfiguredRouter`), and resolves the single provider for a connection test
+  (`resolveTestProvider`). It honors `activeRoutes` for the flagship/SLM roles and falls
+  back to the existing capability-priority selection when a designated provider is missing
+  or invalid.
+
+### Precedence (Req 13.4)
+
+When both an environment-provided value and a persisted UI value exist for the same
+provider/field, **persisted UI configuration takes precedence over `process.env`**.
+Rector is a local-first product, so an explicit in-app setting wins; `process.env`
+is the fallback for any field the user did not set in the UI. The Config_Bridge
+applies this precedence deterministically and identically for both provider
+construction and the connection test (`resolveProviderEnv` overlays resolved record
+fields + the injected secret onto a copy of `process.env`).
+
+### Safety invariants
+
+- **Config/secret separation:** no `providers.json` field ever holds a secret value;
+  secrets live only in the encrypted Secret_Store and are referenced by `secretRef`.
+- **No secret egress:** every Provider_Config_API/Connection_Test_API response passes the
+  fail-closed redaction boundary; responses carry `secretPresent` booleans and masked
+  displays only.
+- **Sandbox isolation:** the bridge output feeds provider construction and the test path
+  only — it is never used to build the sandbox executor environment, so no secret reaches
+  a command the sandbox can run.
+- **Local_Mode invariance:** with `ORCHESTRATOR_MODE=local`, persisted config and secrets
+  never cause a provider or network call. Local_Mode keeps using the provider-free fake
+  router and never consults the Config_Bridge (regression-pinned by
+  `tests/localModeInvariance.test.ts`).
 
 ## 11. Budget and cost flow
 
@@ -743,6 +820,10 @@ Mobile should not directly run local workspace code. It should talk to a trusted
 | `src/orchestration/validationHealing.ts` | validation + bounded repair loop |
 | `src/orchestration/synthesizer.ts` | deterministic + live final response |
 | `src/providers/llm.ts` | provider adapters + router |
+| `src/providers/config.ts` | Provider_Config_Record / state types (non-secret) |
+| `src/providers/configStore.ts` | Provider_Config_Store (`.rector/providers.json`, non-secret config) |
+| `src/providers/configBridge.ts` | Config_Bridge: persisted config+secret → provider construction/test, precedence, active routes |
+| `src/security/secretStore.ts` | encrypted Secret_Store (`.rector/secrets.enc`) for API keys |
 | `src/security/budget.ts` | budget/cost gates |
 | `src/security/redaction.ts` | secret scrubbing |
 | `src/sandbox/index.ts` | path/command containment, sandbox operations |
