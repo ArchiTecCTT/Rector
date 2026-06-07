@@ -11,7 +11,7 @@ import {
 import { createApp } from "../src/api/server";
 import { TaskManager } from "../src/thalamus/router";
 import { LocalTelemetry } from "../src/adapters/providers";
-import { InMemoryRectorStore, type Budget, type CreateRunInput, type Run } from "../src/store";
+import { InMemoryRectorStore, type Budget, type CreateRunInput, type RectorStore, type Run } from "../src/store";
 
 const budget: Budget = {
   maxUsd: 2,
@@ -76,6 +76,27 @@ async function seedPendingRun(
     { now: () => options.presentedAt ?? "2026-06-03T00:00:00.000Z" }
   );
   return (await store.getRun(run.id)) as Run;
+}
+
+/**
+ * Wrap a real store so that the atomic run-transition commit (the Event_Log write that
+ * `resumeFromDecision` performs) always fails, while every other method delegates to the real
+ * store. Used to exercise the "Event_Log write fails" branch of Requirement 9.7 without mocking the
+ * recorder itself: the failure is injected at the persistence boundary and the run is read back from
+ * the genuine in-memory store to confirm it was left untouched.
+ */
+function failingCommitStore(inner: InMemoryRectorStore): RectorStore {
+  return new Proxy(inner, {
+    get(target, prop, receiver) {
+      if (prop === "commitRunTransition") {
+        return async () => {
+          throw new Error("Event_Log write failed");
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as unknown as RectorStore;
 }
 
 describe("recordApprovalDecision", () => {
@@ -211,6 +232,79 @@ describe("recordApprovalDecision", () => {
         {}
       )
     ).rejects.toMatchObject({ code: "RUN_NOT_FOUND" });
+  });
+
+  it("keeps the run pending (RECORD_FAILED) when the Event_Log write fails (Req 9.7)", async () => {
+    const store = new InMemoryRectorStore({ now: () => "2026-06-03T00:00:00.000Z" });
+    const run = await seedPendingRun(store);
+
+    // Presentation appended exactly one DECISION_REQUESTED event; capture the pre-decision state.
+    const eventsBefore = await store.listEvents(run.id);
+    expect(eventsBefore).toHaveLength(1);
+    expect(eventsBefore[0]?.type).toBe("DECISION_REQUESTED");
+
+    // The recorder runs against a store whose atomic commit (the Event_Log write) fails.
+    const failing = failingCommitStore(store);
+    await expect(
+      recordApprovalDecision(
+        failing,
+        { runId: run.id, operationId: "op-1", decision: "approve", decidedBy: "alice" },
+        { now: () => "2026-06-03T00:05:00.000Z" }
+      )
+    ).rejects.toMatchObject({ code: "RECORD_FAILED" });
+
+    // The run is left in its pending-decision state and the operation never executes (Req 9.7):
+    // the atomic commit means a failed write mutates neither the phase nor the decision request.
+    const after = await store.getRun(run.id);
+    expect(after?.phase).toBe("NEEDS_DECISION");
+    expect(after?.status).toBe("needs_decision");
+    expect(after?.decisionRequest).toBeDefined();
+
+    // No decision event was appended; only the original presentation event remains.
+    const eventsAfter = await store.listEvents(run.id);
+    expect(eventsAfter).toHaveLength(1);
+    expect(eventsAfter[0]?.type).toBe("DECISION_REQUESTED");
+  });
+
+  it("honors an approval submitted one millisecond before the 30-minute timeout (Req 9.8 boundary)", async () => {
+    const store = new InMemoryRectorStore({ now: () => "2026-06-03T00:00:00.000Z" });
+    const presentedAt = "2026-06-03T00:00:00.000Z";
+    const run = await seedPendingRun(store, { presentedAt });
+
+    // Just inside the 30-minute window the decision still stands as submitted.
+    const decidedAt = new Date(Date.parse(presentedAt) + APPROVAL_DECISION_TIMEOUT_MS - 1).toISOString();
+    const record = await recordApprovalDecision(
+      store,
+      { runId: run.id, operationId: "op-1", decision: "approve", decidedBy: "dave" },
+      { now: () => decidedAt }
+    );
+
+    expect(record.decision).toBe("approve");
+    const resumed = await store.getRun(run.id);
+    expect(resumed?.phase).toBe("EXECUTING");
+  });
+
+  it("records the timeout-based denial in the Event_Log (Req 9.8)", async () => {
+    const store = new InMemoryRectorStore({ now: () => "2026-06-03T00:00:00.000Z" });
+    const presentedAt = "2026-06-03T00:00:00.000Z";
+    const run = await seedPendingRun(store, { presentedAt });
+
+    // A denial swept in past the window is recorded as a timeout denial, not a plain deny.
+    const decidedAt = new Date(Date.parse(presentedAt) + APPROVAL_DECISION_TIMEOUT_MS + 60_000).toISOString();
+    await recordApprovalDecision(
+      store,
+      { runId: run.id, operationId: "op-1", decision: "deny", decidedBy: "system-timeout" },
+      { now: () => decidedAt }
+    );
+
+    // The timeout-based denial is appended to the Event_Log alongside the resume transition (Req 9.8).
+    const events = await store.listEvents(run.id);
+    const decisionEvent = events[events.length - 1];
+    expect(decisionEvent.payload).toMatchObject({
+      fromPhase: "NEEDS_DECISION",
+      toPhase: "SYNTHESIZING",
+      decision: { decision: "timeout-denied", decidedBy: "system-timeout", decidedAt },
+    });
   });
 });
 
