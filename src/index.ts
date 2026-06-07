@@ -4,6 +4,7 @@ export { LocalTelemetry } from "./adapters/providers";
 
 export * as deployment from "./deployment";
 export * as extensions from "./extensions";
+export * as benchmark from "./benchmark";
 export * as memory from "./memory";
 export * as observability from "./observability";
 export * as orchestration from "./orchestration";
