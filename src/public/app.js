@@ -255,6 +255,16 @@ function cacheEls() {
     "appearance-fontscale",
     "appearance-reduced-motion",
     "appearance-reset",
+    // Top-bar action launchers + overlay surfaces (settings menu + command palette).
+    "open-command-palette",
+    "command-palette",
+    "command-palette-backdrop",
+    "command-palette-input",
+    "command-palette-list",
+    "open-settings-menu",
+    "settings-menu",
+    "settings-menu-wrap",
+    "settings-approval-dot",
   ];
   for (const id of ids) {
     els[id] = document.getElementById(id);
@@ -2258,21 +2268,40 @@ function showApprovalResult(kind, message) {
   box.className = `approval-result approval-result--${kind === "ok" ? "ok" : "err"}`;
 }
 
-// Reflect pending approvals on the sidebar "System" cluster badge (Req 6.6). Accepts either a
-// boolean (legacy callers) or a numeric count. The badge shows the count when any operation is
-// awaiting a decision and is hidden (never color-only) otherwise; an aria-label keeps it readable
-// to assistive tech.
+// Single source of truth for the pending-approvals count. setApprovalBadge writes it; both the
+// Settings_Menu badge mirror (gear dot) and the Command_Palette approval command read it, so the
+// count shown in the palette always matches the badge (Req 9.3).
+let pendingApprovalCount = 0;
+
+// Reflect pending approvals on the Settings_Menu item badge (`approval-badge`) and mirror its
+// presence onto the gear dot (`settings-approval-dot`) so a waiting approval is visible without
+// opening the menu (Req 2.x, 9.1, 9.2, 9.5). Accepts either a boolean (legacy callers) or a numeric
+// count. Both indicators are shown when any operation is awaiting a decision and hidden (never
+// color-only) at zero; the count reads "99+" above 99 (Req 9.5). aria-labels keep both readable to
+// assistive tech. Each element is guarded independently so a missing one degrades gracefully.
 function setApprovalBadge(countOrVisible) {
-  const badge = els["approval-badge"];
-  if (!badge) return;
   const count =
     countOrVisible === true ? 1 : countOrVisible === false ? 0 : Number(countOrVisible) || 0;
-  badge.hidden = count <= 0;
-  if (count > 0) {
-    badge.textContent = String(count);
-    badge.setAttribute("aria-label", `${count} pending approval${count === 1 ? "" : "s"}`);
-  } else {
-    badge.textContent = "";
+  pendingApprovalCount = count > 0 ? count : 0;
+  const display = count > 99 ? "99+" : String(count); // Req 9.5
+  const label = `${count} pending approval${count === 1 ? "" : "s"}`;
+
+  const badge = els["approval-badge"];
+  if (badge) {
+    badge.hidden = count <= 0;
+    if (count > 0) {
+      badge.textContent = display;
+      badge.setAttribute("aria-label", label);
+    } else {
+      badge.textContent = "";
+    }
+  }
+
+  // Mirror the presence (not the number) onto the gear dot, hidden at zero (Req 9.1, 9.2).
+  const dot = els["settings-approval-dot"];
+  if (dot) {
+    dot.hidden = count <= 0;
+    if (count > 0) dot.setAttribute("aria-label", label);
   }
 }
 
@@ -2888,12 +2917,8 @@ function commandRegistry() {
       id: "approval",
       label: "Pending approvals",
       run: () => openApprovalPanel(),
-      badge: () => {
-        const el = els["approval-badge"] || document.getElementById("approval-badge");
-        if (!el || el.hidden) return 0;
-        const count = parseInt(el.textContent, 10);
-        return Number.isFinite(count) ? count : 0;
-      },
+      // Read the same source the Approval_Badge writes, so the palette count matches it (Req 9.3).
+      badge: () => pendingApprovalCount,
     },
     { id: "toggle-trace", label: "Toggle trace panel", run: () => toggleTrace() },
     { id: "new-conversation", label: "New conversation", run: () => startNewConversation() },
@@ -3150,6 +3175,10 @@ function autoGrow(textarea) {
 function bindComposer() {
   const form = els["composer"];
   const input = els["composer-input"];
+  if (!form || !input) {
+    console.error("[composer] missing #composer and/or #composer-input; composer disabled");
+    return;
+  }
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -3169,7 +3198,12 @@ function bindComposer() {
 }
 
 function bindSuggestions() {
-  els["messages"].addEventListener("click", (event) => {
+  const messages = els["messages"];
+  if (!messages) {
+    console.error("[suggestions] missing #messages; suggestion shortcuts disabled");
+    return;
+  }
+  messages.addEventListener("click", (event) => {
     const btn = event.target.closest(".suggestion");
     if (!btn) return;
     const prompt = btn.dataset.prompt || btn.textContent.trim();
@@ -3189,14 +3223,30 @@ function init() {
   bindWorkspaceSafety();
   bindApproval();
   bindAppearance();
+  bindSettingsMenu();
+  bindCommandPalette();
 
-  els["new-conversation"].addEventListener("click", startNewConversation);
-  els["toggle-trace"].addEventListener("click", toggleTrace);
-  els["close-trace"].addEventListener("click", closeTrace);
+  // Direct affordances. Each target is guarded so a missing control is skipped (with a developer
+  // diagnostic) instead of throwing, letting the rest of init() complete (Req 10.2, 10.3, 15.4).
+  if (els["new-conversation"]) {
+    els["new-conversation"].addEventListener("click", startNewConversation);
+  } else {
+    console.error("[init] missing #new-conversation; New conversation control disabled");
+  }
+  if (els["toggle-trace"]) {
+    els["toggle-trace"].addEventListener("click", toggleTrace);
+  } else {
+    console.error("[init] missing #toggle-trace; trace toggle disabled");
+  }
+  if (els["close-trace"]) {
+    els["close-trace"].addEventListener("click", closeTrace);
+  } else {
+    console.error("[init] missing #close-trace; trace close control disabled");
+  }
 
   checkHealth();
   loadConversations();
-  els["composer-input"].focus();
+  els["composer-input"]?.focus();
 }
 
 if (document.readyState === "loading") {
