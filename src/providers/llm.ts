@@ -580,6 +580,129 @@ export class AzureOpenAIProvider implements LLMProvider {
   }
 }
 
+export interface OpenAICompatibleProviderOptions {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+  headers?: Record<string, string>;
+  enableNetwork?: boolean;
+  fetchImpl?: typeof fetch;
+}
+
+const OPENAI_COMPATIBLE_PLACEHOLDER_MODEL = "openai-compatible-model";
+
+export class OpenAICompatibleProvider implements LLMProvider {
+  readonly metadata: ProviderCapabilityMetadata;
+
+  private readonly apiKey: string;
+  private readonly baseUrl: string;
+  private readonly model: string;
+  private readonly headers: Record<string, string>;
+  private readonly enableNetwork: boolean;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(options: OpenAICompatibleProviderOptions = {}) {
+    this.apiKey = options.apiKey ?? process.env.OPENAI_COMPATIBLE_API_KEY ?? "";
+    this.baseUrl = (options.baseUrl ?? process.env.OPENAI_COMPATIBLE_BASE_URL ?? "").replace(/\/+$/, "");
+    this.model = (options.model ?? process.env.OPENAI_COMPATIBLE_MODEL ?? "").trim();
+    this.headers = { ...(options.headers ?? {}) };
+    this.enableNetwork = options.enableNetwork ?? false;
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+
+    const metadataModel = this.model || OPENAI_COMPATIBLE_PLACEHOLDER_MODEL;
+    this.metadata = ProviderCapabilityMetadataSchema.parse({
+      id: "openai-compatible",
+      displayName: "OpenAI-Compatible",
+      routes: ["cheap", "fast", "flagship", "research"],
+      models: {
+        cheap: metadataModel,
+        fast: metadataModel,
+        flagship: metadataModel,
+        research: metadataModel,
+      },
+      supportsJson: true,
+      supportsStreaming: false,
+      maxContextTokens: 128_000,
+      estimatedUsdPer1kInputTokens: 0.001,
+      estimatedUsdPer1kOutputTokens: 0.001,
+    });
+  }
+
+  validateConfig(): void {
+    if (!this.apiKey.trim()) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "An API key is required to use the OpenAI-compatible provider",
+      });
+    }
+    if (!/^https?:\/\//i.test(this.baseUrl)) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "An absolute http(s) base URL is required to use the OpenAI-compatible provider",
+      });
+    }
+    if (!this.model.trim()) {
+      throw new ProviderError({
+        code: "CONFIG_INVALID",
+        provider: this.metadata.id,
+        message: "A model id is required to use the OpenAI-compatible provider",
+      });
+    }
+  }
+
+  estimateRequest(request: LLMRequest): LLMUsage {
+    return estimateCostedRequest(request, this.metadata, 512);
+  }
+
+  buildRequest(request: LLMRequest): BuiltProviderRequest {
+    this.validateConfig();
+    const parsed = LLMRequestSchema.parse(request);
+    const model = parsed.model ?? this.model;
+    const body: Record<string, unknown> = {
+      model,
+      messages: parsed.messages,
+      max_tokens: parsed.maxOutputTokens ?? 512,
+    };
+
+    if (parsed.temperature !== undefined) body.temperature = parsed.temperature;
+    if (parsed.responseFormat !== undefined) body.response_format = parsed.responseFormat;
+
+    return {
+      url: `${this.baseUrl}/chat/completions`,
+      init: {
+        method: "POST",
+        headers: {
+          ...this.headers,
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      },
+    };
+  }
+
+  async invoke(request: LLMRequest): Promise<LLMResponse> {
+    const parsed = LLMRequestSchema.parse(request);
+    const built = this.buildRequest(parsed);
+
+    if (!this.enableNetwork) {
+      throw new ProviderError({
+        code: "NETWORK_DISABLED",
+        provider: this.metadata.id,
+        message: "OpenAI-compatible network calls are disabled unless enableNetwork is explicitly true",
+      });
+    }
+
+    const response = await this.fetchImpl(built.url, built.init);
+    if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, this.metadata.displayName);
+
+    const raw = await response.json();
+    return parseOpenAICompatibleResponse(this.metadata.id, this.metadata, parsed, raw, this.estimateRequest(parsed));
+  }
+}
+
 export interface ModelRouterOptions {
   mode?: "local" | "external";
   providers?: LLMProvider[];
