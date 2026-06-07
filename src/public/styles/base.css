@@ -116,6 +116,18 @@
   --motion-slow: 240ms;
   --easing-standard: cubic-bezier(0.2, 0.6, 0.2, 1);
 
+  /* ---------- Structure: layout geometry + stacking (design B, Req 12.3) ----------
+     Additive Structural_Tokens with non-empty defaults so the region-based shell
+     renders with non-zero geometry and the documented stacking order even when no
+     theme overrides them. Themes MAY override; they are not required to. */
+  --topbar-h: 48px;
+  --rail-w: 248px;
+  --trace-w: 380px;
+  --z-topbar: 30; /* below modals (40) */
+  --z-overlay-panel: 45; /* trace when overlaying on narrow windows */
+  --z-menu: 50; /* settings popover */
+  --z-palette: 60; /* command palette (topmost) */
+
   /* ---------- Derived / component-local tokens (non-contract) ---------- */
   --user-bubble: #243049;
 }
@@ -153,23 +165,65 @@ body {
 }
 
 /* ============================================================
-   App shell (layout grid — structural geometry)
+   App shell (region-based two-row layout — structural geometry)
+   ------------------------------------------------------------
+   Row 1: slim Top_Bar (full width). Row 2: content row holding
+   the conversation rail, chat canvas, and dockable trace panel.
    ============================================================ */
 .app {
   display: grid;
-  grid-template-columns: 260px 1fr 0;
+  grid-template-rows: var(--topbar-h) 1fr;
   height: 100vh;
-  transition: grid-template-columns 0.18s ease;
-}
-
-.app.trace-open {
-  grid-template-columns: 260px 1fr 380px;
 }
 
 /* ============================================================
-   Sidebar
+   Top bar (slim, full-width region)
    ============================================================ */
-.sidebar {
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  z-index: var(--z-topbar);
+}
+
+.topbar__lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ============================================================
+   Content row: rail | canvas | trace
+   ------------------------------------------------------------
+   The trace track is collapsed to 0 until the shell is
+   .trace-open, where it docks to --trace-w on wide windows.
+   ============================================================ */
+.content {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr 0;
+  min-height: 0; /* allow inner scroll regions */
+  transition: grid-template-columns var(--motion-base) var(--easing-standard);
+}
+
+.app.trace-open .content {
+  grid-template-columns: var(--rail-w) 1fr var(--trace-w);
+}
+
+/* ============================================================
+   Conversation rail (slimmed: brand + New + list + foot only)
+   ============================================================ */
+.rail {
   background: linear-gradient(var(--sidebar-dim), var(--sidebar-dim)), var(--surface);
   border-right: 1px solid var(--border);
   display: flex;
@@ -177,7 +231,7 @@ body {
   min-width: 0;
 }
 
-.sidebar__head {
+.rail__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -212,71 +266,6 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 1px 7px;
-}
-
-.mode-banner {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0 var(--space-3) var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  background: var(--elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 11.5px;
-  color: var(--text-dim);
-}
-
-.mode-banner__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ok);
-  box-shadow: 0 0 6px var(--ok);
-  flex: none;
-}
-
-.sidebar__section {
-  padding: 0 var(--space-3) var(--space-3);
-}
-
-/* System cluster (Req 6.6 / design B2): a labelled grouping of the system
-   actions. The heading names the cluster; the actions stack within it. */
-.sidebar__cluster {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.sidebar__cluster-title {
-  margin: 0;
-  padding: 0 var(--space-1);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--text-faint);
-}
-
-.sidebar__cluster-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.sidebar__action {
-  width: 100%;
-  text-align: center;
-}
-
-/* The pending-approvals action carries a count badge, so it lays its label
-   and badge out on one row with the badge trailing. */
-.sidebar__action--badged {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  text-align: center;
 }
 
 .conversation-list {
@@ -326,7 +315,7 @@ body {
   border-color: var(--accent);
 }
 
-.sidebar__foot {
+.rail__foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -336,38 +325,13 @@ body {
 }
 
 /* ============================================================
-   Chat column
+   Chat canvas (focused: messages + composer, no per-column header)
    ============================================================ */
 .chat {
   display: flex;
   flex-direction: column;
   min-width: 0;
   background: var(--bg);
-}
-
-.chat__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-5);
-  border-bottom: 1px solid var(--border);
-}
-
-.chat__title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.chat__title h1 {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .status-pill {
@@ -499,6 +463,10 @@ body {
 
 /* ============================================================
    Messages
+   ------------------------------------------------------------
+   Chat content is capped at --measure and centered horizontally
+   within the canvas (Req 4.4): the region centers its children,
+   and each .msg caps its width at --measure.
    ============================================================ */
 .messages {
   flex: 1;
@@ -506,6 +474,7 @@ body {
   padding: var(--space-6) var(--space-5);
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: var(--space-4);
 }
 
