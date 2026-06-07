@@ -844,6 +844,38 @@ function sendRedacted(res: express.Response, status: number, payload: unknown): 
   res.status(500).json({ error: REDACTION_FAILED_ERROR });
 }
 
+/**
+ * Like {@link sendRedacted}, but re-applies server-computed boolean presence
+ * flags that the sensitive-key redaction rule would otherwise clobber.
+ *
+ * The Redaction_Layer replaces any value under a key whose name contains a
+ * secret keyword (e.g. `secretPresent`, since it contains "secret") with the
+ * `[REDACTED]` placeholder — by design, so a genuine secret string can never
+ * escape. A `secretPresent` PRESENCE boolean, however, is computed server-side
+ * from {@link SecretStore.hasSecret} and carries no secret material, yet the
+ * design (C7, Req 11.2) requires responses to expose it as a real boolean.
+ *
+ * This helper runs the full payload through {@link redactOutbound} (so every
+ * user-controlled string/structure is still redacted exactly as before), then
+ * invokes `reattach` on the redacted value to overwrite the clobbered
+ * placeholder(s) with the known-safe boolean(s). Redaction-failure suppression
+ * is unchanged: if redaction throws, a 500 with {@link REDACTION_FAILED_ERROR}
+ * is sent and `reattach` never runs, so no unredacted content can escape.
+ */
+function sendRedactedPreservingPresence<T>(
+  res: express.Response,
+  status: number,
+  payload: T,
+  reattach: (redacted: any) => unknown,
+): void {
+  const outcome = redactOutbound(payload);
+  if (outcome.ok) {
+    res.status(status).json(reattach(outcome.value));
+    return;
+  }
+  res.status(500).json({ error: REDACTION_FAILED_ERROR });
+}
+
 // --- Provider_Config_API request schemas (design section C7) ---
 
 /**
@@ -1613,7 +1645,17 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
           secretPresent: await setupSecretStore.hasSecret(record.secretRef),
         }))
       );
-      sendRedacted(res, 200, { providers, activeRoutes: state.activeRoutes });
+      // The `secretPresent` booleans are clobbered to `[REDACTED]` by the
+      // sensitive-key rule; re-apply them by record id after redaction so the
+      // response exposes real booleans (Req 11.2) while every other field stays
+      // redacted.
+      const presenceById = new Map(providers.map((p) => [p.id, p.secretPresent]));
+      sendRedactedPreservingPresence(res, 200, { providers, activeRoutes: state.activeRoutes }, (redacted) => {
+        for (const provider of redacted.providers ?? []) {
+          provider.secretPresent = presenceById.get(provider.id) ?? false;
+        }
+        return redacted;
+      });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }
@@ -1664,7 +1706,13 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       }
 
       const secretPresent = await setupSecretStore.hasSecret(secretRef);
-      sendRedacted(res, 200, { provider: { ...upsertResult.value, secretPresent } });
+      // Re-apply the presence boolean after redaction (the sensitive-key rule
+      // would otherwise replace it with `[REDACTED]`), so the response exposes a
+      // real boolean (Req 11.2) while the record's other fields stay redacted.
+      sendRedactedPreservingPresence(res, 200, { provider: { ...upsertResult.value, secretPresent } }, (redacted) => {
+        if (redacted.provider) redacted.provider.secretPresent = secretPresent;
+        return redacted;
+      });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }
@@ -1712,7 +1760,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       if (!result.ok) {
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
-      sendRedacted(res, 200, { id: existing.id, secretPresent: true });
+      sendRedactedPreservingPresence(res, 200, { id: existing.id, secretPresent: true }, (redacted) => {
+        redacted.secretPresent = true;
+        return redacted;
+      });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }
