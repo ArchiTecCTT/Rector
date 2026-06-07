@@ -1529,3 +1529,21 @@ body {
     box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
   }
 }
+
+/* ============================================================
+   Reduced_Motion user toggle (design A5, Req 3.4, 9.2)
+   ------------------------------------------------------------
+   theme.js setReducedMotion(true) sets data-reduced-motion="true" on
+   <html> (and the no-flash boot script applies it before first paint).
+   This mirrors the prefers-reduced-motion media behavior so the user's
+   explicit choice disables non-essential animation/transition while full
+   state feedback (color, text, icon) is preserved.
+   ============================================================ */
+:root[data-reduced-motion="true"] *,
+:root[data-reduced-motion="true"] *::before,
+:root[data-reduced-motion="true"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
