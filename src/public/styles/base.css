@@ -931,6 +931,149 @@ body {
 }
 
 /* ============================================================
+   Phase cards (Trace_Drawer supervision surface, Req 7.1–7.6)
+   ============================================================ */
+.phase-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.phase-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  overflow: hidden;
+}
+
+.phase-card__header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.phase-card__header:hover {
+  background: var(--surface);
+}
+
+.phase-card__header:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+.phase-card__icon {
+  flex: none;
+  width: 1.1em;
+  text-align: center;
+  color: var(--text-faint);
+}
+
+.phase-card__name {
+  flex: 1;
+  font-weight: 500;
+}
+
+.phase-card__status {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.phase-card__duration {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  min-width: 0;
+}
+
+/* Status accents — color reinforces the always-present icon + status text,
+   never the sole signal (Req 9.4). */
+.phase-card--done .phase-card__icon {
+  color: var(--ok);
+}
+.phase-card--active {
+  border-color: var(--accent);
+}
+.phase-card--active .phase-card__icon {
+  color: var(--accent);
+}
+.phase-card--active .phase-card__status {
+  color: var(--accent);
+}
+
+/* Non-success terminal phases are visually distinct from a clean completion
+   (Req 7.6): a colored left rail plus a tinted surface. */
+.phase-card--failed {
+  border-color: var(--err);
+  border-left-width: 3px;
+  background: var(--err-soft);
+}
+.phase-card--failed .phase-card__icon,
+.phase-card--failed .phase-card__status {
+  color: var(--err);
+}
+.phase-card--decision {
+  border-color: var(--warn);
+  border-left-width: 3px;
+  background: var(--warn-soft);
+}
+.phase-card--decision .phase-card__icon,
+.phase-card--decision .phase-card__status {
+  color: var(--warn);
+}
+
+.phase-card--pending {
+  opacity: 0.72;
+}
+
+.phase-card__body {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.phase-card__evidence {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.phase-card__events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.phase-card__event {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.phase-card__empty {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+/* ============================================================
    Decision card
    ============================================================ */
 .decision__card {

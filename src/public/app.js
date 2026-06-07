@@ -80,6 +80,41 @@ const PHASE_STATUS_LABELS = {
   ABORTED: "Failed",
 };
 
+// --- Phase_Cards (Trace_Drawer supervision surface, Req 7.1–7.3, 7.6) ---
+//
+// The nine canonical pipeline phases rendered as collapsible cards, in order
+// (Req 7.1). Each card maps to one or more real RUN_PHASES; a card's status,
+// duration, and evidence are derived ONLY from the actual persisted run events
+// (Req 7.5 / Property 9) — never fabricated. Validation and healing are a single
+// "Validation & healing" card because healing is a conditional follow-on phase.
+const PHASE_CARDS = [
+  { id: "triage", label: "Triage", phases: ["TRIAGE"] },
+  { id: "context", label: "Context building", phases: ["CONTEXT_BUILDING"] },
+  { id: "planning", label: "Planning", phases: ["PLANNING"] },
+  { id: "skeptic", label: "Skeptic review", phases: ["SKEPTIC_REVIEW"] },
+  { id: "crucible", label: "Crucible arbitration", phases: ["CRUCIBLE"] },
+  { id: "dag", label: "DAG compilation", phases: ["DAG_COMPILATION"] },
+  { id: "execution", label: "Execution", phases: ["EXECUTING"] },
+  { id: "validation", label: "Validation & healing", phases: ["VALIDATING", "HEALING"] },
+  { id: "synthesis", label: "Synthesis", phases: ["SYNTHESIZING"] },
+];
+
+// Closed set of Phase_Card statuses with their accessible label + glyph. Status is
+// never conveyed by color alone — the label text and an icon accompany it (Req 9.4).
+const PHASE_CARD_STATUS_META = {
+  pending: { label: "Pending", icon: "○" },
+  active: { label: "Active", icon: "◐" },
+  done: { label: "Done", icon: "●" },
+  failed: { label: "Failed", icon: "✕" },
+  decision: { label: "Needs decision", icon: "!" },
+};
+
+// Expansion state for the Phase_Cards, preserved across live re-renders within a
+// run so a user's expand/collapse choice is not lost as new events stream in.
+// `phaseCardsAutoExpanded` guards the one-time auto-expand of the current phase.
+let phaseCardExpanded = new Set();
+let phaseCardsAutoExpanded = false;
+
 // --- Client state ---
 const state = {
   conversationId: null,
@@ -141,7 +176,7 @@ function cacheEls() {
     "cost-model-calls",
     "cost-providers",
     "cost-models",
-    "timeline",
+    "phase-cards",
     "decision-section",
     "decision-card",
     "events",
@@ -437,6 +472,7 @@ function beginLiveRun({ runId, traceId }) {
   liveRun.pollTimer = null;
   liveRun.closed = false;
   resetCostPanel(); // a fresh run must never show the previous run's totals
+  resetPhaseCards(); // a fresh run starts with no expand state seeded
 }
 
 // Close the EventSource and clear the poll timer so neither transport keeps running. Idempotent.
@@ -781,8 +817,16 @@ function toggleTrace() {
 function resetTrace() {
   teardownLiveRun(); // stop any in-flight stream/poll when switching away
   resetCostPanel(); // clear any prior run's cost totals so a new/empty trace shows none
+  resetPhaseCards(); // clear any prior run's phase-card expand state
   els["trace-empty"].hidden = false;
   els["trace-body"].hidden = true;
+}
+
+// Clear the Phase_Cards expand state and the one-time auto-expand guard so a new
+// or switched-to run starts clean.
+function resetPhaseCards() {
+  phaseCardExpanded = new Set();
+  phaseCardsAutoExpanded = false;
 }
 
 function renderTraceForMessage(messageId) {
@@ -821,60 +865,200 @@ function renderTrace(result) {
 }
 
 function renderTimeline(run, events) {
-  const reachedPhases = new Set(events.map((e) => e.phase));
-  const finalPhase = run.phase;
-  const isTerminalBad = finalPhase === "FAILED" || finalPhase === "ABORTED" || finalPhase === "NEEDS_DECISION";
+  renderPhaseCards(run, events);
+}
 
-  // Map phase -> short evidence pulled from real event payloads.
+// Format a phase duration derived from real event timestamps. Never invents a
+// value: callers pass `null` when no real duration can be computed.
+function formatPhaseDuration(ms) {
+  if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return "";
+  if (ms < 1) return "<1ms";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)}s`;
+}
+
+function phaseRunIndex(phase) {
+  return RUN_PHASES.indexOf(phase);
+}
+
+// Build the shared derivation context for all Phase_Cards from real run data
+// (the persisted events + the run's terminal phase/status). No fabrication.
+function buildPhaseCardContext(run, events) {
+  const reachedPhases = new Set(events.map((e) => e.phase));
+  const realReachedIdx = events
+    .map((e) => phaseRunIndex(e.phase))
+    .filter((i) => i >= 0);
+  const maxReachedIdx = realReachedIdx.length ? Math.max(...realReachedIdx) : -1;
+  const finalPhase = run.phase;
+  const completed =
+    reachedPhases.has("DONE") || finalPhase === "DONE" || run.status === "completed";
+  const terminalBad =
+    finalPhase === "FAILED" ||
+    finalPhase === "ABORTED" ||
+    finalPhase === "NEEDS_DECISION" ||
+    run.status === "failed" ||
+    run.status === "aborted" ||
+    run.status === "needs_decision";
+  const terminalKind =
+    finalPhase === "NEEDS_DECISION" || run.status === "needs_decision" ? "decision" : "failed";
+  return { reachedPhases, maxReachedIdx, completed, terminalBad, terminalKind };
+}
+
+// Derive a single Phase_Card's status from the real-event context. Distinguishes
+// pending / active / done / failed / decision (Req 7.2).
+function derivePhaseCardStatus(card, ctx) {
+  const reached = card.phases.some((p) => ctx.reachedPhases.has(p));
+  if (!reached) return "pending";
+  const cardIdx = Math.max(...card.phases.map(phaseRunIndex));
+  // The furthest-reached real phase is where a bad terminal outcome landed.
+  if (ctx.terminalBad && cardIdx === ctx.maxReachedIdx) return ctx.terminalKind;
+  if (ctx.completed || cardIdx < ctx.maxReachedIdx) return "done";
+  return "active";
+}
+
+// Compute a phase's elapsed time strictly from real event timestamps: the span
+// from the card's first event to the first event of any later phase. Returns null
+// when no real duration is derivable (so the UI shows nothing, not a fake value).
+function phaseCardDurationMs(card, events) {
+  const ts = (e) => Date.parse(e.createdAt);
+  const cardIdx = Math.max(...card.phases.map(phaseRunIndex));
+  const cardStamps = events
+    .filter((e) => card.phases.includes(e.phase))
+    .map(ts)
+    .filter((n) => Number.isFinite(n));
+  if (!cardStamps.length) return null;
+  const start = Math.min(...cardStamps);
+  const laterStamps = events
+    .filter((e) => phaseRunIndex(e.phase) > cardIdx)
+    .map(ts)
+    .filter((n) => Number.isFinite(n) && n >= start);
+  if (!laterStamps.length) return null;
+  const duration = Math.min(...laterStamps) - start;
+  return duration >= 0 ? duration : null;
+}
+
+// Toggle a Phase_Card's expand/collapse state, keeping aria-expanded and the
+// body's hidden attribute in sync (accessible button semantics, Req 7.3).
+function setPhaseCardExpanded(cardId, header, body, expanded) {
+  header.setAttribute("aria-expanded", expanded ? "true" : "false");
+  body.hidden = !expanded;
+  if (expanded) phaseCardExpanded.add(cardId);
+  else phaseCardExpanded.delete(cardId);
+}
+
+// Render the Phase_Card list from real run events. Reuses the existing
+// reachedPhases/finalPhase derivation and buildPhaseEvidence; every rendered
+// value (status, duration, evidence, events) comes from real data (Req 7.1–7.6).
+function renderPhaseCards(run, events) {
+  const container = els["phase-cards"];
+  if (!container) return;
+  container.innerHTML = "";
+
+  const ctx = buildPhaseCardContext(run, events);
   const evidence = buildPhaseEvidence(events);
 
-  const timeline = els["timeline"];
-  timeline.innerHTML = "";
-
-  for (const phase of RUN_PHASES) {
-    const reached = reachedPhases.has(phase);
-    // Skip phases never reached, except always show DONE outcome at the end.
-    if (!reached && phase !== "DONE") continue;
-
-    const li = document.createElement("li");
-    li.className = "timeline__item";
-    if (phase === finalPhase) {
-      li.classList.add("timeline__item--active");
-    } else if (reached) {
-      li.classList.add("timeline__item--done");
+  // One-time auto-expand of the current/terminal phase so the most relevant
+  // card is open by default; subsequent user toggles are preserved.
+  if (!phaseCardsAutoExpanded) {
+    for (const card of PHASE_CARDS) {
+      const status = derivePhaseCardStatus(card, ctx);
+      if (status === "active" || status === "failed" || status === "decision") {
+        phaseCardExpanded.add(card.id);
+        phaseCardsAutoExpanded = true;
+        break;
+      }
     }
-
-    const dot = document.createElement("span");
-    dot.className = "timeline__dot";
-
-    const label = document.createElement("span");
-    label.className = "timeline__phase";
-    label.textContent = phase;
-
-    const meta = document.createElement("span");
-    meta.className = "timeline__meta";
-    meta.textContent = evidence[phase] || "";
-
-    li.appendChild(dot);
-    li.appendChild(label);
-    li.appendChild(meta);
-    timeline.appendChild(li);
   }
 
-  // If the run ended in a non-DONE terminal phase, append it explicitly.
-  if (isTerminalBad) {
-    const li = document.createElement("li");
-    li.className =
-      "timeline__item " +
-      (finalPhase === "NEEDS_DECISION" ? "timeline__item--decision" : "timeline__item--failed");
-    const dot = document.createElement("span");
-    dot.className = "timeline__dot";
-    const label = document.createElement("span");
-    label.className = "timeline__phase";
-    label.textContent = finalPhase;
-    li.appendChild(dot);
-    li.appendChild(label);
-    timeline.appendChild(li);
+  for (const card of PHASE_CARDS) {
+    const status = derivePhaseCardStatus(card, ctx);
+    const meta = PHASE_CARD_STATUS_META[status];
+    const bodyId = `phase-body-${card.id}`;
+    const expanded = phaseCardExpanded.has(card.id);
+
+    const cardEl = document.createElement("div");
+    cardEl.className = `phase-card phase-card--${status}`;
+    cardEl.dataset.phase = card.id;
+    cardEl.dataset.status = status;
+    cardEl.setAttribute("role", "listitem");
+
+    // Header is a real <button> for accessible expand/collapse semantics.
+    const header = document.createElement("button");
+    header.type = "button";
+    header.className = "phase-card__header";
+    header.setAttribute("aria-expanded", expanded ? "true" : "false");
+    header.setAttribute("aria-controls", bodyId);
+
+    const icon = document.createElement("span");
+    icon.className = "phase-card__icon";
+    icon.dataset.status = status;
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = meta.icon;
+
+    const name = document.createElement("span");
+    name.className = "phase-card__name";
+    name.textContent = card.label;
+
+    // Status as text (never color alone, Req 9.4).
+    const statusEl = document.createElement("span");
+    statusEl.className = "phase-card__status";
+    statusEl.textContent = meta.label;
+
+    const durationMs = phaseCardDurationMs(card, events);
+    const durationText = formatPhaseDuration(durationMs);
+    const duration = document.createElement("span");
+    duration.className = "phase-card__duration";
+    duration.textContent = durationText; // empty string when no real duration
+
+    header.appendChild(icon);
+    header.appendChild(name);
+    header.appendChild(statusEl);
+    header.appendChild(duration);
+
+    const body = document.createElement("div");
+    body.className = "phase-card__body";
+    body.id = bodyId;
+    body.hidden = !expanded;
+
+    // Evidence built from real event payloads (may be empty for pending phases).
+    const evidenceText = card.phases.map((p) => evidence[p]).filter(Boolean).join(" · ");
+    if (evidenceText) {
+      const ev = document.createElement("p");
+      ev.className = "phase-card__evidence";
+      ev.textContent = evidenceText;
+      body.appendChild(ev);
+    }
+
+    // Real events recorded for this card's phase(s).
+    const phaseEvents = events.filter((e) => card.phases.includes(e.phase));
+    if (phaseEvents.length) {
+      const list = document.createElement("ul");
+      list.className = "phase-card__events";
+      for (const event of phaseEvents) {
+        const item = document.createElement("li");
+        item.className = "phase-card__event";
+        item.textContent = event.type;
+        list.appendChild(item);
+      }
+      body.appendChild(list);
+    } else if (!evidenceText) {
+      const none = document.createElement("p");
+      none.className = "phase-card__empty";
+      none.textContent =
+        status === "pending"
+          ? "No events recorded for this phase yet."
+          : "No additional detail recorded for this phase.";
+      body.appendChild(none);
+    }
+
+    header.addEventListener("click", () => {
+      const next = header.getAttribute("aria-expanded") !== "true";
+      setPhaseCardExpanded(card.id, header, body, next);
+    });
+
+    cardEl.appendChild(header);
+    cardEl.appendChild(body);
+    container.appendChild(cardEl);
   }
 }
 

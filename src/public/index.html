@@ -278,10 +278,13 @@
             </div>
           </section>
 
-          <!-- Phase timeline -->
+          <!-- Phase cards (Trace_Drawer supervision surface, Req 7.1–7.3, 7.6).
+               One collapsible card per pipeline phase. Status/duration/evidence are
+               derived from the actual persisted run events by app.js
+               (renderPhaseCards) — nothing is fabricated (Req 7.5 / Property 9). -->
           <section class="trace-section">
-            <h3 class="trace-section__title">Phase timeline</h3>
-            <ol class="timeline" id="timeline"></ol>
+            <h3 class="trace-section__title">Phases</h3>
+            <div class="phase-cards" id="phase-cards" role="list"></div>
           </section>
 
           <!-- Decision request (NEEDS_DECISION) -->
