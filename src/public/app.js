@@ -1503,10 +1503,22 @@ function showApprovalResult(kind, message) {
   box.className = `approval-result approval-result--${kind === "ok" ? "ok" : "err"}`;
 }
 
-// Reflect whether an operation is awaiting a decision on the sidebar badge.
-function setApprovalBadge(visible) {
+// Reflect pending approvals on the sidebar "System" cluster badge (Req 6.6). Accepts either a
+// boolean (legacy callers) or a numeric count. The badge shows the count when any operation is
+// awaiting a decision and is hidden (never color-only) otherwise; an aria-label keeps it readable
+// to assistive tech.
+function setApprovalBadge(countOrVisible) {
   const badge = els["approval-badge"];
-  if (badge) badge.hidden = !visible;
+  if (!badge) return;
+  const count =
+    countOrVisible === true ? 1 : countOrVisible === false ? 0 : Number(countOrVisible) || 0;
+  badge.hidden = count <= 0;
+  if (count > 0) {
+    badge.textContent = String(count);
+    badge.setAttribute("aria-label", `${count} pending approval${count === 1 ? "" : "s"}`);
+  } else {
+    badge.textContent = "";
+  }
 }
 
 // Render the redacted pending operation into the panel (Req 9.2). The diff/command/target path are

@@ -27,11 +27,22 @@
   --density-scale: 1;
   --font-scale: 1;
 
+  /* Readable line-length measure for chat content (design B1, Req 6.2).
+     Constrains message width to ~72 characters even in wide windows; the
+     .msg block stays centered in the work area via auto margins. */
+  --measure: 72ch;
+
   /* ---------- Color: surface tiers ---------- */
   --bg: #0a0b0f;
   --surface: #14151c;
   --elevated: #1e2029;
   --overlay: rgba(10, 11, 15, 0.72);
+
+  /* Sidebar dim scrim (design B2, Req 9.4): a translucent darkening layer
+     composited over the sidebar surface so the sidebar luminance reads as
+     dimmed/recessed relative to the brighter chat work area. Works for both
+     dark and light themes (lowering luminance); themes may override. */
+  --sidebar-dim: rgba(0, 0, 0, 0.18);
 
   /* ---------- Color: borders ---------- */
   --border: #2a2d38;
@@ -153,7 +164,7 @@ body {
    Sidebar
    ============================================================ */
 .sidebar {
-  background: var(--surface);
+  background: linear-gradient(var(--sidebar-dim), var(--sidebar-dim)), var(--surface);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -223,8 +234,42 @@ body {
   padding: 0 var(--space-3) var(--space-3);
 }
 
+/* System cluster (Req 6.6 / design B2): a labelled grouping of the system
+   actions. The heading names the cluster; the actions stack within it. */
+.sidebar__cluster {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sidebar__cluster-title {
+  margin: 0;
+  padding: 0 var(--space-1);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+}
+
+.sidebar__cluster-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .sidebar__action {
   width: 100%;
+  text-align: center;
+}
+
+/* The pending-approvals action carries a count badge, so it lays its label
+   and badge out on one row with the badge trailing. */
+.sidebar__action--badged {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
   text-align: center;
 }
 
@@ -325,28 +370,53 @@ body {
   flex: none;
 }
 
+/* Status glyph (Req 6.4, 9.4): a per-state icon precedes the text label so
+   run status is never conveyed by color alone. The glyph is decorative
+   (pseudo-element, not surfaced to AT); the visible text label is the
+   accessible signal app.js sets on the pill. */
+.status-pill::before {
+  content: "•";
+  margin-right: 5px;
+  font-weight: 700;
+}
+
 .status-pill--idle {
   color: var(--text-faint);
+}
+.status-pill--idle::before {
+  content: "○";
 }
 .status-pill--running {
   color: var(--accent);
   border-color: var(--accent-pressed);
   background: var(--accent-soft);
 }
+.status-pill--running::before {
+  content: "◐";
+}
 .status-pill--done {
   color: var(--ok);
   border-color: var(--ok);
   background: var(--ok-soft);
+}
+.status-pill--done::before {
+  content: "✓";
 }
 .status-pill--decision {
   color: var(--warn);
   border-color: var(--warn);
   background: var(--warn-soft);
 }
+.status-pill--decision::before {
+  content: "!";
+}
 .status-pill--failed {
   color: var(--err);
   border-color: var(--err);
   background: var(--err-soft);
+}
+.status-pill--failed::before {
+  content: "✕";
 }
 
 /* --- Live connection badge (SSE stream / polling fallback) --- */
@@ -480,7 +550,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  max-width: 760px;
+  max-width: var(--measure);
   width: 100%;
   margin: 0 auto;
 }

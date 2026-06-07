@@ -89,24 +89,35 @@
           Provider-free mode · no API keys · 0 network calls
         </div>
 
-        <div class="sidebar__section">
-          <button class="btn btn--ghost btn--sm sidebar__action" id="open-setup-wizard" type="button">
-            Setup status
-          </button>
-          <button class="btn btn--ghost btn--sm sidebar__action" id="open-provider-test" type="button">
-            Test provider connection
-          </button>
-          <button class="btn btn--ghost btn--sm sidebar__action" id="open-workspace-safety" type="button">
-            Workspace safety
-          </button>
-          <button class="btn btn--ghost btn--sm sidebar__action" id="open-appearance" type="button">
-            Appearance
-          </button>
-          <button class="btn btn--ghost btn--sm sidebar__action" id="open-approval" type="button">
-            Pending approvals
-            <span class="sidebar__badge" id="approval-badge" hidden>1</span>
-          </button>
-        </div>
+        <!--
+          System cluster (Req 6.6 / design B2): the system-status actions —
+          setup status, provider configuration, workspace safety, pending
+          approvals — plus Appearance are grouped under one labelled heading
+          so they read as a coherent cluster. Pending approvals carries a
+          count badge (#approval-badge) that app.js shows when any operation
+          is awaiting a decision. Button ids/handlers are unchanged.
+        -->
+        <section class="sidebar__section sidebar__cluster" aria-labelledby="sidebar-system-title">
+          <h2 class="sidebar__cluster-title" id="sidebar-system-title">System</h2>
+          <div class="sidebar__cluster-actions">
+            <button class="btn btn--ghost btn--sm sidebar__action" id="open-setup-wizard" type="button">
+              Setup status
+            </button>
+            <button class="btn btn--ghost btn--sm sidebar__action" id="open-provider-test" type="button">
+              Test provider connection
+            </button>
+            <button class="btn btn--ghost btn--sm sidebar__action" id="open-workspace-safety" type="button">
+              Workspace safety
+            </button>
+            <button class="btn btn--ghost btn--sm sidebar__action" id="open-appearance" type="button">
+              Appearance
+            </button>
+            <button class="btn btn--ghost btn--sm sidebar__action sidebar__action--badged" id="open-approval" type="button">
+              <span class="sidebar__action-label">Pending approvals</span>
+              <span class="sidebar__badge" id="approval-badge" hidden>1</span>
+            </button>
+          </div>
+        </section>
 
         <nav class="conversation-list" id="conversation-list" aria-live="polite">
           <p class="conversation-list__empty" id="conversation-empty">No conversations yet. Send a message to start one.</p>
