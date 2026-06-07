@@ -40,6 +40,10 @@
           <button class="btn btn--ghost btn--sm sidebar__action" id="open-workspace-safety" type="button">
             Workspace safety
           </button>
+          <button class="btn btn--ghost btn--sm sidebar__action" id="open-approval" type="button">
+            Pending approvals
+            <span class="sidebar__badge" id="approval-badge" hidden>1</span>
+          </button>
         </div>
 
         <nav class="conversation-list" id="conversation-list" aria-live="polite">
@@ -360,6 +364,93 @@
               <ul class="safety-list" id="safety-approval"></ul>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Run approval panel (Approval_Flow, Requirement 9). Modal overlay; chat + trace stay mounted.
+         Auto-opens when a run pauses for an approval decision (streamed over the existing SSE
+         stream). Displays the redacted diff, command, and target path BEFORE any approve/deny
+         action can be submitted (Req 9.2). All values are redacted by the server (Req 9.6). -->
+    <div
+      class="modal"
+      id="approval-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="approval-title"
+    >
+      <div class="modal__backdrop" id="approval-backdrop"></div>
+      <div class="modal__panel" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="approval-title">Operation needs approval</h2>
+          <button class="btn btn--ghost btn--sm" id="close-approval" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            A run paused for your decision. Review the operation details below — the target path,
+            command, and diff are shown before any decision can be submitted. Values are redacted by
+            the server; no secret is displayed.
+          </p>
+
+          <!-- Empty state: no operation is awaiting a decision. -->
+          <div class="approval-empty" id="approval-empty">
+            No operation is awaiting a decision. Pending operations appear here automatically while a
+            run is in progress.
+          </div>
+
+          <!-- Pending operation details (Req 9.2). The approve/deny actions stay disabled until
+               these redacted fields are rendered. -->
+          <div class="approval" id="approval-detail" hidden>
+            <div class="approval-row">
+              <span class="approval-row__k">Run</span>
+              <span class="approval-row__v t-mono" id="approval-run-id">—</span>
+            </div>
+            <div class="approval-row">
+              <span class="approval-row__k">Operation</span>
+              <span class="approval-row__v t-mono" id="approval-operation-id">—</span>
+            </div>
+            <div class="approval-row">
+              <span class="approval-row__k">Target path</span>
+              <span class="approval-row__v t-mono" id="approval-target-path">—</span>
+            </div>
+
+            <div class="approval-block" id="approval-command-block" hidden>
+              <span class="approval-row__k">Command</span>
+              <pre class="approval-code" id="approval-command"></pre>
+              <span class="approval-risky" id="approval-risky" hidden>
+                Risky shell command — explicit approval is required before it can run.
+              </span>
+            </div>
+
+            <div class="approval-block">
+              <span class="approval-row__k">Diff</span>
+              <pre class="approval-code approval-diff" id="approval-diff"></pre>
+            </div>
+
+            <label class="approval-identity">
+              <span class="approval-row__k">Deciding as</span>
+              <input
+                type="text"
+                id="approval-decided-by"
+                class="approval-input"
+                value="browser-user"
+                autocomplete="off"
+              />
+            </label>
+
+            <div class="approval-result" id="approval-result" role="status" aria-live="polite" hidden></div>
+          </div>
+        </div>
+
+        <div class="modal__foot" id="approval-foot" hidden>
+          <span class="provider-test__loading" id="approval-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Recording decision…</span>
+          </span>
+          <button class="btn" id="approval-deny" type="button" disabled>Deny</button>
+          <button class="btn btn--primary" id="approval-approve" type="button" disabled>Approve</button>
         </div>
       </div>
     </div>

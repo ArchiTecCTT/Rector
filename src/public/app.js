@@ -174,6 +174,26 @@ function cacheEls() {
     "safety-destructive",
     "safety-allowlist",
     "safety-approval",
+    "open-approval",
+    "approval-badge",
+    "close-approval",
+    "approval-modal",
+    "approval-backdrop",
+    "approval-empty",
+    "approval-detail",
+    "approval-run-id",
+    "approval-operation-id",
+    "approval-target-path",
+    "approval-command-block",
+    "approval-command",
+    "approval-risky",
+    "approval-diff",
+    "approval-decided-by",
+    "approval-result",
+    "approval-foot",
+    "approval-loading",
+    "approval-deny",
+    "approval-approve",
   ];
   for (const id of ids) {
     els[id] = document.getElementById(id);
@@ -428,6 +448,9 @@ function applyLiveEvent(event) {
   liveRun.eventIds.add(event.id);
   liveRun.events.push(event);
   renderLiveTimeline();
+  // A run that pauses for an approval decision emits a DECISION_REQUESTED event carrying the
+  // redacted approval request; surface it in the Approval_Flow panel (Req 9.1, 9.2).
+  maybePresentApprovalFromEvent(event);
 }
 
 // Render the timeline from the events seen so far, reusing the existing trace render helpers.
@@ -1392,6 +1415,228 @@ function bindWorkspaceSafety() {
   els["workspace-safety-backdrop"]?.addEventListener("click", closeWorkspaceSafety);
 }
 
+// --- Run approval panel (Approval_Flow, Requirement 9) ---
+//
+// A decision surface rendered as a modal overlay so the chat + trace UI stay mounted at all times.
+// It consumes the existing SSE run stream (via `applyLiveEvent` -> `maybePresentApprovalFromEvent`):
+// when a run pauses for an approval decision the server emits a `DECISION_REQUESTED` run-event whose
+// payload carries the redacted approval request. The panel presents that pending operation and
+// displays its redacted diff, command, and target path BEFORE any approve/deny action can be
+// submitted (Req 9.2). Every displayed value is already redacted by the server boundary
+// (`createDecisionRequest`/`presentApprovalRequest`), so no secret can appear here (Req 9.6).
+
+const approval = {
+  runId: null, // the run currently awaiting a decision (null once decided/cleared)
+  operationId: null, // the operation currently presented for a decision
+  inFlight: false, // guards against double-submitting a decision
+};
+
+// Pure: extract a normalized approval request from a persisted `decisionRequest`, or `null` when the
+// request is not an approval-kind request (so a non-approval decision request is never mistaken for
+// one). Kept side-effect free so the detection rule is trivially testable. The fields are read
+// defensively because the payload crossed the redaction/persistence boundary.
+function extractApprovalRequest(decisionRequest) {
+  if (!decisionRequest || typeof decisionRequest !== "object") return null;
+  if (decisionRequest.kind !== "approval") return null;
+  const operationId = typeof decisionRequest.operationId === "string" ? decisionRequest.operationId : "";
+  if (!operationId) return null;
+  const view = decisionRequest.view && typeof decisionRequest.view === "object" ? decisionRequest.view : {};
+  return {
+    operationId,
+    riskyCommand: decisionRequest.riskyCommand === true,
+    view: {
+      runId: typeof view.runId === "string" ? view.runId : "",
+      operationId: typeof view.operationId === "string" ? view.operationId : operationId,
+      diff: typeof view.diff === "string" ? view.diff : "",
+      command: typeof view.command === "string" ? view.command : undefined,
+      targetPath: typeof view.targetPath === "string" ? view.targetPath : "",
+    },
+  };
+}
+
+// Enable/disable the approve + deny actions. They are gated so a decision can only be submitted once
+// a pending operation's redacted details have been rendered (Req 9.2) and no decision is in flight.
+function setApprovalActionsEnabled(enabled) {
+  const approveBtn = els["approval-approve"];
+  const denyBtn = els["approval-deny"];
+  if (approveBtn) approveBtn.disabled = !enabled;
+  if (denyBtn) denyBtn.disabled = !enabled;
+}
+
+function setApprovalLoading(loading) {
+  const indicator = els["approval-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+function clearApprovalResult() {
+  const box = els["approval-result"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+  box.className = "approval-result";
+}
+
+// Render a decision result/indication. `kind` is "ok" (decision recorded) or "err" (could not be
+// processed — the run stays pending and the user can retry, Req 9.7).
+function showApprovalResult(kind, message) {
+  const box = els["approval-result"];
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+  box.className = `approval-result approval-result--${kind === "ok" ? "ok" : "err"}`;
+}
+
+// Reflect whether an operation is awaiting a decision on the sidebar badge.
+function setApprovalBadge(visible) {
+  const badge = els["approval-badge"];
+  if (badge) badge.hidden = !visible;
+}
+
+// Render the redacted pending operation into the panel (Req 9.2). The diff/command/target path are
+// shown verbatim — already redacted at the server boundary — and the approve/deny actions are only
+// enabled after these fields are populated.
+function renderApprovalRequest(runId, request) {
+  const view = request.view;
+
+  if (els["approval-run-id"]) els["approval-run-id"].textContent = runId || view.runId || "—";
+  if (els["approval-operation-id"]) els["approval-operation-id"].textContent = request.operationId || "—";
+  if (els["approval-target-path"]) els["approval-target-path"].textContent = view.targetPath || "—";
+
+  // Command block: shown only when the operation carries a command. The risky-command note is shown
+  // for risky shell commands, which require explicit approval before they can run (Req 9.4 context).
+  const commandBlock = els["approval-command-block"];
+  if (commandBlock) {
+    if (view.command !== undefined && view.command !== "") {
+      commandBlock.hidden = false;
+      if (els["approval-command"]) els["approval-command"].textContent = view.command;
+    } else {
+      commandBlock.hidden = true;
+      if (els["approval-command"]) els["approval-command"].textContent = "";
+    }
+  }
+  const riskyNote = els["approval-risky"];
+  if (riskyNote) riskyNote.hidden = !request.riskyCommand;
+
+  if (els["approval-diff"]) els["approval-diff"].textContent = view.diff || "(no diff provided)";
+
+  clearApprovalResult();
+  if (els["approval-empty"]) els["approval-empty"].hidden = true;
+  if (els["approval-detail"]) els["approval-detail"].hidden = false;
+  if (els["approval-foot"]) els["approval-foot"].hidden = false;
+}
+
+// Present a pending operation for a decision: record which run/operation is awaiting a decision,
+// render its redacted details, enable the actions, surface the sidebar badge, and open the panel
+// (Req 9.1). Called from the SSE event handler when a DECISION_REQUESTED approval arrives.
+function presentApproval(runId, request) {
+  approval.runId = runId || request.view.runId || null;
+  approval.operationId = request.operationId;
+  approval.inFlight = false;
+
+  renderApprovalRequest(approval.runId, request);
+  setApprovalActionsEnabled(true);
+  setApprovalLoading(false);
+  setApprovalBadge(true);
+
+  const modal = els["approval-modal"];
+  if (modal) modal.hidden = false;
+}
+
+// Inspect a live run event; if it is an approval DECISION_REQUESTED, present the pending operation.
+// Safe to call for every event — non-approval events are ignored.
+function maybePresentApprovalFromEvent(event) {
+  if (!event || event.type !== "DECISION_REQUESTED") return;
+  const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  const request = extractApprovalRequest(payload.decisionRequest);
+  if (!request) return;
+  presentApproval(event.runId || liveRun.runId, request);
+}
+
+// Submit an approve/deny decision to the existing decision endpoint (`POST /api/runs/:id/decision`).
+// The action is disabled while in flight. On success the decision is recorded server-side (the run
+// continues to execute or to a final answer that excludes the operation); on a processing failure
+// the run stays pending and the user can retry (Req 9.7).
+async function submitApprovalDecision(decision) {
+  if (approval.inFlight || !approval.runId || !approval.operationId) return;
+  const decidedByRaw = (els["approval-decided-by"]?.value ?? "").trim();
+  const decidedBy = decidedByRaw || "browser-user";
+
+  approval.inFlight = true;
+  setApprovalActionsEnabled(false);
+  setApprovalLoading(true);
+  clearApprovalResult();
+
+  const runId = approval.runId;
+  const operationId = approval.operationId;
+
+  try {
+    const res = await fetch(`${API}/runs/${runId}/decision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operationId, decision, decidedBy }),
+    });
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+
+    if (res.ok && body.decisionProcessed) {
+      // Decided: clear the pending operation and leave the actions disabled so it cannot be
+      // submitted twice. The run continues per the recorded decision.
+      approval.runId = null;
+      approval.operationId = null;
+      setApprovalBadge(false);
+      showApprovalResult(
+        "ok",
+        decision === "approve"
+          ? "Operation approved. The run will continue and execute it."
+          : "Operation denied. The run will continue to a final answer that excludes it.",
+      );
+    } else {
+      // Req 9.7: the decision could not be processed; keep the operation pending and allow a retry.
+      showApprovalResult(
+        "err",
+        body.error || "The decision could not be processed. The run is still awaiting a decision.",
+      );
+      setApprovalActionsEnabled(true);
+    }
+  } catch {
+    showApprovalResult("err", "The decision could not be sent. The run is still awaiting a decision.");
+    setApprovalActionsEnabled(true);
+  } finally {
+    approval.inFlight = false;
+    setApprovalLoading(false);
+  }
+}
+
+// Open the panel manually (e.g. from the sidebar). When nothing is pending, the empty state shows
+// and no decision controls are available.
+function openApprovalPanel() {
+  const modal = els["approval-modal"];
+  if (!modal) return;
+  if (!approval.operationId) {
+    if (els["approval-empty"]) els["approval-empty"].hidden = false;
+    if (els["approval-detail"]) els["approval-detail"].hidden = true;
+    if (els["approval-foot"]) els["approval-foot"].hidden = true;
+  }
+  modal.hidden = false;
+}
+
+function closeApprovalPanel() {
+  const modal = els["approval-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindApproval() {
+  els["open-approval"]?.addEventListener("click", openApprovalPanel);
+  els["close-approval"]?.addEventListener("click", closeApprovalPanel);
+  els["approval-backdrop"]?.addEventListener("click", closeApprovalPanel);
+  els["approval-approve"]?.addEventListener("click", () => void submitApprovalDecision("approve"));
+  els["approval-deny"]?.addEventListener("click", () => void submitApprovalDecision("deny"));
+  // No operation is pending on load: actions stay disabled until a pending operation is presented
+  // and its redacted details are rendered (Req 9.2).
+  setApprovalActionsEnabled(false);
+  setApprovalBadge(false);
+}
+
 // --- Composer behavior ---
 function autoGrow(textarea) {
   textarea.style.height = "auto";
@@ -1437,6 +1682,7 @@ function init() {
   bindProviderTest();
   bindSetupWizard();
   bindWorkspaceSafety();
+  bindApproval();
 
   els["new-conversation"].addEventListener("click", startNewConversation);
   els["toggle-trace"].addEventListener("click", toggleTrace);
