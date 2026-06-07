@@ -19,6 +19,60 @@ export function redactSecrets<T>(value: T): T {
   return redactValue(value, undefined, new WeakSet()) as T;
 }
 
+/**
+ * Fixed, secret-free message returned whenever outbound redaction cannot complete. It carries no
+ * caller-supplied content (only this constant), so suppressing a response can never itself leak a
+ * secret substring (Requirement 11.5).
+ */
+export const REDACTION_FAILED_ERROR = "redaction-failed: outbound content suppressed";
+
+/** Successful outbound redaction carrying the redacted value (Requirement 11.5). */
+export interface RedactionSuccess<T> {
+  ok: true;
+  value: T;
+}
+
+/** Failed outbound redaction: the raw content is suppressed and only a fixed error is returned. */
+export interface RedactionFailure {
+  ok: false;
+  error: string;
+}
+
+/** The outcome of an outbound redaction pass: either the redacted value or a suppression error. */
+export type RedactionOutcome<T> = RedactionSuccess<T> | RedactionFailure;
+
+/**
+ * Outbound redaction-failure suppression (Requirement 11.5).
+ *
+ * Run `value` through {@link redactSecrets} and return the redacted value on success. If redaction
+ * throws for any reason, the raw (unredacted) content is suppressed — never returned — and a
+ * structured {@link RedactionFailure} carrying only the fixed {@link REDACTION_FAILED_ERROR} is
+ * returned instead. This is the single reusable boundary every productization response, streamed
+ * frame, and error path routes through so unredacted content can never escape the process.
+ */
+export function redactOutbound<T>(value: T): RedactionOutcome<T> {
+  try {
+    return { ok: true, value: redactSecrets(value) };
+  } catch {
+    return { ok: false, error: REDACTION_FAILED_ERROR };
+  }
+}
+
+/**
+ * Redact a single string for an outbound boundary, suppressing the raw value on failure
+ * (Requirement 11.5). Returns the redacted string on success; if {@link redactString} throws, the
+ * raw content is suppressed and the fixed {@link REDACTION_FAILED_ERROR} placeholder is returned in
+ * its place so no unredacted substring is ever emitted (used for streamed view fields where a
+ * per-field placeholder is preferable to dropping the whole frame).
+ */
+export function redactStringOrSuppress(value: string): string {
+  try {
+    return redactString(value);
+  } catch {
+    return REDACTION_FAILED_ERROR;
+  }
+}
+
 export function isSensitiveKey(key: string): boolean {
   const compactKey = compactKeyName(key);
   return SECRET_KEYWORDS.some((keyword) => compactKey.includes(keyword));

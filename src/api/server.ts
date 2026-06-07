@@ -16,7 +16,7 @@ import {
   aggregateRunCost,
   aggregateConversationCost,
 } from "../observability";
-import { redactSecrets, redactString } from "../security/redaction";
+import { redactSecrets, redactString, redactOutbound, REDACTION_FAILED_ERROR } from "../security/redaction";
 import { computeSetupStatus } from "../setupStatus";
 import {
   ApprovalProcessingError,
@@ -775,6 +775,25 @@ function resolveWorkspaceSafetyConfig(env: Record<string, string | undefined>): 
   };
 }
 
+/**
+ * Send `payload` as JSON only after a successful outbound redaction pass (Requirement 11.5).
+ *
+ * Every new productization boundary (setup-status, workspace-safety, and approval-decision
+ * responses, plus their error paths) routes its outbound body through {@link redactOutbound}. On
+ * success the redacted value is serialized with the caller's `status`, preserving the response
+ * shape. If redaction throws, the raw (unredacted) content is suppressed — never written — and a
+ * fixed `{ error: REDACTION_FAILED_ERROR }` is returned with HTTP 500 instead, so no unredacted
+ * content can escape even when the Redaction_Layer itself fails.
+ */
+function sendRedacted(res: express.Response, status: number, payload: unknown): void {
+  const outcome = redactOutbound(payload);
+  if (outcome.ok) {
+    res.status(status).json(outcome.value);
+    return;
+  }
+  res.status(500).json({ error: REDACTION_FAILED_ERROR });
+}
+
 export function createApp(manager: TaskManager, securityOptions: ApiSecurityOptions = {}): express.Application {
   const app = express();
   // Select the store from the deployment persistence config (ORN-39). When no persistence config
@@ -1064,20 +1083,22 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         { runId, operationId, decision: decision as ApprovalDecision, decidedBy },
         {}
       );
-      return res.status(200).json({ decisionProcessed: true, record });
+      // Outbound boundary: route the decision record through the suppression helper so a redaction
+      // failure suppresses the raw record and returns a redaction-failed error (Req 9.6, 11.1, 11.5).
+      return sendRedacted(res, 200, { decisionProcessed: true, record });
     } catch (error) {
       if (error instanceof ApprovalProcessingError) {
         // Req 9.7: do not execute, keep the run in its pending-decision state, and indicate the
         // decision could not be processed. RUN_NOT_FOUND maps to 404; everything else is a conflict
         // with the run's current state (409).
         const httpStatus = error.code === "RUN_NOT_FOUND" ? 404 : 409;
-        return res.status(httpStatus).json({
+        return sendRedacted(res, httpStatus, {
           decisionProcessed: false,
           code: error.code,
           error: redactString(error.message),
         });
       }
-      return res.status(500).json({
+      return sendRedacted(res, 500, {
         decisionProcessed: false,
         error: redactString(error instanceof Error ? error.message : String(error)),
       });
@@ -1389,10 +1410,19 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.get("/api/setup/status", async (_req, res) => {
     try {
       const status = await computeSetupStatus(process.env, setupSecretStore);
+      // `computeSetupStatus` is itself the redaction boundary for this payload: it routes every
+      // field through the Redaction_Layer per-field (and omits any value whose redaction fails,
+      // Req 1.10) precisely because a blanket `redactSecrets` pass would treat the legitimately
+      // named `secretPresence` field as sensitive and drop it. Emitting the already-redacted result
+      // directly preserves that contract; an upstream redaction failure throws and is suppressed by
+      // the catch below (Req 1.3, 11.1, 11.5).
       res.json(status);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: redactString(message) });
+      // Suppress the error body too: redact it, and if even that fails, emit only the fixed
+      // redaction-failed placeholder rather than any raw message (Req 1.8, 1.10, 11.3, 11.5).
+      const outcome = redactOutbound({ error: redactString(message) });
+      res.status(500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
     }
   });
 
@@ -1401,16 +1431,22 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // allowlisted commands, destructive-protection status, and approval-required categories — and
   // never executes any command (Req 3.5, 3.6). `buildWorkspaceSafetyResponse` routes the workspace
   // root through the Redaction_Layer (Req 3.7) and returns `available:false` when the root or policy
-  // cannot be retrieved (Req 3.8). Any internal failure is caught and surfaced as `available:false`
-  // so the panel shows the unavailable state with no action controls; the response is additionally
-  // passed through `redactSecrets` so no secret substring can escape.
+  // cannot be retrieved (Req 3.8). A build failure is surfaced as `available:false` so the panel
+  // shows the unavailable state with no action controls; the response is then sent via
+  // `sendRedacted`, which redacts the outbound body and — if redaction itself fails — suppresses the
+  // raw content and returns a redaction-failed error instead (Req 11.5).
   const workspaceSafetyConfig = securityOptions.workspaceSafety ?? resolveWorkspaceSafetyConfig(process.env);
   app.get("/api/setup/workspace", (_req, res) => {
+    let response: WorkspaceSafetyResponse;
     try {
-      res.json(redactSecrets(buildWorkspaceSafetyResponse(workspaceSafetyConfig)));
+      response = buildWorkspaceSafetyResponse(workspaceSafetyConfig);
     } catch {
-      res.json({ ...UNAVAILABLE_WORKSPACE_SAFETY });
+      // A build failure is treated as "policy unavailable" (Req 3.8); still redacted on the way out.
+      response = { ...UNAVAILABLE_WORKSPACE_SAFETY };
     }
+    // Outbound boundary: redact and, if redaction fails, suppress the raw content and return a
+    // redaction-failed error instead of emitting unredacted data (Req 3.7, 11.1, 11.5).
+    sendRedacted(res, 200, response);
   });
 
   // --- Provider connection test (ORN-32) ---

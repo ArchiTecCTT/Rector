@@ -1,6 +1,6 @@
 import { createDecisionRequest, resumeFromDecision } from "../orchestration/runStateMachine";
 import type { RunTransitionResult } from "../orchestration/runStateMachine";
-import { redactString } from "../security/redaction";
+import { redactStringOrSuppress } from "../security/redaction";
 import type { RectorStore } from "../store";
 
 /**
@@ -195,14 +195,19 @@ export async function recordApprovalDecision(
   return record;
 }
 
-/** Redact each displayed field of an operation view (Requirement 9.6). */
+/**
+ * Redact each displayed field of an operation view (Requirement 9.6) with outbound-failure
+ * suppression (Requirement 11.5): each field is routed through `redactStringOrSuppress`, so if
+ * redaction of a field throws, that field's raw content is suppressed and replaced with the fixed
+ * redaction-failed placeholder rather than streamed unredacted in the `ApprovalRequestView`.
+ */
 function redactApprovalView(view: ApprovalRequestView): ApprovalRequestView {
   return {
     runId: view.runId,
     operationId: view.operationId,
-    diff: redactString(view.diff),
-    command: view.command === undefined ? undefined : redactString(view.command),
-    targetPath: redactString(view.targetPath),
+    diff: redactStringOrSuppress(view.diff),
+    command: view.command === undefined ? undefined : redactStringOrSuppress(view.command),
+    targetPath: redactStringOrSuppress(view.targetPath),
   };
 }
 
