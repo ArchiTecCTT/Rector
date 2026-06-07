@@ -31,8 +31,14 @@
         </div>
 
         <div class="sidebar__section">
+          <button class="btn btn--ghost btn--sm sidebar__action" id="open-setup-wizard" type="button">
+            Setup status
+          </button>
           <button class="btn btn--ghost btn--sm sidebar__action" id="open-provider-test" type="button">
             Test provider connection
+          </button>
+          <button class="btn btn--ghost btn--sm sidebar__action" id="open-workspace-safety" type="button">
+            Workspace safety
           </button>
         </div>
 
@@ -216,6 +222,46 @@
       </aside>
     </div>
 
+    <!-- Setup Wizard panel (modal overlay; chat + trace stay mounted) -->
+    <div
+      class="modal"
+      id="setup-wizard-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="setup-wizard-title"
+    >
+      <div class="modal__backdrop" id="setup-wizard-backdrop"></div>
+      <div class="modal__panel" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="setup-wizard-title">Setup status</h2>
+          <button class="btn btn--ghost btn--sm" id="close-setup-wizard" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            A read-only view of Rector's configuration readiness. No configuration is entered,
+            changed, or stored here — credentials live only in the server environment.
+          </p>
+
+          <div class="wizard" id="setup-wizard-body" hidden>
+            <div class="wizard__mode">
+              <span class="wizard__mode-label">Mode</span>
+              <span class="wizard__mode-value" id="setup-wizard-mode">—</span>
+            </div>
+            <div class="wizard__pills" id="setup-wizard-categories" aria-label="Configuration readiness"></div>
+          </div>
+
+          <div class="wizard__loading" id="setup-wizard-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Checking setup status…</span>
+          </div>
+
+          <div class="wizard__error" id="setup-wizard-error" role="alert" hidden></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Provider connection-test panel (modal overlay; chat + trace stay mounted) -->
     <div
       class="modal"
@@ -257,6 +303,63 @@
           <button class="btn btn--primary" id="run-provider-test" type="button" disabled>
             Test connection
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Workspace safety panel (modal overlay; chat + trace stay mounted) -->
+    <div
+      class="modal"
+      id="workspace-safety-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="workspace-safety-title"
+    >
+      <div class="modal__backdrop" id="workspace-safety-backdrop"></div>
+      <div class="modal__panel" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="workspace-safety-title">Workspace safety</h2>
+          <button class="btn btn--ghost btn--sm" id="close-workspace-safety" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            A read-only view of the workspace Rector can touch and the sandbox safety policy that
+            applies. This panel runs no commands and changes no configuration.
+          </p>
+
+          <div class="safety-loading" id="workspace-safety-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Loading safety configuration…</span>
+          </div>
+
+          <!-- Unavailable state (Req 3.8): an error message and no workspace action controls. -->
+          <div class="safety-unavailable" id="workspace-safety-unavailable" role="alert" hidden>
+            Safety configuration is unavailable. Rector cannot confirm the workspace root or sandbox
+            policy, so no workspace details are shown.
+          </div>
+
+          <div class="safety" id="workspace-safety-detail" hidden>
+            <div class="safety-row">
+              <span class="safety-row__k">Workspace root</span>
+              <span class="safety-row__v t-mono" id="safety-workspace-root">—</span>
+            </div>
+            <div class="safety-row">
+              <span class="safety-row__k">Destructive command protection</span>
+              <span class="safety-badge" id="safety-destructive">—</span>
+            </div>
+
+            <div class="safety-block">
+              <span class="safety-row__k">Allowlisted commands</span>
+              <ul class="safety-list" id="safety-allowlist"></ul>
+            </div>
+
+            <div class="safety-block">
+              <span class="safety-row__k">Approval required before execution</span>
+              <ul class="safety-list" id="safety-approval"></ul>
+            </div>
+          </div>
         </div>
       </div>
     </div>

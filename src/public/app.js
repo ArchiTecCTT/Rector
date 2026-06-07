@@ -48,6 +48,20 @@ const PROVIDERS = [
 
 const PROVIDER_LABELS = new Map(PROVIDERS.map((p) => [p.id, p.label]));
 
+// --- Setup Wizard (Setup_Wizard, Requirement 1) ---
+
+// Client-side timeout for the setup-status fetch (Requirement 1.9). After this elapses the in-flight
+// request is aborted and the wizard shows an error state while chat/trace stay accessible.
+const SETUP_STATUS_TIMEOUT_MS = 10_000;
+
+// Static, non-secret display labels for the four configuration categories (Requirement 1.2).
+const SETUP_CATEGORY_LABELS = {
+  provider: "Provider",
+  persistence: "Persistence",
+  workspace: "Workspace",
+  budget: "Budget",
+};
+
 // User-facing status labels per phase (mirror of RUN_PHASE_STATUS_LABELS).
 const PHASE_STATUS_LABELS = {
   CHAT_RECEIVED: "Thinking",
@@ -140,6 +154,26 @@ function cacheEls() {
     "provider-test-result",
     "provider-test-loading",
     "run-provider-test",
+    "open-setup-wizard",
+    "close-setup-wizard",
+    "setup-wizard-modal",
+    "setup-wizard-backdrop",
+    "setup-wizard-body",
+    "setup-wizard-mode",
+    "setup-wizard-categories",
+    "setup-wizard-loading",
+    "setup-wizard-error",
+    "open-workspace-safety",
+    "close-workspace-safety",
+    "workspace-safety-modal",
+    "workspace-safety-backdrop",
+    "workspace-safety-loading",
+    "workspace-safety-unavailable",
+    "workspace-safety-detail",
+    "safety-workspace-root",
+    "safety-destructive",
+    "safety-allowlist",
+    "safety-approval",
   ];
   for (const id of ids) {
     els[id] = document.getElementById(id);
@@ -1080,6 +1114,284 @@ function bindProviderTest() {
   els["run-provider-test"]?.addEventListener("click", runProviderTest);
 }
 
+// --- Setup Wizard panel (Setup_Wizard, Requirement 1) ---
+//
+// A read-only status surface rendered as a modal overlay so the chat + trace UI stay mounted and
+// accessible at all times (Requirement 1.7), including while an error/timeout state is shown
+// (Requirements 1.8, 1.9). It presents the orchestration mode (1.1) and exactly one readiness pill
+// per configuration category (1.2). It mutates no configuration (1.6) and persists nothing to
+// localStorage/sessionStorage (1.5) — no browser storage is touched anywhere in this flow.
+
+const setupWizard = {
+  inFlight: false,
+  abort: null,
+  timer: null,
+};
+
+// Human-language mode label (Requirement 1.1). Local_Mode unless the server reports "external".
+function setupModeLabel(mode) {
+  return mode === "external" ? "External mode" : "Local mode";
+}
+
+// Map a closed-set readiness status to its pill style. Unknown values fall back to the error style.
+function readinessPillClass(status) {
+  if (status === "Ready") return "wizard-pill--ready";
+  if (status === "Incomplete") return "wizard-pill--incomplete";
+  return "wizard-pill--error";
+}
+
+function setSetupWizardLoading(loading) {
+  const indicator = els["setup-wizard-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+// Show the error state and hide the status body. Messages are static, key-free strings; the wizard
+// never echoes a server payload here, so no secret material can appear (Requirements 1.5, 1.8, 1.9).
+function showSetupWizardError(message) {
+  if (els["setup-wizard-body"]) els["setup-wizard-body"].hidden = true;
+  const error = els["setup-wizard-error"];
+  if (!error) return;
+  error.hidden = false;
+  error.textContent = message;
+}
+
+// Render the redacted SetupStatusResponse: the mode plus one pill per category (Requirements 1.1, 1.2).
+function renderSetupStatus(status) {
+  if (els["setup-wizard-error"]) els["setup-wizard-error"].hidden = true;
+
+  const modeEl = els["setup-wizard-mode"];
+  if (modeEl) modeEl.textContent = setupModeLabel(status.mode);
+
+  const container = els["setup-wizard-categories"];
+  if (container) {
+    container.innerHTML = "";
+    const categories = Array.isArray(status.categories) ? status.categories : [];
+    for (const entry of categories) {
+      const pill = document.createElement("div");
+      pill.className = `wizard-pill ${readinessPillClass(entry.status)}`;
+
+      const head = document.createElement("div");
+      head.className = "wizard-pill__head";
+
+      const name = document.createElement("span");
+      name.className = "wizard-pill__name";
+      name.textContent = SETUP_CATEGORY_LABELS[entry.category] || entry.category;
+
+      const badge = document.createElement("span");
+      badge.className = "wizard-pill__status";
+      badge.textContent = entry.status;
+
+      head.appendChild(name);
+      head.appendChild(badge);
+
+      const detail = document.createElement("p");
+      detail.className = "wizard-pill__detail";
+      detail.textContent = entry.detail || "";
+
+      pill.appendChild(head);
+      pill.appendChild(detail);
+      container.appendChild(pill);
+    }
+  }
+
+  if (els["setup-wizard-body"]) els["setup-wizard-body"].hidden = false;
+}
+
+// Fetch the redacted setup status from the existing Setup_API. Applies a 10s aborting client-side
+// timeout (Requirement 1.9); on any failure or non-OK response shows an error state (Requirement
+// 1.8). The chat/trace UI stays mounted and accessible throughout (Requirement 1.7).
+async function loadSetupStatus() {
+  if (setupWizard.inFlight) return;
+  setupWizard.inFlight = true;
+  if (els["setup-wizard-body"]) els["setup-wizard-body"].hidden = true;
+  if (els["setup-wizard-error"]) els["setup-wizard-error"].hidden = true;
+  setSetupWizardLoading(true);
+
+  const controller = new AbortController();
+  setupWizard.abort = controller;
+  let timedOut = false;
+  setupWizard.timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, SETUP_STATUS_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${API}/setup/status`, {
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+
+    if (!res.ok || !body || !Array.isArray(body.categories)) {
+      showSetupWizardError("Setup status is unavailable right now. Chat and trace remain available.");
+      return;
+    }
+    renderSetupStatus(body);
+  } catch (err) {
+    if (timedOut || (err && err.name === "AbortError")) {
+      showSetupWizardError("Setup status timed out after 10 seconds. Chat and trace remain available.");
+    } else {
+      showSetupWizardError("Setup status could not be loaded. Chat and trace remain available.");
+    }
+  } finally {
+    clearTimeout(setupWizard.timer);
+    setupWizard.timer = null;
+    setupWizard.abort = null;
+    setupWizard.inFlight = false;
+    setSetupWizardLoading(false);
+  }
+}
+
+function openSetupWizard() {
+  const modal = els["setup-wizard-modal"];
+  if (!modal) return;
+  modal.hidden = false;
+  void loadSetupStatus();
+}
+
+function closeSetupWizard() {
+  // Abort any in-flight status fetch so a background request never resolves against a closed panel.
+  if (setupWizard.abort) {
+    try {
+      setupWizard.abort.abort();
+    } catch {
+      /* ignore */
+    }
+  }
+  if (setupWizard.timer) {
+    clearTimeout(setupWizard.timer);
+    setupWizard.timer = null;
+  }
+  setupWizard.inFlight = false;
+  setSetupWizardLoading(false);
+  const modal = els["setup-wizard-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindSetupWizard() {
+  els["open-setup-wizard"]?.addEventListener("click", openSetupWizard);
+  els["close-setup-wizard"]?.addEventListener("click", closeSetupWizard);
+  els["setup-wizard-backdrop"]?.addEventListener("click", closeSetupWizard);
+}
+
+// --- Workspace safety panel (Workspace_Safety_Panel, Requirement 3) ---
+
+// Human-readable labels for the approval-required operation categories returned by the Setup_API
+// (`/api/setup/workspace`). Unknown categories fall back to their raw id so nothing is dropped.
+const APPROVAL_CATEGORY_LABELS = {
+  FILE_WRITE: "File writes",
+  COMMAND: "Shell commands",
+};
+
+// Render a string list into a <ul>, or an italic empty-state line when the list is empty. Used for
+// both the allowlisted commands and the approval-required categories.
+function renderSafetyList(list, values, emptyText) {
+  if (!list) return;
+  list.innerHTML = "";
+  const items = Array.isArray(values) ? values : [];
+  if (items.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "safety-list__empty";
+    empty.textContent = emptyText;
+    list.appendChild(empty);
+    return;
+  }
+  for (const value of items) {
+    const item = document.createElement("li");
+    item.className = "safety-list__item";
+    item.textContent = value;
+    list.appendChild(item);
+  }
+}
+
+// Render a WorkspaceSafetyResponse into the panel. This is a read-only view: it shows the workspace
+// root, allowlisted commands, destructive-protection status, and approval-required categories, and
+// it exposes no command-execution control (Req 3.1–3.4, 3.6). When `available` is not true (the
+// root or policy could not be retrieved), the unavailable error state is shown with no workspace
+// details and no action controls (Req 3.8). Server responses are already redacted at the boundary.
+function renderWorkspaceSafety(safety) {
+  setWorkspaceSafetyLoading(false);
+  const unavailable = els["workspace-safety-unavailable"];
+  const detail = els["workspace-safety-detail"];
+
+  if (!safety || safety.available !== true) {
+    if (detail) detail.hidden = true;
+    if (unavailable) unavailable.hidden = false;
+    return;
+  }
+
+  if (unavailable) unavailable.hidden = true;
+
+  if (els["safety-workspace-root"]) {
+    els["safety-workspace-root"].textContent = safety.workspaceRoot || "—";
+  }
+
+  const protectionEnabled = safety.destructiveProtection === "enabled";
+  const badge = els["safety-destructive"];
+  if (badge) {
+    badge.textContent = protectionEnabled ? "Enabled" : "Disabled";
+    badge.className = `safety-badge safety-badge--${protectionEnabled ? "ok" : "warn"}`;
+  }
+
+  renderSafetyList(
+    els["safety-allowlist"],
+    safety.allowlistedCommands,
+    "No commands are allowlisted.",
+  );
+  renderSafetyList(
+    els["safety-approval"],
+    (Array.isArray(safety.approvalRequiredCategories) ? safety.approvalRequiredCategories : []).map(
+      (category) => APPROVAL_CATEGORY_LABELS[category] || category,
+    ),
+    "No operation categories require approval.",
+  );
+
+  if (detail) detail.hidden = false;
+}
+
+// Toggle the loading indicator for the workspace safety panel.
+function setWorkspaceSafetyLoading(loading) {
+  const indicator = els["workspace-safety-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+// Fetch the read-only workspace safety policy from the Setup_API and render it. Any failure — a
+// network error, a thrown response, or an `available:false` payload — is treated as "policy
+// unavailable" and shows the unavailable state with no action controls (Req 3.8).
+async function loadWorkspaceSafety() {
+  const unavailable = els["workspace-safety-unavailable"];
+  const detail = els["workspace-safety-detail"];
+  if (unavailable) unavailable.hidden = true;
+  if (detail) detail.hidden = true;
+  setWorkspaceSafetyLoading(true);
+
+  try {
+    const safety = await api("/setup/workspace");
+    renderWorkspaceSafety(safety);
+  } catch {
+    renderWorkspaceSafety(null);
+  }
+}
+
+function openWorkspaceSafety() {
+  const modal = els["workspace-safety-modal"];
+  if (!modal) return;
+  modal.hidden = false;
+  void loadWorkspaceSafety();
+}
+
+function closeWorkspaceSafety() {
+  const modal = els["workspace-safety-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindWorkspaceSafety() {
+  els["open-workspace-safety"]?.addEventListener("click", openWorkspaceSafety);
+  els["close-workspace-safety"]?.addEventListener("click", closeWorkspaceSafety);
+  els["workspace-safety-backdrop"]?.addEventListener("click", closeWorkspaceSafety);
+}
+
 // --- Composer behavior ---
 function autoGrow(textarea) {
   textarea.style.height = "auto";
@@ -1123,6 +1435,8 @@ function init() {
   bindComposer();
   bindSuggestions();
   bindProviderTest();
+  bindSetupWizard();
+  bindWorkspaceSafety();
 
   els["new-conversation"].addEventListener("click", startNewConversation);
   els["toggle-trace"].addEventListener("click", toggleTrace);
