@@ -60,6 +60,12 @@
   --accent-hover: #7886ff;
   --accent-pressed: #4a59e6;
   --accent-soft: rgba(91, 107, 255, 0.12);
+  /* Foreground for text/icons placed ON the solid --accent fill (e.g. the
+     primary button). Part of the token contract so every theme picks a value
+     that meets the contrast requirement (Req 8.3, 9.1) — a light accent theme
+     (Penumbra grayscale, Cairn mint) needs dark on-accent text, a saturated
+     accent (Halo indigo, Vellum iris) needs light. Default mirrors Halo. */
+  --accent-contrast: #ffffff;
 
   /* ---------- Color: signal ---------- */
   --ok: #2be08c;
@@ -314,6 +320,12 @@ body {
   color: var(--text);
 }
 
+.conversation-item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
 .sidebar__foot {
   display: flex;
   align-items: center;
@@ -546,6 +558,12 @@ body {
   color: var(--text);
 }
 
+.suggestion:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
 .msg {
   display: flex;
   flex-direction: column;
@@ -606,6 +624,12 @@ body {
   padding: 0;
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.msg__trace-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
 }
 
 /* ============================================================
@@ -681,7 +705,7 @@ body {
 .btn--primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-contrast, #fff);
 }
 
 .btn--primary:hover:not(:disabled) {
@@ -1217,6 +1241,15 @@ body {
   color: var(--text);
 }
 
+/* The selectable provider row wraps a radio input; surface the focus ring on
+   the whole row so keyboard focus is visible in every theme (Req 8.3, 9.3). */
+.provider-option:focus-within {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  background: var(--elevated);
+  color: var(--text);
+}
+
 .provider-option input {
   accent-color: var(--accent);
   width: 15px;
@@ -1739,7 +1772,7 @@ body {
     bottom: 0;
     width: min(380px, 90vw);
     z-index: 20;
-    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-lg);
   }
 }
 
@@ -2017,6 +2050,14 @@ body {
   width: 16px;
   height: 16px;
   accent-color: var(--accent);
+}
+
+/* Visible focus ring on the motion toggle's checkbox, surfaced on the row so
+   it reads in every theme (Req 8.3, 9.3). */
+.appearance-toggle:focus-within {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
 }
 
 .appearance-toggle__label {

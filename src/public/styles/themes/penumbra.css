@@ -52,6 +52,9 @@
   --accent-hover: #dedee4;
   --accent-pressed: #a9a9b2;
   --accent-soft: rgba(201, 201, 208, 0.12);
+  /* On-accent foreground: the achromatic --accent is a light gray, so dark ink
+     (the obsidian canvas) reads on it; white would be illegible (Req 8.3, 9.1). */
+  --accent-contrast: #0b0b0d;
 
   /* ---------- Color: signal (shared semantic tokens, kept legible) ----------
      Penumbra keeps chromatic status signals (paired with icons,

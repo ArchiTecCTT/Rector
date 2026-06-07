@@ -47,6 +47,9 @@
   --accent-hover: #b7efd6;
   --accent-pressed: #7fd3ad;
   --accent-soft: rgba(159, 231, 199, 0.12);
+  /* On-accent foreground: the mint --accent is light, so dark ink reads on it
+     (white would fail contrast) (Req 8.3, 9.1). */
+  --accent-contrast: #080909;
 
   /* ---------- Color: signal ---------- */
   --ok: #8fdcae;

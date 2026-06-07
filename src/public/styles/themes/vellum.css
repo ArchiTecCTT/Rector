@@ -55,6 +55,8 @@
   --accent-pressed: #283f9e;
   --accent-soft: rgba(59, 91, 219, 0.12);
   --accent-gradient: linear-gradient(135deg, #0d9488 0%, #4f46e5 52%, #2563eb 100%);
+  /* On-accent foreground: white on the saturated iris-blue fill (Req 8.3, 9.1). */
+  --accent-contrast: #ffffff;
 
   /* ---------- Color: signal (darkened for legibility on light canvas) ---------- */
   --ok: #1f7a4d;

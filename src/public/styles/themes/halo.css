@@ -51,6 +51,8 @@
   --accent-hover: #7886ff;
   --accent-pressed: #4a59e6;
   --accent-soft: rgba(91, 107, 255, 0.12);
+  /* On-accent foreground: white on the saturated indigo fill (Req 8.3, 9.1). */
+  --accent-contrast: #ffffff;
 
   /* ---------- Color: signal ---------- */
   --ok: #2be08c;

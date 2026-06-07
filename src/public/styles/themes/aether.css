@@ -53,6 +53,9 @@
   --accent-pressed: #16afc7;
   --accent-soft: rgba(34, 211, 238, 0.12);
   --accent-gradient: linear-gradient(135deg, #22d3ee 0%, #d946ef 52%, #f59e0b 100%);
+  /* On-accent foreground: the solid --accent is bright cyan, so dark ink (the
+     near-black canvas) reads on it far better than white (Req 8.3, 9.1). */
+  --accent-contrast: #06070a;
 
   /* ---------- Color: signal ---------- */
   --ok: #34e0a1;

@@ -71,6 +71,7 @@ const TOKEN_CONTRACT: string[] = [
   "--accent-hover",
   "--accent-pressed",
   "--accent-soft",
+  "--accent-contrast",
   // signal
   "--ok",
   "--warn",
