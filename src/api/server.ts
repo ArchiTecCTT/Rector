@@ -24,6 +24,7 @@ import {
   type ApprovalDecision,
 } from "./approvalFlow";
 import type { SecretStore } from "../security/secretStore";
+import type { ProviderConfigStore } from "../providers/configStore";
 import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
@@ -75,6 +76,18 @@ export interface ApiSecurityOptions {
    * `createLocalSecretStore`) can be injected here without touching the route.
    */
   secretStore?: SecretStore;
+
+  /**
+   * Optional {@link ProviderConfigStore} backing for the in-app BYOK provider configuration
+   * (Provider_Config_API, design section C2/C7). Stores **non-secret** Provider_Config_Records and
+   * the Active_Route_Map only; secrets live in {@link ApiSecurityOptions.secretStore}. Additive and
+   * inert when omitted: the real (non-test) app injects a `createLocalProviderConfigStore`
+   * (`.rector/providers.json`) here, while tests can inject `createInMemoryProviderConfigStore` (or
+   * omit it). The CRUD/selection routes (task 5.2) and the upgraded connection test (task 5.3)
+   * consume this store; this option is accepted and stored without forcing a real disk store in
+   * tests.
+   */
+  providerConfigStore?: ProviderConfigStore;
 
   /**
    * Optional, read-only {@link WorkspaceSafetyConfig} surfaced by the workspace-safety route
