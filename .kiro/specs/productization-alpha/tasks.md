@@ -39,31 +39,31 @@ Property-based tests implement the 17 correctness properties from the design (on
     - Run the assembled response through `redactSecrets` before return; if redaction of a value fails, omit that value rather than return it
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.10, 7.5_
 
-  - [ ] 2.2 Write property test for setup status mode derivation
+  - [x] 2.2 Write property test for setup status mode derivation
     - **Property 3: Setup status mode derivation**
     - **Validates: Requirements 1.1**
 
-  - [ ] 2.3 Write property test for well-formed readiness
+  - [x] 2.3 Write property test for well-formed readiness
     - **Property 4: Setup status readiness is well-formed**
     - **Validates: Requirements 1.2**
 
-  - [ ] 2.4 Add `GET /api/setup/status` route
+  - [x] 2.4 Add `GET /api/setup/status` route
     - Wire the route in `src/api/server.ts` returning the redacted `SetupStatusResponse`
     - Wrap in try/catch returning a structured, redacted error state; keep the handler fast and non-blocking so the client can apply a 10s timeout
     - _Requirements: 1.3, 1.8_
 
-  - [ ] 2.5 Write unit tests for setup status route error handling
+  - [x] 2.5 Write unit tests for setup status route error handling
     - Cover internal-error structured response and redacted value omission
     - _Requirements: 1.8, 1.10_
 
 - [ ] 3. Implement Setup Wizard UI
-  - [ ] 3.1 Build the Setup Wizard panel
+  - [x] 3.1 Build the Setup Wizard panel
     - Add a panel in `src/public` rendered alongside (never replacing) the existing chat/trace UI
     - Fetch `/api/setup/status`, render mode plus the four category pills, and show an error state on failure or a 10s client timeout while keeping chat/trace accessible
     - Store no secret values in `localStorage`/`sessionStorage`; render no configuration-mutation controls
     - _Requirements: 1.1, 1.2, 1.5, 1.6, 1.7, 1.8, 1.9_
 
-  - [ ] 3.2 Write snapshot/DOM tests for the wizard
+  - [x] 3.2 Write snapshot/DOM tests for the wizard
     - Assert mode + four pills render, chat/trace remain accessible, error and timeout states render
     - _Requirements: 1.5, 1.6, 1.7, 1.8, 1.9_
 
@@ -83,16 +83,16 @@ Property-based tests implement the 17 correctness properties from the design (on
     - _Requirements: 2.2, 2.4, 2.6, 2.7_
 
 - [ ] 5. Implement Workspace Safety API and Panel
-  - [ ] 5.1 Add the workspace safety endpoint
+  - [x] 5.1 Add the workspace safety endpoint
     - Implement `buildWorkspaceSafetyResponse(config)` and a read-only route in `src/api/server.ts` exposing workspace root (redacted), allowlisted commands, destructive-protection status, and approval-required categories
     - Set `available:false` when the root or policy cannot be retrieved; the endpoint reads configuration only and never executes
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.7, 3.8_
 
-  - [ ] 5.2 Build the Workspace Safety panel
+  - [x] 5.2 Build the Workspace Safety panel
     - Add a panel in `src/public` rendering the safety values with no command-execution control; show an unavailable error state with no action controls when `available:false`
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.6, 3.8_
 
-  - [ ] 5.3 Write unit tests for the safety panel/endpoint
+  - [x] 5.3 Write unit tests for the safety panel/endpoint
     - Cover policy rendering, no-exec-control invariant, and the unavailable state
     - _Requirements: 3.6, 3.8_
 
@@ -145,7 +145,7 @@ Property-based tests implement the 17 correctness properties from the design (on
     - _Requirements: 8.2, 8.6_
 
 - [ ] 9. Implement Run Approval UX
-  - [ ] 9.1 Add the approval decision recorder and endpoint
+  - [x] 9.1 Add the approval decision recorder and endpoint
     - Implement `recordApprovalDecision(store, input, options)` and `POST /api/runs/:id/decision` in `src/api`, binding the existing `NEEDS_APPROVAL`/`NEEDS_DECISION` states via `createDecisionRequest`/`resumeFromDecision`
     - Record decision, deciding identity, and timestamp in the `Event_Log` before executing or cancelling; require explicit approval for risky shell commands; on denial halt the operation and continue the run to a final answer excluding it (targets unchanged)
     - When the operation cannot be presented or recorded, do not execute, keep the run pending, and surface an indication; treat a 30-minute no-decision as a timeout denial
