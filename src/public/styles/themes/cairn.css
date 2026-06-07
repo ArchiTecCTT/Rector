@@ -1,0 +1,104 @@
+/* ============================================================
+   Rector — Cairn theme
+   ------------------------------------------------------------
+   Cairn is a THEME LAYER token set (design A1/A3): it defines the
+   full Theme_Token_Set — the complete token-name contract declared
+   in styles/base.css — scoped to :root[data-theme="cairn"].
+
+   Brief (design A2 / Req 2.3):
+     - near-black EDITORIAL interface
+     - a serif display face (Cormorant) paired with Inter body and
+       JetBrains Mono labels
+     - a SINGLE mint accent (~#9FE7C7 range) threading interactive
+       and active states
+     - surgical hairline dividers; cream CTAs (--cta tokens) for the
+       primary call-to-action surfaces
+     - Cairn's own corner-radius scale (Req 2.7), modest and editorial
+
+   Contrast verification (Req 9.1, body text --text on its bg):
+     --text #ECEAE3 on --bg      #080909  ≈ 16.56:1  (≥ 4.5:1 ✓)
+     --text #ECEAE3 on --surface #101211  ≈ 15.62:1  (≥ 4.5:1 ✓)
+   (WCAG 2.x relative-luminance contrast; both far exceed 4.5:1.)
+
+   No build step, no remote origins: served verbatim by
+   express.static from src/public.
+   ============================================================ */
+
+:root[data-theme="cairn"] {
+  /* ---------- Color: surface tiers (near-black editorial) ---------- */
+  --bg: #080909;
+  --surface: #101211;
+  --elevated: #181b19;
+  --overlay: rgba(4, 5, 4, 0.74);
+
+  /* ---------- Color: borders (surgical hairlines) ---------- */
+  --border: #262a27;
+  --border-strong: #373c38;
+  --border-soft: rgba(255, 255, 255, 0.035);
+
+  /* ---------- Color: foreground (warm off-white) ---------- */
+  --text: #eceae3;
+  --text-dim: #a6a399;
+  --text-faint: #67645b;
+  --text-inverse: #080909;
+
+  /* ---------- Color: accent (single mint, threads interactive/active) ---------- */
+  --accent: #9fe7c7;
+  --accent-hover: #b7efd6;
+  --accent-pressed: #7fd3ad;
+  --accent-soft: rgba(159, 231, 199, 0.12);
+
+  /* ---------- Color: signal ---------- */
+  --ok: #8fdcae;
+  --warn: #e6c878;
+  --info: #8fc7dc;
+  --err: #e88a8a;
+  --ok-soft: rgba(143, 220, 174, 0.12);
+  --warn-soft: rgba(230, 200, 120, 0.14);
+  --info-soft: rgba(143, 199, 220, 0.14);
+  --err-soft: rgba(232, 138, 138, 0.14);
+
+  /* ---------- Type (Cormorant serif display + Inter + mono) ---------- */
+  --font-display: "Cormorant", Georgia, "Times New Roman", serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --fs-base: calc(14px * var(--font-scale));
+
+  /* ---------- Geometry: Cairn's own modest editorial radius scale (Req 2.7) ---------- */
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-full: 999px;
+
+  /* ---------- Space (4px grid, scaled by interface density) ---------- */
+  --space-1: calc(4px * var(--density-scale));
+  --space-2: calc(8px * var(--density-scale));
+  --space-3: calc(12px * var(--density-scale));
+  --space-4: calc(16px * var(--density-scale));
+  --space-5: calc(20px * var(--density-scale));
+  --space-6: calc(24px * var(--density-scale));
+  --space-8: calc(32px * var(--density-scale));
+  --space-10: calc(40px * var(--density-scale));
+  --space-12: calc(48px * var(--density-scale));
+  --space-16: calc(64px * var(--density-scale));
+  --space-20: calc(80px * var(--density-scale));
+
+  /* ---------- Elevation ---------- */
+  --shadow-sm: 0 1px 0 rgba(255, 255, 255, 0.02) inset, 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.52), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.6), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --focus-ring: 0 0 0 3px rgba(159, 231, 199, 0.34);
+
+  /* ---------- Motion ---------- */
+  --motion-fast: 120ms;
+  --motion-base: 150ms;
+  --motion-slow: 240ms;
+  --easing-standard: cubic-bezier(0.2, 0.6, 0.2, 1);
+
+  /* ---------- Derived / component-local tokens (non-contract) ----------
+     Cream CTA surface (design A2 "cream CTAs") + user message bubble. */
+  --cta: #efe9da;
+  --cta-text: #161513;
+  --user-bubble: #1c201d;
+}

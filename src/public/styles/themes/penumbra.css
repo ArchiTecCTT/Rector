@@ -1,0 +1,108 @@
+/* ============================================================
+   Rector — Penumbra theme
+   ------------------------------------------------------------
+   Penumbra is a THEME LAYER token set (design A1/A3): it defines
+   the full Theme_Token_Set — the complete token-name contract
+   declared in styles/base.css — scoped to :root[data-theme="penumbra"].
+
+   Brief (design A2 / Req 2.4):
+     - MONOCHROME dark (obsidian) interface using only grayscale tones
+     - NO chromatic accent: --accent resolves to a light gray, so
+       interactive/active states read as luminance shifts, not hue.
+     - serif display (Fraunces) + widely tracked monospace labels
+     - soft radial glow / dot-matrix medallion feel -> a softly
+       rounded radius scale that is Penumbra's own (Req 2.7)
+
+   Per design A2 grayscale note: status signals STILL use the shared
+   --ok / --warn / --err semantic tokens (kept chromatic, paired with
+   icons per Req 9.4) so failure/decision states remain legible even
+   though the accent itself is achromatic.
+
+   Contrast verification (Req 9.1, body text --text on its bg):
+     --text #E8E8EC on --bg      #0B0B0D  ≈ 16.09:1  (≥ 4.5:1 ✓)
+     --text #E8E8EC on --surface #131316  ≈ 15.18:1  (≥ 4.5:1 ✓)
+   (WCAG 2.x relative-luminance contrast; both far exceed 4.5:1.)
+
+   No build step, no remote origins: served verbatim by
+   express.static from src/public.
+   ============================================================ */
+
+:root[data-theme="penumbra"] {
+  /* ---------- Color: surface tiers (obsidian, monochrome) ---------- */
+  --bg: #0b0b0d;
+  --surface: #131316;
+  --elevated: #1c1c20;
+  --overlay: rgba(6, 6, 8, 0.74);
+
+  /* ---------- Color: borders (grayscale hairline) ---------- */
+  --border: #26262b;
+  --border-strong: #38383f;
+  --border-soft: rgba(255, 255, 255, 0.04);
+
+  /* ---------- Color: foreground (neutral grays) ---------- */
+  --text: #e8e8ec;
+  --text-dim: #9d9da6;
+  --text-faint: #61616b;
+  --text-inverse: #0b0b0d;
+
+  /* ---------- Color: accent (NO chromatic accent — light gray) ----------
+     Interactive/active states are conveyed by a light achromatic gray
+     (luminance shift), never a hue. */
+  --accent: #c9c9d0;
+  --accent-hover: #dedee4;
+  --accent-pressed: #a9a9b2;
+  --accent-soft: rgba(201, 201, 208, 0.12);
+
+  /* ---------- Color: signal (shared semantic tokens, kept legible) ----------
+     Penumbra keeps chromatic status signals (paired with icons,
+     Req 9.4) even though the accent is achromatic. */
+  --ok: #4cc38a;
+  --warn: #e0b850;
+  --info: #6fb3d6;
+  --err: #e0617a;
+  --ok-soft: rgba(76, 195, 138, 0.12);
+  --warn-soft: rgba(224, 184, 80, 0.14);
+  --info-soft: rgba(111, 179, 214, 0.14);
+  --err-soft: rgba(224, 97, 122, 0.14);
+
+  /* ---------- Type (Fraunces serif display + widely tracked mono) ---------- */
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --fs-base: calc(14px * var(--font-scale));
+
+  /* ---------- Geometry: Penumbra's own softly-rounded radius scale (Req 2.7) ---------- */
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-full: 999px;
+
+  /* ---------- Space (4px grid, scaled by interface density) ---------- */
+  --space-1: calc(4px * var(--density-scale));
+  --space-2: calc(8px * var(--density-scale));
+  --space-3: calc(12px * var(--density-scale));
+  --space-4: calc(16px * var(--density-scale));
+  --space-5: calc(20px * var(--density-scale));
+  --space-6: calc(24px * var(--density-scale));
+  --space-8: calc(32px * var(--density-scale));
+  --space-10: calc(40px * var(--density-scale));
+  --space-12: calc(48px * var(--density-scale));
+  --space-16: calc(64px * var(--density-scale));
+  --space-20: calc(80px * var(--density-scale));
+
+  /* ---------- Elevation (soft radial glow feel) ---------- */
+  --shadow-sm: 0 1px 0 rgba(255, 255, 255, 0.02) inset, 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.5), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  --shadow-lg: 0 28px 70px rgba(0, 0, 0, 0.58), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --focus-ring: 0 0 0 3px rgba(201, 201, 208, 0.34);
+
+  /* ---------- Motion ---------- */
+  --motion-fast: 120ms;
+  --motion-base: 150ms;
+  --motion-slow: 240ms;
+  --easing-standard: cubic-bezier(0.2, 0.6, 0.2, 1);
+
+  /* ---------- Derived / component-local tokens (non-contract) ---------- */
+  --user-bubble: #202026;
+}

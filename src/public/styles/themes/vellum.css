@@ -1,0 +1,111 @@
+/* ============================================================
+   Rector — Vellum Tessera theme
+   ------------------------------------------------------------
+   Vellum Tessera is a THEME LAYER token set (design A1/A3): it
+   defines the full Theme_Token_Set — the complete token-name
+   contract declared in styles/base.css — scoped to
+   :root[data-theme="vellum"].
+
+   Brief (design A2 / Req 2.5, 2.6):
+     - LIGHT polarity: a warm cream canvas (--bg ~#F4EEDD range).
+       Foreground/background polarity is inverted vs the dark
+       themes — dark warm ink on cream — and verified to meet the
+       4.5:1 body-contrast requirement (Req 2.6 -> Req 9.1).
+     - serif display (Fraunces) + Inter body + JetBrains Mono.
+     - a SINGLE teal -> iris -> blue --accent-gradient reserved for
+       PRIMARY emphasis (send button, active pill, focus glow); a
+       solid --accent (iris-blue) fallback backs borders/focus rings
+       where a gradient is inappropriate (design A2 gradient note).
+     - soft shadows, gradient-active pills -> Vellum's own rounded
+       radius scale (Req 2.7).
+
+   Contrast verification (Req 9.1, body text --text on its bg) —
+   light theme, so bg is the lighter term:
+     --text #2A2722 on --bg      #F4EEDD  ≈ 12.83:1  (≥ 4.5:1 ✓)
+     --text #2A2722 on --surface #FBF7EC  ≈ 13.89:1  (≥ 4.5:1 ✓)
+   (WCAG 2.x relative-luminance contrast; both far exceed 4.5:1.)
+
+   No build step, no remote origins: served verbatim by
+   express.static from src/public.
+   ============================================================ */
+
+:root[data-theme="vellum"] {
+  /* ---------- Color: surface tiers (warm cream, LIGHT polarity) ---------- */
+  --bg: #f4eedd;
+  --surface: #fbf7ec;
+  --elevated: #ffffff;
+  --overlay: rgba(58, 50, 33, 0.32);
+
+  /* ---------- Color: borders (warm hairline) ---------- */
+  --border: #e0d7c0;
+  --border-strong: #cabfa2;
+  --border-soft: rgba(58, 50, 33, 0.06);
+
+  /* ---------- Color: foreground (dark warm ink — inverted polarity) ---------- */
+  --text: #2a2722;
+  --text-dim: #5f5848;
+  --text-faint: #8a8270;
+  --text-inverse: #ffffff;
+
+  /* ---------- Color: accent ----------
+     Single teal->iris->blue gradient reserved for primary emphasis;
+     solid --accent (iris-blue) fallback for borders/focus. */
+  --accent: #3b5bdb;
+  --accent-hover: #2f4bc0;
+  --accent-pressed: #283f9e;
+  --accent-soft: rgba(59, 91, 219, 0.12);
+  --accent-gradient: linear-gradient(135deg, #0d9488 0%, #4f46e5 52%, #2563eb 100%);
+
+  /* ---------- Color: signal (darkened for legibility on light canvas) ---------- */
+  --ok: #1f7a4d;
+  --warn: #b45309;
+  --info: #1d6f8b;
+  --err: #c2334d;
+  --ok-soft: rgba(31, 122, 77, 0.12);
+  --warn-soft: rgba(180, 83, 9, 0.13);
+  --info-soft: rgba(29, 111, 139, 0.12);
+  --err-soft: rgba(194, 51, 77, 0.12);
+
+  /* ---------- Type (Fraunces serif display + Inter + mono) ---------- */
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --fs-base: calc(14px * var(--font-scale));
+
+  /* ---------- Geometry: Vellum's own rounded radius scale (Req 2.7) ---------- */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 26px;
+  --radius-full: 999px;
+
+  /* ---------- Space (4px grid, scaled by interface density) ---------- */
+  --space-1: calc(4px * var(--density-scale));
+  --space-2: calc(8px * var(--density-scale));
+  --space-3: calc(12px * var(--density-scale));
+  --space-4: calc(16px * var(--density-scale));
+  --space-5: calc(20px * var(--density-scale));
+  --space-6: calc(24px * var(--density-scale));
+  --space-8: calc(32px * var(--density-scale));
+  --space-10: calc(40px * var(--density-scale));
+  --space-12: calc(48px * var(--density-scale));
+  --space-16: calc(64px * var(--density-scale));
+  --space-20: calc(80px * var(--density-scale));
+
+  /* ---------- Elevation (soft, warm shadows on light canvas) ---------- */
+  --shadow-sm: 0 1px 2px rgba(58, 50, 33, 0.12);
+  --shadow-md: 0 8px 24px rgba(58, 50, 33, 0.14);
+  --shadow-lg: 0 24px 60px rgba(58, 50, 33, 0.2);
+  --focus-ring: 0 0 0 3px rgba(59, 91, 219, 0.3);
+
+  /* ---------- Motion ---------- */
+  --motion-fast: 120ms;
+  --motion-base: 150ms;
+  --motion-slow: 240ms;
+  --easing-standard: cubic-bezier(0.2, 0.6, 0.2, 1);
+
+  /* ---------- Derived / component-local tokens (non-contract) ----------
+     Light-polarity user bubble so user messages stay legible (the
+     dark-theme default would be illegible on cream). */
+  --user-bubble: #e7ddc5;
+}
