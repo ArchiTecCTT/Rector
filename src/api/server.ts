@@ -17,6 +17,8 @@ import {
   aggregateConversationCost,
 } from "../observability";
 import { redactSecrets, redactString } from "../security/redaction";
+import { computeSetupStatus } from "../setupStatus";
+import type { SecretStore } from "../security/secretStore";
 import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
@@ -61,6 +63,37 @@ export interface ApiSecurityOptions {
    * regression baseline byte-for-byte.
    */
   persistence?: PersistenceConfig;
+
+  /**
+   * Optional {@link SecretStore} backing for the setup-status route's secret-presence booleans.
+   * Additive and inert in Local_Mode: when omitted, an empty no-op store is used so every provider
+   * is reported as absent and no secret value is ever read. A real backing (e.g.
+   * `createLocalSecretStore`) can be injected here without touching the route.
+   */
+  secretStore?: SecretStore;
+}
+
+/**
+ * Empty, inert {@link SecretStore} used as the default backing for the setup-status route.
+ *
+ * Local_Mode requires no provider secrets, so the default store reports every provider as absent
+ * and never persists anything. It performs no I/O and surfaces no value — `getSecret` always fails
+ * with a redaction-safe "not configured" message and `setSecret` is a no-op success — keeping the
+ * setup-status handler fast, non-blocking, and additive. A real backing
+ * (`createLocalSecretStore`) can be injected via {@link ApiSecurityOptions.secretStore}.
+ */
+function createEmptySecretStore(): SecretStore {
+  return {
+    async setSecret() {
+      return { ok: true, value: undefined };
+    },
+    async getSecret(providerId: string) {
+      return { ok: false, error: `No secret stored for provider "${providerId}".` };
+    },
+    async hasSecret() {
+      return false;
+    },
+  };
 }
 
 // --- Provider connection-test service (ORN-32) ---
@@ -1162,6 +1195,25 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   app.get("/api/setup", (_req, res) => {
     res.json(getSetupChecklist());
+  });
+
+  // Setup status (Requirement 1): the redacted, presence-only readiness summary the Setup_Wizard
+  // renders. The handler is fast and non-blocking — it composes the ambient `process.env` and the
+  // (default empty) SecretStore via `computeSetupStatus`, which performs no network I/O — so the
+  // client can safely apply its own 10s timeout (Requirement 1.9). `computeSetupStatus` already
+  // routes the response through the Redaction_Layer (Requirement 1.3). Any internal failure is
+  // caught and returned as a structured, redacted error state so the wizard can show an error and
+  // keep the chat/trace UI accessible (Requirement 1.8); the redacted message never carries a
+  // secret substring.
+  const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
+  app.get("/api/setup/status", async (_req, res) => {
+    try {
+      const status = await computeSetupStatus(process.env, setupSecretStore);
+      res.json(status);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: redactString(message) });
+    }
   });
 
   // --- Provider connection test (ORN-32) ---
