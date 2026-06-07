@@ -1,0 +1,103 @@
+/* ============================================================
+   Rector — Halo theme (default)
+   ------------------------------------------------------------
+   Halo is the DEFAULT theme (Req 1.6). It is the THEME LAYER of
+   the Theme_System (design A1/A3): it defines the full
+   Theme_Token_Set — the complete token-name contract declared in
+   styles/base.css — scoped to :root[data-theme="halo"].
+
+   Selecting a theme sets document.documentElement.dataset.theme
+   (design A3), so when data-theme="halo" these values win over the
+   base-layer defaults. The base.css defaults already mirror these
+   values, so the UI renders correctly as Halo before/without an
+   explicit data-theme attribute (no flash, Req 3.2/1.6).
+
+   Values are ported VERBATIM from the supplied source design
+   system, docs/specs/UI-Ideas/halo/css/system.css:
+     - three charcoal surface tiers (#0A0B0F / #14151C / #1E2029)
+     - hairline borders (#2A2D38 / #3A3D4A / soft white)
+     - a single indigo accent (#5B6BFF) — design A2
+     - Inter (display + body) + JetBrains Mono pairing
+     - Halo's own corner-radius scale and accent token (Req 2.7)
+
+   The --density-scale / --font-scale customization mechanism
+   (design A5) is preserved here so interface density and
+   font-size scaling keep working under Halo.
+
+   No build step, no remote origins: served verbatim by
+   express.static from src/public.
+   ============================================================ */
+
+:root[data-theme="halo"] {
+  /* ---------- Color: surface tiers (three charcoal tiers) ---------- */
+  --bg: #0a0b0f;
+  --surface: #14151c;
+  --elevated: #1e2029;
+  --overlay: rgba(10, 11, 15, 0.72);
+
+  /* ---------- Color: borders (hairline) ---------- */
+  --border: #2a2d38;
+  --border-strong: #3a3d4a;
+  --border-soft: rgba(255, 255, 255, 0.04);
+
+  /* ---------- Color: foreground ---------- */
+  --text: #f2f4f8;
+  --text-dim: #9aa0ae;
+  --text-faint: #5c6170;
+  --text-inverse: #0a0b0f;
+
+  /* ---------- Color: accent (single indigo, design A2) ---------- */
+  --accent: #5b6bff;
+  --accent-hover: #7886ff;
+  --accent-pressed: #4a59e6;
+  --accent-soft: rgba(91, 107, 255, 0.12);
+
+  /* ---------- Color: signal ---------- */
+  --ok: #2be08c;
+  --warn: #f5d547;
+  --info: #3dd7e5;
+  --err: #ff3a5c;
+  --ok-soft: rgba(43, 224, 140, 0.12);
+  --warn-soft: rgba(245, 213, 71, 0.14);
+  --info-soft: rgba(61, 215, 229, 0.14);
+  --err-soft: rgba(255, 58, 92, 0.14);
+
+  /* ---------- Type (Inter + JetBrains Mono pairing) ---------- */
+  --font-display: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Scaled by the user font-scale choice (design A5). */
+  --fs-base: calc(14px * var(--font-scale));
+
+  /* ---------- Geometry: Halo's own corner-radius scale (Req 2.7) ---------- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 999px;
+
+  /* ---------- Space (4px grid, scaled by interface density) ---------- */
+  --space-1: calc(4px * var(--density-scale));
+  --space-2: calc(8px * var(--density-scale));
+  --space-3: calc(12px * var(--density-scale));
+  --space-4: calc(16px * var(--density-scale));
+  --space-5: calc(20px * var(--density-scale));
+  --space-6: calc(24px * var(--density-scale));
+  --space-8: calc(32px * var(--density-scale));
+  --space-10: calc(40px * var(--density-scale));
+  --space-12: calc(48px * var(--density-scale));
+  --space-16: calc(64px * var(--density-scale));
+  --space-20: calc(80px * var(--density-scale));
+
+  /* ---------- Elevation ---------- */
+  --shadow-sm: 0 1px 0 rgba(255, 255, 255, 0.02) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --focus-ring: 0 0 0 3px rgba(91, 107, 255, 0.35);
+
+  /* ---------- Motion ---------- */
+  --motion-fast: 120ms;
+  --motion-base: 150ms;
+  --motion-slow: 240ms;
+  --easing-standard: cubic-bezier(0.2, 0.6, 0.2, 1);
+}
