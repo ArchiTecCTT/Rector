@@ -37,6 +37,7 @@ import {
   ProviderModelRoleSchema,
   type ProviderConfigRecord,
 } from "../providers/config";
+import { resolveTestProvider } from "../providers/configBridge";
 import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
@@ -147,8 +148,14 @@ function createEmptySecretStore(): SecretStore {
  */
 export const SUPPORTED_PROVIDER_IDS = ["together", "cloudflare", "azure-openai"] as const;
 
-/** Type guard for the supported provider id set, used to reject unsupported ids with a 400. */
-function isSupportedProviderId(providerId: string): boolean {
+/** Type guard for the supported provider id set, used to reject unsupported ids with a 400.
+ *
+ * Retained as a public helper for the {@link SUPPORTED_PROVIDER_IDS} kind-level guard and the
+ * env-based fallback resolution. The upgraded `POST /api/setup/test-connection` route now keys
+ * selection off persisted Provider_Config_Records via the Config_Bridge (so any configured kind,
+ * including `openai-compatible`, is testable); an id with no matching persisted record is rejected
+ * pre-build by the route instead. */
+export function isSupportedProviderId(providerId: string): boolean {
   return (SUPPORTED_PROVIDER_IDS as readonly string[]).includes(providerId);
 }
 
@@ -216,8 +223,18 @@ function resolveConnectionTestProvider(
 /**
  * Verifies a single provider's credentials with at most one minimal network ping.
  *
- * Pure and unit-testable via an injected `fetchImpl`. Guarantees:
- * - Unknown/unsupported `providerId` => `CONFIG_INVALID`, `networkAttempted: false`, zero calls.
+ * Pure and unit-testable via an injected `fetchImpl`. Resolution of the provider is decoupled from
+ * the ping so this core works for both wiring paths (design C8):
+ * - **Config_Bridge path (route):** the caller passes an already-resolved `provider`, built from
+ *   persisted config + secret via `resolveTestProvider`. This is the path `POST
+ *   /api/setup/test-connection` now uses so the test reflects persisted UI configuration.
+ * - **Env fallback path:** when no `provider` is supplied, a single provider is resolved from the
+ *   injected `env` via {@link resolveConnectionTestProvider} (used by the unit/property tests and
+ *   any caller without a Config_Bridge in scope).
+ *
+ * Guarantees:
+ * - No resolvable provider (unknown/unsupported id, or neither `provider` nor `env` supplied) =>
+ *   `CONFIG_INVALID`, `networkAttempted: false`, zero calls.
  * - `validateConfig()` runs first; on failure => `CONFIG_INVALID`, `networkAttempted: false`.
  * - Otherwise a single `invoke()` ping (small `maxOutputTokens`) is attempted.
  * - Every outbound error message is passed through `redactString`; the response never includes the
@@ -225,12 +242,25 @@ function resolveConnectionTestProvider(
  */
 export async function runConnectionTest(input: {
   providerId: string;
-  env: Record<string, string | undefined>;
+  /**
+   * Pre-resolved provider (Config_Bridge path). When supplied it is pinged directly, so the test
+   * reflects the persisted config + secret the route resolved via `resolveTestProvider`.
+   */
+  provider?: LLMProvider;
+  /**
+   * Env-based fallback resolution. Used ONLY when `provider` is not supplied; a single provider is
+   * resolved from this env map via {@link resolveConnectionTestProvider}.
+   */
+  env?: Record<string, string | undefined>;
   fetchImpl: typeof fetch;
 }): Promise<TestConnectionResponse> {
-  const { providerId, env, fetchImpl } = input;
+  const { providerId, fetchImpl } = input;
 
-  const provider = resolveConnectionTestProvider(providerId, env, { enableNetwork: true, fetchImpl });
+  const provider =
+    input.provider ??
+    (input.env !== undefined
+      ? resolveConnectionTestProvider(providerId, input.env, { enableNetwork: true, fetchImpl })
+      : undefined);
   if (!provider) {
     return TestConnectionResponseSchema.parse({
       ok: false,
@@ -1525,24 +1555,36 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
     }
 
-    // An unsupported providerId is rejected with a 400 before any provider is built or any network
-    // call is attempted (Requirement 2.4). The body keeps the safe TestConnectionResponse shape.
-    if (!isSupportedProviderId(request.providerId)) {
-      return res.status(400).json(
-        TestConnectionResponseSchema.parse({
-          ok: false,
-          providerId: request.providerId,
-          code: "CONFIG_INVALID",
-          error: redactString(`Unsupported providerId: ${request.providerId}`),
-          networkAttempted: false,
-        })
-      );
-    }
-
     try {
+      // Config_Bridge resolution (design C5/C8): build exactly one provider from the persisted
+      // Provider_Config_Record identified by `providerId` plus its Secret_Store secret, with
+      // persisted UI configuration taking precedence over `process.env` (Req 13.2/13.4). Selection
+      // is keyed off persisted records, so any configured kind — including `openai-compatible` — is
+      // testable. `resolveTestProvider` returns `undefined` when no persisted record matches the id;
+      // that id is rejected with a 400 BEFORE any provider build/network call, keeping the same
+      // redacted, `networkAttempted:false` contract the env-only path used for an unsupported id
+      // (Req 15.6). The body keeps the safe TestConnectionResponse shape.
+      const provider = await resolveTestProvider(request.providerId, providerConfigStore, setupSecretStore, {
+        enableNetwork: true,
+        fetchImpl: fetch,
+      });
+      if (!provider) {
+        return res.status(400).json(
+          TestConnectionResponseSchema.parse({
+            ok: false,
+            providerId: request.providerId,
+            code: "CONFIG_INVALID",
+            error: redactString(`Unsupported providerId: ${request.providerId}`),
+            networkAttempted: false,
+          })
+        );
+      }
+
+      // Validate → single-ping flow is unchanged; the resolved provider is pinged directly so the
+      // connection test reflects the persisted config + secret rather than env-only (Req 15.1).
       const result = await runConnectionTest({
         providerId: request.providerId,
-        env: process.env,
+        provider,
         fetchImpl: fetch,
       });
       res.json(result);
