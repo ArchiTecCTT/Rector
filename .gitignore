@@ -5,9 +5,11 @@ coverage/
 .env
 .env.*
 !.env.example
+.rector/
 *.log
 .DS_Store
 reviews/
 test_debug.mjs
 progress.md
 scripts/local/
+docs/specs/UI-Ideas
