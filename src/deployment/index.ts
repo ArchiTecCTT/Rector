@@ -3,7 +3,6 @@ import { redactSecrets, redactString } from "../security/redaction";
 import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
-  PerplexityResearchProvider,
   TogetherAIProvider,
   type LLMProvider,
 } from "../providers/llm";
@@ -465,11 +464,6 @@ const EXTERNAL_PROVIDER_DESCRIPTORS: ExternalProviderDescriptor[] = [
           research: env.AZURE_OPENAI_RESEARCH_DEPLOYMENT,
         },
       }),
-  },
-  {
-    id: "perplexity",
-    requiredEnvKeys: ["PERPLEXITY_API_KEY"],
-    build: (env) => new PerplexityResearchProvider({ apiKey: env.PERPLEXITY_API_KEY ?? "", baseUrl: env.PERPLEXITY_BASE_URL }),
   },
 ];
 

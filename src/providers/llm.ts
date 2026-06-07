@@ -580,106 +580,6 @@ export class AzureOpenAIProvider implements LLMProvider {
   }
 }
 
-export interface PerplexityResearchProviderOptions {
-  apiKey?: string;
-  baseUrl?: string;
-  enableNetwork?: boolean;
-  fetchImpl?: typeof fetch;
-}
-
-export class PerplexityResearchProvider implements LLMProvider {
-  readonly metadata = ProviderCapabilityMetadataSchema.parse({
-    id: "perplexity",
-    displayName: "Perplexity Research",
-    routes: ["research"],
-    models: {
-      research: "sonar-pro",
-    },
-    supportsJson: false,
-    supportsStreaming: false,
-    maxContextTokens: 128_000,
-    estimatedUsdPer1kInputTokens: 0.003,
-    estimatedUsdPer1kOutputTokens: 0.015,
-  });
-
-  private readonly apiKey: string;
-  private readonly baseUrl: string;
-  private readonly enableNetwork: boolean;
-  private readonly fetchImpl: typeof fetch;
-
-  constructor(options: PerplexityResearchProviderOptions = {}) {
-    this.apiKey = options.apiKey ?? process.env.PERPLEXITY_API_KEY ?? "";
-    this.baseUrl = (options.baseUrl ?? process.env.PERPLEXITY_BASE_URL ?? "https://api.perplexity.ai").replace(/\/+$/, "");
-    this.enableNetwork = options.enableNetwork ?? false;
-    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
-  }
-
-  validateConfig(): void {
-    if (!this.apiKey.trim()) {
-      throw new ProviderError({
-        code: "CONFIG_INVALID",
-        provider: this.metadata.id,
-        message: "PERPLEXITY_API_KEY is required to use Perplexity research provider",
-      });
-    }
-    if (!/^https?:\/\//i.test(this.baseUrl)) {
-      throw new ProviderError({
-        code: "CONFIG_INVALID",
-        provider: this.metadata.id,
-        message: "PERPLEXITY_BASE_URL must be an absolute http(s) URL",
-      });
-    }
-  }
-
-  estimateRequest(request: LLMRequest): LLMUsage {
-    return estimateCostedRequest(request, this.metadata, 512);
-  }
-
-  buildRequest(request: LLMRequest): BuiltProviderRequest {
-    this.validateConfig();
-    const parsed = LLMRequestSchema.parse(request);
-    const model = parsed.model ?? this.metadata.models[parsed.modelRoute ?? "research"] ?? this.metadata.models.research;
-    const body: Record<string, unknown> = {
-      model,
-      messages: parsed.messages,
-      max_tokens: parsed.maxOutputTokens ?? 512,
-    };
-
-    if (parsed.temperature !== undefined) body.temperature = parsed.temperature;
-
-    return {
-      url: `${this.baseUrl}/chat/completions`,
-      init: {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      },
-    };
-  }
-
-  async invoke(request: LLMRequest): Promise<LLMResponse> {
-    const parsed = LLMRequestSchema.parse(request);
-    const built = this.buildRequest(parsed);
-
-    if (!this.enableNetwork) {
-      throw new ProviderError({
-        code: "NETWORK_DISABLED",
-        provider: this.metadata.id,
-        message: "Perplexity network calls are disabled unless enableNetwork is explicitly true",
-      });
-    }
-
-    const response = await this.fetchImpl(built.url, built.init);
-    if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, "Perplexity");
-
-    const raw = await response.json();
-    return parseOpenAICompatibleResponse(this.metadata.id, this.metadata, parsed, raw, this.estimateRequest(parsed));
-  }
-}
-
 export interface ModelRouterOptions {
   mode?: "local" | "external";
   providers?: LLMProvider[];
@@ -724,10 +624,6 @@ export function buildModelRouter(options: ModelRouterOptions = {}): ModelRouter 
         flagship: env.AZURE_OPENAI_FLAGSHIP_DEPLOYMENT ?? env.AZURE_OPENAI_DEPLOYMENT,
         research: env.AZURE_OPENAI_RESEARCH_DEPLOYMENT,
       },
-    }),
-    new PerplexityResearchProvider({
-      apiKey: env.PERPLEXITY_API_KEY,
-      baseUrl: env.PERPLEXITY_BASE_URL,
     }),
     new TogetherAIProvider({
       apiKey: env.TOGETHER_API_KEY,
@@ -908,7 +804,7 @@ function prioritizeProvidersForRoute(providers: LLMProvider[], route: ModelRoute
     cheap: ["cloudflare", "azure-openai", "together"],
     fast: ["cloudflare", "azure-openai", "together"],
     flagship: ["azure-openai", "together"],
-    research: ["perplexity", "azure-openai", "together"],
+    research: ["azure-openai", "together"],
     fake: ["fake"],
   };
   const preferred = priority[route] ?? [];

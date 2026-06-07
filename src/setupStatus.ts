@@ -57,7 +57,6 @@ const PROVIDER_ENV_REQUIREMENTS: ReadonlyArray<{ id: string; requiredEnvKeys: re
   { id: "together", requiredEnvKeys: ["TOGETHER_API_KEY"] },
   { id: "cloudflare", requiredEnvKeys: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"] },
   { id: "azure-openai", requiredEnvKeys: ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_DEPLOYMENT"] },
-  { id: "perplexity", requiredEnvKeys: ["PERPLEXITY_API_KEY"] },
 ];
 
 /** Provider ids reported in `secretPresence`, in a stable order. */

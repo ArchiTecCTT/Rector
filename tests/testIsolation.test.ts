@@ -17,7 +17,7 @@
  * The three invariants asserted:
  *
  *   (1) No real API key is present/required. Every provider/orchestration secret env key
- *       (`TOGETHER_API_KEY`, `CLOUDFLARE_API_TOKEN`, `AZURE_OPENAI_API_KEY`, `PERPLEXITY_API_KEY`,
+ *       (`TOGETHER_API_KEY`, `CLOUDFLARE_API_TOKEN`, `AZURE_OPENAI_API_KEY`,
  *       `OPENAI_API_KEY`, … — see `src/deployment/index.ts` EXTERNAL_PROVIDER_DESCRIPTORS and
  *       `src/providers/llm.ts`) is unset, empty, or a recognizable placeholder during the run, so
  *       the suite cannot depend on a real credential. If a real-looking value is present the
@@ -76,7 +76,6 @@ const PROVIDER_SECRET_ENV_KEYS = [
   "TOGETHER_API_KEY",
   "CLOUDFLARE_API_TOKEN",
   "AZURE_OPENAI_API_KEY",
-  "PERPLEXITY_API_KEY",
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
 ] as const;

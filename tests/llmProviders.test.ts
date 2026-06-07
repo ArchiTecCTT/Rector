@@ -5,7 +5,6 @@ import {
   CloudflareWorkersAIProvider,
   FakeLLMProvider,
   LLMResponseSchema,
-  PerplexityResearchProvider,
   ProviderError,
   TogetherAIProvider,
   buildModelRouter,
@@ -27,7 +26,7 @@ const baseRun: Run = {
     maxModelCalls: 1,
     maxRuntimeMs: 60_000,
     maxHealingAttempts: 1,
-    allowedProviders: ["fake", "together", "cloudflare", "azure-openai", "perplexity"],
+    allowedProviders: ["fake", "together", "cloudflare", "azure-openai"],
     approvalRequiredAboveUsd: 0,
   },
   costEstimate: { usd: 0, modelCalls: 0, runtimeMs: 0 },
@@ -331,65 +330,6 @@ describe("LLM provider layer", () => {
     expect(response.usage.outputTokens).toBe(30);
   });
 
-  it("Perplexity config validation fails cleanly when API key is missing", () => {
-    const provider = new PerplexityResearchProvider({ apiKey: "" });
-
-    expect(() => provider.validateConfig()).toThrow(ProviderError);
-    expect(() => provider.validateConfig()).toThrow(/PERPLEXITY_API_KEY is required/);
-  });
-
-  it("Perplexity request builder emits research chat shape without network", () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const provider = new PerplexityResearchProvider({ apiKey: "pplx-key", baseUrl: "https://unit.perplexity.test" });
-
-    const built = provider.buildRequest({ ...request, modelRoute: "research" });
-
-    expect(built.url).toBe("https://unit.perplexity.test/chat/completions");
-    expect(built.init.method).toBe("POST");
-    expect(built.init.headers).toMatchObject({
-      Authorization: "Bearer pplx-key",
-      "Content-Type": "application/json",
-    });
-    expect(JSON.parse(String(built.init.body))).toEqual({
-      model: "sonar-pro",
-      messages: request.messages,
-      max_tokens: 128,
-    });
-    expect(fetchSpy).not.toHaveBeenCalled();
-    fetchSpy.mockRestore();
-  });
-
-  it("Perplexity live invocation is disabled unless explicitly enabled", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const provider = new PerplexityResearchProvider({ apiKey: "pplx-key" });
-
-    await expect(provider.invoke(request)).rejects.toMatchObject({
-      code: "NETWORK_DISABLED",
-      provider: "perplexity",
-    });
-    expect(fetchSpy).not.toHaveBeenCalled();
-    fetchSpy.mockRestore();
-  });
-
-  it("Perplexity provider executes mocked fetch/parse response", async () => {
-    const mockJson = {
-      model: "sonar-pro",
-      choices: [{ message: { content: "Mocked Perplexity research response" }, finish_reason: "stop" }],
-      usage: { prompt_tokens: 22, completion_tokens: 33, total_tokens: 55 },
-    };
-    const mockFetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => mockJson });
-    const provider = new PerplexityResearchProvider({ apiKey: "pplx-key", enableNetwork: true, fetchImpl: mockFetch as any });
-
-    const response = await provider.invoke({ ...request, modelRoute: "research" });
-
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(response.provider).toBe("perplexity");
-    expect(response.model).toBe("sonar-pro");
-    expect(response.content).toBe("Mocked Perplexity research response");
-    expect(response.usage.inputTokens).toBe(22);
-    expect(response.usage.outputTokens).toBe(33);
-  });
-
   it("model router assigns configured external providers by route", () => {
     const router = buildModelRouter({
       mode: "external",
@@ -400,14 +340,12 @@ describe("LLM provider layer", () => {
         AZURE_OPENAI_ENDPOINT: "https://unit-resource.openai.azure.com",
         AZURE_OPENAI_FAST_DEPLOYMENT: "gpt-4o-mini-test",
         AZURE_OPENAI_FLAGSHIP_DEPLOYMENT: "gpt-5-test",
-        PERPLEXITY_API_KEY: "pplx-key",
       },
     });
 
     expect(router.select({ capability: "cheap", run: baseRun }).provider.metadata.id).toBe("cloudflare");
     expect(router.select({ capability: "fast", run: baseRun }).provider.metadata.id).toBe("cloudflare");
     expect(router.select({ capability: "flagship", run: baseRun }).provider.metadata.id).toBe("azure-openai");
-    expect(router.select({ capability: "research", run: baseRun }).provider.metadata.id).toBe("perplexity");
   });
 
   it("TogetherAIProvider executes mocked fetch/parse response with enableNetwork true and no real network", async () => {
@@ -615,55 +553,6 @@ describe("LLM provider layer", () => {
       expect(err).toBeInstanceOf(ProviderError);
       expect(err.code).toBe("PROVIDER_RESPONSE_INVALID");
       expect(err.provider).toBe("azure-openai");
-    }
-  });
-
-  it("PerplexityResearchProvider handles HTTP 500 and throws retryable PROVIDER_HTTP_ERROR", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
-    });
-    const provider = new PerplexityResearchProvider({
-      apiKey: "pplx-key",
-      enableNetwork: true,
-      fetchImpl: mockFetch as any,
-    });
-
-    try {
-      await provider.invoke({ ...request, modelRoute: "research" });
-      expect.fail("Should have thrown");
-    } catch (err: any) {
-      expect(err).toBeInstanceOf(ProviderError);
-      expect(err.code).toBe("PROVIDER_HTTP_ERROR");
-      expect(err.status).toBe(500);
-      expect(err.retryable).toBe(true);
-      expect(err.provider).toBe("perplexity");
-    }
-  });
-
-  it("PerplexityResearchProvider handles malformed response and throws PROVIDER_RESPONSE_INVALID", async () => {
-    const mockJson = {
-      model: "", // empty model to fail LLMResponseSchema validation
-      choices: [{ message: { content: "invalid model response" } }],
-    };
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => mockJson,
-    });
-    const provider = new PerplexityResearchProvider({
-      apiKey: "pplx-key",
-      enableNetwork: true,
-      fetchImpl: mockFetch as any,
-    });
-
-    try {
-      await provider.invoke({ ...request, modelRoute: "research" });
-      expect.fail("Should have thrown");
-    } catch (err: any) {
-      expect(err).toBeInstanceOf(ProviderError);
-      expect(err.code).toBe("PROVIDER_RESPONSE_INVALID");
-      expect(err.provider).toBe("perplexity");
     }
   });
 });

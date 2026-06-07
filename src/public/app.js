@@ -43,7 +43,6 @@ const PROVIDERS = [
   { id: "together", label: "Together AI" },
   { id: "cloudflare", label: "Cloudflare Workers AI" },
   { id: "azure-openai", label: "Azure OpenAI" },
-  { id: "perplexity", label: "Perplexity" },
 ];
 
 const PROVIDER_LABELS = new Map(PROVIDERS.map((p) => [p.id, p.label]));

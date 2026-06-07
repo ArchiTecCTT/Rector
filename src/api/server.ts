@@ -27,7 +27,6 @@ import type { SecretStore } from "../security/secretStore";
 import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
-  PerplexityResearchProvider,
   ProviderError,
   TogetherAIProvider,
   type LLMProvider,
@@ -118,7 +117,7 @@ function createEmptySecretStore(): SecretStore {
  * Supported provider identifiers the connection test can build and ping. Any value outside this
  * set is rejected as CONFIG_INVALID before any provider is constructed or any network call occurs.
  */
-export const SUPPORTED_PROVIDER_IDS = ["together", "cloudflare", "azure-openai", "perplexity"] as const;
+export const SUPPORTED_PROVIDER_IDS = ["together", "cloudflare", "azure-openai"] as const;
 
 /** Type guard for the supported provider id set, used to reject unsupported ids with a 400. */
 function isSupportedProviderId(providerId: string): boolean {
@@ -126,7 +125,7 @@ function isSupportedProviderId(providerId: string): boolean {
 }
 
 export const TestConnectionRequestSchema = z.object({
-  providerId: z.string().min(1), // "together" | "cloudflare" | "azure-openai" | "perplexity"
+  providerId: z.string().min(1), // "together" | "cloudflare" | "azure-openai"
 });
 export type TestConnectionRequest = z.infer<typeof TestConnectionRequestSchema>;
 
@@ -178,13 +177,6 @@ function resolveConnectionTestProvider(
           flagship: env.AZURE_OPENAI_FLAGSHIP_DEPLOYMENT ?? env.AZURE_OPENAI_DEPLOYMENT,
           research: env.AZURE_OPENAI_RESEARCH_DEPLOYMENT,
         },
-        enableNetwork,
-        fetchImpl,
-      });
-    case "perplexity":
-      return new PerplexityResearchProvider({
-        apiKey: env.PERPLEXITY_API_KEY,
-        baseUrl: env.PERPLEXITY_BASE_URL,
         enableNetwork,
         fetchImpl,
       });

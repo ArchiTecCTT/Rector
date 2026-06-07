@@ -53,7 +53,6 @@ export const SETUP_ITEMS: SetupItem[] = [
 
   { key: "CHROMA_URL", label: "Chroma URL", description: "Vector memory endpoint.", required: false, defaultValue: "http://localhost:8000", category: "memory" },
   { key: "CHROMA_API_KEY", label: "Chroma API Key", description: "Chroma Cloud token if using hosted Chroma.", required: false, category: "memory" },
-  { key: "PERPLEXITY_API_KEY", label: "Perplexity API Key", description: "Docs/research distillation API key.", required: false, category: "memory" },
 
   { key: "LINEAR_API_KEY", label: "Linear API Key", description: "Linear GraphQL token for issue ingest/handoff.", required: false, category: "integrations" },
   { key: "LINEAR_WEBHOOK_SECRET", label: "Linear Webhook Secret", description: "Secret used to verify incoming Linear webhooks.", required: false, category: "integrations" },
@@ -85,7 +84,6 @@ const SENSITIVE_KEYS = new Set([
   "CODECOV_TOKEN",
   "CODESCENE_TOKEN",
   "CHROMA_API_KEY",
-  "PERPLEXITY_API_KEY",
   "LINEAR_API_KEY",
   "LINEAR_WEBHOOK_SECRET",
   "MAKE_WEBHOOK_URL",

@@ -230,7 +230,6 @@ describe("Property 8: orchestration config defaults safely and never leaks secre
           TOGETHER_API_KEY: secret,
           CLOUDFLARE_API_TOKEN: secret,
           AZURE_OPENAI_API_KEY: secret,
-          PERPLEXITY_API_KEY: secret,
         };
 
         const config = withoutNetwork(() => parseOrchestrationConfig(env));
@@ -250,7 +249,7 @@ describe("Property 8: orchestration config defaults safely and never leaks secre
       fc.property(arbKeyLikeSecret(), (secret) => {
         // Each provider is left incompletely configured so none validates: cloudflare is
         // missing CLOUDFLARE_ACCOUNT_ID and azure is missing its endpoint/deployment, while
-        // together/perplexity have no key at all. The injected secret therefore reaches the
+        // together has no key at all. The injected secret therefore reaches the
         // parser but must not appear in the resulting error.
         const env: Record<string, string | undefined> = {
           ORCHESTRATOR_MODE: "external",
@@ -428,7 +427,6 @@ describe("parseOrchestrationConfig (unit)", () => {
     expect(error.setupHint).toContain("TOGETHER_API_KEY");
     expect(error.setupHint).toContain("CLOUDFLARE_ACCOUNT_ID");
     expect(error.setupHint).toContain("AZURE_OPENAI_API_KEY");
-    expect(error.setupHint).toContain("PERPLEXITY_API_KEY");
   });
 
   // Requirement 1.3: the concrete secret value supplied via env must NOT appear

@@ -47,7 +47,7 @@ function loadConnectionTestEnabled(): (
 }
 
 // Provider ids the panel can select (mirror of PROVIDERS in src/public/app.js).
-const PROVIDER_IDS = ["together", "cloudflare", "azure-openai", "perplexity"];
+const PROVIDER_IDS = ["together", "cloudflare", "azure-openai"];
 
 describe("connection-test action enablement (Property 5)", () => {
   const connectionTestEnabled = loadConnectionTestEnabled();

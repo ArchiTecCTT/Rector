@@ -74,7 +74,7 @@ describe("computeSetupStatus", () => {
 
   it("reports provider Ready in external mode when required env keys are present", async () => {
     const status = await computeSetupStatus(
-      { ORCHESTRATOR_MODE: "external", PERPLEXITY_API_KEY: "anything" },
+      { ORCHESTRATOR_MODE: "external", TOGETHER_API_KEY: "anything" },
       fakeSecretStore()
     );
     expect(providerStatus(status.categories)).toBe("Ready");
@@ -114,7 +114,7 @@ describe("computeSetupStatus", () => {
 
     expect(status.secretPresence.together).toBe(true);
     expect(status.secretPresence["azure-openai"]).toBe(true);
-    expect(status.secretPresence.perplexity).toBe(false);
+    expect(status.secretPresence.cloudflare).toBe(false);
     for (const value of Object.values(status.secretPresence)) {
       expect(typeof value).toBe("boolean");
     }

@@ -31,7 +31,6 @@ const REQUIRED_CREDENTIAL_KEYS = [
   "CLOUDFLARE_ACCOUNT_ID",
   "CLOUDFLARE_API_TOKEN",
   "AZURE_OPENAI_API_KEY",
-  "PERPLEXITY_API_KEY",
 ] as const;
 
 /** An env in which every supported provider is missing its required credentials. */

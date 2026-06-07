@@ -115,7 +115,7 @@ flowchart TB
   Mode --> External[External BYOK path]
 
   External --> Router[ModelRouter\nsrc/providers/llm.ts]
-  Router --> Providers[LLM Providers\nCloudflare / Azure / Together / Perplexity]
+  Router --> Providers[LLM Providers\nCloudflare / Azure / Together]
 
   External --> Sandbox[Safe Workspace Sandbox\nsrc/sandbox + sandboxExecutor]
   External --> Store[(RectorStore\nmemory / SQLite / TiDB)]
@@ -344,14 +344,12 @@ classDiagram
   class TogetherAIProvider
   class AzureOpenAIProvider
   class CloudflareWorkersAIProvider
-  class PerplexityResearchProvider
   class FakeLLMProvider
 
   ModelRouter --> LLMProvider
   LLMProvider <|.. TogetherAIProvider
   LLMProvider <|.. AzureOpenAIProvider
   LLMProvider <|.. CloudflareWorkersAIProvider
-  LLMProvider <|.. PerplexityResearchProvider
   LLMProvider <|.. FakeLLMProvider
 ```
 

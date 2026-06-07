@@ -28,7 +28,7 @@ const ALL_CATEGORIES: readonly SetupCategory[] = ["provider", "persistence", "wo
 const VALID_STATUSES = ["Ready", "Incomplete", "Error"] as const;
 
 /** Provider ids the composer reports presence for. */
-const PROVIDER_IDS = ["together", "cloudflare", "azure-openai", "perplexity"] as const;
+const PROVIDER_IDS = ["together", "cloudflare", "azure-openai"] as const;
 
 /**
  * An in-memory {@link SecretStore} double seeded with the provider ids that
@@ -89,7 +89,6 @@ const envArbitrary = (): fc.Arbitrary<Record<string, string | undefined>> => {
       AZURE_OPENAI_API_KEY: maybe(fc.string()),
       AZURE_OPENAI_ENDPOINT: maybe(fc.string()),
       AZURE_OPENAI_DEPLOYMENT: maybe(fc.string()),
-      PERPLEXITY_API_KEY: maybe(fc.string()),
     },
     { requiredKeys: [] }
   );
