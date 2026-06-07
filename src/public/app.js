@@ -2722,6 +2722,137 @@ function bindAppearance() {
   });
 }
 
+// --- Settings menu (gear popover) controller ---
+//
+// The gear in the top bar opens an anchored popover listing the six System_Actions
+// (Req 6.2). This controller only governs the popover's open/close + focus + listener
+// lifecycle; it never re-implements an action. Each menu item keeps its original id
+// (`open-setup-wizard`, `open-provider-config`, …) so the existing `bind*()` click
+// handlers stay attached and run unchanged when an item is activated (Req 6.3, 8.3).
+//
+// Listener hygiene (Req 14): exactly one document-level outside-click listener and one
+// Escape listener are attached on open and removed on close, and a repeat open while
+// already open attaches nothing more. While the menu is closed it owns zero document
+// listeners. References are resolved defensively so missing markup degrades gracefully
+// instead of throwing (Req 15).
+const settingsMenu = {
+  open: false,
+  docClick: null, // the outside-click listener currently attached at document level
+  keydown: null, // the Escape listener currently attached at document level
+};
+
+// Resolve the gear button and popover, preferring the cached refs but falling back to a
+// live lookup (the new ids are added to cacheEls() in a later task). Returns null when
+// either is absent so callers can guard and return early without throwing (Req 15.1, 15.3).
+function settingsMenuEls() {
+  const gear = els["open-settings-menu"] || document.getElementById("open-settings-menu");
+  const popover = els["settings-menu"] || document.getElementById("settings-menu");
+  if (!gear || !popover) return null;
+  return { gear, popover };
+}
+
+// Open the Settings_Menu: unhide the popover, mark the gear expanded, move focus to the
+// first menu item, and attach exactly one outside-click + one Escape listener (Req 6.1,
+// 14.1). A no-op when already open so no duplicate listeners are attached (Req 14.3).
+function openSettingsMenu() {
+  const refs = settingsMenuEls();
+  if (!refs) return;
+  if (settingsMenu.open) return;
+  const { gear, popover } = refs;
+
+  popover.hidden = false;
+  gear.setAttribute("aria-expanded", "true");
+  settingsMenu.open = true;
+
+  // Move keyboard focus to the first menu item (Req 6.1). Guard: the popover may be empty.
+  const firstItem = popover.querySelector(".menu__item, [role='menuitem']");
+  if (firstItem) firstItem.focus();
+
+  // Attach exactly one of each document-level listener and remember the references so
+  // close() removes precisely those (Req 14.1, 14.2).
+  settingsMenu.docClick = onDocClickForMenu;
+  settingsMenu.keydown = onMenuKeydown;
+  document.addEventListener("click", settingsMenu.docClick);
+  document.addEventListener("keydown", settingsMenu.keydown);
+}
+
+// Close the Settings_Menu: re-hide the popover, clear the gear's expanded state, and
+// remove the document listeners attached on open so the closed menu leaves no dangling
+// handlers (Req 6.4, 14.2, 14.4). Pass { returnFocus: true } to return focus to the gear
+// (used by the Escape path, Req 6.5). Listener teardown runs even if the markup vanished.
+function closeSettingsMenu(opts = {}) {
+  if (settingsMenu.docClick) {
+    document.removeEventListener("click", settingsMenu.docClick);
+    settingsMenu.docClick = null;
+  }
+  if (settingsMenu.keydown) {
+    document.removeEventListener("keydown", settingsMenu.keydown);
+    settingsMenu.keydown = null;
+  }
+  settingsMenu.open = false;
+
+  const refs = settingsMenuEls();
+  if (!refs) return;
+  const { gear, popover } = refs;
+  popover.hidden = true;
+  gear.setAttribute("aria-expanded", "false");
+  if (opts.returnFocus) gear.focus();
+}
+
+// Document-level outside-click handler: close the menu when a click lands outside the
+// gear/popover wrapper (Req 6.4). Clicks on the gear or inside the popover are inside the
+// wrapper, so this never fights the gear toggle or a menu-item activation.
+function onDocClickForMenu(event) {
+  const refs = settingsMenuEls();
+  if (!refs) {
+    closeSettingsMenu();
+    return;
+  }
+  const wrap = els["settings-menu-wrap"] || document.getElementById("settings-menu-wrap");
+  const within = wrap
+    ? wrap.contains(event.target)
+    : refs.popover.contains(event.target) || refs.gear.contains(event.target);
+  if (!within) closeSettingsMenu();
+}
+
+// Document-level key handler: Escape closes the menu and returns focus to the gear (Req 6.5).
+function onMenuKeydown(event) {
+  if (event.key === "Escape" || event.key === "Esc") {
+    event.stopPropagation();
+    closeSettingsMenu({ returnFocus: true });
+  }
+}
+
+// Wire the gear toggle and close-on-item-activation. The gear toggles the menu on repeated
+// activation (Req 6.1, 6.6). Each menu item retains its own existing click handler (attached
+// by its `bind*()`); this listener sits on the popover and only closes the menu after an item
+// is activated, so the item's Open_Function still runs unchanged (Req 6.3, 8.3). Guards the
+// required refs and emits a developer diagnostic when absent (Req 15.1, 15.4).
+function bindSettingsMenu() {
+  const refs = settingsMenuEls();
+  if (!refs) {
+    console.error(
+      "[settings-menu] missing #open-settings-menu and/or #settings-menu; settings menu disabled",
+    );
+    return;
+  }
+  const { gear, popover } = refs;
+
+  gear.addEventListener("click", (event) => {
+    // Stop the click from reaching the document outside-click listener for this same event.
+    event.stopPropagation();
+    if (settingsMenu.open) closeSettingsMenu();
+    else openSettingsMenu();
+  });
+
+  // Close after any menu-item activation. The item's own handler (e.g. openAppearance) fires
+  // first on the item itself, then this bubble-phase listener closes the menu (Req 6.3).
+  popover.addEventListener("click", (event) => {
+    const item = event.target.closest(".menu__item, [role='menuitem']");
+    if (item) closeSettingsMenu();
+  });
+}
+
 // --- Composer behavior ---
 function autoGrow(textarea) {
   textarea.style.height = "auto";
