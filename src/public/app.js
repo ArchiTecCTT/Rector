@@ -188,6 +188,22 @@ function cacheEls() {
     "provider-test-result",
     "provider-test-loading",
     "run-provider-test",
+    "open-provider-config",
+    "close-provider-config",
+    "provider-config-modal",
+    "provider-config-backdrop",
+    "provider-config-loading",
+    "provider-config-error",
+    "provider-config-cards",
+    "provider-config-adv-cards",
+    "provider-config-adv-form",
+    "provider-config-adv-label",
+    "provider-config-adv-baseurl",
+    "provider-config-adv-model",
+    "provider-config-adv-key",
+    "provider-config-adv-key-toggle",
+    "provider-config-adv-add",
+    "provider-config-adv-result",
     "open-setup-wizard",
     "close-setup-wizard",
     "setup-wizard-modal",
@@ -1338,6 +1354,561 @@ function bindProviderTest() {
   els["run-provider-test"]?.addEventListener("click", runProviderTest);
 }
 
+// --- Provider configuration panel (Provider_Config_UI, Req 10/11/14.5/15) ---
+//
+// A two-tier BYOK configuration surface rendered as a modal overlay so the chat + trace UI stay
+// mounted and accessible at all times (Req 10.7). It talks only to the real Provider_Config_API:
+//   GET  /api/providers                 -> { providers: [{...record, secretPresent}], activeRoutes }
+//   POST /api/providers                 -> upsert (apiKey sent ONLY when entered; write-once UX)
+//   DELETE /api/providers/:id           -> remove record + secret
+//   POST /api/providers/active          -> { role, providerId|null } active-route selection
+//   POST /api/setup/test-connection     -> { providerId } (resolved from persisted config+secret)
+//
+// Secrets only ever travel browser -> server; the API exposes a `secretPresent` PRESENCE boolean
+// only and never returns a key (Req 11.2). The panel writes no secret to browser storage (Req 11.5)
+// and clears the key input after a save so no key lingers in the DOM.
+
+// The preset providers (Basic tier, Req 10.1/10.2). Each preset has a stable record id (its kind),
+// the adapter `kind`, a display `label`, and the non-secret fields it requires. Field `name`s use a
+// dotted path for nested record fields (e.g. "azure.endpoint", "cloudflare.accountId").
+const PROVIDER_CONFIG_PRESETS = [
+  {
+    id: "together",
+    kind: "together",
+    label: "Together AI",
+    fields: [
+      { name: "model", label: "Model id", placeholder: "meta-llama/Llama-3-70b" },
+      { name: "baseUrl", label: "Base URL (optional)", placeholder: "https://api.together.xyz/v1", optional: true },
+    ],
+  },
+  {
+    id: "cloudflare",
+    kind: "cloudflare",
+    label: "Cloudflare Workers AI",
+    fields: [
+      { name: "cloudflare.accountId", label: "Account ID", placeholder: "account id" },
+      { name: "model", label: "Model id", placeholder: "@cf/meta/llama-3-8b-instruct" },
+    ],
+  },
+  {
+    id: "azure-openai",
+    kind: "azure-openai",
+    label: "Azure OpenAI",
+    fields: [
+      { name: "azure.endpoint", label: "Endpoint", placeholder: "https://my-resource.openai.azure.com" },
+      { name: "azure.deployment", label: "Deployment", placeholder: "deployment name" },
+      { name: "azure.apiVersion", label: "API version", placeholder: "2024-02-01" },
+      { name: "model", label: "Model id (optional)", placeholder: "model id", optional: true },
+    ],
+  },
+];
+
+// The two addressable model roles (Active_Route_Map, Req 14.5). `slm` is the small/fast tier.
+const PROVIDER_CONFIG_ROLES = [
+  { id: "flagship", label: "Flagship" },
+  { id: "slm", label: "Small / fast" },
+];
+
+// Closed set of per-provider configuration statuses with an accessible label + glyph. Status is
+// never conveyed by color alone — the label text and an icon accompany it (Req 9.4 / 10.4).
+const PROVIDER_CONFIG_STATUS_META = {
+  "not-configured": { label: "Not configured", icon: "○" },
+  configured: { label: "Configured", icon: "●" },
+  active: { label: "Active", icon: "★" },
+};
+
+// Latest snapshot from GET /api/providers. `providers` carries each record + its `secretPresent`
+// boolean; `activeRoutes` maps role -> provider id. No secret value is ever held here (Req 11.2).
+const providerConfigState = {
+  providers: [],
+  activeRoutes: {},
+};
+
+// Shared connection-test guard for the config panel (one test at a time). `abort`/`timer` let the
+// 30s client timeout (Req 15.5) and panel-close cancel an in-flight request.
+const providerConfigTest = {
+  inFlight: false,
+  abort: null,
+  timer: null,
+};
+
+// Derive a provider's configuration status from real API state (Req 10.4): "active" when it is the
+// designated provider for any role, "configured" when a record exists, otherwise "not-configured".
+// Pure and side-effect free so the status rule is trivially testable.
+function providerConfigStatus(providerId, hasRecord, activeRoutes) {
+  const routes = activeRoutes && typeof activeRoutes === "object" ? activeRoutes : {};
+  const isActive = Object.values(routes).includes(providerId);
+  if (hasRecord && isActive) return "active";
+  if (hasRecord) return "configured";
+  return "not-configured";
+}
+
+// Read a (possibly nested, dotted) field value from a record as a string, or "" when absent.
+function providerConfigFieldValue(record, path) {
+  if (!record) return "";
+  let cursor = record;
+  for (const part of String(path).split(".")) {
+    if (cursor == null || typeof cursor !== "object") return "";
+    cursor = cursor[part];
+  }
+  return cursor == null ? "" : String(cursor);
+}
+
+// Assign a (possibly nested, dotted) field value onto a plain object, creating intermediate objects.
+function setNestedField(target, path, value) {
+  const parts = String(path).split(".");
+  let cursor = target;
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    if (cursor[parts[i]] == null || typeof cursor[parts[i]] !== "object") cursor[parts[i]] = {};
+    cursor = cursor[parts[i]];
+  }
+  cursor[parts[parts.length - 1]] = value;
+}
+
+// Build the POST /api/providers upsert body from a spec, the entered field values, and the entered
+// API key. WRITE-ONCE (Req 11.3): `apiKey` is included ONLY when a non-empty key was entered, so
+// saving other fields without re-entering a key never clears the stored secret. Pure/testable.
+function buildProviderUpsertBody(spec, fieldValues, apiKey) {
+  const body = { id: spec.id, kind: spec.kind, label: spec.label };
+  for (const field of spec.fields || []) {
+    const raw = (fieldValues[field.name] ?? "").trim();
+    if (raw) setNestedField(body, field.name, raw);
+  }
+  const key = (apiKey ?? "").trim();
+  if (key) body.apiKey = key;
+  return body;
+}
+
+// Slugify a label into the suffix of an openai-compatible record id (e.g. "My Proxy" ->
+// "openai-compatible:my-proxy"). Falls back to "endpoint" when the label has no usable characters.
+function openAICompatibleId(label) {
+  const slug = String(label || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `openai-compatible:${slug || "endpoint"}`;
+}
+
+function findProviderRecord(providerId) {
+  return providerConfigState.providers.find((p) => p.id === providerId) || null;
+}
+
+function setProviderConfigLoading(loading) {
+  const indicator = els["provider-config-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+function showProviderConfigError(message) {
+  const box = els["provider-config-error"];
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+}
+
+function hideProviderConfigError() {
+  const box = els["provider-config-error"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+}
+
+// Render a redacted result line into a card/form result element. Server responses are already
+// redacted at the boundary; client-built strings carry only static text + the non-secret label and
+// model id, so no key material can appear (Req 15.2–15.5).
+function showProviderConfigResult(box, kind, message) {
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+  box.className = `provider-config-result provider-config-result--${kind === "ok" ? "ok" : "err"}`;
+}
+
+function clearProviderConfigResult(box) {
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+  box.className = "provider-config-result";
+}
+
+// Wire a masked key input to its show/hide toggle (Req 11.1). Flipping reveals/masks the value and
+// keeps the button label + aria-pressed in sync. No value is persisted anywhere by toggling.
+function bindKeyToggle(input, toggle) {
+  if (!input || !toggle) return;
+  toggle.addEventListener("click", () => {
+    const reveal = input.type === "password";
+    input.type = reveal ? "text" : "password";
+    toggle.textContent = reveal ? "Hide" : "Show";
+    toggle.setAttribute("aria-pressed", reveal ? "true" : "false");
+  });
+}
+
+// Run a connection test for one configured provider (Req 15). Validates via the server, applies a
+// 30s aborting client timeout (Req 15.5), disables the action while in flight (Req 15.4), and
+// renders a redacted success/failure/timeout message (Req 15.2/15.3) into the card's result box.
+async function runProviderConfigTest(providerId, label, resultBox, testBtn, loadingEl) {
+  if (providerConfigTest.inFlight) return;
+  providerConfigTest.inFlight = true;
+  clearProviderConfigResult(resultBox);
+  if (testBtn) testBtn.disabled = true;
+  if (loadingEl) loadingEl.hidden = false;
+
+  const controller = new AbortController();
+  providerConfigTest.abort = controller;
+  let timedOut = false;
+  providerConfigTest.timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, PROVIDER_TEST_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${API}/setup/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId }),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+    if (res.ok && body.ok) {
+      const model = typeof body.model === "string" && body.model ? ` (model: ${body.model})` : "";
+      showProviderConfigResult(resultBox, "ok", `${label} is ready. Connection succeeded${model}.`);
+    } else {
+      const reason = (body && (body.error || body.code)) || "the provider rejected the request";
+      showProviderConfigResult(resultBox, "err", `${label} connection failed: ${reason}`);
+    }
+  } catch (err) {
+    if (timedOut || (err && err.name === "AbortError")) {
+      showProviderConfigResult(
+        resultBox,
+        "err",
+        `${label} connection test timed out after 30 seconds. No result was received.`,
+      );
+    } else {
+      showProviderConfigResult(resultBox, "err", `${label} connection failed: could not reach the server.`);
+    }
+  } finally {
+    clearTimeout(providerConfigTest.timer);
+    providerConfigTest.timer = null;
+    providerConfigTest.abort = null;
+    providerConfigTest.inFlight = false;
+    if (testBtn) testBtn.disabled = false;
+    if (loadingEl) loadingEl.hidden = true;
+  }
+}
+
+// Persist a record via POST /api/providers, sending the key only when entered (write-once). On
+// success the key input is cleared (no secret lingers in the DOM) and the panel reloads.
+async function saveProviderConfig(spec, inputs, keyInput, resultBox) {
+  const fieldValues = {};
+  for (const field of spec.fields || []) {
+    const input = inputs[field.name];
+    fieldValues[field.name] = input ? input.value : "";
+  }
+  const body = buildProviderUpsertBody(spec, fieldValues, keyInput ? keyInput.value : "");
+  try {
+    await api("/providers", { method: "POST", body: JSON.stringify(body) });
+    if (keyInput) keyInput.value = ""; // never keep a secret in the DOM after save
+    showProviderConfigResult(resultBox, "ok", `${spec.label} saved.`);
+    await loadProviderConfig();
+  } catch (err) {
+    showProviderConfigResult(resultBox, "err", `Could not save ${spec.label}: ${err.message}`);
+  }
+}
+
+// Remove a record + its stored secret via DELETE /api/providers/:id, then reload.
+async function removeProviderConfig(spec, resultBox) {
+  try {
+    await api(`/providers/${encodeURIComponent(spec.id)}`, { method: "DELETE" });
+    await loadProviderConfig();
+  } catch (err) {
+    showProviderConfigResult(resultBox, "err", `Could not remove ${spec.label}: ${err.message}`);
+  }
+}
+
+// Toggle the active provider for a role (Req 14.5). Designating a role that this provider already
+// serves clears it (providerId: null); otherwise it claims the role. Reloads to reflect the change.
+async function toggleActiveRole(spec, role, resultBox) {
+  const current = providerConfigState.activeRoutes ? providerConfigState.activeRoutes[role] : undefined;
+  const providerId = current === spec.id ? null : spec.id;
+  try {
+    await api("/providers/active", { method: "POST", body: JSON.stringify({ role, providerId }) });
+    await loadProviderConfig();
+  } catch (err) {
+    showProviderConfigResult(resultBox, "err", `Could not update active provider: ${err.message}`);
+  }
+}
+
+// Build one provider card (preset or openai-compatible) reflecting its real record + secret presence
+// + active-route state. Every interactive control is wired to the real API. Returns the card element.
+function createProviderConfigCard(spec) {
+  const record = findProviderRecord(spec.id);
+  const recordEntry = providerConfigState.providers.find((p) => p.id === spec.id);
+  const secretPresent = recordEntry ? recordEntry.secretPresent === true : false;
+  const status = providerConfigStatus(spec.id, Boolean(record), providerConfigState.activeRoutes);
+  const meta = PROVIDER_CONFIG_STATUS_META[status];
+
+  const card = document.createElement("div");
+  card.className = `provider-config-card provider-config-card--${status}`;
+  card.dataset.providerId = spec.id;
+  card.dataset.status = status;
+
+  // Header: icon + name + status text (never color alone, Req 9.4 / 10.4).
+  const head = document.createElement("div");
+  head.className = "provider-config-card__head";
+  const icon = document.createElement("span");
+  icon.className = "provider-config-card__icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = meta.icon;
+  const name = document.createElement("span");
+  name.className = "provider-config-card__name";
+  name.textContent = spec.label;
+  const statusEl = document.createElement("span");
+  statusEl.className = "provider-config-card__status";
+  statusEl.textContent = meta.label;
+  head.appendChild(icon);
+  head.appendChild(name);
+  head.appendChild(statusEl);
+  card.appendChild(head);
+
+  // Non-secret fields.
+  const fields = document.createElement("div");
+  fields.className = "provider-config-card__fields";
+  const inputs = {};
+  for (const field of spec.fields || []) {
+    const row = document.createElement("label");
+    row.className = "provider-config-field-row";
+    const label = document.createElement("span");
+    label.className = "provider-config-label";
+    label.textContent = field.label;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "provider-config-input provider-config-field";
+    input.dataset.field = field.name;
+    input.value = providerConfigFieldValue(record, field.name);
+    if (field.placeholder) input.setAttribute("placeholder", field.placeholder);
+    inputs[field.name] = input;
+    row.appendChild(label);
+    row.appendChild(input);
+    fields.appendChild(row);
+  }
+
+  // Masked API key input + show/hide toggle (Req 11.1) with write-once hint (Req 11.3/11.5).
+  const keyRow = document.createElement("label");
+  keyRow.className = "provider-config-field-row";
+  const keyLabel = document.createElement("span");
+  keyLabel.className = "provider-config-label";
+  keyLabel.textContent = "API key";
+  const keyWrap = document.createElement("span");
+  keyWrap.className = "provider-config-key-wrap";
+  const keyInput = document.createElement("input");
+  keyInput.type = "password";
+  keyInput.className = "provider-config-input provider-config-key";
+  keyInput.setAttribute("autocomplete", "off");
+  keyInput.setAttribute("placeholder", secretPresent ? "•••••• stored — leave blank to keep" : "Enter API key");
+  const keyToggle = document.createElement("button");
+  keyToggle.type = "button";
+  keyToggle.className = "btn btn--ghost btn--sm provider-config-key-toggle";
+  keyToggle.setAttribute("aria-pressed", "false");
+  keyToggle.textContent = "Show";
+  bindKeyToggle(keyInput, keyToggle);
+  keyWrap.appendChild(keyInput);
+  keyWrap.appendChild(keyToggle);
+  keyRow.appendChild(keyLabel);
+  keyRow.appendChild(keyWrap);
+  fields.appendChild(keyRow);
+
+  const keyHint = document.createElement("span");
+  keyHint.className = "provider-config-key-hint";
+  keyHint.textContent = secretPresent ? "A key is stored for this provider." : "No key stored yet.";
+  fields.appendChild(keyHint);
+  card.appendChild(fields);
+
+  // Active-route selection (Req 14.5): one toggle per role with clear active indication.
+  const roles = document.createElement("div");
+  roles.className = "provider-config-card__roles";
+  const rolesLabel = document.createElement("span");
+  rolesLabel.className = "provider-config-roles__label";
+  rolesLabel.textContent = "Active for:";
+  roles.appendChild(rolesLabel);
+  const resultBox = document.createElement("div");
+  resultBox.className = "provider-config-result";
+  resultBox.setAttribute("role", "status");
+  resultBox.setAttribute("aria-live", "polite");
+  resultBox.hidden = true;
+  for (const role of PROVIDER_CONFIG_ROLES) {
+    const isActive = providerConfigState.activeRoutes && providerConfigState.activeRoutes[role.id] === spec.id;
+    const roleBtn = document.createElement("button");
+    roleBtn.type = "button";
+    roleBtn.className = "provider-config-role" + (isActive ? " is-active" : "");
+    roleBtn.dataset.role = role.id;
+    roleBtn.setAttribute("aria-pressed", isActive ? "true" : "false");
+    roleBtn.textContent = isActive ? `${role.label} ✓` : role.label;
+    // A role can only be assigned to a provider that has a saved record.
+    roleBtn.disabled = !record;
+    roleBtn.addEventListener("click", () => void toggleActiveRole(spec, role.id, resultBox));
+    roles.appendChild(roleBtn);
+  }
+  card.appendChild(roles);
+
+  // Actions: Save / Test connection / Remove.
+  const actions = document.createElement("div");
+  actions.className = "provider-config-card__actions";
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "btn btn--primary btn--sm provider-config-save";
+  saveBtn.textContent = "Save";
+  saveBtn.addEventListener("click", () => void saveProviderConfig(spec, inputs, keyInput, resultBox));
+
+  const testLoading = document.createElement("span");
+  testLoading.className = "provider-config-test-loading";
+  testLoading.setAttribute("aria-hidden", "true");
+  testLoading.hidden = true;
+
+  const testBtn = document.createElement("button");
+  testBtn.type = "button";
+  testBtn.className = "btn btn--sm provider-config-test";
+  testBtn.textContent = "Test connection";
+  // A connection test resolves the provider from its persisted record, so it requires a saved one.
+  testBtn.disabled = !record;
+  testBtn.addEventListener("click", () =>
+    void runProviderConfigTest(spec.id, spec.label, resultBox, testBtn, testLoading),
+  );
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "btn btn--sm provider-config-remove";
+  removeBtn.textContent = "Remove";
+  removeBtn.disabled = !record;
+  removeBtn.addEventListener("click", () => void removeProviderConfig(spec, resultBox));
+
+  actions.appendChild(saveBtn);
+  actions.appendChild(testBtn);
+  actions.appendChild(testLoading);
+  actions.appendChild(removeBtn);
+  card.appendChild(actions);
+  card.appendChild(resultBox);
+
+  return card;
+}
+
+// Render the preset cards and the existing openai-compatible cards from the latest API state.
+function renderProviderConfig() {
+  const presetContainer = els["provider-config-cards"];
+  if (presetContainer) {
+    presetContainer.innerHTML = "";
+    for (const preset of PROVIDER_CONFIG_PRESETS) {
+      presetContainer.appendChild(createProviderConfigCard(preset));
+    }
+  }
+
+  const advContainer = els["provider-config-adv-cards"];
+  if (advContainer) {
+    advContainer.innerHTML = "";
+    const advRecords = providerConfigState.providers.filter((p) => p.kind === "openai-compatible");
+    for (const record of advRecords) {
+      const spec = {
+        id: record.id,
+        kind: "openai-compatible",
+        label: record.label || record.id,
+        fields: [
+          { name: "baseUrl", label: "Base URL", placeholder: "https://api.example.com/v1" },
+          { name: "model", label: "Model id", placeholder: "model id" },
+        ],
+      };
+      advContainer.appendChild(createProviderConfigCard(spec));
+    }
+  }
+}
+
+// Fetch the current provider configuration (records + active routes + secret presence) and render
+// it. Any failure shows a redacted error while chat/trace stay accessible (Req 10.7).
+async function loadProviderConfig() {
+  setProviderConfigLoading(true);
+  hideProviderConfigError();
+  try {
+    const data = await api("/providers");
+    providerConfigState.providers = Array.isArray(data.providers) ? data.providers : [];
+    providerConfigState.activeRoutes =
+      data.activeRoutes && typeof data.activeRoutes === "object" ? data.activeRoutes : {};
+    renderProviderConfig();
+  } catch {
+    providerConfigState.providers = [];
+    providerConfigState.activeRoutes = {};
+    renderProviderConfig();
+    showProviderConfigError(
+      "Provider configuration could not be loaded. Chat and trace remain available.",
+    );
+  } finally {
+    setProviderConfigLoading(false);
+  }
+}
+
+// Add a new openai-compatible endpoint from the Advanced form. The id is derived from the name; the
+// key is sent only when entered (write-once). On success the form is cleared and the panel reloads.
+async function addOpenAICompatibleProvider() {
+  const label = (els["provider-config-adv-label"]?.value ?? "").trim();
+  const baseUrl = (els["provider-config-adv-baseurl"]?.value ?? "").trim();
+  const model = (els["provider-config-adv-model"]?.value ?? "").trim();
+  const apiKey = (els["provider-config-adv-key"]?.value ?? "").trim();
+  const resultBox = els["provider-config-adv-result"];
+
+  if (!label || !baseUrl || !model) {
+    showProviderConfigResult(resultBox, "err", "Name, base URL, and model id are all required.");
+    return;
+  }
+
+  const body = { id: openAICompatibleId(label), kind: "openai-compatible", label, baseUrl, model };
+  if (apiKey) body.apiKey = apiKey;
+
+  try {
+    await api("/providers", { method: "POST", body: JSON.stringify(body) });
+    if (els["provider-config-adv-label"]) els["provider-config-adv-label"].value = "";
+    if (els["provider-config-adv-baseurl"]) els["provider-config-adv-baseurl"].value = "";
+    if (els["provider-config-adv-model"]) els["provider-config-adv-model"].value = "";
+    if (els["provider-config-adv-key"]) els["provider-config-adv-key"].value = "";
+    showProviderConfigResult(resultBox, "ok", `${label} added.`);
+    await loadProviderConfig();
+  } catch (err) {
+    showProviderConfigResult(resultBox, "err", `Could not add endpoint: ${err.message}`);
+  }
+}
+
+function openProviderConfig() {
+  const modal = els["provider-config-modal"];
+  if (!modal) return;
+  modal.hidden = false;
+  void loadProviderConfig();
+}
+
+function closeProviderConfig() {
+  // Abort any in-flight connection test so a background request never resolves against a closed panel.
+  if (providerConfigTest.abort) {
+    try {
+      providerConfigTest.abort.abort();
+    } catch {
+      /* ignore */
+    }
+  }
+  if (providerConfigTest.timer) {
+    clearTimeout(providerConfigTest.timer);
+    providerConfigTest.timer = null;
+  }
+  providerConfigTest.inFlight = false;
+  const modal = els["provider-config-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindProviderConfig() {
+  els["open-provider-config"]?.addEventListener("click", openProviderConfig);
+  els["close-provider-config"]?.addEventListener("click", closeProviderConfig);
+  els["provider-config-backdrop"]?.addEventListener("click", closeProviderConfig);
+  bindKeyToggle(els["provider-config-adv-key"], els["provider-config-adv-key-toggle"]);
+  els["provider-config-adv-form"]?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void addOpenAICompatibleProvider();
+  });
+}
+
 // --- Setup Wizard panel (Setup_Wizard, Requirement 1) ---
 //
 // A read-only status surface rendered as a modal overlay so the chat + trace UI stay mounted and
@@ -2194,6 +2765,7 @@ function init() {
   bindComposer();
   bindSuggestions();
   bindProviderTest();
+  bindProviderConfig();
   bindSetupWizard();
   bindWorkspaceSafety();
   bindApproval();

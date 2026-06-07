@@ -103,6 +103,9 @@
             <button class="btn btn--ghost btn--sm sidebar__action" id="open-setup-wizard" type="button">
               Setup status
             </button>
+            <button class="btn btn--ghost btn--sm sidebar__action" id="open-provider-config" type="button">
+              Provider configuration
+            </button>
             <button class="btn btn--ghost btn--sm sidebar__action" id="open-provider-test" type="button">
               Test provider connection
             </button>
@@ -527,6 +530,128 @@
           </span>
           <button class="btn" id="approval-deny" type="button" disabled>Deny</button>
           <button class="btn btn--primary" id="approval-approve" type="button" disabled>Approve</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Provider configuration panel (Provider_Config_UI, Requirements 10, 11, 14.5, 15).
+         Modal overlay; chat + trace stay mounted and accessible (Req 10.7). Two tiers: preset
+         provider cards (Together AI, Cloudflare Workers AI, Azure OpenAI) and an Advanced
+         OpenAI-compatible endpoint form (base URL / API key / model id). Cards are rendered by
+         app.js (renderProviderConfig) from GET /api/providers, which exposes a `secretPresent`
+         presence boolean only — never a secret value (Req 11.2). API keys are masked inputs with a
+         show/hide control and write-once behavior (Req 11.1, 11.3, 11.5); no secret is ever stored
+         in browser storage (Req 11.5). Each card shows a not-configured / configured / active
+         status (Req 10.4), Save (POST /api/providers) and Remove (DELETE), per-role active
+         selection (POST /api/providers/active, Req 14.5), and a Test connection action with a 30s
+         timeout and redacted success/failure/timeout messages (Req 15.2–15.5). -->
+    <div
+      class="modal"
+      id="provider-config-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="provider-config-title"
+    >
+      <div class="modal__backdrop" id="provider-config-backdrop"></div>
+      <div class="modal__panel modal__panel--wide" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="provider-config-title">Provider configuration</h2>
+          <button class="btn btn--ghost btn--sm" id="close-provider-config" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            Configure Bring-Your-Own-Key providers for External mode. API keys are sent to the local
+            server, stored encrypted on disk, and never returned to the browser or kept in browser
+            storage. Leave a key field blank to keep an already-stored key.
+          </p>
+
+          <div class="provider-config-loading" id="provider-config-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Loading provider configuration…</span>
+          </div>
+
+          <div class="provider-config-error" id="provider-config-error" role="alert" hidden></div>
+
+          <!-- Basic tier: preset provider cards (Req 10.1, 10.2). -->
+          <section class="provider-config-tier" aria-labelledby="provider-config-presets-title">
+            <h3 class="provider-config-tier__title" id="provider-config-presets-title">Preset providers</h3>
+            <div class="provider-config-cards" id="provider-config-cards"></div>
+          </section>
+
+          <!-- Advanced tier: OpenAI-compatible endpoints (Req 10.1, 10.3). -->
+          <section class="provider-config-tier" aria-labelledby="provider-config-adv-title">
+            <h3 class="provider-config-tier__title" id="provider-config-adv-title">
+              Advanced — OpenAI-compatible endpoints
+            </h3>
+            <p class="provider-config-tier__desc">
+              Connect any OpenAI-compatible <code>/chat/completions</code> endpoint by giving it a
+              name, base URL, model id, and API key.
+            </p>
+
+            <div class="provider-config-cards" id="provider-config-adv-cards"></div>
+
+            <form class="provider-config-adv" id="provider-config-adv-form">
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="provider-config-adv-label">Name</label>
+                <input
+                  class="provider-config-input"
+                  id="provider-config-adv-label"
+                  type="text"
+                  placeholder="My proxy"
+                  autocomplete="off"
+                  required
+                />
+              </div>
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="provider-config-adv-baseurl">Base URL</label>
+                <input
+                  class="provider-config-input"
+                  id="provider-config-adv-baseurl"
+                  type="text"
+                  placeholder="https://api.example.com/v1"
+                  autocomplete="off"
+                  required
+                />
+              </div>
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="provider-config-adv-model">Model id</label>
+                <input
+                  class="provider-config-input"
+                  id="provider-config-adv-model"
+                  type="text"
+                  placeholder="gpt-4o-mini"
+                  autocomplete="off"
+                  required
+                />
+              </div>
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="provider-config-adv-key">API key</label>
+                <span class="provider-config-key-wrap">
+                  <input
+                    class="provider-config-input provider-config-key"
+                    id="provider-config-adv-key"
+                    type="password"
+                    placeholder="Enter API key"
+                    autocomplete="off"
+                  />
+                  <button
+                    class="btn btn--ghost btn--sm provider-config-key-toggle"
+                    id="provider-config-adv-key-toggle"
+                    type="button"
+                    aria-pressed="false"
+                  >
+                    Show
+                  </button>
+                </span>
+              </div>
+              <div class="provider-config-adv__foot">
+                <button class="btn btn--primary" id="provider-config-adv-add" type="submit">Add endpoint</button>
+              </div>
+              <div class="provider-config-result" id="provider-config-adv-result" role="status" aria-live="polite" hidden></div>
+            </form>
+          </section>
         </div>
       </div>
     </div>

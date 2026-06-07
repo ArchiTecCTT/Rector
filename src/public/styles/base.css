@@ -2029,3 +2029,283 @@ body {
   font-size: 11px;
   color: var(--text-faint);
 }
+
+/* ============================================================
+   Provider_Config_UI (Req 10/11/14.5/15). A two-tier BYOK
+   configuration surface rendered in the .modal overlay. All
+   colors/geometry reference theme tokens so it adopts the
+   Active_Theme like every other panel (Req 1.7, 8).
+   ============================================================ */
+.provider-config-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.provider-config-loading[hidden] {
+  display: none;
+}
+
+.provider-config-error {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--err);
+  border-radius: var(--radius-sm);
+  background: var(--err-soft);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.provider-config-error[hidden] {
+  display: none;
+}
+
+.provider-config-tier {
+  margin-top: var(--space-4);
+}
+
+.provider-config-tier__title {
+  margin: 0 0 var(--space-2);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.provider-config-tier__desc {
+  margin: 0 0 var(--space-3);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.provider-config-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.provider-config-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.provider-config-card--active {
+  border-color: var(--accent);
+}
+
+.provider-config-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.provider-config-card__icon {
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.provider-config-card--configured .provider-config-card__icon {
+  color: var(--ok);
+}
+
+.provider-config-card--active .provider-config-card__icon {
+  color: var(--accent);
+}
+
+.provider-config-card__name {
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+}
+
+.provider-config-card__status {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full, 999px);
+  color: var(--text-dim);
+}
+
+.provider-config-card--configured .provider-config-card__status {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.provider-config-card--active .provider-config-card__status {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.provider-config-card__fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.provider-config-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.provider-config-label {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.provider-config-input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  padding: var(--space-2) var(--space-3);
+  box-sizing: border-box;
+}
+
+.provider-config-input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
+.provider-config-key-wrap {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.provider-config-key-wrap .provider-config-key {
+  flex: 1;
+  font-family: var(--font-mono);
+}
+
+.provider-config-key-toggle {
+  flex: none;
+}
+
+.provider-config-key-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.provider-config-card__roles {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.provider-config-roles__label {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.provider-config-role {
+  font-size: 12px;
+  padding: var(--space-1, 4px) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.provider-config-role:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--elevated);
+}
+
+.provider-config-role:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.provider-config-role.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.provider-config-role:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.provider-config-card__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.provider-config-test-loading {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  display: inline-block;
+  animation: provider-spin 0.7s linear infinite;
+}
+
+.provider-config-test-loading[hidden] {
+  display: none;
+}
+
+:root[data-reduced-motion="true"] .provider-config-test-loading {
+  animation: none;
+}
+
+.provider-config-result {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.provider-config-result[hidden] {
+  display: none;
+}
+
+.provider-config-result--ok {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.provider-config-result--err {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+
+.provider-config-adv {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  padding: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.provider-config-adv__foot {
+  display: flex;
+  justify-content: flex-end;
+}
