@@ -2853,6 +2853,294 @@ function bindSettingsMenu() {
   });
 }
 
+// --- Command palette (Cmd/Ctrl+K overlay) controller ---
+//
+// A centered, keyboard-driven launcher listing every System_Action plus "Toggle trace panel"
+// and "New conversation" (Req 7.3). Like the settings menu, this controller never re-implements
+// behavior: every command's `run` is a thin reference to an existing Open_Function in this file
+// (Req 8.4). It owns only the overlay's open/close, filter-as-you-type, keyboard selection, and
+// listener lifecycle.
+//
+// Listener hygiene (Req 14): a single document-level keydown listener (Escape + Arrow + Enter)
+// and the backdrop click listener are attached on open and removed on close; opening while
+// already open attaches nothing more, and an invoked command tears the listeners down before its
+// run function fires (Req 14.5). The global Cmd/Ctrl+K hotkey registered by bindCommandPalette is
+// a deliberate persistent app-level listener (it must work while the palette is closed). All refs
+// are resolved defensively so missing markup degrades gracefully instead of throwing (Req 15).
+const commandPalette = {
+  open: false,
+  keydown: null, // the document-level keydown listener currently attached
+  backdropEl: null, // the backdrop element the close-on-click listener is attached to
+  visible: [], // the currently filtered commands, in display order
+};
+
+// The Command_Registry: one descriptor per launchable action. `run` always references an existing
+// function defined above — the palette delegates, it never re-implements (Req 7.3, 8.4). `badge`,
+// when present, reads the live pending-approvals count from the same source as the Approval_Badge.
+function commandRegistry() {
+  return [
+    { id: "setup", label: "Setup status", run: () => openSetupWizard() },
+    { id: "provider-config", label: "Provider configuration", run: () => openProviderConfig() },
+    { id: "provider-test", label: "Test provider connection", run: () => openProviderTest() },
+    { id: "safety", label: "Workspace safety", run: () => openWorkspaceSafety() },
+    { id: "appearance", label: "Appearance", run: () => openAppearance() },
+    {
+      id: "approval",
+      label: "Pending approvals",
+      run: () => openApprovalPanel(),
+      badge: () => {
+        const el = els["approval-badge"] || document.getElementById("approval-badge");
+        if (!el || el.hidden) return 0;
+        const count = parseInt(el.textContent, 10);
+        return Number.isFinite(count) ? count : 0;
+      },
+    },
+    { id: "toggle-trace", label: "Toggle trace panel", run: () => toggleTrace() },
+    { id: "new-conversation", label: "New conversation", run: () => startNewConversation() },
+  ];
+}
+
+// Resolve the palette's required refs, preferring cached lookups but falling back to a live lookup
+// (the new ids are added to cacheEls() in a later task). Returns null when any required element is
+// absent so callers can guard and return early (Req 15.1, 15.3). The backdrop is optional.
+function commandPaletteEls() {
+  const dialog = els["command-palette"] || document.getElementById("command-palette");
+  const input = els["command-palette-input"] || document.getElementById("command-palette-input");
+  const list = els["command-palette-list"] || document.getElementById("command-palette-list");
+  if (!dialog || !input || !list) return null;
+  const backdrop =
+    els["command-palette-backdrop"] || document.getElementById("command-palette-backdrop");
+  return { dialog, input, list, backdrop };
+}
+
+// Render the filtered command list. Filtering is a case-insensitive substring match on the label
+// after leading/trailing whitespace is trimmed (Req 7.4). The first match is selected; with no
+// matches a no-results indicator is shown and no option carries aria-selected (Req 7.5).
+function renderPaletteList(query) {
+  const refs = commandPaletteEls();
+  if (!refs) return;
+  const { input, list } = refs;
+  const q = String(query == null ? "" : query)
+    .trim()
+    .toLowerCase();
+  const matches = commandRegistry().filter((cmd) => cmd.label.toLowerCase().includes(q));
+  commandPalette.visible = matches;
+  list.innerHTML = "";
+
+  if (!matches.length) {
+    const empty = document.createElement("li");
+    empty.className = "palette__empty";
+    empty.setAttribute("role", "presentation");
+    empty.textContent = "No matching commands";
+    list.appendChild(empty);
+    input.removeAttribute("aria-activedescendant");
+    return;
+  }
+
+  matches.forEach((cmd, index) => {
+    const option = document.createElement("li");
+    option.className = "palette__option";
+    option.setAttribute("role", "option");
+    option.id = `palette-option-${cmd.id}`;
+    option.dataset.commandId = cmd.id;
+    // The first match is the initial selection (Req 7.4); others are explicitly unselected.
+    option.setAttribute("aria-selected", index === 0 ? "true" : "false");
+
+    const label = document.createElement("span");
+    label.className = "palette__option-label";
+    label.textContent = cmd.label;
+    option.appendChild(label);
+
+    // Optional count badge (e.g. Pending approvals) read from the same source as the Approval_Badge.
+    if (typeof cmd.badge === "function") {
+      const count = Number(cmd.badge()) || 0;
+      if (count > 0) {
+        const badge = document.createElement("span");
+        badge.className = "palette__badge";
+        badge.textContent = count > 99 ? "99+" : String(count);
+        option.appendChild(badge);
+      }
+    }
+
+    list.appendChild(option);
+  });
+
+  input.setAttribute("aria-activedescendant", `palette-option-${matches[0].id}`);
+}
+
+// Resolve the currently selected command (the option carrying aria-selected="true"), or null when
+// nothing is selected (e.g. a no-results list). Used by the Enter handler (Req 7.7, 7.8).
+function selectedPaletteCommand() {
+  const refs = commandPaletteEls();
+  if (!refs) return null;
+  const selected = refs.list.querySelector('.palette__option[aria-selected="true"]');
+  if (!selected) return null;
+  const id = selected.dataset.commandId;
+  return commandPalette.visible.find((cmd) => cmd.id === id) || null;
+}
+
+// Move the aria-selected option by one position, clamping at the first and last visible options
+// without wrapping (Req 7.6). A no-op when there are no visible options.
+function movePaletteSelection(delta) {
+  const refs = commandPaletteEls();
+  if (!refs) return;
+  const options = Array.from(refs.list.querySelectorAll(".palette__option"));
+  if (!options.length) return;
+  let current = options.findIndex((o) => o.getAttribute("aria-selected") === "true");
+  if (current < 0) current = 0;
+  const next = Math.max(0, Math.min(options.length - 1, current + delta)); // clamp, never wrap
+  options.forEach((o, i) => o.setAttribute("aria-selected", i === next ? "true" : "false"));
+  const selectedOption = options[next];
+  refs.input.setAttribute("aria-activedescendant", selectedOption.id);
+  if (typeof selectedOption.scrollIntoView === "function") {
+    selectedOption.scrollIntoView({ block: "nearest" });
+  }
+}
+
+// Open the Command_Palette: unhide the dialog, reset to an empty query showing all commands with
+// the first selected, focus the input, and attach exactly one document keydown + one backdrop
+// click listener (Req 7.1, 14.1). A no-op when already open so no duplicate listeners attach
+// (Req 14.3).
+function openCommandPalette() {
+  const refs = commandPaletteEls();
+  if (!refs) return;
+  if (commandPalette.open) return;
+  const { dialog, input, backdrop } = refs;
+
+  dialog.hidden = false;
+  commandPalette.open = true;
+
+  input.value = "";
+  renderPaletteList(""); // show all commands; first is selected (Req 7.1)
+  input.focus();
+
+  // Attach exactly one of each per-open listener and remember the references so close() removes
+  // precisely those (Req 14.1, 14.2).
+  commandPalette.keydown = onPaletteKeydown;
+  document.addEventListener("keydown", commandPalette.keydown);
+  if (backdrop) {
+    backdrop.addEventListener("click", onPaletteBackdropClick);
+    commandPalette.backdropEl = backdrop;
+  }
+}
+
+// Close the Command_Palette: re-hide the dialog, clear the filtered list, and remove the document
+// keydown + backdrop listeners attached on open so the closed overlay leaves no dangling handlers
+// (Req 7.9, 14.2, 14.4). Pass { returnFocus: true } to return focus to the launcher (Escape/backdrop
+// paths). Listener teardown runs even if the markup vanished.
+function closeCommandPalette(opts = {}) {
+  if (commandPalette.keydown) {
+    document.removeEventListener("keydown", commandPalette.keydown);
+    commandPalette.keydown = null;
+  }
+  if (commandPalette.backdropEl) {
+    commandPalette.backdropEl.removeEventListener("click", onPaletteBackdropClick);
+    commandPalette.backdropEl = null;
+  }
+  commandPalette.open = false;
+  commandPalette.visible = [];
+
+  const refs = commandPaletteEls();
+  if (!refs) return;
+  refs.dialog.hidden = true;
+  if (opts.returnFocus) {
+    const launcher = els["open-command-palette"] || document.getElementById("open-command-palette");
+    if (launcher) launcher.focus();
+  }
+}
+
+// Invoke a command: close the palette and remove its document listeners BEFORE calling the run
+// function, so the action (which may open a modal and attach its own listeners) starts from a
+// clean overlay state (Req 7.7, 14.5). Guards a malformed descriptor.
+function invokePaletteCommand(cmd) {
+  if (!cmd || typeof cmd.run !== "function") return;
+  closeCommandPalette();
+  cmd.run();
+}
+
+// The backdrop close handler, kept as a stable reference so add/removeEventListener pair up.
+function onPaletteBackdropClick() {
+  closeCommandPalette({ returnFocus: true });
+}
+
+// Document-level key handler attached while the palette is open: Escape closes (Req 7.9), Arrow
+// keys move the clamped selection (Req 7.6), Enter invokes the selected command (Req 7.7) or is a
+// no-op when nothing is selected (Req 7.8). A guard against a stray late event when closed.
+function onPaletteKeydown(event) {
+  if (!commandPalette.open) return;
+  const key = event.key;
+  if (key === "Escape" || key === "Esc") {
+    event.stopPropagation();
+    closeCommandPalette({ returnFocus: true });
+    return;
+  }
+  if (key === "ArrowDown") {
+    event.preventDefault();
+    movePaletteSelection(1);
+    return;
+  }
+  if (key === "ArrowUp") {
+    event.preventDefault();
+    movePaletteSelection(-1);
+    return;
+  }
+  if (key === "Enter") {
+    event.preventDefault();
+    const cmd = selectedPaletteCommand();
+    if (cmd) invokePaletteCommand(cmd); // no selection -> no-op, palette stays open (Req 7.8)
+  }
+}
+
+// The persistent global hotkey: Cmd/Ctrl+K toggles the palette open/closed (Req 7.1, 7.2). This is
+// intentionally an app-level listener so it works while the palette is closed.
+function onGlobalPaletteHotkey(event) {
+  if ((event.metaKey || event.ctrlKey) && (event.key === "k" || event.key === "K")) {
+    event.preventDefault();
+    if (commandPalette.open) closeCommandPalette();
+    else openCommandPalette();
+  }
+}
+
+// Wire the launcher button, the filter input, option clicks, and the global Cmd/Ctrl+K hotkey. The
+// per-open keydown/backdrop listeners are managed by open/close; only the global hotkey, the input
+// filter, the launcher, and option-click delegation are registered here (element-level + the one
+// persistent document hotkey). Guards the required refs and emits a developer diagnostic when
+// absent (Req 15.1, 15.4).
+function bindCommandPalette() {
+  const refs = commandPaletteEls();
+  if (!refs) {
+    console.error(
+      "[command-palette] missing #command-palette / #command-palette-input / #command-palette-list; command palette disabled",
+    );
+    return;
+  }
+  const { input, list } = refs;
+
+  // The top-bar launcher toggles the palette (mouse entry point).
+  const launcher = els["open-command-palette"] || document.getElementById("open-command-palette");
+  if (launcher) {
+    launcher.addEventListener("click", () => {
+      if (commandPalette.open) closeCommandPalette();
+      else openCommandPalette();
+    });
+  }
+
+  // Filter-as-you-type (Req 7.4). Element-level, so it does not affect document-listener hygiene.
+  input.addEventListener("input", () => renderPaletteList(input.value));
+
+  // Pointer activation of an option invokes its command (keyboard parity for mouse users).
+  list.addEventListener("click", (event) => {
+    const option = event.target.closest(".palette__option");
+    if (!option) return;
+    const id = option.dataset.commandId;
+    const cmd = commandPalette.visible.find((c) => c.id === id) || null;
+    if (cmd) invokePaletteCommand(cmd);
+  });
+
+  // The persistent global hotkey (Req 7.1, 7.2).
+  document.addEventListener("keydown", onGlobalPaletteHotkey);
+}
+
 // --- Composer behavior ---
 function autoGrow(textarea) {
   textarea.style.height = "auto";
