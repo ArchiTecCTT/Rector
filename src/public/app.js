@@ -392,7 +392,14 @@ function renderMessage(role, content, opts = {}) {
   const bubble = document.createElement("div");
   bubble.className = "msg__bubble";
   if (opts.pending) bubble.classList.add("is-pending");
-  bubble.textContent = content;
+  // Assistant messages render Markdown as formatted content (Req 6.3); the
+  // renderer escapes/sanitizes all input, so the HTML string is XSS-safe.
+  // User messages (and transient pending bubbles) stay plain text.
+  if (role === "assistant" && !opts.pending && window.RectorMarkdown) {
+    bubble.innerHTML = window.RectorMarkdown.render(content);
+  } else {
+    bubble.textContent = content;
+  }
 
   wrap.appendChild(roleEl);
   wrap.appendChild(bubble);
