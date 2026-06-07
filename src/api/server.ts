@@ -18,6 +18,11 @@ import {
 } from "../observability";
 import { redactSecrets, redactString } from "../security/redaction";
 import { computeSetupStatus } from "../setupStatus";
+import {
+  ApprovalProcessingError,
+  recordApprovalDecision,
+  type ApprovalDecision,
+} from "./approvalFlow";
 import type { SecretStore } from "../security/secretStore";
 import {
   AzureOpenAIProvider,
@@ -71,6 +76,17 @@ export interface ApiSecurityOptions {
    * `createLocalSecretStore`) can be injected here without touching the route.
    */
   secretStore?: SecretStore;
+
+  /**
+   * Optional, read-only {@link WorkspaceSafetyConfig} surfaced by the workspace-safety route
+   * (`GET /api/setup/workspace`, Requirement 3). Additive and inert in Local_Mode: when omitted,
+   * the route resolves a default config from the ambient environment via
+   * {@link resolveWorkspaceSafetyConfig} that mirrors the sandbox defaults (workspace root from
+   * `RECTOR_WORKSPACE_ROOT`/`process.cwd()`, always-on destructive protection). Inject a config here
+   * (e.g. with deterministic doubles) without touching the route. The route only reads this
+   * configuration and never executes any command.
+   */
+  workspaceSafety?: WorkspaceSafetyConfig;
 }
 
 /**
@@ -644,6 +660,121 @@ export function registerRunStreamRoute(
   });
 }
 
+// --- Workspace safety status (Requirement 3) ---
+
+/**
+ * The approval-required operation categories the Workspace_Safety_Panel reports (Requirement 3.4).
+ *
+ * `FILE_WRITE` is always present because the workspace sandbox never applies a patch
+ * (`PROPOSE_PATCH`) without a matching `FILE_WRITE` approval. `COMMAND` is present only when at
+ * least one risky command is configured, because the sandbox gates risky `RUN_COMMAND`s behind a
+ * `COMMAND` approval (read-only/idempotent allowlisted commands run without one).
+ */
+const FILE_WRITE_APPROVAL_CATEGORY = "FILE_WRITE";
+const COMMAND_APPROVAL_CATEGORY = "COMMAND";
+
+/**
+ * Read-only configuration describing the workspace sandbox safety policy, sourced from the same
+ * inputs the {@link WorkspaceSandboxAdapter} is constructed from. This carries configuration only;
+ * it authorizes no execution. A missing/empty `workspaceRoot` models the "policy cannot be
+ * retrieved" case and yields an unavailable response (Requirement 3.8).
+ */
+export interface WorkspaceSafetyConfig {
+  /** Absolute workspace root (the containment boundary). Missing/empty => unavailable (Req 3.8). */
+  workspaceRoot?: string;
+  /** Commands permitted for `RUN_COMMAND` (exact match); empty by default (Req 3.2). */
+  allowlistedCommands?: string[];
+  /** Allowlisted commands that additionally require an explicit `COMMAND` approval (Req 3.4). */
+  riskyCommands?: string[];
+  /**
+   * Whether destructive-command protection is enforced. The workspace sandbox always enforces its
+   * destructive denylist, so this defaults to enabled; an explicit `false` reports it disabled
+   * (Req 3.3).
+   */
+  destructiveProtectionEnabled?: boolean;
+}
+
+/**
+ * The redacted, read-only workspace safety summary the Workspace_Safety_Panel renders (Req 3).
+ */
+export interface WorkspaceSafetyResponse {
+  /** Configured workspace root, routed through the Redaction_Layer (Req 3.1, 3.7). */
+  workspaceRoot: string;
+  /** Allowlisted commands enforced by the sandbox (Req 3.2). */
+  allowlistedCommands: string[];
+  /** Destructive command protection status (Req 3.3). */
+  destructiveProtection: "enabled" | "disabled";
+  /** Operation categories that require user approval before execution (Req 3.4). */
+  approvalRequiredCategories: string[];
+  /** `false` when the root or policy cannot be retrieved; the panel then shows an error (Req 3.8). */
+  available: boolean;
+}
+
+/** The unavailable workspace-safety response: no root, no policy, no action surface (Req 3.8). */
+const UNAVAILABLE_WORKSPACE_SAFETY: WorkspaceSafetyResponse = {
+  workspaceRoot: "",
+  allowlistedCommands: [],
+  destructiveProtection: "disabled",
+  approvalRequiredCategories: [],
+  available: false,
+};
+
+/**
+ * Build the redacted, read-only {@link WorkspaceSafetyResponse} from a {@link WorkspaceSafetyConfig}.
+ *
+ * Pure and side-effect-free: it reads configuration only and never executes a command (Req 3.5,
+ * 3.6). The configured workspace root is routed through `redactString` before it is returned
+ * (Req 3.7). When the workspace root or policy cannot be retrieved — a missing/blank root, or any
+ * failure while assembling the policy — it returns the unavailable response with `available:false`
+ * and no action surface (Req 3.8).
+ */
+export function buildWorkspaceSafetyResponse(config: WorkspaceSafetyConfig): WorkspaceSafetyResponse {
+  try {
+    const root = config.workspaceRoot;
+    if (typeof root !== "string" || root.trim().length === 0) {
+      return { ...UNAVAILABLE_WORKSPACE_SAFETY };
+    }
+
+    const allowlistedCommands = [...(config.allowlistedCommands ?? [])];
+    const riskyCommands = config.riskyCommands ?? [];
+
+    // FILE_WRITE always requires approval; COMMAND only when a risky command is configured.
+    const approvalRequiredCategories = [FILE_WRITE_APPROVAL_CATEGORY];
+    if (riskyCommands.length > 0) {
+      approvalRequiredCategories.push(COMMAND_APPROVAL_CATEGORY);
+    }
+
+    return {
+      // Redaction at the boundary: a root carrying any secret material (e.g. an embedded
+      // credential URI) is scrubbed before it leaves the process (Req 3.7).
+      workspaceRoot: redactString(root),
+      allowlistedCommands,
+      destructiveProtection: config.destructiveProtectionEnabled === false ? "disabled" : "enabled",
+      approvalRequiredCategories,
+      available: true,
+    };
+  } catch {
+    // Any failure assembling the policy is treated as "policy unavailable" (Req 3.8).
+    return { ...UNAVAILABLE_WORKSPACE_SAFETY };
+  }
+}
+
+/**
+ * Resolve the default {@link WorkspaceSafetyConfig} from the ambient environment, mirroring the
+ * sandbox defaults used by the chat runner (`workspaceRoot` from `RECTOR_WORKSPACE_ROOT`, falling
+ * back to `process.cwd()`). Destructive protection is always enforced by the workspace sandbox, so
+ * it is reported as enabled. This reads configuration only and performs no I/O beyond `process.cwd()`.
+ */
+function resolveWorkspaceSafetyConfig(env: Record<string, string | undefined>): WorkspaceSafetyConfig {
+  const configuredRoot = env.RECTOR_WORKSPACE_ROOT?.trim();
+  return {
+    workspaceRoot: configuredRoot && configuredRoot.length > 0 ? configuredRoot : process.cwd(),
+    allowlistedCommands: [],
+    riskyCommands: [],
+    destructiveProtectionEnabled: true,
+  };
+}
+
 export function createApp(manager: TaskManager, securityOptions: ApiSecurityOptions = {}): express.Application {
   const app = express();
   // Select the store from the deployment persistence config (ORN-39). When no persistence config
@@ -901,6 +1032,55 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       res.json(aggregateRunCost(runId, events));
     } catch (err: any) {
       res.status(500).json({ error: redactString(err?.message ?? String(err)) });
+    }
+  });
+
+  // Run Approval UX decision endpoint (Requirement 9). Records a user's approve/deny decision over a
+  // pending operation and continues the run. `recordApprovalDecision` appends the decision (with the
+  // deciding identity and timestamp) to the Event_Log atomically with the run transition, BEFORE the
+  // operation executes or is cancelled (Req 9.3): an approval resumes to EXECUTING, a denial (or a
+  // 30-minute timeout) resumes to a final answer that excludes the operation (Req 9.5, 9.8). When the
+  // decision cannot be recorded — the run is not awaiting this operation's decision, or the Event_Log
+  // write fails — the run is left pending and a redacted indication is surfaced (Req 9.7). Every
+  // outbound message is routed through `redactString` so no secret substring escapes (Req 9.6/11.3).
+  app.post("/api/runs/:id/decision", async (req, res) => {
+    const runId = req.params.id;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { operationId, decision, decidedBy } = body;
+
+    if (typeof operationId !== "string" || operationId.length === 0) {
+      return res.status(400).json({ error: "operationId (string) is required" });
+    }
+    if (decision !== "approve" && decision !== "deny") {
+      return res.status(400).json({ error: "decision must be 'approve' or 'deny'" });
+    }
+    if (typeof decidedBy !== "string" || decidedBy.length === 0) {
+      return res.status(400).json({ error: "decidedBy (string) is required" });
+    }
+
+    try {
+      const record = await recordApprovalDecision(
+        rectorStore,
+        { runId, operationId, decision: decision as ApprovalDecision, decidedBy },
+        {}
+      );
+      return res.status(200).json({ decisionProcessed: true, record });
+    } catch (error) {
+      if (error instanceof ApprovalProcessingError) {
+        // Req 9.7: do not execute, keep the run in its pending-decision state, and indicate the
+        // decision could not be processed. RUN_NOT_FOUND maps to 404; everything else is a conflict
+        // with the run's current state (409).
+        const httpStatus = error.code === "RUN_NOT_FOUND" ? 404 : 409;
+        return res.status(httpStatus).json({
+          decisionProcessed: false,
+          code: error.code,
+          error: redactString(error.message),
+        });
+      }
+      return res.status(500).json({
+        decisionProcessed: false,
+        error: redactString(error instanceof Error ? error.message : String(error)),
+      });
     }
   });
 
@@ -1213,6 +1393,23 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: redactString(message) });
+    }
+  });
+
+  // Workspace safety status (Requirement 3): the redacted, read-only sandbox safety policy the
+  // Workspace_Safety_Panel renders. The handler reads configuration only — the workspace root,
+  // allowlisted commands, destructive-protection status, and approval-required categories — and
+  // never executes any command (Req 3.5, 3.6). `buildWorkspaceSafetyResponse` routes the workspace
+  // root through the Redaction_Layer (Req 3.7) and returns `available:false` when the root or policy
+  // cannot be retrieved (Req 3.8). Any internal failure is caught and surfaced as `available:false`
+  // so the panel shows the unavailable state with no action controls; the response is additionally
+  // passed through `redactSecrets` so no secret substring can escape.
+  const workspaceSafetyConfig = securityOptions.workspaceSafety ?? resolveWorkspaceSafetyConfig(process.env);
+  app.get("/api/setup/workspace", (_req, res) => {
+    try {
+      res.json(redactSecrets(buildWorkspaceSafetyResponse(workspaceSafetyConfig)));
+    } catch {
+      res.json({ ...UNAVAILABLE_WORKSPACE_SAFETY });
     }
   });
 
