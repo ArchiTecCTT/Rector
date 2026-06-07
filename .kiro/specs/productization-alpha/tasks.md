@@ -151,28 +151,28 @@ Property-based tests implement the 17 correctness properties from the design (on
     - When the operation cannot be presented or recorded, do not execute, keep the run pending, and surface an indication; treat a 30-minute no-decision as a timeout denial
     - _Requirements: 9.1, 9.3, 9.4, 9.5, 9.7, 9.8_
 
-  - [ ] 9.2 Build the Approval UX panel
+  - [x] 9.2 Build the Approval UX panel
     - Add a panel in `src/public` that consumes the existing SSE stream, presents pending operations, and displays redacted diff/command/target path before any approval action can be submitted
     - _Requirements: 9.1, 9.2, 9.6_
 
-  - [ ] 9.3 Write property test for decision-before-action ordering
+  - [x] 9.3 Write property test for decision-before-action ordering
     - **Property 14: A decision is recorded before the operation acts**
     - **Validates: Requirements 9.3**
 
-  - [ ] 9.4 Write property test for approval-gated risky commands
+  - [x] 9.4 Write property test for approval-gated risky commands
     - **Property 15: Risky commands never run without recorded approval**
     - **Validates: Requirements 9.4**
 
-  - [ ] 9.5 Write property test for denial leaving targets unchanged
+  - [x] 9.5 Write property test for denial leaving targets unchanged
     - **Property 16: Denial leaves targets unchanged and continues the run**
     - **Validates: Requirements 9.5, 9.8**
 
-  - [ ] 9.6 Write unit tests for approval edge cases
+  - [x] 9.6 Write unit tests for approval edge cases
     - Cover record-failure keeping the run pending and the 30-minute timeout denial
     - _Requirements: 9.7, 9.8_
 
 - [ ] 10. Enforce cross-cutting redaction at new boundaries
-  - [ ] 10.1 Wire all new boundaries through redaction with failure suppression
+  - [x] 10.1 Wire all new boundaries through redaction with failure suppression
     - Audit the new setup-status, workspace-safety, and approval responses, streamed frames, and error paths to ensure each routes through `redactSecrets`/`redactString`
     - Add outbound redaction-failure suppression so unredacted content is never emitted and a redaction-failed error is returned instead
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
