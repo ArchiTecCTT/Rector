@@ -177,7 +177,7 @@ Property-based tests implement the 17 correctness properties from the design (on
     - Add outbound redaction-failure suppression so unredacted content is never emitted and a redaction-failed error is returned instead
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
 
-  - [ ] 10.2 Write property test for boundary redaction
+  - [x] 10.2 Write property test for boundary redaction
     - **Property 1: Boundary redaction leaves no secret substring**
     - **Validates: Requirements 1.3, 1.4, 2.3, 2.5, 3.7, 5.7, 7.8, 8.5, 9.6, 11.1, 11.2, 11.3, 11.4**
 
@@ -214,15 +214,15 @@ Property-based tests implement the 17 correctness properties from the design (on
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6_
 
 - [ ] 13. Implement preserve-experience guard suite
-  - [ ] 13.1 Add the regression guard suite
+  - [x] 13.1 Add the regression guard suite
     - Add guards asserting existing chat/trace tests still pass, sandbox constraints are unchanged, all five verification gates pass, and the suite makes zero real provider/network calls
     - _Requirements: 12.1, 12.2, 12.4, 12.5, 12.6_
 
-  - [ ] 13.2 Write property test for Local_Mode determinism vs baseline
+  - [x] 13.2 Write property test for Local_Mode determinism vs baseline
     - **Property 17: Local_Mode is deterministic against the baseline**
     - **Validates: Requirements 12.3**
 
-- [ ] 14. Final checkpoint - all gates green
+- [x] 14. Final checkpoint - all gates green
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
