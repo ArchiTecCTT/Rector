@@ -11,7 +11,8 @@ import {
   parseOrchestrationConfig,
   type OrchestrationConfig,
 } from "../deployment";
-import { buildModelRouter } from "../providers/llm";
+import { buildModelRouter, type ModelRouter } from "../providers/llm";
+import { buildConfiguredRouter } from "../providers/configBridge";
 import { createLocalSecretStore } from "../security/secretStore";
 import { createLocalProviderConfigStore } from "../providers/configStore";
 import { TaskManager } from "../thalamus/router";
@@ -35,14 +36,6 @@ try {
   }
   throw error;
 }
-
-// Build the model router once for the lifetime of the app. Local mode uses the provider-free
-// (fake) router; external mode builds the router from configured providers. No network call is made
-// at startup — the router only selects providers lazily per request.
-const orchestrationRouter =
-  orchestrationConfig.mode === "external"
-    ? buildModelRouter({ mode: "external", env: process.env })
-    : buildModelRouter({ mode: "local" });
 
 const telemetry = new LocalTelemetry();
 const manager = new TaskManager({
@@ -104,19 +97,66 @@ const secretStore = createLocalSecretStore({
 });
 const providerConfigStore = createLocalProviderConfigStore({ filePath: PROVIDER_CONFIG_FILE });
 
-const app = createApp(manager, {
-  orchestration: { mode: orchestrationConfig.mode, router: orchestrationRouter },
-  persistence: deploymentConfig.persistence,
-  secretStore,
-  providerConfigStore,
+/**
+ * Build the model router for the resolved orchestration mode (design C6, Req 13.3/14.3).
+ *
+ * External_Mode builds the router via the {@link buildConfiguredRouter} Config_Bridge so persisted
+ * Provider_Config_Records (including every `openai-compatible` deployment) and their Secret_Store
+ * secrets participate in selection, honoring the persisted Active_Route_Map with fallback to the
+ * capability-priority selection. The live server explicitly opts the constructed providers into the
+ * network (`enableNetwork: true`); `process.env` remains the documented fallback when the user has
+ * not set a field in-app (precedence: persisted UI config over env).
+ *
+ * Local_Mode is the provider-free regression baseline (Req 17.1, Correctness Property 7): it uses
+ * the fake router and NEVER consults the Config_Bridge, so no persisted configuration or secret can
+ * ever cause a provider/network call. The bridge is deliberately not invoked on this path.
+ *
+ * No network call is made at startup — the router only selects providers lazily per request.
+ */
+async function buildStartupRouter(): Promise<ModelRouter> {
+  if (orchestrationConfig.mode === "external") {
+    return buildConfiguredRouter({
+      store: providerConfigStore,
+      secrets: secretStore,
+      mode: "external",
+      baseEnv: process.env,
+      enableNetwork: true,
+      fetchImpl: fetch,
+    });
+  }
+  return buildModelRouter({ mode: "local" });
+}
+
+/**
+ * Async startup. `buildConfiguredRouter` is async (it reads persisted config + secrets), so the
+ * router build, app construction, listen, and graceful-shutdown wiring are sequenced here. The
+ * fail-fast `parseOrchestrationConfig` check already ran synchronously above, so a misconfigured
+ * external mode never reaches this bootstrap.
+ */
+async function bootstrap(): Promise<{ app: ReturnType<typeof createApp>; server: http.Server; gracefulShutdown: ReturnType<typeof createGracefulShutdownHandler> }> {
+  const orchestrationRouter = await buildStartupRouter();
+
+  const app = createApp(manager, {
+    orchestration: { mode: orchestrationConfig.mode, router: orchestrationRouter },
+    persistence: deploymentConfig.persistence,
+    secretStore,
+    providerConfigStore,
+  });
+  const server = http.createServer(app);
+  const gracefulShutdown = createGracefulShutdownHandler({ server });
+
+  server.listen({ port, host }, () => {
+    console.log(`Rector MVP running on http://${host}:${port} (orchestration mode: ${orchestrationConfig.mode})`);
+  });
+
+  gracefulShutdown.install();
+
+  return { app, server, gracefulShutdown };
+}
+
+const bootstrapPromise = bootstrap().catch((error) => {
+  console.error(`Rector startup failed: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
 });
-const server = http.createServer(app);
-const gracefulShutdown = createGracefulShutdownHandler({ server });
 
-server.listen({ port, host }, () => {
-  console.log(`Rector MVP running on http://${host}:${port} (orchestration mode: ${orchestrationConfig.mode})`);
-});
-
-gracefulShutdown.install();
-
-export { app, deploymentConfig, gracefulShutdown, manager, orchestrationConfig, telemetry };
+export { bootstrapPromise, deploymentConfig, manager, orchestrationConfig, telemetry };
