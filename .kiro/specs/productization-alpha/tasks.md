@@ -16,24 +16,24 @@ Property-based tests implement the 17 correctness properties from the design (on
     - Route every error message through `redactString`/`redactSecrets`; on store/retrieve failure return `{ok:false, error}` without persisting a partial/corrupted value
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.6, 7.7, 7.8_
 
-  - [ ] 1.2 Write property test for secret store restart round-trip
+  - [x] 1.2 Write property test for secret store restart round-trip
     - **Property 10: Secret store persists across restart (round-trip)**
     - **Validates: Requirements 7.2**
 
-  - [ ] 1.3 Write property test for non-plaintext stored representation
+  - [x] 1.3 Write property test for non-plaintext stored representation
     - **Property 11: Secret store representation is non-plaintext**
     - **Validates: Requirements 7.4**
 
-  - [ ] 1.4 Write property test for secret presence without value exposure
+  - [x] 1.4 Write property test for secret presence without value exposure
     - **Property 2: Secret presence is reported without value exposure**
     - **Validates: Requirements 1.4, 7.5, 7.6**
 
-  - [ ] 1.5 Write unit tests for secret store failure paths
+  - [x] 1.5 Write unit tests for secret store failure paths
     - Cover mid-write failure (no partial/corrupted value persisted) and redacted error messages
     - _Requirements: 7.7, 7.8_
 
 - [ ] 2. Implement Setup Status Service and Setup API
-  - [ ] 2.1 Implement `computeSetupStatus` composer
+  - [x] 2.1 Implement `computeSetupStatus` composer
     - Create `src/setupStatus.ts` with `SetupMode`, `ReadinessStatus`, `SetupCategory`, `CategoryReadiness`, `SetupStatusResponse`
     - Derive mode from `ORCHESTRATOR_MODE` (default `local`); compose `getSetupChecklist()` into exactly one readiness entry per category; include `secretPresence` booleans only via the `SecretStore`
     - Run the assembled response through `redactSecrets` before return; if redaction of a value fails, omit that value rather than return it
@@ -74,11 +74,11 @@ Property-based tests implement the 17 correctness properties from the design (on
     - Apply a 30s client-side timeout that aborts, clears loading, and shows a redacted timeout message
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7_
 
-  - [ ] 4.2 Write property test for connection-test action enablement
+  - [x] 4.2 Write property test for connection-test action enablement
     - **Property 5: Connection-test action enablement**
     - **Validates: Requirements 2.1**
 
-  - [ ] 4.3 Write unit tests for provider panel states
+  - [x] 4.3 Write unit tests for provider panel states
     - Cover loading/disabled-in-flight, redacted failure message with retained selection, and 30s timeout message
     - _Requirements: 2.2, 2.4, 2.6, 2.7_
 
@@ -103,27 +103,27 @@ Property-based tests implement the 17 correctness properties from the design (on
     - Write all output under a temporary root (never modify tracked files); retain artifacts/logs and record `failed` on failure; terminate and record `timeout` past 300s; produce a summary with total and per-status counts; support a manual `live` mode over the same task set
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8_
 
-  - [ ] 6.2 Write property test for benchmark result completeness
+  - [x] 6.2 Write property test for benchmark result completeness
     - **Property 6: Benchmark result completeness**
     - **Validates: Requirements 4.3**
 
-  - [ ] 6.3 Write property test for benchmark output containment
+  - [x] 6.3 Write property test for benchmark output containment
     - **Property 7: Benchmark output containment**
     - **Validates: Requirements 4.4**
 
-  - [ ] 6.4 Write property test for consistent summary counts
+  - [x] 6.4 Write property test for consistent summary counts
     - **Property 8: Benchmark summary counts are consistent**
     - **Validates: Requirements 4.8**
 
-  - [ ] 6.5 Write property test for default-mode determinism
+  - [x] 6.5 Write property test for default-mode determinism
     - **Property 9: Benchmark determinism in default mode**
     - **Validates: Requirements 4.9**
 
-  - [ ] 6.6 Write unit tests for benchmark failure and timeout
+  - [x] 6.6 Write unit tests for benchmark failure and timeout
     - Cover artifact retention on failure, 300s timeout termination, and zero network calls in default mode
     - _Requirements: 4.2, 4.5, 4.7_
 
-- [ ] 7. Checkpoint - core services and panels
+- [x] 7. Checkpoint - core services and panels
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 8. Implement Store config validation and TiDB smoke path
@@ -132,15 +132,15 @@ Property-based tests implement the 17 correctness properties from the design (on
     - Document required env vars in `docs/`; ensure the script never runs in CI and that SQLite remains the default when no driver is configured
     - _Requirements: 8.1, 8.2, 8.3, 8.6_
 
-  - [ ] 8.2 Write property test for store write-then-read-back round-trip
+  - [x] 8.2 Write property test for store write-then-read-back round-trip
     - **Property 12: Store write-then-read-back round-trip**
     - **Validates: Requirements 8.1**
 
-  - [ ] 8.3 Write property test for pre-I/O rejection of incomplete config
+  - [x] 8.3 Write property test for pre-I/O rejection of incomplete config
     - **Property 13: Incomplete persistence config is rejected before I/O**
     - **Validates: Requirements 8.4**
 
-  - [ ] 8.4 Write unit tests for read-back mismatch and SQLite default
+  - [x] 8.4 Write unit tests for read-back mismatch and SQLite default
     - Cover read-back mismatch failure reporting and default SQLite selection
     - _Requirements: 8.2, 8.6_
 
@@ -190,7 +190,7 @@ Property-based tests implement the 17 correctness properties from the design (on
     - Add a test comparing the Local_Mode regression pass rate before/after a prompt change so a drop fails the gate and the previous prompt set stands
     - _Requirements: 5.5, 5.6_
 
-  - [ ] 11.3 Add a regression-case template for fixed failure modes
+  - [x] 11.3 Add a regression-case template for fixed failure modes
     - Provide a reusable regression-case scaffold that reproduces a benchmark failure mode and asserts the corrected behavior
     - _Requirements: 5.1, 5.4_
 
@@ -200,7 +200,7 @@ Property-based tests implement the 17 correctness properties from the design (on
     - Include a rationale referencing the assessment, a minimal prototype path (or documented deferral reason), and any added-dependency reasons; leave the Node web app runnable with gates passing
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6_
 
-  - [ ] 12.2 Write doc-structure test for the Desktop_Shell_Decision
+  - [x] 12.2 Write doc-structure test for the Desktop_Shell_Decision
     - Assert presence of recommendation, assessment factors, rationale, and prototype path/deferral sections
     - _Requirements: 6.1, 6.2, 6.3, 6.4_
 
@@ -209,7 +209,7 @@ Property-based tests implement the 17 correctness properties from the design (on
     - Document each named risk (stolen device, relay compromise, prompt injection, approval spoofing) with a mitigation or explicit residual-risk statement; route approvals through the `Approval_Flow`/`Event_Log`; enumerate non-goals
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6_
 
-  - [ ] 12.4 Write doc-structure test for the Mobile_Companion_Design
+  - [x] 12.4 Write doc-structure test for the Mobile_Companion_Design
     - Assert presence of capabilities, no-local-exec statement, comms boundary, risk/mitigation entries, approval routing, and non-goals
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6_
 
