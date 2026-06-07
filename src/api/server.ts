@@ -24,7 +24,19 @@ import {
   type ApprovalDecision,
 } from "./approvalFlow";
 import type { SecretStore } from "../security/secretStore";
-import type { ProviderConfigStore } from "../providers/configStore";
+import {
+  createInMemoryProviderConfigStore,
+  type ProviderConfigStore,
+} from "../providers/configStore";
+import {
+  AzureProviderConfigSchema,
+  CloudflareProviderConfigSchema,
+  ProviderConfigRecordSchema,
+  ProviderKindSchema,
+  ProviderModelMapSchema,
+  ProviderModelRoleSchema,
+  type ProviderConfigRecord,
+} from "../providers/config";
 import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
@@ -120,6 +132,9 @@ function createEmptySecretStore(): SecretStore {
     },
     async hasSecret() {
       return false;
+    },
+    async deleteSecret() {
+      return { ok: true, value: undefined };
     },
   };
 }
@@ -799,6 +814,47 @@ function sendRedacted(res: express.Response, status: number, payload: unknown): 
   res.status(500).json({ error: REDACTION_FAILED_ERROR });
 }
 
+// --- Provider_Config_API request schemas (design section C7) ---
+
+/**
+ * Upsert body for `POST /api/providers`. Mirrors the non-secret {@link ProviderConfigRecord} the
+ * caller may set, plus an OPTIONAL write-once `apiKey`. Server-managed fields (`secretRef`,
+ * `createdAt`, `updatedAt`) are intentionally NOT accepted from the client — the route derives
+ * `secretRef` from `id` and stamps the timestamps. `.strict()` rejects unknown fields so a
+ * mis-named secret can never slip into the non-secret config record.
+ */
+export const UpsertProviderRequestSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: ProviderKindSchema,
+    label: z.string().min(1),
+    baseUrl: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    models: ProviderModelMapSchema.optional(),
+    azure: AzureProviderConfigSchema.optional(),
+    cloudflare: CloudflareProviderConfigSchema.optional(),
+    headers: z.record(z.string()).optional(),
+    /** Optional secret; persisted to the Secret_Store then stripped, never stored in config. */
+    apiKey: z.string().min(1).optional(),
+  })
+  .strict();
+export type UpsertProviderRequest = z.infer<typeof UpsertProviderRequestSchema>;
+
+/** Body for `POST /api/providers/:id/secret`: the secret only (write/replace). */
+export const SetProviderSecretRequestSchema = z
+  .object({ apiKey: z.string().min(1) })
+  .strict();
+export type SetProviderSecretRequest = z.infer<typeof SetProviderSecretRequestSchema>;
+
+/** Body for `POST /api/providers/active`: designate (or clear, with `null`) a role's provider. */
+export const SetActiveRouteRequestSchema = z
+  .object({
+    role: ProviderModelRoleSchema,
+    providerId: z.string().min(1).nullable(),
+  })
+  .strict();
+export type SetActiveRouteRequest = z.infer<typeof SetActiveRouteRequestSchema>;
+
 export function createApp(manager: TaskManager, securityOptions: ApiSecurityOptions = {}): express.Application {
   const app = express();
   // Select the store from the deployment persistence config (ORN-39). When no persistence config
@@ -1412,6 +1468,11 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // keep the chat/trace UI accessible (Requirement 1.8); the redacted message never carries a
   // secret substring.
   const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
+  // Provider_Config_Store backing the BYOK CRUD/selection routes (design C2/C7). Inert and
+  // additive when no store is injected: a fresh in-memory store is used so the routes work in
+  // tests without forcing a real disk store; the non-test app injects the local
+  // `.rector/providers.json` store via `securityOptions.providerConfigStore` (task 5.1).
+  const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
   app.get("/api/setup/status", async (_req, res) => {
     try {
       const status = await computeSetupStatus(process.env, setupSecretStore);
@@ -1487,6 +1548,158 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: redactString(err?.message ?? String(err)) });
+    }
+  });
+
+  // --- Provider_Config_API: BYOK CRUD + selection (design C7, Req 10/11/14) ---
+  //
+  // Every response is routed through `sendRedacted`/`redactOutbound` so no full or partial secret
+  // value can appear in any response (Req 11.4). Secrets are accepted on input, persisted ONLY via
+  // the Secret_Store, and never written to the Provider_Config_Store or echoed back (Req 11.6);
+  // responses expose a `secretPresent` boolean only (Req 11.2).
+  const errorMessageOf = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
+  // GET /api/providers — non-secret records + activeRoutes + per-provider secretPresent (Req 10.4).
+  app.get("/api/providers", async (_req, res) => {
+    try {
+      const state = await providerConfigStore.getState();
+      const providers = await Promise.all(
+        state.providers.map(async (record) => ({
+          ...record,
+          // Presence-only boolean from the Secret_Store; the value is never read here (Req 11.2).
+          secretPresent: await setupSecretStore.hasSecret(record.secretRef),
+        }))
+      );
+      sendRedacted(res, 200, { providers, activeRoutes: state.activeRoutes });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // POST /api/providers — upsert a non-secret record; optional `apiKey` is persisted to the
+  // Secret_Store then STRIPPED from the stored config (Req 10.5, 11.6). Write-once UX: when no
+  // `apiKey` is supplied any existing secret is retained unchanged (Req 11.3). If persisting the
+  // secret fails, the prior secret is left intact and the config is NOT upserted (Req 11.7).
+  app.post("/api/providers", async (req, res) => {
+    let body: UpsertProviderRequest;
+    try {
+      body = UpsertProviderRequestSchema.parse(req.body ?? {});
+    } catch (err: unknown) {
+      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
+    }
+
+    try {
+      const state = await providerConfigStore.getState();
+      const existing = state.providers.find((record) => record.id === body.id);
+      const now = new Date().toISOString();
+      // `secretRef` is derived from the record id; the Secret_Store is keyed by it. The apiKey is
+      // destructured out so it can NEVER reach the non-secret config record (Req 11.6).
+      const { apiKey, ...config } = body;
+      const secretRef = body.id;
+
+      // Persist a newly supplied secret BEFORE the config upsert so a secret failure leaves both
+      // the prior secret and the prior config untouched (Req 11.7).
+      if (apiKey !== undefined) {
+        const secretResult = await setupSecretStore.setSecret(secretRef, apiKey);
+        if (!secretResult.ok) {
+          return sendRedacted(res, 500, { error: redactString(secretResult.error) });
+        }
+      }
+
+      // Parse through the canonical record schema so only a well-formed, non-secret record is
+      // persisted; `createdAt` is preserved across updates and `updatedAt` is stamped now.
+      const record: ProviderConfigRecord = ProviderConfigRecordSchema.parse({
+        ...config,
+        secretRef,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      });
+
+      const upsertResult = await providerConfigStore.upsertProvider(record);
+      if (!upsertResult.ok) {
+        return sendRedacted(res, 500, { error: redactString(upsertResult.error) });
+      }
+
+      const secretPresent = await setupSecretStore.hasSecret(secretRef);
+      sendRedacted(res, 200, { provider: { ...upsertResult.value, secretPresent } });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // POST /api/providers/active — designate (or clear) the provider serving a model role (Req 14.2).
+  // Registered BEFORE the `:id` routes; its single static segment never collides with `:id/secret`.
+  app.post("/api/providers/active", async (req, res) => {
+    let body: SetActiveRouteRequest;
+    try {
+      body = SetActiveRouteRequestSchema.parse(req.body ?? {});
+    } catch (err: unknown) {
+      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
+    }
+
+    try {
+      const result = await providerConfigStore.setActiveRoute(body.role, body.providerId);
+      if (!result.ok) {
+        return sendRedacted(res, 500, { error: redactString(result.error) });
+      }
+      const state = await providerConfigStore.getState();
+      sendRedacted(res, 200, { activeRoutes: state.activeRoutes });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // POST /api/providers/:id/secret — write/replace only the secret for an existing record. The
+  // value is persisted ONLY through the Secret_Store; on failure the prior secret is left intact
+  // and a redacted error is returned (Req 11.6, 11.7).
+  app.post("/api/providers/:id/secret", async (req, res) => {
+    let body: SetProviderSecretRequest;
+    try {
+      body = SetProviderSecretRequestSchema.parse(req.body ?? {});
+    } catch (err: unknown) {
+      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
+    }
+
+    try {
+      const state = await providerConfigStore.getState();
+      const existing = state.providers.find((record) => record.id === req.params.id);
+      if (!existing) return res.status(404).json({ error: "Provider not found" });
+
+      const result = await setupSecretStore.setSecret(existing.secretRef, body.apiKey);
+      if (!result.ok) {
+        return sendRedacted(res, 500, { error: redactString(result.error) });
+      }
+      sendRedacted(res, 200, { id: existing.id, secretPresent: true });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // DELETE /api/providers/:id — remove the record AND its stored secret (Req 10.6). The record is
+  // removed first; the secret is then deleted via the Secret_Store's optional `deleteSecret` (the
+  // shipped local backing implements it). A secret-deletion failure surfaces a redacted error.
+  app.delete("/api/providers/:id", async (req, res) => {
+    try {
+      const state = await providerConfigStore.getState();
+      const existing = state.providers.find((record) => record.id === req.params.id);
+      if (!existing) return res.status(404).json({ error: "Provider not found" });
+
+      const removeResult = await providerConfigStore.removeProvider(existing.id);
+      if (!removeResult.ok) {
+        return sendRedacted(res, 500, { error: redactString(removeResult.error) });
+      }
+
+      if (setupSecretStore.deleteSecret) {
+        const secretResult = await setupSecretStore.deleteSecret(existing.secretRef);
+        if (!secretResult.ok) {
+          return sendRedacted(res, 500, { error: redactString(secretResult.error) });
+        }
+      }
+
+      sendRedacted(res, 200, { removed: true, id: existing.id });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }
   });
 

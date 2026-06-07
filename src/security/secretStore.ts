@@ -53,6 +53,14 @@ export interface SecretStore {
   getSecret(providerId: string): Promise<SecretStoreResult<string>>;
   /** Report whether a secret value is currently stored for `providerId`. Presence only. */
   hasSecret(providerId: string): Promise<boolean>;
+  /**
+   * Remove the stored secret for `providerId`, if any. Optional so existing presence-only doubles
+   * remain valid `SecretStore`s; the shipped local backing implements it so deleting a provider
+   * configuration can also delete its secret (Requirement 10.6). Removing an absent secret is a
+   * success (idempotent), and on any failure the prior stored state is left intact (Requirement
+   * 7.7) with a redacted error.
+   */
+  deleteSecret?(providerId: string): Promise<SecretStoreResult<void>>;
 }
 
 /**
@@ -241,6 +249,25 @@ export function createLocalSecretStore(options: LocalSecretStoreOptions): Secret
         // Presence is a best-effort boolean; an unreadable backing reports "absent"
         // rather than surfacing an error or a value.
         return false;
+      }
+    },
+
+    async deleteSecret(providerId: string): Promise<SecretStoreResult<void>> {
+      try {
+        const contents = await readFileContents();
+        // Deleting an absent secret is a no-op success (idempotent), and avoids an
+        // unnecessary write when nothing changes.
+        if (!Object.prototype.hasOwnProperty.call(contents.entries, providerId)) {
+          return { ok: true, value: undefined };
+        }
+        // Build the next entries in a fresh object so a mid-operation failure never mutates
+        // the on-disk state until the atomic rename succeeds (Requirement 7.7).
+        const entries = { ...contents.entries };
+        delete entries[providerId];
+        await writeFileContents({ version: FORMAT_VERSION, entries });
+        return { ok: true, value: undefined };
+      } catch (error) {
+        return { ok: false, error: toRedactedError(error) };
       }
     },
   };
