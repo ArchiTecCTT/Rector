@@ -159,9 +159,11 @@
       var accent = accents[name];
       if (typeof accent === "string" && accent) {
         setProp("--accent", accent);
+        setProp("--accent-gradient", "none");
       } else {
         // No override for this theme -> revert to the theme's own token (Req 3.8).
         removeProp("--accent");
+        removeProp("--accent-gradient");
       }
     }
 
@@ -192,9 +194,11 @@
       if (value === null || value === undefined || value === "") {
         delete accents[theme];
         removeProp("--accent");
+        removeProp("--accent-gradient");
       } else {
         accents[theme] = String(value);
         setProp("--accent", String(value));
+        setProp("--accent-gradient", "none");
       }
       pref.accents = accents;
       safeWrite(pref);

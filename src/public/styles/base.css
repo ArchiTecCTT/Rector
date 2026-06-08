@@ -164,6 +164,31 @@ body {
   color: var(--text-faint);
 }
 
+h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
+  font-family: var(--font-display);
+  margin: 0;
+}
+
+.icon {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.topbar__kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 1px 4px;
+  color: var(--text-dim);
+  margin-left: var(--space-2);
+  vertical-align: middle;
+}
+
 /* ============================================================
    App shell (region-based two-row layout — structural geometry)
    ------------------------------------------------------------
@@ -201,6 +226,58 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* Command palette search launcher (Req 2.2 / Design premium improvement) */
+.btn.topbar__search-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px var(--space-3);
+  color: var(--text-dim);
+  cursor: pointer;
+  min-width: 220px;
+  max-width: 320px;
+  text-align: left;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: normal;
+  transition: all var(--motion-fast) var(--easing-standard);
+  white-space: nowrap;
+}
+
+.btn.topbar__search-btn:hover {
+  border-color: var(--border-strong);
+  background: var(--elevated);
+  color: var(--text);
+}
+
+.topbar__search-text {
+  flex: 1;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  font-weight: normal;
+}
+
+.btn.topbar__search-btn:hover .topbar__search-text {
+  color: var(--text-dim);
+}
+
+.btn.topbar__search-btn .icon {
+  color: var(--text-faint);
+  width: 14px;
+  height: 14px;
+}
+
+.btn.topbar__search-btn:hover .icon {
+  color: var(--text-dim);
+}
+
+.btn.topbar__search-btn .topbar__kbd {
+  margin-left: auto;
 }
 
 /* ============================================================
@@ -673,17 +750,26 @@ body {
 
 .btn--primary {
   background: var(--accent);
+  background: var(--accent-gradient, var(--accent));
   border-color: var(--accent);
   color: var(--accent-contrast, #fff);
 }
 
 .btn--primary:hover:not(:disabled) {
   background: var(--accent-hover);
+  background: var(--accent-gradient, var(--accent-hover));
+  opacity: 0.92;
   border-color: var(--accent-hover);
 }
 
 .btn--ghost {
   background: transparent;
+  border-color: transparent;
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--elevated);
+  border-color: var(--border-strong);
 }
 
 .btn--sm {

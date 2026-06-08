@@ -40,6 +40,7 @@
   --border: #e0d7c0;
   --border-strong: #cabfa2;
   --border-soft: rgba(58, 50, 33, 0.06);
+  --sidebar-dim: rgba(58, 50, 33, 0.04);
 
   /* ---------- Color: foreground (dark warm ink — inverted polarity) ---------- */
   --text: #2a2722;

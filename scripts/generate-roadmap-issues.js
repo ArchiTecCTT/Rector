@@ -157,8 +157,12 @@ function checkFiles(outputDir, files) {
     const path = join(outputDir, file);
     if (!existsSync(path)) {
       missing.push(file);
-    } else if (readFileSync(path, "utf8") !== content) {
-      changed.push(file);
+    } else {
+      const existing = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+      const generated = content.replace(/\r\n/g, "\n");
+      if (existing !== generated) {
+        changed.push(file);
+      }
     }
   }
   const extra = existsSync(outputDir)
