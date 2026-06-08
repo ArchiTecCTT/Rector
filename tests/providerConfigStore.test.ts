@@ -34,6 +34,8 @@ import {
 } from "../src/providers/config";
 import {
   createLocalProviderConfigStore,
+  createInMemoryProviderConfigStore,
+  type DiscoveryCacheInvalidator,
   type ProviderConfigFs,
 } from "../src/providers/configStore";
 
@@ -327,5 +329,105 @@ describe("Provider_Config_Store — Property 2: config/secret separation (Req 11
       ),
       { numRuns: 100 },
     );
+  });
+});
+
+describe("Provider_Config_Store — Discovery_Cache invalidation (Req 16.3, task 6.2)", () => {
+  /** A trivial Discovery_Cache double recording every `invalidate` call. */
+  class RecordingCache implements DiscoveryCacheInvalidator {
+    readonly invalidated: string[] = [];
+    invalidate(providerId: string): void {
+      this.invalidated.push(providerId);
+    }
+  }
+
+  it("evicts the provider's cache entry on upsertProvider (local store)", async () => {
+    const cache = new RecordingCache();
+    const store = createLocalProviderConfigStore({
+      filePath: FILE_PATH,
+      fsImpl: new InMemoryConfigFs(),
+      cache,
+    });
+    const record = makeRecord();
+
+    await store.upsertProvider(record);
+
+    expect(cache.invalidated).toEqual([record.id]);
+  });
+
+  it("evicts the provider's cache entry on removeProvider (local store)", async () => {
+    const cache = new RecordingCache();
+    const fsImpl = new InMemoryConfigFs();
+    const store = createLocalProviderConfigStore({ filePath: FILE_PATH, fsImpl, cache });
+    const record = makeRecord();
+    await store.upsertProvider(record);
+    cache.invalidated.length = 0; // ignore the upsert eviction
+
+    await store.removeProvider(record.id);
+
+    expect(cache.invalidated).toEqual([record.id]);
+  });
+
+  it("evicts both the previous and the newly designated provider on setActiveRoute", async () => {
+    const cache = new RecordingCache();
+    const fsImpl = new InMemoryConfigFs();
+    const store = createLocalProviderConfigStore({ filePath: FILE_PATH, fsImpl, cache });
+    const first = makeRecord({ id: "together:first", kind: "together" });
+    const second = makeRecord({ id: "openai-compatible:second" });
+    await store.upsertProvider(first);
+    await store.upsertProvider(second);
+
+    // Initial designation invalidates only the newly designated provider.
+    cache.invalidated.length = 0;
+    await store.setActiveRoute("flagship", first.id);
+    expect(cache.invalidated).toEqual([first.id]);
+
+    // Re-pointing the role invalidates both the replaced and the new provider.
+    cache.invalidated.length = 0;
+    await store.setActiveRoute("flagship", second.id);
+    expect(cache.invalidated).toEqual([first.id, second.id]);
+
+    // Clearing the role invalidates the provider it had been pointing at.
+    cache.invalidated.length = 0;
+    await store.setActiveRoute("flagship", null);
+    expect(cache.invalidated).toEqual([second.id]);
+  });
+
+  it("does not invalidate when an atomic write fails (no eviction on a no-op)", async () => {
+    const cache = new RecordingCache();
+    const fsImpl = new InMemoryConfigFs();
+    const store = createLocalProviderConfigStore({ filePath: FILE_PATH, fsImpl, cache });
+
+    fsImpl.failNextWrite = new Error("EIO: simulated disk failure during write");
+    const failed = await store.upsertProvider(makeRecord());
+
+    expect(failed.ok).toBe(false);
+    // The mutation never committed, so nothing was evicted.
+    expect(cache.invalidated).toEqual([]);
+  });
+
+  it("evicts on every mutation of the in-memory store too", async () => {
+    const cache = new RecordingCache();
+    const store = createInMemoryProviderConfigStore(undefined, { cache });
+    const record = makeRecord();
+
+    await store.upsertProvider(record);
+    await store.setActiveRoute("slm", record.id);
+    await store.removeProvider(record.id);
+
+    expect(cache.invalidated).toEqual([record.id, record.id, record.id]);
+  });
+
+  it("remains fully backward compatible when no cache is injected", async () => {
+    const store = createLocalProviderConfigStore({
+      filePath: FILE_PATH,
+      fsImpl: new InMemoryConfigFs(),
+    });
+    const record = makeRecord();
+
+    // The mutations behave exactly as before; no cache, no throw.
+    expect((await store.upsertProvider(record)).ok).toBe(true);
+    expect((await store.setActiveRoute("flagship", record.id)).ok).toBe(true);
+    expect((await store.removeProvider(record.id)).ok).toBe(true);
   });
 });

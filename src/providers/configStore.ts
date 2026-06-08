@@ -39,6 +39,18 @@ export type ProviderConfigResult<T> =
   | { ok: false; error: string };
 
 /**
+ * The narrow slice of the `Discovery_Cache` the store depends on to evict stale
+ * entries (Requirement 16.3). Only {@link DiscoveryCache.invalidate} is needed,
+ * so the store stays decoupled from the cache's `get`/`set`/TTL machinery and a
+ * test can inject a trivial double. Implemented by the real `DiscoveryCache`
+ * from `./discovery/cache`.
+ */
+export interface DiscoveryCacheInvalidator {
+  /** Evict any cached discovery result for `providerId`. */
+  invalidate(providerId: string): void;
+}
+
+/**
  * The store contract (design C2). Reads return the full state; mutations report
  * success/failure and never throw for an operational error.
  */
@@ -75,6 +87,12 @@ export interface LocalProviderConfigStoreOptions {
   filePath: string;
   /** Injectable filesystem (defaults to a `node:fs/promises`-backed adapter). */
   fsImpl?: ProviderConfigFs;
+  /**
+   * Optional Discovery_Cache to evict on every mutation, so a configuration or
+   * scope change re-discovers a Provider's models on the next read
+   * (Requirement 16.3). When omitted the store behaves exactly as before.
+   */
+  cache?: DiscoveryCacheInvalidator;
 }
 
 /** Default filesystem adapter over `node:fs/promises`. */
@@ -131,6 +149,7 @@ export function createLocalProviderConfigStore(
 ): ProviderConfigStore {
   const { filePath } = options;
   const fsImpl = options.fsImpl ?? defaultProviderConfigFs();
+  const cache = options.cache;
 
   async function readState(): Promise<ProviderConfigState> {
     const raw = await fsImpl.readFile(filePath);
@@ -185,6 +204,9 @@ export function createLocalProviderConfigStore(
         // mutates the on-disk state until the atomic rename succeeds.
         const next: ProviderConfigState = { ...state, providers };
         await writeState(next);
+        // Evict so the next discovery read re-runs against the changed config
+        // (Requirement 16.3). Only after the atomic write commits.
+        cache?.invalidate(rec.id);
         return { ok: true, value: rec };
       } catch (error) {
         return { ok: false, error: toRedactedError(error) };
@@ -201,6 +223,8 @@ export function createLocalProviderConfigStore(
           activeRoutes: pruneActiveRoutes(state.activeRoutes, id),
         };
         await writeState(next);
+        // Evict the removed Provider's discovery result (Requirement 16.3).
+        cache?.invalidate(id);
         return { ok: true, value: undefined };
       } catch (error) {
         return { ok: false, error: toRedactedError(error) };
@@ -213,6 +237,7 @@ export function createLocalProviderConfigStore(
     ): Promise<ProviderConfigResult<void>> {
       try {
         const state = await readState();
+        const previousId = state.activeRoutes[role];
         const activeRoutes: ActiveRouteMap = { ...state.activeRoutes };
         if (providerId === null) {
           delete activeRoutes[role];
@@ -221,6 +246,10 @@ export function createLocalProviderConfigStore(
         }
         const next: ProviderConfigState = { ...state, activeRoutes };
         await writeState(next);
+        // A route change is a scope change for every Provider it touches: the
+        // newly designated one and the one it replaced (Requirement 16.3).
+        if (previousId) cache?.invalidate(previousId);
+        if (providerId) cache?.invalidate(providerId);
         return { ok: true, value: undefined };
       } catch (error) {
         return { ok: false, error: toRedactedError(error) };
@@ -232,14 +261,17 @@ export function createLocalProviderConfigStore(
 /**
  * Create an in-memory {@link ProviderConfigStore} for tests. Holds state in a
  * closure (no disk, no fs double needed) while preserving the same mutation
- * semantics — including pruning removed providers from active routes.
+ * semantics — including pruning removed providers from active routes and
+ * evicting an injected Discovery_Cache on every mutation (Requirement 16.3).
  */
 export function createInMemoryProviderConfigStore(
   initial?: ProviderConfigState,
+  options: { cache?: DiscoveryCacheInvalidator } = {},
 ): ProviderConfigStore {
   let state: ProviderConfigState = initial
     ? ProviderConfigStateSchema.parse(initial)
     : emptyProviderConfigState();
+  const cache = options.cache;
 
   return {
     async getState(): Promise<ProviderConfigState> {
@@ -257,6 +289,7 @@ export function createInMemoryProviderConfigStore(
         providers.push(rec);
       }
       state = { ...state, providers };
+      cache?.invalidate(rec.id);
       return { ok: true, value: rec };
     },
 
@@ -266,6 +299,7 @@ export function createInMemoryProviderConfigStore(
         providers: state.providers.filter((existing) => existing.id !== id),
         activeRoutes: pruneActiveRoutes(state.activeRoutes, id),
       };
+      cache?.invalidate(id);
       return { ok: true, value: undefined };
     },
 
@@ -273,6 +307,7 @@ export function createInMemoryProviderConfigStore(
       role: ProviderModelRole,
       providerId: string | null,
     ): Promise<ProviderConfigResult<void>> {
+      const previousId = state.activeRoutes[role];
       const activeRoutes: ActiveRouteMap = { ...state.activeRoutes };
       if (providerId === null) {
         delete activeRoutes[role];
@@ -280,6 +315,8 @@ export function createInMemoryProviderConfigStore(
         activeRoutes[role] = providerId;
       }
       state = { ...state, activeRoutes };
+      if (previousId) cache?.invalidate(previousId);
+      if (providerId) cache?.invalidate(providerId);
       return { ok: true, value: undefined };
     },
   };
