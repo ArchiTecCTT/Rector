@@ -39,6 +39,13 @@ import {
 } from "../providers/config";
 import { resolveTestProvider } from "../providers/configBridge";
 import {
+  createModelDiscoveryService,
+  type ModelDiscoveryService,
+} from "../providers/discovery/service";
+import { createDiscoveryCache } from "../providers/discovery/cache";
+import { createDefaultDiscoveryAdapterRegistry } from "../providers/discovery/adapters/registry";
+import type { DiscoveryResult } from "../providers/discovery/types";
+import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
   ProviderError,
@@ -112,6 +119,18 @@ export interface ApiSecurityOptions {
    * configuration and never executes any command.
    */
   workspaceSafety?: WorkspaceSafetyConfig;
+
+  /**
+   * Optional {@link ModelDiscoveryService} backing the Discovery_API endpoints
+   * (`GET /api/providers/:id/models`, `POST /api/providers/:id/models/refresh`; design section C,
+   * Req 17). Additive and inert when omitted: the route layer constructs a default service from the
+   * injected {@link ApiSecurityOptions.providerConfigStore} and {@link ApiSecurityOptions.secretStore}
+   * plus a fresh {@link DiscoveryCache} and the default per-kind adapter registry. The cache is owned
+   * by the single service instance so a refresh overwrites exactly the entry a subsequent read
+   * serves. Tests can inject a deterministic service (e.g. with an injected clock and a mocked
+   * `fetch`) here without touching the routes.
+   */
+  modelDiscoveryService?: ModelDiscoveryService;
 }
 
 /**
@@ -1791,6 +1810,66 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       }
 
       sendRedacted(res, 200, { removed: true, id: existing.id });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // --- Discovery_API: read + refresh discovered models (design section C, Req 17) ---
+  //
+  // A single Model_Discovery_Service instance is constructed once so its Discovery_Cache persists
+  // across requests: a `GET` serves a still-fresh cached result and a `POST .../refresh` bypasses
+  // and overwrites exactly the entry the next `GET` will read (Req 16.2, 17.2). It is wired to the
+  // same Provider_Config_Store and Secret_Store the BYOK routes use, plus the default per-kind
+  // adapter registry; secrets are read transiently inside the service and never returned (Req 18).
+  // A deterministic service can be injected via `securityOptions.modelDiscoveryService` for tests.
+  const modelDiscoveryService =
+    securityOptions.modelDiscoveryService ??
+    createModelDiscoveryService({
+      configStore: providerConfigStore,
+      secrets: setupSecretStore,
+      cache: createDiscoveryCache(),
+      adapters: createDefaultDiscoveryAdapterRegistry(),
+    });
+
+  // Map a DiscoveryResult to an HTTP status: a success is 200; an unknown provider id (resolved with
+  // NO network call, Req 17.4) is 404; any other classified, redacted failure is 502 (an upstream
+  // provider/transport failure). The full DiscoveryResult — already redacted by the service
+  // (Req 18.1, 18.2) — is the response body in every case, routed through `sendRedacted` so the
+  // outbound boundary is enforced uniformly.
+  const sendDiscoveryResult = (res: express.Response, result: DiscoveryResult): void => {
+    if (result.ok) {
+      sendRedacted(res, 200, result);
+      return;
+    }
+    const status = result.error.category === "not_found" ? 404 : 502;
+    sendRedacted(res, status, result);
+  };
+
+  // GET /api/providers/:id/models — discover the Model_Candidates for a provider, returning
+  // candidates + `lastRefreshedAt` (Req 17.1) or a classified, redacted error (Req 17.3). An id
+  // with no Provider_Config_Record short-circuits to a redacted `not_found` result with NO network
+  // call inside the service (Req 17.4). A cache hit within TTL is served without re-discovery.
+  app.get("/api/providers/:id/models", async (req, res) => {
+    try {
+      const result = await modelDiscoveryService.discover(req.params.id, { fetchImpl: fetch });
+      sendDiscoveryResult(res, result);
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // POST /api/providers/:id/models/refresh — bypass the Discovery_Cache, re-run discovery, and
+  // overwrite the cache (Req 17.2). The same classification/redaction and `not_found` short-circuit
+  // (Req 17.3, 17.4) apply. The distinct `/models/refresh` path never collides with the `:id/secret`
+  // or `:id` routes above.
+  app.post("/api/providers/:id/models/refresh", async (req, res) => {
+    try {
+      const result = await modelDiscoveryService.discover(req.params.id, {
+        refresh: true,
+        fetchImpl: fetch,
+      });
+      sendDiscoveryResult(res, result);
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }
