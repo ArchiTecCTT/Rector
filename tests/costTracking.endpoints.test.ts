@@ -135,7 +135,7 @@ function externalApp(provider: SpyLLMProvider): express.Application {
 
 describe("GET /api/runs/:id/cost — run with provider-call events (Req 3.6)", () => {
   it("returns the correct RunCostAggregate derived from the run's persisted provider-call events", async () => {
-    const prompt = "Explain the Rector vertical slice.";
+    const prompt = "Create an implementation plan for adding login, but do not edit files.";
     const plannerUsage = { inputTokens: 321, outputTokens: 123, totalTokens: 444, estimatedUsd: 0.0456, modelCalls: 1 };
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
@@ -192,8 +192,8 @@ describe("GET /api/runs/:id/cost — run with provider-call events (Req 3.6)", (
 
 describe("GET /api/chat/conversations/:id/cost — summed across the conversation's runs (Req 3.6)", () => {
   it("returns the correct ConversationCostAggregate summed over two runs in insertion order", async () => {
-    const prompt1 = "Explain the Rector vertical slice.";
-    const prompt2 = "Describe the deterministic orchestration pipeline.";
+    const prompt1 = "Create an implementation plan for adding login, but do not edit files.";
+    const prompt2 = "Outline a design proposal for the billing module.";
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
       responses: [

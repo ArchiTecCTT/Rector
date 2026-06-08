@@ -369,13 +369,29 @@ function spyRouter(provider: SpyLLMProvider): ModelRouter {
   };
 }
 
+// Prompts that triage to a "heavy" route (PLAN_ONLY / CODE_EDIT / RESEARCH / LONG_RUNNING) — i.e. NOT
+// DIRECT_ANSWER. The full-pipeline cost-reflection property below drives planner -> skeptic ->
+// synthesizer (three flagship calls) and reflects every call's token/cost usage into the run. The
+// DIRECT_ANSWER route now takes the lightweight cheap-model path (ORN-58, runLiveDirectAnswer), whose
+// contract surfaces only USD + model-call cost (not token counts), so it is intentionally excluded
+// here and covered by the dedicated direct-answer tests instead.
+const HEAVY_ROUTE_PROMPTS = [
+  "Create an implementation plan for adding login, but do not edit files.",
+  "Fix the TypeScript bug in src/api/server.ts and update tests.",
+  "Add pagination to the /users endpoint and update the tests.",
+  "Research current options for vector databases and compare sources.",
+  "Refactor the budget module and add tests.",
+] as const;
+
+const arbHeavyRoutePrompt = (): fc.Arbitrary<string> => fc.constantFrom(...HEAVY_ROUTE_PROMPTS);
+
 describe("Property 7: external mode records provider/model/cost on the PLANNING event", () => {
   // Validates: Requirements 3.4, 4.9 (PLANNING metadata + usage reflection) and the Phase 2 wiring
   // (9.1/9.2/9.7/9.8): a full external run now drives planner -> live skeptic -> crucible -> DAG ->
   // safe executor -> bounded healing -> live synthesizer, so three provider calls are made.
   it("records schema-shaped ProviderCallMetadata and reflects reported usage into run cost/token fields", async () => {
     await fc.assert(
-      fc.asyncProperty(arbPrompt(), arbReportedUsage(), async (prompt, reported) => {
+      fc.asyncProperty(arbHeavyRoutePrompt(), arbReportedUsage(), async (prompt, reported) => {
         const store = new InMemoryRectorStore();
         const args = await buildArgs(store, prompt);
 

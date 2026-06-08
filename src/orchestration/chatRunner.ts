@@ -4,6 +4,7 @@ import type { ContextPack } from "./contextBuilder";
 import { arbitratePlanWithCrucible, type CrucibleDecision } from "./crucible";
 import { compileAcceptedPlanToDag, type CompiledDag } from "./dagCompiler";
 import { executeCompiledDag, type ExecutorSimulatorOptions } from "./executorSimulator";
+import { runLiveDirectAnswer, type LiveDirectAnswerFallback } from "./liveDirectAnswer";
 import { createFakePlan, runLivePlanner, type PlannerBlocker, type PlannerOutput } from "./planner";
 import { buildRepairPrompt } from "./prompts";
 import { createDecisionRequest, transitionRun } from "./runStateMachine";
@@ -503,8 +504,47 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
 
   let synthesis: BrainstemSynthesis;
   let synthProviderCall: ProviderCallMetadata | undefined;
+  // Set only on a DIRECT_ANSWER turn that fell back to the deterministic local text (Req 8.4, 9.3).
+  let directAnswerFallback: LiveDirectAnswerFallback | undefined;
 
-  if (proceedToSynthesis) {
+  if (proceedToSynthesis && args.triage.route === "DIRECT_ANSWER") {
+    // SYNTHESIZING — ORN-58 lightweight direct answer. For the DIRECT_ANSWER route only, External_Mode
+    // produces the user-facing answer with a cheap (`slm` role → `cheap` route) model via
+    // runLiveDirectAnswer, which mirrors the runLiveSynthesizer discipline (budget preflight → invoke →
+    // redact → deterministic fallback) and reports `providerCalls === 0` on every fallback path
+    // (budget denial, provider error, missing provider) (Req 7.1, 7.2, 7.3, 8.1, 8.2, 8.3).
+    const directSelection: ModelSelection = deps.router.select({ capability: "cheap", task: "direct-answer", run: budgetRun });
+    const directResult = await observability.recordSpan("SYNTHESIZING", () =>
+      runLiveDirectAnswer(synthInput, { provider: directSelection.provider, run: budgetRun })
+    );
+    directAnswerFallback = directResult.fallback;
+    // Keep the deterministic base (status/route/trace/evidence/observability) so trace surfaces are
+    // unchanged; only the user-facing `response` and `providerCalls` reflect the direct-answer step.
+    const base = synthesizeChatBrainstemResponse(synthInput);
+    synthesis = { ...base, response: directResult.response, providerCalls: directResult.providerCalls };
+    // runLiveDirectAnswer surfaces only the accumulated cost (USD + model calls) for the cheap call;
+    // its contract does not surface token counts, so they are recorded as zero for this step.
+    const directUsage: LLMUsage = LLMUsageSchema.parse({
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      estimatedUsd: directResult.cost?.estimatedUsd ?? 0,
+      modelCalls: directResult.cost?.modelCalls ?? 0,
+    });
+    // Record the provider call attempt on the SYNTHESIZING event (`attempts === 0` on a fallback, Req
+    // 9.1/9.2/9.3); only a real provider call accumulates cost into the run (Req 9.2).
+    synthProviderCall = buildProviderCallMetadata(
+      directSelection,
+      directSelection.provider.metadata.id,
+      directSelection.model,
+      directUsage,
+      directResult.providerCalls
+    );
+    if (directResult.providerCalls > 0) {
+      budgetRun = await addProviderUsageToRun(store, budgetRun, directUsage, directSelection.provider.metadata.id);
+    }
+    await observability.recordSpan("DONE", () => undefined);
+  } else if (proceedToSynthesis) {
     // SYNTHESIZING — live, evidence-cited answer with deterministic fallback (ORN-36).
     const synthSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "synthesizer", run: budgetRun });
     const synthResult = await observability.recordSpan("SYNTHESIZING", () =>
@@ -574,7 +614,17 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
         payload: {
           source: "external-orchestrator",
           note: `External brainstem run ${phase === "DONE" ? "completed" : "advanced"}`,
-          ...(phase === "SYNTHESIZING" ? { synthesis, providerCall: synthProviderCall } : {}),
+          ...(phase === "SYNTHESIZING"
+            ? {
+                synthesis,
+                providerCall: synthProviderCall,
+                // Record the route and (when present) the fallback status for a DIRECT_ANSWER turn so
+                // an auditor can see the cheap-model attempt and whether it fell back (Req 8.4, 9.1, 9.3).
+                ...(args.triage.route === "DIRECT_ANSWER"
+                  ? { route: args.triage.route, ...(directAnswerFallback ? { fallback: directAnswerFallback } : {}) }
+                  : {}),
+              }
+            : {}),
           observability: phaseObservabilityPayload(observability, phase),
         },
       });

@@ -113,7 +113,7 @@ const ALL_PHASES = [
 
 describe("BYOK external-mode end-to-end", () => {
   it("runs a full external brainstem run through createApp, records provider/cost metadata, and reaches DONE", async () => {
-    const prompt = "Explain the Rector vertical slice.";
+    const prompt = "Create an implementation plan for adding login, but do not edit files.";
 
     // The spy scripts the three live steps in order: (a) the planner plan with a known reported
     // usage, (b) a SOUND/empty skeptic draft (so the crucible ACCEPTS), and (c) a synthesizer draft
@@ -351,7 +351,7 @@ function fileOperationPlanJson(artifactPath: string, secret: string): string {
 
 describe("BYOK external-mode end-to-end — citations, safe executor, and healing (task 10.3)", () => {
   it("surfaces the live synthesizer's evidence-cited answer in the SYNTHESIZING event and redacts an answer-embedded secret from the HTTP body", async () => {
-    const prompt = "Explain the Rector vertical slice.";
+    const prompt = "Create an implementation plan for adding login, but do not edit files.";
     // The secret is embedded (Bearer form) in BOTH the plan goal and the model's
     // synthesis answer + a citation detail; production redaction must strip every
     // occurrence before it crosses the HTTP boundary.
