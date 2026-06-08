@@ -75,6 +75,18 @@ const PLAN_ONLY_PATTERNS = [
 
 const NO_EDIT_PATTERNS = [/\bdo not edit\b/i, /\bno edits?\b/i, /\bwithout editing\b/i, /\bplan only\b/i];
 const AMBIGUOUS_PATTERNS = [/\bthe thing\b/i, /\bstuff\b/i, /\bit\b/i, /^\s*(help|hi|hello|hey)\s*[.!?]?\s*$/i];
+
+// Vague greetings carry no task detail and must route to NEEDS_CLARIFICATION (Req 3.1).
+// Each pattern matches the whole message after trailing punctuation has been stripped.
+const GREETING_PATTERNS = [
+  /^(hi+|hey+|hello+|helo+|hiya|heya|yo|sup|howdy|greetings)$/i,
+  /^(hi|hey|hello)\s+there$/i,
+  /^(what'?s|whats|wat)\s+up$/i,
+  /^wh?assup$/i,
+  /^good\s+(morning|afternoon|evening|day)$/i,
+  /^how\s+(are\s+you|'?s\s+it\s+going|are\s+things|'?s\s+things)$/i,
+  /^how\s+do\s+you\s+do$/i,
+];
 const DIRECT_PATTERNS = [/\bwhat is\b/i, /\bexplain\b/i, /\bdefine\b/i, /\bsummarize\b/i, /\bhow does\b/i, /\bwhy\b/i];
 
 export function triageUserMessage(content: string): TriageResult {
@@ -85,6 +97,16 @@ export function triageUserMessage(content: string): TriageResult {
 
   if (!text) {
     return result(TRIAGE_ROUTES.NEEDS_CLARIFICATION, 0.95, "low", ["empty user message"], ["ambiguous_request"]);
+  }
+
+  if (isVagueGreeting(text)) {
+    return result(
+      TRIAGE_ROUTES.NEEDS_CLARIFICATION,
+      0.85,
+      "low",
+      ["vague greeting detected"],
+      ["ambiguous_request"]
+    );
   }
 
   const wordCount = text.split(/\s+/).filter(Boolean).length;
@@ -147,6 +169,16 @@ export function triageUserMessage(content: string): TriageResult {
 
 function countMatches(text: string, patterns: RegExp[]): number {
   return patterns.reduce((count, pattern) => count + (pattern.test(text) ? 1 : 0), 0);
+}
+
+// True when the whole message is a bare greeting with no task detail (Req 3.1).
+// Trailing punctuation is stripped so "Hello!", "hi.", and "What's up?" all match.
+function isVagueGreeting(text: string): boolean {
+  const normalized = text.trim().replace(/[.!?]+$/u, "").trim();
+  if (!normalized) {
+    return false;
+  }
+  return GREETING_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 function result(
