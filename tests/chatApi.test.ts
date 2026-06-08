@@ -14,6 +14,7 @@ import {
 import { InMemoryRectorStore } from "../src/store/inMemoryRectorStore";
 import { triageUserMessage } from "../src/orchestration/triage";
 import { createFakePlan } from "../src/orchestration/planner";
+import { buildDeterministicDirectAnswer } from "../src/orchestration/synthesizer";
 import { createInMemoryObservabilityTrace } from "../src/observability";
 import {
   ProviderError,
@@ -111,9 +112,17 @@ describe("chat API vertical shell", () => {
     expect(sent.status).toBe(201);
     expect((sent.data as any).userMessage.role).toBe("user");
     expect((sent.data as any).assistantMessage.role).toBe("assistant");
-    expect((sent.data as any).assistantMessage.content).toContain("Status:");
-    expect((sent.data as any).assistantMessage.content).toContain("Trace:");
-    expect((sent.data as any).assistantMessage.content).toContain("provider calls: 0");
+    // "Explain the vertical slice" triages to DIRECT_ANSWER, whose reply is now route-aware
+    // (ORN-57/58): a deterministic answer with no internal status/route/trace/evidence prose.
+    const assistantContent = (sent.data as any).assistantMessage.content as string;
+    expect(assistantContent).toBe(buildDeterministicDirectAnswer({} as never));
+    for (const marker of ["Status:", "Route:", "Trace:", "Evidence:"]) {
+      expect(assistantContent).not.toContain(marker);
+    }
+    // The internal trace/provider-call detail still lives on the SYNTHESIZING event payload.
+    const synthesisEvent = (sent.data as any).events.find((e: any) => e.phase === "SYNTHESIZING");
+    expect(synthesisEvent?.payload?.synthesis?.traceId).toBe((sent.data as any).run.traceId);
+    expect(synthesisEvent?.payload?.synthesis?.providerCalls).toBe(0);
     expect((sent.data as any).run.id).toMatch(/^run-/);
     expect((sent.data as any).run.status).toBe("completed");
     const eventTypes = (sent.data as any).events.map((e: any) => e.type);

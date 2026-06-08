@@ -113,8 +113,14 @@ describe("observability baseline", () => {
       expect(body.observability.estimatedCostUsd).toBe(0);
       expect(body.observability.durationMs).toBeGreaterThanOrEqual(0);
       expect(body.observability.spans.length).toBeGreaterThanOrEqual(10);
-      expect(body.assistantMessage.content).toContain("Observed:");
-      expect(body.assistantMessage.content).toContain("provider cost: $0");
+
+      // The DIRECT_ANSWER reply is route-aware (ORN-57/58): the observability summary prose
+      // ("Observed: ...", "provider cost: $0") no longer lives on the assistant message. It is
+      // exposed on the dedicated observability payload (asserted above) and the synthesis event below.
+      const assistantContent = body.assistantMessage.content as string;
+      expect(assistantContent).not.toContain("Observed:");
+      expect(assistantContent).not.toContain("provider cost: $0");
+      expect(assistantContent).not.toContain("Status:");
 
       for (const event of body.events) {
         expect(event.traceId).toBe(traceId);

@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import express from "express";
 import http from "node:http";
 import { createApp } from "../src/api/server";
+import { buildDeterministicDirectAnswer } from "../src/orchestration/synthesizer";
 import { TaskManager } from "../src/thalamus/router";
+
+// The route-aware synthesizer (ORN-57/58) keeps internal status/route/trace/evidence prose OFF the
+// DIRECT_ANSWER and NEEDS_CLARIFICATION assistant messages. These substrings must never leak into a
+// route-aware reply; the same detail is asserted on the SYNTHESIZING event payload (trace surface).
+const INTERNAL_PROSE_MARKERS = ["Status:", "Route:", "Trace:", "Evidence:"];
 
 async function withServer<T>(app: express.Application, fn: (base: string) => Promise<T>): Promise<T> {
   let server!: http.Server;
@@ -109,16 +115,30 @@ describe("chat brainstem end-to-end", () => {
       expect(eventForPhase(body.events, "VALIDATING").payload.validationHealingResult.status).toBe("VALIDATED");
       expect(eventForPhase(body.events, "SYNTHESIZING").payload.synthesis.status).toBe("VALIDATED");
 
+      // DIRECT_ANSWER now returns the deterministic, route-aware reply (<= 6 sentences) and carries
+      // none of the internal status/route/trace/evidence prose (ORN-57/58).
       const finalText = body.assistantMessage.content as string;
-      expect(finalText).toContain("Status: VALIDATED");
-      expect(finalText).toContain("Route: DIRECT_ANSWER");
-      expect(finalText).toContain(`Trace: ${body.run.traceId}`);
-      expect(finalText).toContain("triage DIRECT_ANSWER/low");
-      expect(finalText).toContain("crucible ACCEPTED");
-      expect(finalText).toContain("execution SUCCESS");
-      expect(finalText).toContain("validation VALIDATED");
-      expect(finalText).toContain("provider calls: 0");
+      expect(finalText).toBe(buildDeterministicDirectAnswer({} as never));
+      for (const marker of INTERNAL_PROSE_MARKERS) {
+        expect(finalText).not.toContain(marker);
+      }
       expect(finalText).not.toContain("Rector received");
+
+      // The trace-backed detail still exists in full — now on the SYNTHESIZING event payload, which is
+      // the trace surface rather than the user-facing assistant message.
+      const synthesis = eventForPhase(body.events, "SYNTHESIZING").payload.synthesis;
+      expect(synthesis.status).toBe("VALIDATED");
+      expect(synthesis.route).toBe("DIRECT_ANSWER");
+      expect(synthesis.traceId).toBe(body.run.traceId);
+      expect(synthesis.providerCalls).toBe(0);
+      expect(synthesis.evidence).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("triage DIRECT_ANSWER/low"),
+          expect.stringContaining("crucible ACCEPTED"),
+          expect.stringContaining("execution SUCCESS"),
+          expect.stringContaining("validation VALIDATED"),
+        ])
+      );
     });
   });
 
@@ -156,9 +176,19 @@ describe("chat brainstem end-to-end", () => {
           expect.arrayContaining([expect.objectContaining({ type: "RETRY_NODE", nodeId: "task:answer.synthesize" })])
         );
         expect(synthesis.status).toBe("HEALED");
-        expect(body.assistantMessage.content).toContain("Status: HEALED");
-        expect(body.assistantMessage.content).toContain("healing HEALED after 1 attempt");
-        expect(body.assistantMessage.content).toContain("provider calls: 0");
+        // DIRECT_ANSWER returns the route-aware deterministic reply; the healing/provider detail is
+        // asserted on the synthesis event payload (trace surface), not the assistant message.
+        expect(body.assistantMessage.content).toBe(buildDeterministicDirectAnswer({} as never));
+        for (const marker of INTERNAL_PROSE_MARKERS) {
+          expect(body.assistantMessage.content).not.toContain(marker);
+        }
+        expect(synthesis.providerCalls).toBe(0);
+        expect(synthesis.evidence).toEqual(
+          expect.arrayContaining([
+            expect.stringContaining("validation HEALED"),
+            expect.stringContaining("healing HEALED after 1 attempt"),
+          ])
+        );
       }
     );
   });
