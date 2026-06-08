@@ -180,16 +180,30 @@ describe("Property 1: local mode output is unchanged (regression baseline)", () 
     );
   });
 
-  // Req 8.1 / 8.4: the synthesis response string preserves the Phase 1 section
-  // ordering exactly: Status -> Route -> Trace -> Evidence -> Observed -> the
-  // deterministic "Local mode: provider calls: 0" marker, which is always last.
-  it("preserves the deterministic response section ordering for arbitrary prompts", async () => {
+  // Req 27.3: for every route OTHER than NEEDS_CLARIFICATION and DIRECT_ANSWER the
+  // synthesis response string preserves the legacy section ordering exactly:
+  // Status -> Route -> Trace -> Evidence -> Observed -> the deterministic
+  // "Local mode: provider calls: 0" marker, which is always last. The two
+  // route-aware target routes (ORN-57/ORN-58) intentionally replace this string
+  // with a short, prose-free reply, so they are asserted to carry no internal trace
+  // prose instead.
+  it("preserves the deterministic response section ordering for non-target routes", async () => {
     await fc.assert(
       fc.asyncProperty(arbPrompt(), async (prompt) => {
         const store = new InMemoryRectorStore();
         const { synthesis } = await runChat(store, await buildArgs(store, prompt), { mode: "local" });
 
         const response = synthesis.response;
+
+        if (synthesis.route === "NEEDS_CLARIFICATION" || synthesis.route === "DIRECT_ANSWER") {
+          // Route-aware reply: no internal trace prose leaks into the chat answer.
+          expect(response).not.toContain("Status:");
+          expect(response).not.toContain("Route:");
+          expect(response).not.toContain("Trace:");
+          expect(response).not.toContain("Evidence:");
+          return;
+        }
+
         const statusAt = response.indexOf("Status: ");
         const routeAt = response.indexOf("Route: ");
         const traceAt = response.indexOf("Trace: ");
@@ -198,7 +212,7 @@ describe("Property 1: local mode output is unchanged (regression baseline)", () 
         const localMarker = "Local mode: provider calls: 0, API keys: not required.";
         const localAt = response.indexOf(localMarker);
 
-        // Every Phase 1 section is present.
+        // Every legacy section is present.
         expect(statusAt).toBeGreaterThanOrEqual(0);
         expect(routeAt).toBeGreaterThan(statusAt);
         expect(traceAt).toBeGreaterThan(routeAt);

@@ -55,17 +55,6 @@ export interface BrainstemSynthesis {
 export function synthesizeChatBrainstemResponse(input: BrainstemSynthesisInput): BrainstemSynthesis {
   const status = synthesisStatus(input);
   const evidence = synthesisEvidence(input);
-  const observed = input.observabilitySummary
-    ? `Observed: ${input.observabilitySummary.spanCount} spans, ${input.observabilitySummary.durationMs}ms, provider calls: ${input.observabilitySummary.modelCallCount}, provider cost: $${input.observabilitySummary.estimatedCostUsd}.`
-    : "Observed: pending.";
-  const response = [
-    `Status: ${status}.`,
-    `Route: ${input.triage.route}.`,
-    `Trace: ${input.traceId}.`,
-    `Evidence: ${evidence.join("; ")}.`,
-    observed,
-    "Local mode: provider calls: 0, API keys: not required.",
-  ].join(" ");
 
   return {
     status,
@@ -74,8 +63,99 @@ export function synthesizeChatBrainstemResponse(input: BrainstemSynthesisInput):
     evidence,
     providerCalls: 0,
     observability: input.observabilitySummary,
-    response,
+    // The deterministic `response` is route-aware (ORN-57 / ORN-58). `status`, `route`, `traceId`,
+    // `evidence`, and `observability` are unchanged so every trace surface keeps full internal detail.
+    response: selectResponseText(input),
   };
+}
+
+/**
+ * Default Clarification_Response text used when no specific missing detail can be derived from the
+ * triaged message (Req 1.3). Kept byte-exact because it is asserted verbatim.
+ */
+export const DEFAULT_CLARIFICATION_RESPONSE =
+  "What would you like me to help with? Share the task, repo area, or goal, and I'll route it through the right Rector workflow.";
+
+/**
+ * Selects the deterministic `Main_Assistant_Message` text by triage route. Only the two target
+ * routes change; every other route keeps the legacy status string byte-for-byte (Req 27.3).
+ */
+function selectResponseText(input: BrainstemSynthesisInput): string {
+  switch (input.triage.route) {
+    case "NEEDS_CLARIFICATION":
+      return buildClarificationResponse(input); // <= 3 sentences, no internal prose (Req 1, 2)
+    case "DIRECT_ANSWER":
+      return buildDeterministicDirectAnswer(input); // <= 6 sentences, deterministic (Req 5, 6)
+    default:
+      return legacyStatusResponse(input); // existing "Status: ... Evidence: ..." string (Req 27.3)
+  }
+}
+
+/**
+ * Pure, deterministic Clarification_Response for the `NEEDS_CLARIFICATION` route (Req 1). Derives a
+ * short missing-detail hint from the triage `reasons` when one is recognizable, otherwise returns the
+ * fixed {@link DEFAULT_CLARIFICATION_RESPONSE} text (Req 1.3). The result is at most 3 sentences
+ * (Req 1.4) and never contains the internal-prose substrings `"Status:"`, `"Route: NEEDS_CLARIFICATION"`,
+ * `"Trace:"`, or `"Evidence:"` (Req 2). It echoes no raw message content, so fuzzed input can never
+ * leak a forbidden substring into the reply.
+ */
+export function buildClarificationResponse(input: BrainstemSynthesisInput): string {
+  const hint = deriveMissingDetailHint(input.triage);
+  if (hint === undefined) return DEFAULT_CLARIFICATION_RESPONSE;
+  // Two sentences: the derived hint, then the ask for the missing task details (Req 1.2).
+  return `${hint} Tell me the task, repo area, or goal, and I'll route it through the right Rector workflow.`;
+}
+
+/**
+ * Derives a canned missing-detail hint from the deterministic triage `reasons`. Returns `undefined`
+ * when no specific hint applies (e.g. an empty message), which routes the caller to the fixed default
+ * text. Only canned phrasing is returned, never raw reason or message text.
+ */
+function deriveMissingDetailHint(triage: TriageResult): string | undefined {
+  const reasons = triage.reasons.map((reason) => reason.toLowerCase());
+  if (reasons.some((reason) => reason.includes("ambiguous"))) {
+    return "That request is a little ambiguous, so I want to point my workflow at the right thing.";
+  }
+  if (reasons.some((reason) => reason.includes("too little detail"))) {
+    return "I need a bit more detail before I can route this safely.";
+  }
+  return undefined;
+}
+
+/**
+ * Pure, deterministic Direct_Answer_Response for the `DIRECT_ANSWER` route in Local_Mode (Req 5, 6).
+ * It is a constant function of intent: identical input yields identical text (Req 6.2), it carries no
+ * provider-specific content and is paired with `providerCalls === 0` (Req 6.3), it is at most 6
+ * sentences (Req 5.3), and it excludes the internal-prose substrings `"Status:"`, `"Route:"`,
+ * `"Trace:"`, and `"Evidence:"` (Req 5.2).
+ */
+export function buildDeterministicDirectAnswer(_input: BrainstemSynthesisInput): string {
+  return [
+    "Here is a direct answer from Rector.",
+    "You're running in provider-free local mode, so this reply is deterministic and stays on your machine.",
+    "For a more detailed response, add more specifics or enable an external model for this kind of query.",
+  ].join(" ");
+}
+
+/**
+ * The legacy status string, preserved byte-for-byte for every route other than `NEEDS_CLARIFICATION`
+ * and `DIRECT_ANSWER` (Req 27.3). `status` and `evidence` are recomputed from the same pure helpers so
+ * the output is identical to the value carried on the returned {@link BrainstemSynthesis}.
+ */
+function legacyStatusResponse(input: BrainstemSynthesisInput): string {
+  const status = synthesisStatus(input);
+  const evidence = synthesisEvidence(input);
+  const observed = input.observabilitySummary
+    ? `Observed: ${input.observabilitySummary.spanCount} spans, ${input.observabilitySummary.durationMs}ms, provider calls: ${input.observabilitySummary.modelCallCount}, provider cost: $${input.observabilitySummary.estimatedCostUsd}.`
+    : "Observed: pending.";
+  return [
+    `Status: ${status}.`,
+    `Route: ${input.triage.route}.`,
+    `Trace: ${input.traceId}.`,
+    `Evidence: ${evidence.join("; ")}.`,
+    observed,
+    "Local mode: provider calls: 0, API keys: not required.",
+  ].join(" ");
 }
 
 function synthesisStatus(input: BrainstemSynthesisInput): BrainstemSynthesisStatus {
