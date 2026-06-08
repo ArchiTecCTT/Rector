@@ -66,6 +66,26 @@ export interface ResolveProviderOptions {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * Optional model/deployment targeting for the per-model Model_Probe
+ * (Requirement 22.1, 22.2). When the Setup_UI tests a selected Model_Candidate
+ * it threads the candidate's `model` (and, for Azure OpenAI, its `deployment`)
+ * here so the single connection ping targets exactly that candidate rather than
+ * the record's default route.
+ *
+ * The override is applied at provider construction for the kinds that bind a
+ * model/deployment at build time (`openai-compatible`, `azure-openai`); the
+ * connection-test ping additionally sets the request `model` so route-aware
+ * providers (Together AI) target the candidate too. Both fields are optional:
+ * when absent the provider is built exactly as before from the persisted record.
+ */
+export interface ProbeTarget {
+  /** The selected candidate's model id, targeting a single model on the ping. */
+  model?: string;
+  /** The selected candidate's deployment name (Azure OpenAI), targeting a single deployment. */
+  deployment?: string;
+}
+
 /** Read a secret value for `secretRef`, or `undefined` when absent/unreadable. */
 async function readSecretValue(secrets: SecretStore, secretRef: string): Promise<string | undefined> {
   const result = await secrets.getSecret(secretRef);
@@ -148,9 +168,15 @@ function buildProviderFromRecord(
   record: ProviderConfigRecord,
   secret: string | undefined,
   options: ResolveProviderOptions,
+  target: ProbeTarget = {},
 ): LLMProvider {
   const enableNetwork = options.enableNetwork ?? false;
   const fetchImpl = options.fetchImpl;
+  // A per-model probe (Req 22.1/22.2) targets a single candidate. For Azure the
+  // candidate is addressed by its deployment name; for the OpenAI-compatible
+  // kind it is addressed by its model id. The override is applied here only when
+  // supplied, so a plain connection test (no target) builds the record verbatim.
+  const azureTarget = target.deployment ?? target.model;
   switch (record.kind) {
     case "together":
       return new TogetherAIProvider({
@@ -173,8 +199,8 @@ function buildProviderFromRecord(
         endpoint: record.azure?.endpoint ?? record.baseUrl,
         apiVersion: record.azure?.apiVersion,
         deployments: {
-          fast: record.models?.slm ?? record.azure?.deployment ?? record.model,
-          flagship: record.models?.flagship ?? record.azure?.deployment ?? record.model,
+          fast: azureTarget ?? record.models?.slm ?? record.azure?.deployment ?? record.model,
+          flagship: azureTarget ?? record.models?.flagship ?? record.azure?.deployment ?? record.model,
         },
         enableNetwork,
         fetchImpl,
@@ -183,7 +209,7 @@ function buildProviderFromRecord(
       return new OpenAICompatibleProvider({
         apiKey: secret,
         baseUrl: record.baseUrl,
-        model: record.model ?? record.models?.flagship,
+        model: target.model ?? record.model ?? record.models?.flagship,
         headers: record.headers,
         enableNetwork,
         fetchImpl,
@@ -197,18 +223,25 @@ function buildProviderFromRecord(
  * (Requirement 13.2). Returns `undefined` when no record with that id exists,
  * so the caller can reject an unsupported id before any network call
  * (Requirement 15.6).
+ *
+ * The optional {@link ProbeTarget} threads a selected Model_Candidate's `model`
+ * (and, for Azure OpenAI, its `deployment`) into provider construction so a
+ * per-model Model_Probe pings exactly that candidate (Requirement 22.1, 22.2).
+ * When omitted, the provider is built verbatim from the record — the existing
+ * connection-test behavior is unchanged.
  */
 export async function resolveTestProvider(
   providerId: string,
   store: ProviderConfigStore,
   secrets: SecretStore,
   options: ResolveProviderOptions = {},
+  target: ProbeTarget = {},
 ): Promise<LLMProvider | undefined> {
   const state = await store.getState();
   const record = state.providers.find((candidate) => candidate.id === providerId);
   if (!record) return undefined;
   const secret = await readSecretValue(secrets, record.secretRef);
-  return buildProviderFromRecord(record, secret, options);
+  return buildProviderFromRecord(record, secret, options, target);
 }
 
 /** Dependencies for {@link buildConfiguredRouter}. */

@@ -58,3 +58,102 @@ export const ProbeResultSchema = z
   })
   .strict();
 export type ProbeResult = z.infer<typeof ProbeResultSchema>;
+
+/**
+ * The raw, internal-only signal a failed Model_Probe carries into
+ * {@link classifyProbeError}. It is assembled from the thrown error (a
+ * `ProviderError` from `src/providers/llm.ts`, or any other thrown value) and is
+ * NEVER returned to a caller — only the derived {@link ProbeErrorCategory} and a
+ * Redaction_Layer–routed message ever leave the Connection_Test_Service
+ * (Requirement 23.3). The `message` is used solely for keyword classification
+ * here; it must be redacted before it is placed in a {@link ProbeResult}.
+ */
+export interface ProbeFailureSignal {
+  /** Provider error code when available (e.g. a `ProviderErrorCode`). */
+  code?: string;
+  /** HTTP status from the provider response, when the failure was an HTTP error. */
+  status?: number;
+  /** Raw error message, used only for keyword matching — never returned raw. */
+  message?: string;
+}
+
+/**
+ * Classify a failed Model_Probe into a {@link ProbeErrorCategory} (Requirement
+ * 23.1, 23.2). This is a pure, dependency-free heuristic over the failure's HTTP
+ * status, provider error code, and message keywords so the Setup_UI can tell the
+ * user which part of their configuration to fix.
+ *
+ * The matching is ordered from most-specific to least-specific so an overlapping
+ * signal lands in the most actionable bucket: a content/safety rejection and a
+ * quota hit are checked before generic status codes; a deployment-not-found
+ * (Azure) and a model-access/agreement gap are checked before a bare auth or
+ * endpoint failure (a `403` with "no access to model" is `model_access_missing`,
+ * not `auth_invalid`). Anything unrecognized falls through to `unknown`.
+ *
+ * The `message` is inspected here for classification only; it is never returned
+ * from this function. The Connection_Test_Service routes the user-facing message
+ * through the Redaction_Layer separately (Requirement 23.3).
+ */
+export function classifyProbeError(signal: ProbeFailureSignal): ProbeErrorCategory {
+  const status = signal.status;
+  const haystack = `${signal.code ?? ""} ${signal.message ?? ""}`.toLowerCase();
+  const has = (...needles: string[]): boolean => needles.some((needle) => haystack.includes(needle));
+
+  // Content / safety rejection — checked before generic 400 parameter handling
+  // because a safety block is frequently surfaced as a 400.
+  if (has("content filter", "content_filter", "contentfilter", "safety", "responsible ai", "content management policy", "content policy", "jailbreak")) {
+    return "content_rejected";
+  }
+
+  // Quota / rate limit.
+  if (status === 429 || has("quota", "rate limit", "rate_limit", "ratelimit", "too many requests", "insufficient_quota")) {
+    return "quota_exceeded";
+  }
+
+  // Deployment not found (Azure) — a specific 404/CONFIG case; checked before the
+  // generic endpoint branch so a named-deployment miss is not mistaken for a bad URL.
+  if (
+    has("deploymentnotfound", "deployment not found", "deployment does not exist", "unknown deployment", "no deployment", "deployment is not configured", "deployment env is required") ||
+    (has("deployment") && (status === 404 || has("not found", "does not exist", "does not have a deployment")))
+  ) {
+    return "deployment_not_found";
+  }
+
+  // Region / location unsupported.
+  if (has("region", "location", "not available in your", "unsupported_region", "not supported in this region", "unsupportedregion")) {
+    return "region_unsupported";
+  }
+
+  // Model access or agreement missing — checked before auth so a 403 that is
+  // really an access/agreement gap is routed to the actionable category.
+  if (has("does not have access", "model access", "access to the model", "agreement", "not authorized to access model", "model_not_authorized", "subscribe to the model", "purchase the model", "marketplace agreement")) {
+    return "model_access_missing";
+  }
+
+  // Authentication invalid.
+  if (
+    status === 401 ||
+    status === 403 ||
+    has("unauthorized", "invalid api key", "invalid_api_key", "invalid key", "authentication", "authentication_error", "invalid token", "permission denied", "permissiondenied", "forbidden", "access denied")
+  ) {
+    return "auth_invalid";
+  }
+
+  // Endpoint or base URL invalid / unreachable.
+  if (
+    status === 404 ||
+    has("enotfound", "econnrefused", "getaddrinfo", "could not resolve", "name_not_resolved", "dns", "invalid url", "etimedout", "network", "endpoint", "base url", "fetch failed", "failed to fetch", "connection refused")
+  ) {
+    return "endpoint_invalid";
+  }
+
+  // Parameter incompatibility (typically a 400 with a request-shape complaint).
+  if (
+    status === 400 ||
+    has("unsupported parameter", "invalid_request_error", "unsupported value", "unrecognized request argument", "unsupported_parameter", "parameter")
+  ) {
+    return "parameter_incompatible";
+  }
+
+  return "unknown";
+}

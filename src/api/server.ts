@@ -38,6 +38,7 @@ import {
   type ProviderConfigRecord,
 } from "../providers/config";
 import { resolveTestProvider } from "../providers/configBridge";
+import { classifyProbeError, ProbeErrorCategorySchema, type ProbeFailureSignal } from "../providers/probe";
 import {
   createModelDiscoveryService,
   type ModelDiscoveryService,
@@ -180,6 +181,11 @@ export function isSupportedProviderId(providerId: string): boolean {
 
 export const TestConnectionRequestSchema = z.object({
   providerId: z.string().min(1), // "together" | "cloudflare" | "azure-openai"
+  // Optional per-model Model_Probe targeting (Req 22.1, 22.2). When the Setup_UI tests a selected
+  // Model_Candidate it sends the candidate's `model` (and, for Azure OpenAI, its `deployment`) so a
+  // single ping targets exactly that candidate. Both omitted => the prior whole-provider test.
+  model: z.string().min(1).optional(),
+  deployment: z.string().min(1).optional(),
 });
 export type TestConnectionRequest = z.infer<typeof TestConnectionRequestSchema>;
 
@@ -188,6 +194,9 @@ export const TestConnectionResponseSchema = z.object({
   providerId: z.string().min(1),
   model: z.string().optional(), // present only on success
   code: z.string().optional(), // ProviderErrorCode on failure
+  // Classified Probe_Error_Category on failure (Req 23.1, 23.2) so the UI can tell the user whether
+  // to fix their key, region, deployment, or model access. Absent on success.
+  category: ProbeErrorCategorySchema.optional(),
   error: z.string().optional(), // redacted message on failure
   networkAttempted: z.boolean(), // false when config invalid blocks before any call
 });
@@ -271,9 +280,20 @@ export async function runConnectionTest(input: {
    * resolved from this env map via {@link resolveConnectionTestProvider}.
    */
   env?: Record<string, string | undefined>;
+  /**
+   * Optional per-model Model_Probe targeting (Req 22.1, 22.2). When a `model` (or, for Azure
+   * OpenAI, a `deployment`) is supplied, the single ping sets the request `model` to it so the
+   * probe targets exactly the selected Model_Candidate rather than the provider's default route.
+   * Azure addresses a candidate by deployment name, so `deployment` is preferred when present.
+   */
+  model?: string;
+  deployment?: string;
   fetchImpl: typeof fetch;
 }): Promise<TestConnectionResponse> {
   const { providerId, fetchImpl } = input;
+  // Azure addresses a candidate by deployment name; the OpenAI-compatible/Together kinds by model
+  // id. Both flow through the request `model` field, which every provider honors over its default.
+  const targetModel = input.deployment ?? input.model;
 
   const provider =
     input.provider ??
@@ -285,6 +305,7 @@ export async function runConnectionTest(input: {
       ok: false,
       providerId,
       code: "CONFIG_INVALID",
+      category: classifyProbeError({ code: "CONFIG_INVALID", message: `Unsupported providerId: ${providerId}` }),
       error: redactString(`Unsupported providerId: ${providerId}`),
       networkAttempted: false,
     });
@@ -298,6 +319,7 @@ export async function runConnectionTest(input: {
       ok: false,
       providerId,
       code: error instanceof ProviderError ? error.code : "CONFIG_INVALID",
+      category: classifyProbeError(probeFailureSignal(error)),
       error: redactString(connectionTestErrorMessage(error)),
       networkAttempted: false,
     });
@@ -310,6 +332,9 @@ export async function runConnectionTest(input: {
     ],
     maxOutputTokens: 8,
     task: "connection-test",
+    // Target the selected candidate (Req 22.1, 22.2) when supplied; otherwise the provider falls
+    // back to its configured default route exactly as the prior whole-provider test did.
+    ...(targetModel !== undefined ? { model: targetModel } : {}),
   };
 
   try {
@@ -325,6 +350,9 @@ export async function runConnectionTest(input: {
       ok: false,
       providerId,
       code: error instanceof ProviderError ? error.code : "PROVIDER_ERROR",
+      // Classify the failure into a Probe_Error_Category (Req 23.1, 23.2). The raw message is used
+      // only for classification; the user-facing `error` is routed through `redactString` (Req 23.3).
+      category: classifyProbeError(probeFailureSignal(error)),
       error: redactString(connectionTestErrorMessage(error)),
       networkAttempted: true,
     });
@@ -334,6 +362,22 @@ export async function runConnectionTest(input: {
 function connectionTestErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+/**
+ * Assemble the internal-only {@link ProbeFailureSignal} from a thrown error for {@link classifyProbeError}.
+ *
+ * Pulls the provider error `code`/`status` when the failure is a {@link ProviderError} and the raw
+ * `message` for keyword classification. The message is consumed by the classifier only; the
+ * user-facing message is redacted separately via `redactString` (Req 23.3), so no raw provider body
+ * or secret leaves on the classification path.
+ */
+function probeFailureSignal(error: unknown): ProbeFailureSignal {
+  if (error instanceof ProviderError) {
+    return { code: error.code, status: error.status, message: error.message };
+  }
+  if (error instanceof Error) return { message: error.message };
+  return { message: String(error) };
 }
 
 /** Builds a concise, redaction-ready message from a Zod (or other) request-body parse failure. */
@@ -1615,16 +1659,25 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       // that id is rejected with a 400 BEFORE any provider build/network call, keeping the same
       // redacted, `networkAttempted:false` contract the env-only path used for an unsupported id
       // (Req 15.6). The body keeps the safe TestConnectionResponse shape.
-      const provider = await resolveTestProvider(request.providerId, providerConfigStore, setupSecretStore, {
-        enableNetwork: true,
-        fetchImpl: fetch,
-      });
+      const provider = await resolveTestProvider(
+        request.providerId,
+        providerConfigStore,
+        setupSecretStore,
+        { enableNetwork: true, fetchImpl: fetch },
+        // Per-model Model_Probe targeting (Req 22.1, 22.2): build the provider for the selected
+        // candidate's model/deployment when supplied; a plain test passes neither.
+        { model: request.model, deployment: request.deployment },
+      );
       if (!provider) {
         return res.status(400).json(
           TestConnectionResponseSchema.parse({
             ok: false,
             providerId: request.providerId,
             code: "CONFIG_INVALID",
+            category: classifyProbeError({
+              code: "CONFIG_INVALID",
+              message: `Unsupported providerId: ${request.providerId}`,
+            }),
             error: redactString(`Unsupported providerId: ${request.providerId}`),
             networkAttempted: false,
           })
@@ -1632,10 +1685,13 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       }
 
       // Validate → single-ping flow is unchanged; the resolved provider is pinged directly so the
-      // connection test reflects the persisted config + secret rather than env-only (Req 15.1).
+      // connection test reflects the persisted config + secret rather than env-only (Req 15.1). The
+      // selected model/deployment targets the single ping at exactly that candidate (Req 22.1, 22.2).
       const result = await runConnectionTest({
         providerId: request.providerId,
         provider,
+        model: request.model,
+        deployment: request.deployment,
         fetchImpl: fetch,
       });
       res.json(result);
