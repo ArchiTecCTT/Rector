@@ -1647,6 +1647,491 @@ async function toggleActiveRole(spec, role, resultBox) {
   }
 }
 
+// --- Model_Picker (Setup_UI model discovery + selection, Req 19–24) ---
+//
+// Talks to the real Discovery_API:
+//   GET  /api/providers/:id/models          -> { ok, candidates, lastRefreshedAt } | classified error
+//   POST /api/providers/:id/models/refresh  -> same shape, bypassing + overwriting the cache
+// and reuses the existing Connection_Test_Service path (`POST /api/setup/test-connection`,
+// extended with optional `model`/`deployment`) for the per-model probe (Req 22.1, 22.2).
+//
+// No secret value is ever read or rendered here — secret presence is a boolean on the record only
+// (Req 24.1, 24.3). Discovery failures render the redacted server message while manual model entry
+// stays available for every role (Req 19.4, 21.2, 21.3).
+
+// Per-provider discovery snapshot, keyed by provider id. Holds only non-secret, already-redacted
+// data returned by the Discovery_API. Reset whenever the config panel reloads.
+const modelDiscoveryState = new Map();
+
+// Format a candidate's pricing object into a compact, non-secret readout, or "" when absent.
+// Pure so it is covered by the rendered-detail property test (Property 16).
+function formatCandidatePricing(pricing) {
+  if (!pricing || typeof pricing !== "object") return "";
+  const currency = typeof pricing.currency === "string" && pricing.currency ? pricing.currency : "USD";
+  const parts = [];
+  if (typeof pricing.inputPer1k === "number") parts.push(`in ${pricing.inputPer1k}/1k`);
+  if (typeof pricing.outputPer1k === "number") parts.push(`out ${pricing.outputPer1k}/1k`);
+  if (!parts.length) return "";
+  return `${parts.join(" · ")} ${currency}`;
+}
+
+// Pure render helper (Req 20, Property 16): produce the markup for one Model_Candidate. Includes the
+// capability tags (20.1), lifecycle status with a deprecated indicator when deprecated (20.2), the
+// context window and/or pricing when present (20.3), and a region/deployment note when the candidate
+// requires one (20.4). Returns an HTML string; carries no secret material and never throws on a
+// partially-populated candidate.
+function renderCandidate(candidate) {
+  if (!candidate || typeof candidate !== "object") return "";
+  const c = candidate;
+  const modelId = typeof c.modelId === "string" ? c.modelId : "";
+  const name = escapeHtml(String(c.displayName || modelId || "Unknown model"));
+  const out = [];
+  out.push(`<div class="model-candidate" data-model-id="${escapeHtml(modelId)}">`);
+
+  out.push(`<div class="model-candidate__head">`);
+  out.push(`<span class="model-candidate__name">${name}</span>`);
+  // Lifecycle status with an explicit deprecated indicator (Req 20.2).
+  if (c.lifecycle != null && String(c.lifecycle).length > 0) {
+    const life = String(c.lifecycle);
+    const deprecated = life === "deprecated";
+    const cls = deprecated ? "model-candidate__lifecycle is-deprecated" : "model-candidate__lifecycle";
+    const text = deprecated ? `⚠ ${life}` : life;
+    out.push(`<span class="${cls}" data-lifecycle="${escapeHtml(life)}">${escapeHtml(text)}</span>`);
+  }
+  out.push(`</div>`);
+
+  // Capability tags (Req 20.1).
+  const caps = Array.isArray(c.capabilities) ? c.capabilities.filter((t) => typeof t === "string" && t) : [];
+  if (caps.length) {
+    out.push(`<div class="model-candidate__caps">`);
+    for (const tag of caps) out.push(`<span class="model-candidate__cap">${escapeHtml(tag)}</span>`);
+    out.push(`</div>`);
+  }
+
+  // Context window and/or pricing when present (Req 20.3).
+  const meta = [];
+  if (typeof c.contextWindow === "number" && c.contextWindow > 0) {
+    meta.push(`Context: ${escapeHtml(String(c.contextWindow))} tokens`);
+  }
+  const pricing = formatCandidatePricing(c.pricing);
+  if (pricing) meta.push(`Pricing: ${escapeHtml(pricing)}`);
+  if (meta.length) out.push(`<div class="model-candidate__meta">${meta.join(" · ")}</div>`);
+
+  // Region / deployment note when the candidate requires one (Req 20.4).
+  const notes = [];
+  if (c.requiresDeployment === true) notes.push("Requires a deployment name");
+  if (c.requiresRegion === true) {
+    const region = c.scope && typeof c.scope === "object" && c.scope.region ? ` (${String(c.scope.region)})` : "";
+    notes.push(`Requires a region${region}`);
+  }
+  if (notes.length) out.push(`<div class="model-candidate__note">${escapeHtml(notes.join("; "))}</div>`);
+
+  out.push(`</div>`);
+  return out.join("");
+}
+
+// Human-readable, non-secret label for one candidate in a role <select> option.
+function candidateOptionLabel(candidate) {
+  const c = candidate || {};
+  const base = String(c.displayName || c.modelId || "model");
+  const life = c.lifecycle === "deprecated" ? " (deprecated)" : "";
+  return `${base}${life}`;
+}
+
+// Resolve the model + deployment a role row currently targets. The manual override always wins when
+// non-empty (Req 21.2); otherwise the selected candidate's model id is used. For Azure the manual
+// input is the deployment name (Req 24.2), sent alongside the selected catalog model.
+function resolveRoleSelection(row, isAzure) {
+  const select = row.querySelector(".model-picker-role-select");
+  const manual = row.querySelector(".model-picker-role-manual");
+  const manualValue = manual && typeof manual.value === "string" ? manual.value.trim() : "";
+  const selected = select && typeof select.value === "string" ? select.value.trim() : "";
+  if (isAzure) {
+    // Azure: selected candidate is the catalog model; the manual field is the deployment name.
+    return { model: selected, deployment: manualValue };
+  }
+  return { model: manualValue || selected, deployment: "" };
+}
+
+// Render the discovered candidates (or an empty-state line) into a picker's candidate list, and
+// (re)populate each role <select> with the discovered models while preserving the manual override.
+function renderModelPickerCandidates(spec, ui) {
+  const snapshot = modelDiscoveryState.get(spec.id) || {};
+  const candidates = Array.isArray(snapshot.candidates) ? snapshot.candidates : [];
+
+  if (candidates.length) {
+    ui.candidatesEl.innerHTML = candidates.map(renderCandidate).join("");
+  } else {
+    ui.candidatesEl.innerHTML = "";
+  }
+
+  // lastRefreshedAt readout (Req 19.3).
+  if (snapshot.lastRefreshedAt) {
+    ui.refreshedEl.hidden = false;
+    ui.refreshedEl.textContent = `Last refreshed: ${snapshot.lastRefreshedAt}`;
+  } else {
+    ui.refreshedEl.hidden = true;
+    ui.refreshedEl.textContent = "";
+  }
+
+  // (Re)build the role <select> options. Manual entry is unaffected and always usable (Req 21.2/21.3).
+  for (const select of ui.roleSelects) {
+    select.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = candidates.length ? "Select a discovered model…" : "No models discovered — use manual entry";
+    select.appendChild(placeholder);
+    for (const candidate of candidates) {
+      const opt = document.createElement("option");
+      opt.value = typeof candidate.modelId === "string" ? candidate.modelId : "";
+      opt.textContent = candidateOptionLabel(candidate);
+      select.appendChild(opt);
+    }
+  }
+}
+
+// Run discovery for a provider via the Discovery_API. `refresh` switches to the cache-bypassing
+// refresh endpoint (Req 19.2). On a classified error the redacted message is shown and manual entry
+// stays available (Req 19.4); a thrown/transport failure is reported the same redaction-safe way.
+async function discoverProviderModels(spec, ui, { refresh } = {}) {
+  if (ui.error) {
+    ui.error.hidden = true;
+    ui.error.textContent = "";
+  }
+  ui.discoverBtn.disabled = true;
+  ui.refreshBtn.disabled = true;
+  ui.loadingEl.hidden = false;
+  try {
+    const base = `${API}/providers/${encodeURIComponent(spec.id)}/models`;
+    // Fetch directly (not the throwing `api()` helper): a classified discovery error is returned with
+    // a non-2xx status but a structured, already-redacted DiscoveryResult body we must read (Req 19.4).
+    const res = refresh
+      ? await fetch(`${base}/refresh`, { method: "POST", headers: { "Content-Type": "application/json" } })
+      : await fetch(base, { method: "GET", headers: { "Content-Type": "application/json" } });
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : {};
+    if (data && data.ok) {
+      modelDiscoveryState.set(spec.id, {
+        candidates: Array.isArray(data.candidates) ? data.candidates : [],
+        lastRefreshedAt: typeof data.lastRefreshedAt === "string" ? data.lastRefreshedAt : "",
+      });
+      renderModelPickerCandidates(spec, ui);
+    } else {
+      // Classified, already-redacted discovery error (Req 19.4). Keep manual entry usable.
+      modelDiscoveryState.set(spec.id, {
+        candidates: [],
+        lastRefreshedAt: data && typeof data.lastRefreshedAt === "string" ? data.lastRefreshedAt : "",
+      });
+      renderModelPickerCandidates(spec, ui);
+      const message =
+        (data && data.error && data.error.message) || (data && data.error) || "Model discovery failed.";
+      if (ui.error) {
+        ui.error.hidden = false;
+        ui.error.textContent = String(message);
+      }
+    }
+  } catch (err) {
+    if (ui.error) {
+      ui.error.hidden = false;
+      ui.error.textContent = `Model discovery failed: ${err.message}. Manual model entry is still available.`;
+    }
+  } finally {
+    ui.discoverBtn.disabled = false;
+    ui.refreshBtn.disabled = false;
+    ui.loadingEl.hidden = true;
+  }
+}
+
+// Run a single Model_Probe for a role's current selection through the existing Connection_Test_Service
+// path (Req 22.1, 22.2). On success the role is marked verified (Req 22.3); the server message is
+// already redacted (Req 23.3). Selecting a different model later clears the verified flag.
+async function probeRoleModel(spec, role, row, ui, isAzure) {
+  const sel = resolveRoleSelection(row, isAzure);
+  const verifyEl = row.querySelector(".model-picker-role-verify");
+  const testBtn = row.querySelector(".model-picker-role-test");
+  if (!sel.model) {
+    showProviderConfigResult(ui.resultBox, "err", "Select or enter a model to test first.");
+    return;
+  }
+  if (testBtn) testBtn.disabled = true;
+  try {
+    const body = { providerId: spec.id, model: sel.model };
+    if (sel.deployment) body.deployment = sel.deployment;
+    const res = await fetch(`${API}/setup/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : {};
+    if (res.ok && parsed.ok) {
+      ui.verified[role] = sel.model + "::" + (sel.deployment || "");
+      if (verifyEl) {
+        verifyEl.textContent = "Verified ✓";
+        verifyEl.className = "model-picker-role-verify is-verified";
+      }
+      showProviderConfigResult(ui.resultBox, "ok", `${spec.label} ${role} model verified.`);
+    } else {
+      ui.verified[role] = null;
+      if (verifyEl) {
+        verifyEl.textContent = "Unverified";
+        verifyEl.className = "model-picker-role-verify";
+      }
+      const reason = (parsed && (parsed.error || parsed.code)) || "the provider rejected the request";
+      showProviderConfigResult(ui.resultBox, "err", `${spec.label} ${role} probe failed: ${reason}`);
+    }
+  } catch (err) {
+    ui.verified[role] = null;
+    showProviderConfigResult(ui.resultBox, "err", `${spec.label} ${role} probe failed: could not reach the server.`);
+  } finally {
+    if (testBtn) testBtn.disabled = false;
+  }
+}
+
+// Build the non-secret upsert body that persists a role's chosen model (and Azure deployment) onto
+// the provider record. The API key is never included (write-once, Req 24.1/secret-safety).
+function buildRouteSaveBody(spec, record, modelId, deployment) {
+  const body = { id: spec.id, kind: spec.kind, label: spec.label };
+  for (const field of spec.fields || []) {
+    const value = providerConfigFieldValue(record, field.name);
+    if (value) setNestedField(body, field.name, value);
+  }
+  if (modelId) body.model = modelId;
+  if (deployment) setNestedField(body, "azure.deployment", deployment);
+  return body;
+}
+
+// Persist a role selection to the Active_Route_Map (Req 22.4): write the chosen model onto the
+// record, then designate the provider active for the role. `verified` only affects the status line;
+// the unverified path is gated by an explicit warning in the row handler (Req 22.5).
+async function saveRouteSelection(spec, role, sel, ui, { verified }) {
+  try {
+    const body = buildRouteSaveBody(spec, findProviderRecord(spec.id), sel.model, sel.deployment);
+    await api("/providers", { method: "POST", body: JSON.stringify(body) });
+    await api("/providers/active", { method: "POST", body: JSON.stringify({ role, providerId: spec.id }) });
+    showProviderConfigResult(
+      ui.resultBox,
+      "ok",
+      `${spec.label} saved as ${role} model${verified ? " (verified)" : " (unverified)"}.`,
+    );
+    await loadProviderConfig();
+  } catch (err) {
+    showProviderConfigResult(ui.resultBox, "err", `Could not save ${role} selection: ${err.message}`);
+  }
+}
+
+// Build the per-role selection row: a candidate <select>, an always-available manual override input
+// (Req 21.2), a "Test selected model" probe button (Req 22.1), a verified/unverified indicator
+// (Req 22.3), a verified save, and a warning-gated "save unverified" action (Req 22.5).
+function createModelPickerRoleRow(spec, role, ui, isAzure) {
+  const row = document.createElement("div");
+  row.className = "model-picker-role-row";
+  row.dataset.role = role.id;
+
+  const label = document.createElement("span");
+  label.className = "model-picker-role-label";
+  label.textContent = role.label;
+  row.appendChild(label);
+
+  const select = document.createElement("select");
+  select.className = "model-picker-role-select";
+  select.dataset.role = role.id;
+  row.appendChild(select);
+  ui.roleSelects.push(select);
+
+  const manual = document.createElement("input");
+  manual.type = "text";
+  manual.className = "model-picker-role-manual";
+  manual.dataset.role = role.id;
+  manual.setAttribute("placeholder", isAzure ? "Deployment name" : "or type a model id");
+  row.appendChild(manual);
+
+  const verify = document.createElement("span");
+  verify.className = "model-picker-role-verify";
+  verify.dataset.role = role.id;
+  verify.textContent = "Unverified";
+  row.appendChild(verify);
+
+  // Changing the selection invalidates a prior verification and resets the unverified warning gate.
+  const onSelectionChange = () => {
+    ui.verified[role.id] = null;
+    verify.textContent = "Unverified";
+    verify.className = "model-picker-role-verify";
+    warning.hidden = true;
+    saveUnverifiedBtn.textContent = "Save unverified";
+  };
+  select.addEventListener("change", onSelectionChange);
+  manual.addEventListener("input", onSelectionChange);
+
+  const testBtn = document.createElement("button");
+  testBtn.type = "button";
+  testBtn.className = "btn btn--sm model-picker-role-test";
+  testBtn.dataset.role = role.id;
+  testBtn.textContent = "Test selected model";
+  testBtn.disabled = !findProviderRecord(spec.id);
+  testBtn.addEventListener("click", () => void probeRoleModel(spec, role.id, row, ui, isAzure));
+  row.appendChild(testBtn);
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "btn btn--primary btn--sm model-picker-role-save";
+  saveBtn.dataset.role = role.id;
+  saveBtn.textContent = "Save active route";
+  saveBtn.disabled = !findProviderRecord(spec.id);
+  saveBtn.addEventListener("click", () => {
+    const sel = resolveRoleSelection(row, isAzure);
+    if (!sel.model) {
+      showProviderConfigResult(ui.resultBox, "err", "Select or enter a model before saving.");
+      return;
+    }
+    const token = sel.model + "::" + (sel.deployment || "");
+    if (ui.verified[role.id] !== token) {
+      showProviderConfigResult(ui.resultBox, "err", "Test the model first, or use Save unverified.");
+      return;
+    }
+    void saveRouteSelection(spec, role.id, sel, ui, { verified: true });
+  });
+  row.appendChild(saveBtn);
+
+  const warning = document.createElement("div");
+  warning.className = "model-picker-role-warning";
+  warning.dataset.role = role.id;
+  warning.setAttribute("role", "alert");
+  warning.hidden = true;
+  row.appendChild(warning);
+
+  const saveUnverifiedBtn = document.createElement("button");
+  saveUnverifiedBtn.type = "button";
+  saveUnverifiedBtn.className = "btn btn--sm model-picker-role-save-unverified";
+  saveUnverifiedBtn.dataset.role = role.id;
+  saveUnverifiedBtn.textContent = "Save unverified";
+  saveUnverifiedBtn.disabled = !findProviderRecord(spec.id);
+  saveUnverifiedBtn.addEventListener("click", () => {
+    const sel = resolveRoleSelection(row, isAzure);
+    if (!sel.model) {
+      showProviderConfigResult(ui.resultBox, "err", "Select or enter a model before saving.");
+      return;
+    }
+    // Two-step gate (Req 22.5): the warning MUST be displayed before an unverified save proceeds.
+    if (warning.hidden) {
+      warning.hidden = false;
+      warning.textContent =
+        "This model has not been verified. Saving it as your active route may activate a model that does not work.";
+      saveUnverifiedBtn.textContent = "Confirm save unverified";
+      return;
+    }
+    warning.hidden = true;
+    saveUnverifiedBtn.textContent = "Save unverified";
+    void saveRouteSelection(spec, role.id, sel, ui, { verified: false });
+  });
+  row.appendChild(saveUnverifiedBtn);
+
+  return row;
+}
+
+// Build the Model_Picker section for one provider card: Discover/Refresh controls (Req 19.1), a
+// lastRefreshedAt readout (Req 19.3), a redacted error region (Req 19.4), the discovered-candidate
+// list (Req 20), the Azure deployment-name explanation when applicable (Req 24.2), and one role row
+// per model role (Req 21).
+function createModelPickerSection(spec) {
+  const isAzure = spec.kind === "azure-openai";
+  const section = document.createElement("div");
+  section.className = "model-picker";
+  section.dataset.providerId = spec.id;
+
+  const heading = document.createElement("div");
+  heading.className = "model-picker__title";
+  heading.textContent = "Model discovery";
+  section.appendChild(heading);
+
+  // Discover / Refresh controls + lastRefreshedAt readout (Req 19.1, 19.3).
+  const controls = document.createElement("div");
+  controls.className = "model-picker__controls";
+
+  const discoverBtn = document.createElement("button");
+  discoverBtn.type = "button";
+  discoverBtn.className = "btn btn--sm model-picker-discover";
+  discoverBtn.textContent = "Discover models";
+  discoverBtn.disabled = !findProviderRecord(spec.id);
+
+  const refreshBtn = document.createElement("button");
+  refreshBtn.type = "button";
+  refreshBtn.className = "btn btn--sm model-picker-refresh";
+  refreshBtn.textContent = "Refresh";
+  refreshBtn.disabled = !findProviderRecord(spec.id);
+
+  const loadingEl = document.createElement("span");
+  loadingEl.className = "provider-config-test-loading model-picker-loading";
+  loadingEl.setAttribute("aria-hidden", "true");
+  loadingEl.hidden = true;
+
+  const refreshedEl = document.createElement("span");
+  refreshedEl.className = "model-picker-refreshed";
+  refreshedEl.setAttribute("aria-live", "polite");
+  refreshedEl.hidden = true;
+
+  controls.appendChild(discoverBtn);
+  controls.appendChild(refreshBtn);
+  controls.appendChild(loadingEl);
+  controls.appendChild(refreshedEl);
+  section.appendChild(controls);
+
+  const error = document.createElement("div");
+  error.className = "model-picker-error";
+  error.setAttribute("role", "alert");
+  error.hidden = true;
+  section.appendChild(error);
+
+  // Azure deployment-name explanation (Req 24.2): endpoint + key alone cannot enumerate deployments.
+  if (isAzure) {
+    const azureNote = document.createElement("p");
+    azureNote.className = "model-picker-azure-note";
+    azureNote.textContent =
+      "Azure OpenAI inference requires a deployment name. An endpoint and API key list the catalog " +
+      "models but do not enumerate your deployments — enter the deployment name for each role below.";
+    section.appendChild(azureNote);
+  }
+
+  const candidatesEl = document.createElement("div");
+  candidatesEl.className = "model-picker-candidates";
+  section.appendChild(candidatesEl);
+
+  const roles = document.createElement("div");
+  roles.className = "model-picker-roles";
+  section.appendChild(roles);
+
+  const resultBox = document.createElement("div");
+  resultBox.className = "provider-config-result model-picker-result";
+  resultBox.setAttribute("role", "status");
+  resultBox.setAttribute("aria-live", "polite");
+  resultBox.hidden = true;
+
+  const ui = {
+    discoverBtn,
+    refreshBtn,
+    loadingEl,
+    refreshedEl,
+    error,
+    candidatesEl,
+    resultBox,
+    roleSelects: [],
+    verified: {},
+  };
+
+  for (const role of PROVIDER_CONFIG_ROLES) {
+    roles.appendChild(createModelPickerRoleRow(spec, role, ui, isAzure));
+  }
+  section.appendChild(resultBox);
+
+  discoverBtn.addEventListener("click", () => void discoverProviderModels(spec, ui, { refresh: false }));
+  refreshBtn.addEventListener("click", () => void discoverProviderModels(spec, ui, { refresh: true }));
+
+  // Render any candidates already cached in this panel session, plus the empty role selects.
+  renderModelPickerCandidates(spec, ui);
+
+  return section;
+}
+
 // Build one provider card (preset or openai-compatible) reflecting its real record + secret presence
 // + active-route state. Every interactive control is wired to the real API. Returns the card element.
 function createProviderConfigCard(spec) {
@@ -1796,6 +2281,11 @@ function createProviderConfigCard(spec) {
   actions.appendChild(testLoading);
   actions.appendChild(removeBtn);
   card.appendChild(actions);
+
+  // Model discovery + per-role selection/probe surface (Req 19–24). Built per card and wired to the
+  // real Discovery_API + Connection_Test_Service.
+  card.appendChild(createModelPickerSection(spec));
+
   card.appendChild(resultBox);
 
   return card;
@@ -1835,6 +2325,7 @@ function renderProviderConfig() {
 async function loadProviderConfig() {
   setProviderConfigLoading(true);
   hideProviderConfigError();
+  modelDiscoveryState.clear();
   try {
     const data = await api("/providers");
     providerConfigState.providers = Array.isArray(data.providers) ? data.providers : [];
