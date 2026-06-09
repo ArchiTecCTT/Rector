@@ -10,7 +10,7 @@ import {
   parseDeploymentEnvironment,
   type OrchestrationConfig,
 } from "../deployment";
-import { buildModelRouter, type ModelRouter } from "../providers/llm";
+import { buildModelRouter, FakeLLMProvider, type ModelRouter } from "../providers/llm";
 import { buildConfiguredRouter } from "../providers/configBridge";
 import { WorkspaceSandboxAdapter, type SandboxAdapter } from "../sandbox";
 import { createE2BSandboxAdapter } from "../sandbox/e2bSandboxAdapter";
@@ -108,7 +108,10 @@ const providerConfigStore = createLocalProviderConfigStore({ filePath: PROVIDER_
  *
  * Local_Mode is the provider-free regression baseline (Req 17.1, Correctness Property 7): it uses
  * the fake router and NEVER consults the Config_Bridge, so no persisted configuration or secret can
- * ever cause a provider/network call. The bridge is deliberately not invoked on this path.
+ * ever cause a provider/network call. The bridge is deliberately not invoked on this path, and the
+ * router is constructed with ONLY the {@link FakeLLMProvider} so no network-capable provider is even
+ * instantiated in local mode (cloud-capable-transition Req 9.1/9.3) — the mode gate is therefore
+ * provably inert rather than merely never-selected.
  *
  * No network call is made at startup — the router only selects providers lazily per request.
  */
@@ -123,7 +126,7 @@ async function buildStartupRouter(config: OrchestrationConfig): Promise<ModelRou
       fetchImpl: fetch,
     });
   }
-  return buildModelRouter({ mode: "local" });
+  return buildModelRouter({ mode: "local", providers: [new FakeLLMProvider()] });
 }
 
 // Workspace containment boundary for every sandbox operation. Mirrors the chat-runner / workspace
