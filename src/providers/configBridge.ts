@@ -320,6 +320,16 @@ export async function buildConfiguredRouter(options: BuildConfiguredRouterOption
     fetchImpl: options.fetchImpl,
   };
 
+  // Local_Mode refusal (Requirement 5.6): in `local` mode the Config_Bridge
+  // constructs NO external provider and reads NO secret. It returns a
+  // provider-free router backed solely by the FakeLLMProvider so the
+  // Model_Router always selects the provider-free fallback. This is also the
+  // last-line guard for the live path; the boot path normally builds the fake
+  // router directly without consulting the bridge at all (Requirement 9.3).
+  if (mode === "local") {
+    return buildModelRouter({ mode: "local", providers: [new FakeLLMProvider()] });
+  }
+
   const effectiveEnv = await resolveProviderEnv(store, secrets, baseEnv);
   const state = await store.getState();
 
@@ -400,11 +410,18 @@ export async function buildConfiguredRouter(options: BuildConfiguredRouterOption
       if (!designatedId) return base;
 
       const designated = providerByRecordId.get(designatedId);
-      // Fallback (Requirement 14.4): the designated provider is no longer
+      // Fallback (Requirement 5.4): the designated provider is no longer
       // configured, fails validation, or cannot serve this route — keep the
-      // capability-priority selection rather than failing the run.
+      // capability-priority selection rather than failing the run. Record a
+      // secret-free substitution marker in the trace so the run surfaces that a
+      // designated route was substituted by the fallback (Requirement 5.5). The
+      // marker carries only the role, the designated record id, the substitute
+      // provider's adapter id, and the route — never any secret value.
       if (!designated || !isProviderValid(designated) || !designated.metadata.routes.includes(base.modelRoute)) {
-        return base;
+        return {
+          ...base,
+          reason: `fallback substitution: designated ${role} provider ${designatedId} unavailable; using ${base.provider.metadata.id} for ${base.modelRoute}`,
+        };
       }
 
       return selectionFor(designated, base.modelRoute, role, designatedId);
