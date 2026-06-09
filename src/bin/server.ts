@@ -12,6 +12,8 @@ import {
 } from "../deployment";
 import { buildModelRouter, type ModelRouter } from "../providers/llm";
 import { buildConfiguredRouter } from "../providers/configBridge";
+import { WorkspaceSandboxAdapter, type SandboxAdapter } from "../sandbox";
+import { createE2BSandboxAdapter } from "../sandbox/e2bSandboxAdapter";
 import {
   describeRequiredProviderEnvKeys,
   resolveOrchestrationConfig,
@@ -124,6 +126,59 @@ async function buildStartupRouter(config: OrchestrationConfig): Promise<ModelRou
   return buildModelRouter({ mode: "local" });
 }
 
+// Workspace containment boundary for every sandbox operation. Mirrors the chat-runner / workspace
+// safety defaults: an explicit `RECTOR_WORKSPACE_ROOT` wins, otherwise the process cwd is used.
+const SANDBOX_WORKSPACE_ROOT = process.env.RECTOR_WORKSPACE_ROOT?.trim() || process.cwd();
+
+// The Secret_Store key (and env fallback) under which the E2B container API key is stored. Read
+// transiently at construction; the value never leaves this module.
+const E2B_SECRET_REF = "e2b";
+
+/**
+ * Resolve the E2B API key, preferring an in-app Secret_Store entry and falling back to the
+ * documented `E2B_API_KEY` environment variable. The value is read transiently and never logged.
+ * A store read failure is treated as "absent" so it can never crash startup (boot-tolerant).
+ */
+async function resolveE2BApiKey(): Promise<string | undefined> {
+  try {
+    const stored = await secretStore.getSecret(E2B_SECRET_REF);
+    if (stored.ok && stored.value.trim().length > 0) {
+      return stored.value;
+    }
+  } catch {
+    // Treat an unreadable secret store as absent credentials; fall through to the env fallback.
+  }
+  const envKey = process.env.E2B_API_KEY?.trim();
+  return envKey && envKey.length > 0 ? envKey : undefined;
+}
+
+/**
+ * Select the Sandbox_Adapter for the resolved orchestration mode (design C6, Req 6.1/6.7).
+ *
+ * Local_Mode is the provider-free regression baseline: it constructs the network-free local runner
+ * ({@link WorkspaceSandboxAdapter}, which never spawns a container or touches the network) and
+ * initializes NO E2B client (Req 6.7).
+ *
+ * External_Mode constructs the real {@link createE2BSandboxAdapter} so sandbox commands and patches
+ * run inside a real E2B container — but only when an E2B API key is present in the Secret_Store (or
+ * the `E2B_API_KEY` env fallback), per Req 6.1. When no key is configured, External_Mode degrades to
+ * the same network-free local runner so the server still serves and the operator can add the key in
+ * the UI; no E2B client is initialized in that case either.
+ *
+ * No container is contacted at startup — the adapter only initializes its client lazily on first use.
+ */
+async function buildStartupSandboxAdapter(config: OrchestrationConfig): Promise<SandboxAdapter> {
+  if (config.mode === "external") {
+    const apiKey = await resolveE2BApiKey();
+    if (apiKey) {
+      return createE2BSandboxAdapter({ apiKey, workspaceRoot: SANDBOX_WORKSPACE_ROOT });
+    }
+  }
+  // Local mode (Req 6.7) — and external mode with no configured E2B key — use the network-free
+  // local runner and initialize no E2B container client.
+  return new WorkspaceSandboxAdapter({ workspaceRoot: SANDBOX_WORKSPACE_ROOT });
+}
+
 /**
  * Resolve the orchestration config on the live boot path (design C1; Req 1.1-1.8).
  *
@@ -180,9 +235,10 @@ async function bootstrap(): Promise<{ app: ReturnType<typeof createApp>; server:
   }
 
   const orchestrationRouter = await buildStartupRouter(orchestrationConfig);
+  const orchestrationSandbox = await buildStartupSandboxAdapter(orchestrationConfig);
 
   const app = createApp(manager, {
-    orchestration: { mode: orchestrationConfig.mode, router: orchestrationRouter },
+    orchestration: { mode: orchestrationConfig.mode, router: orchestrationRouter, sandbox: orchestrationSandbox },
     persistence: deploymentConfig.persistence,
     secretStore,
     providerConfigStore,

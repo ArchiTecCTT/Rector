@@ -11,6 +11,7 @@ import { buildContextPack, createContextMaterial } from "../orchestration/contex
 import type { ExecutorSimulatorOptions } from "../orchestration/executorSimulator";
 import { runChat } from "../orchestration/chatRunner";
 import { triageUserMessage } from "../orchestration/triage";
+import type { SandboxAdapter } from "../sandbox";
 import {
   createInMemoryObservabilityTrace,
   aggregateRunCost,
@@ -72,7 +73,10 @@ export interface ApiSecurityOptions {
    * deterministic phases shared by both modes. `mode` and `router` are resolved once at startup
    * (`parseOrchestrationConfig` + `buildModelRouter`) and stored here so the chat runner can
    * dispatch by mode; `mode` defaults to `local` (provider-free) and `router` is optional because
-   * local mode requires no provider. The chat endpoint is wired to consume `mode`/`router` in a
+   * local mode requires no provider. `sandbox` is the mode-selected Sandbox_Adapter resolved at
+   * startup (the real E2B adapter in external mode, the network-free local runner in local mode —
+   * Req 6.7); like `mode`/`router` it is accepted and stored without rewiring the endpoint, which
+   * consumes it in a later task. The chat endpoint is wired to consume `mode`/`router` in a
    * later task; this option is accepted and stored without rewiring the endpoint.
    */
   orchestration?: {
@@ -80,6 +84,7 @@ export interface ApiSecurityOptions {
     maxHealingAttempts?: number;
     mode?: OrchestratorMode;
     router?: ModelRouter;
+    sandbox?: SandboxAdapter;
   };
   /**
    * Persistence selection for the Rector store (ORN-39). Forwarded verbatim to
