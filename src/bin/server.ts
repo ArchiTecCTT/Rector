@@ -8,34 +8,31 @@ import {
   OrchestrationConfigError,
   createGracefulShutdownHandler,
   parseDeploymentEnvironment,
-  parseOrchestrationConfig,
   type OrchestrationConfig,
 } from "../deployment";
 import { buildModelRouter, type ModelRouter } from "../providers/llm";
 import { buildConfiguredRouter } from "../providers/configBridge";
+import {
+  describeRequiredProviderEnvKeys,
+  resolveOrchestrationConfig,
+} from "../providers/orchestrationConfig";
 import { createLocalSecretStore } from "../security/secretStore";
 import { createLocalProviderConfigStore } from "../providers/configStore";
+import { redactString } from "../security/redaction";
 import { TaskManager } from "../thalamus/router";
 
 const deploymentConfig = parseDeploymentEnvironment();
 const port = deploymentConfig.port;
 const host = process.env.HOST?.trim() || "127.0.0.1";
 
-// Resolve and validate the orchestration mode before serving (fail fast — Req 1.2). In local mode
-// (the default) no provider is required. In external mode this throws OrchestrationConfigError when
-// no supported provider validates; we log the redacted setup hint (never any secret value) and exit
-// non-zero rather than starting in a misconfigured state.
+// The orchestration config is resolved inside the async bootstrap below, after the BYOK stores are
+// constructed: the boot-tolerant resolver (design C1; Req 1.1-1.3, 1.8) awaits both the
+// Provider_Config_Store and the Secret_Store (presence-only) so credentials that live only in the
+// UI configuration stores still count as "configured". The resolver halts startup for exactly one
+// reason — an ORCHESTRATOR_MODE value that is neither `local` nor `external` (Req 1.6) — and that
+// hard-exit is handled in `resolveStartupOrchestrationConfig`. The binding is assigned once during
+// bootstrap and exported for downstream consumers/tests.
 let orchestrationConfig: OrchestrationConfig;
-try {
-  orchestrationConfig = parseOrchestrationConfig(process.env);
-} catch (error) {
-  if (error instanceof OrchestrationConfigError) {
-    console.error(`Rector startup failed (${error.code}): ${error.message}`);
-    console.error(error.setupHint);
-    process.exit(1);
-  }
-  throw error;
-}
 
 const telemetry = new LocalTelemetry();
 const manager = new TaskManager({
@@ -113,8 +110,8 @@ const providerConfigStore = createLocalProviderConfigStore({ filePath: PROVIDER_
  *
  * No network call is made at startup — the router only selects providers lazily per request.
  */
-async function buildStartupRouter(): Promise<ModelRouter> {
-  if (orchestrationConfig.mode === "external") {
+async function buildStartupRouter(config: OrchestrationConfig): Promise<ModelRouter> {
+  if (config.mode === "external") {
     return buildConfiguredRouter({
       store: providerConfigStore,
       secrets: secretStore,
@@ -128,13 +125,61 @@ async function buildStartupRouter(): Promise<ModelRouter> {
 }
 
 /**
- * Async startup. `buildConfiguredRouter` is async (it reads persisted config + secrets), so the
- * router build, app construction, listen, and graceful-shutdown wiring are sequenced here. The
- * fail-fast `parseOrchestrationConfig` check already ran synchronously above, so a misconfigured
- * external mode never reaches this bootstrap.
+ * Resolve the orchestration config on the live boot path (design C1; Req 1.1-1.8).
+ *
+ * Unlike the legacy synchronous `parseOrchestrationConfig`, the boot-tolerant
+ * {@link resolveOrchestrationConfig} consults the initialized Provider_Config_Store and Secret_Store
+ * (presence-only via `hasSecret`) in addition to `process.env`, so credentials entered through the
+ * UI count as configured. The ONLY condition that halts startup is an `ORCHESTRATOR_MODE` value that
+ * is neither `local` nor `external` (`ORCHESTRATOR_MODE_INVALID` — Req 1.6): we log the redacted,
+ * secret-free error/setup hint (which names the accepted values `local`/`external`) and exit
+ * non-zero. Every other condition — including external mode with zero configured providers — resolves
+ * normally so the server can bind, listen, and let the operator enter credentials in the UI.
+ */
+async function resolveStartupOrchestrationConfig(): Promise<OrchestrationConfig> {
+  try {
+    return await resolveOrchestrationConfig({
+      env: process.env,
+      providerConfigStore,
+      secretStore,
+    });
+  } catch (error) {
+    if (error instanceof OrchestrationConfigError && error.code === "ORCHESTRATOR_MODE_INVALID") {
+      // Req 1.6: invalid mode value is the sole hard-exit path. Both message and setupHint are
+      // already routed through the Redaction_Layer by OrchestrationConfigError.
+      console.error(`Rector startup failed (${error.code}): ${error.message}`);
+      console.error(error.setupHint);
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Async startup. The boot-tolerant orchestration config is resolved first (after the BYOK stores are
+ * constructed above), then the router build, app construction, listen, and graceful-shutdown wiring
+ * are sequenced. External mode with zero configured providers does NOT exit (Req 1.5): instead a
+ * redacted warning naming each provider's required env keys is emitted (Req 1.4, 1.7) and the server
+ * binds + listens so credentials can be entered through the UI.
  */
 async function bootstrap(): Promise<{ app: ReturnType<typeof createApp>; server: http.Server; gracefulShutdown: ReturnType<typeof createGracefulShutdownHandler> }> {
-  const orchestrationRouter = await buildStartupRouter();
+  orchestrationConfig = await resolveStartupOrchestrationConfig();
+
+  // Req 1.4 / 1.5 / 1.7: external mode with no configured provider warns and serves (rather than
+  // crashing) so the operator can open the configuration panel. The warning names every supported
+  // provider's required environment-variable keys and contains no secret value; it is additionally
+  // routed through the Redaction_Layer as a defense-in-depth guarantee before reaching the sink.
+  if (orchestrationConfig.mode === "external" && orchestrationConfig.configuredProviders.length === 0) {
+    console.warn(
+      redactString(
+        "Rector is starting in external mode with no configured providers. " +
+          "Enter provider credentials in the configuration UI before issuing requests. " +
+          `Supported providers and required environment variables: ${describeRequiredProviderEnvKeys()}.`,
+      ),
+    );
+  }
+
+  const orchestrationRouter = await buildStartupRouter(orchestrationConfig);
 
   const app = createApp(manager, {
     orchestration: { mode: orchestrationConfig.mode, router: orchestrationRouter },
