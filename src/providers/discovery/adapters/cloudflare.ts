@@ -58,10 +58,34 @@ function fail(category: DiscoveryError["category"], message: string): AdapterRes
 }
 
 /**
+ * The exact set of task values retained from the Cloudflare catalog, mapped to
+ * the capability tags each task contributes (Requirement 2.3). Only an entry
+ * whose task is exactly `text-generation`, `chat`, or `embeddings` survives;
+ * every other task is discarded.
+ */
+const ALLOWED_TASKS: Record<string, string[]> = {
+  // Cloudflare's "Text Generation" task serves chat-style completions.
+  "text-generation": ["text-generation", "chat"],
+  chat: ["chat"],
+  embeddings: ["embeddings"],
+};
+
+/**
+ * Normalize a raw task token to its canonical comparison form: trimmed,
+ * lower-cased, with internal whitespace collapsed to single hyphens. This lets
+ * the human-readable Cloudflare form (e.g. `"Text Generation"`) compare equal
+ * to its canonical token (`"text-generation"`) while still requiring an exact
+ * match against the allowed set.
+ */
+function normalizeTaskToken(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, "-");
+}
+
+/**
  * The capability tags a Cloudflare task maps to, or `undefined` when the task
- * is not one of the default-kept categories (text generation, chat, or
- * embeddings — Requirement 12.2). A Cloudflare entry's `task` is an object like
- * `{ name: "Text Generation" }`, though we also accept a bare string.
+ * is not exactly one of the retained categories — `text-generation`, `chat`,
+ * or `embeddings` (Requirement 2.3). A Cloudflare entry's `task` is an object
+ * like `{ name: "Text Generation" }`, though we also accept a bare string.
  */
 function classifyTask(entry: Record<string, unknown>): string[] | undefined {
   const taskName = firstString(
@@ -71,15 +95,7 @@ function classifyTask(entry: Record<string, unknown>): string[] | undefined {
   if (taskName === undefined) {
     return undefined;
   }
-  const normalized = taskName.toLowerCase();
-  if (normalized.includes("embedding")) {
-    return ["embeddings"];
-  }
-  if (normalized.includes("text generation") || normalized.includes("chat")) {
-    // Cloudflare's "Text Generation" task serves chat-style completions.
-    return ["text-generation", "chat"];
-  }
-  return undefined;
+  return ALLOWED_TASKS[normalizeTaskToken(taskName)];
 }
 
 /**
@@ -191,7 +207,8 @@ async function discover(ctx: AdapterContext): Promise<AdapterResult> {
   for (const rawEntry of entries) {
     const entry = asRecord(rawEntry);
 
-    // Keep only text-generation, chat, and embedding models (Requirement 12.2).
+    // Retain only entries whose task is exactly text-generation, chat, or
+    // embeddings, discarding all others (Requirement 2.3).
     const capabilities = classifyTask(entry);
     if (capabilities === undefined) {
       continue;
