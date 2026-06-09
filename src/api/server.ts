@@ -1007,6 +1007,138 @@ export const SetActiveRouteRequestSchema = z
   .strict();
 export type SetActiveRouteRequest = z.infer<typeof SetActiveRouteRequestSchema>;
 
+/**
+ * The Settings_API model-discovery deadline (cloud-capable-transition Req 4.6). The discovery
+ * handler races the {@link ModelDiscoveryService} call against this outer timer and returns a
+ * `timeout` Discovery_Error if the service has not produced a result by the deadline. The service
+ * already enforces its own per-adapter 30 000 ms abort; this is the independent Settings_API-layer
+ * deadline the requirement mandates, so an outer wait (e.g. a stalled cache or resolution step) is
+ * still bounded.
+ */
+export const SETTINGS_DISCOVERY_TIMEOUT_MS = 30_000;
+
+/**
+ * Core Settings_API model-discovery handler (cloud-capable-transition Req 4). Decoupled from
+ * Express so it is unit/property testable: it takes the resolved Orchestrator_Mode, the
+ * {@link ModelDiscoveryService}, and the requested provider id, and resolves to a
+ * {@link DiscoveryResult} the route serializes through {@link sendRedacted} (Req 4.4).
+ *
+ * Behavior:
+ * - **Local mode (Req 4.3, 4.7):** returns a Discovery_Error indicating discovery is unavailable in
+ *   local mode WITHOUT invoking the service or making any network call. The mode gate is checked
+ *   first, before the service is ever touched, so the local-isolation invariant is directly
+ *   observable (the injected service's `discover` is never called).
+ * - **External mode (Req 4.1, 4.5):** invokes the service and relays its result — the discovered
+ *   `Model_Candidate`s on success, or the service's classified, redacted Discovery_Error (including
+ *   `not_found` for an unknown provider, Req 4.2) — without ever throwing. An unexpected throw from
+ *   the service is itself caught and classified as a redacted `unknown` error.
+ * - **30 000 ms deadline (Req 4.6):** the service call is raced against an outer timer; on expiry
+ *   the handler stops waiting and returns a Discovery_Error with category `timeout`.
+ *
+ * Timers and the clock are injectable so property tests stay hermetic.
+ */
+export async function runSettingsDiscovery(input: {
+  mode: OrchestratorMode;
+  service: ModelDiscoveryService;
+  providerId: string;
+  refresh?: boolean;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  now?: () => Date;
+  setTimeoutImpl?: (handler: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  clearTimeoutImpl?: (handle: ReturnType<typeof setTimeout>) => void;
+}): Promise<DiscoveryResult> {
+  const { mode, service, providerId } = input;
+  const now = input.now ?? (() => new Date());
+  const timeoutMs = input.timeoutMs ?? SETTINGS_DISCOVERY_TIMEOUT_MS;
+  const setTimeoutImpl = input.setTimeoutImpl ?? ((handler, ms) => setTimeout(handler, ms));
+  const clearTimeoutImpl = input.clearTimeoutImpl ?? ((handle) => clearTimeout(handle));
+
+  // Local mode (Req 4.3, 4.7): short-circuit BEFORE the service is consulted so no discovery
+  // network call is made and the service is provably never invoked.
+  if (mode !== "external") {
+    return {
+      ok: false,
+      providerId,
+      error: {
+        category: "unknown",
+        message: redactString("Model discovery is unavailable in local mode."),
+      },
+      lastRefreshedAt: now().toISOString(),
+    };
+  }
+
+  // External mode: race the service call against the Settings_API 30 000 ms deadline (Req 4.6).
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<DiscoveryResult>((resolve) => {
+    timer = setTimeoutImpl(() => {
+      resolve({
+        ok: false,
+        providerId,
+        error: {
+          category: "timeout",
+          message: redactString(
+            `Model discovery for "${providerId}" did not complete within ${timeoutMs} ms.`,
+          ),
+        },
+        lastRefreshedAt: now().toISOString(),
+      });
+    }, timeoutMs);
+  });
+
+  try {
+    // Invoke the service (Req 4.1) and relay its classified result (Req 4.2, 4.5). The service is
+    // designed never to throw, but a defensive `.catch` guarantees the handler never throws either,
+    // classifying any unexpected throw as a redacted `unknown` error.
+    const discovery = Promise.resolve(
+      service.discover(providerId, { refresh: input.refresh, fetchImpl: input.fetchImpl }),
+    ).catch(
+      (error): DiscoveryResult => ({
+        ok: false,
+        providerId,
+        error: {
+          category: "unknown",
+          message: redactString(error instanceof Error ? error.message : String(error)),
+        },
+        lastRefreshedAt: now().toISOString(),
+      }),
+    );
+
+    return await Promise.race([discovery, timeout]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeoutImpl(timer);
+    }
+  }
+}
+
+/**
+ * Map a Settings_API {@link DiscoveryResult} to an HTTP status. A success is 200; an unknown
+ * provider id is 404 (Req 4.2); a Settings_API deadline expiry is 504 (Req 4.6); other classified
+ * upstream failures map to a representative status. The full, already-redacted DiscoveryResult is
+ * always the response body (Req 4.4, 4.5), so the category is preserved regardless of status. A
+ * local-mode "discovery unavailable" result is mapped to 503 by the route (it carries the generic
+ * `unknown` category) so it is distinguished from a genuine upstream `unknown` failure.
+ */
+function settingsDiscoveryStatus(result: DiscoveryResult): number {
+  if (result.ok) return 200;
+  switch (result.error.category) {
+    case "not_found":
+      return 404;
+    case "timeout":
+      return 504;
+    case "auth_invalid":
+      return 401;
+    case "endpoint_invalid":
+    case "requires_management_plane":
+      return 400;
+    case "rate_limited":
+      return 429;
+    default:
+      return 502;
+  }
+}
+
 export function createApp(manager: TaskManager, securityOptions: ApiSecurityOptions = {}): express.Application {
   const app = express();
   // Select the store from the deployment persistence config (ORN-39). When no persistence config
@@ -1953,6 +2085,45 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         fetchImpl: fetch,
       });
       sendDiscoveryResult(res, result);
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // POST /api/config/providers/:id/discover — Settings_API model discovery for a configured
+  // provider (cloud-capable-transition Req 4). This is the mode-gated, deadline-bounded discovery
+  // surface the settings panel triggers, distinct from the ORN read/refresh routes above:
+  //
+  // - Local mode (Req 4.3, 4.7): returns a redacted "discovery unavailable in local mode"
+  //   Discovery_Error WITHOUT invoking the Model_Discovery_Service or making any network call. The
+  //   mode is resolved from the orchestration wiring (default `local`), so discovery is inert by
+  //   default and only live once an operator selects external mode.
+  // - External mode: invokes the service (Req 4.1), relays its candidates or its classified,
+  //   redacted Discovery_Error — `not_found` for an unknown provider (Req 4.2), or any other
+  //   category (Req 4.5) — without throwing, and races the call against a 30 000 ms deadline,
+  //   returning a `timeout` Discovery_Error on expiry (Req 4.6).
+  //
+  // The full DiscoveryResult is sent through `sendRedacted`, so no secret value or authorization
+  // header can escape in the response (Req 4.4). A refresh can be requested via `?refresh=1` or a
+  // truthy `refresh` body field.
+  app.post("/api/config/providers/:id/discover", async (req, res) => {
+    const mode = securityOptions.orchestration?.mode ?? "local";
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const refresh =
+      body.refresh === true || req.query.refresh === "1" || req.query.refresh === "true";
+    try {
+      const result = await runSettingsDiscovery({
+        mode,
+        service: modelDiscoveryService,
+        providerId: req.params.id,
+        refresh,
+        fetchImpl: fetch,
+      });
+      // Local-mode unavailability carries the generic `unknown` category; surface it as 503 so it
+      // is distinguished from a genuine upstream `unknown` failure (502). All other results map by
+      // category. The redacted DiscoveryResult is the body in every case.
+      const status = mode !== "external" ? 503 : settingsDiscoveryStatus(result);
+      sendRedacted(res, status, result);
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }

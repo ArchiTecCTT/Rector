@@ -102,7 +102,10 @@ export type ModelCandidate = z.infer<typeof ModelCandidateSchema>;
  * provider error body (Requirement 18.1). `not_found` is used when no
  * Provider_Config_Record exists (Requirement 10.3, 17.4);
  * `requires_management_plane` is used when Azure deployment enumeration is
- * requested (Requirement 15.4).
+ * requested (Requirement 15.4); `timeout` is used by the Settings_API layer
+ * when a discovery call does not complete within its 30 000 ms deadline
+ * (cloud-capable-transition Req 4.6 — additionally used at the Settings_API
+ * layer, per the requirements glossary).
  */
 export const DiscoveryErrorCategorySchema = z.enum([
   "not_found",
@@ -112,6 +115,7 @@ export const DiscoveryErrorCategorySchema = z.enum([
   "network_error",
   "rate_limited",
   "requires_management_plane",
+  "timeout",
   "unknown",
 ]);
 export type DiscoveryErrorCategory = z.infer<typeof DiscoveryErrorCategorySchema>;
