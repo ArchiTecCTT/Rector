@@ -14,6 +14,7 @@ import type {
   UpdateRunInput,
 } from "./schemas";
 import type { DeploymentConfig, TiDBConnectionConfig } from "../deployment";
+import { redactString } from "../security/redaction";
 import { InMemoryRectorStore } from "./inMemoryRectorStore";
 import { SqlRectorStore, createSqliteDriver, type SqlDriver } from "./sqlRectorStore";
 import { createTiDBDriver } from "./tidbRectorStore";
@@ -184,5 +185,138 @@ export function createRectorStore(
       // Defensive: the schema constrains driver to the enum, but a malformed
       // config object could still carry an unknown value. Fail before any I/O.
       throw new StoreConfigError(`Unknown persistence driver: ${String(driver)}.`);
+  }
+}
+
+/**
+ * The relational tables the {@link runStartupMigration} step verifies and
+ * provisions before the Rector_Server serves any request (Req 8.4). The order
+ * mirrors the entity DDL emitted by {@link SqlRectorStore}.
+ */
+export const STARTUP_MIGRATION_TABLES = [
+  "conversations",
+  "messages",
+  "runs",
+  "run_events",
+  "artifacts",
+] as const;
+
+/**
+ * The Startup_Migration deadline in milliseconds (Req 8.8): connect + provision
+ * must complete within this window or startup is halted.
+ */
+export const DEFAULT_STARTUP_MIGRATION_DEADLINE_MS = 30_000;
+
+/**
+ * Raised when the Startup_Migration cannot establish the persistence connection
+ * or provision the relational tables within the deadline (Req 8.8). The message
+ * is routed through {@link redactString} so no connection password or embedded
+ * URL credential can leak; on this error the caller halts startup and serves no
+ * request.
+ */
+export class PersistenceInitializationError extends Error {
+  readonly name = "PersistenceInitializationError";
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+/** Construction overrides for {@link runStartupMigration}. */
+export interface StartupMigrationOverrides extends CreateRectorStoreOverrides {
+  /**
+   * The connect+provision deadline in milliseconds. Defaults to
+   * {@link DEFAULT_STARTUP_MIGRATION_DEADLINE_MS}. Exposed for deterministic
+   * tests of the timeout path.
+   */
+  deadlineMs?: number;
+}
+
+/**
+ * Race a unit of provisioning work against a deadline (Req 8.8). On expiry the
+ * returned promise rejects with the supplied timeout error; the timer is always
+ * cleared and is `unref`'d so it never keeps the process alive on its own.
+ */
+async function withDeadline<T>(
+  work: Promise<T>,
+  deadlineMs: number,
+  onTimeout: () => Error
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(onTimeout()), deadlineMs);
+    if (typeof timer.unref === "function") timer.unref();
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Verify that each of the {@link STARTUP_MIGRATION_TABLES} is present and
+ * queryable by issuing a bounded list read against every entity through the
+ * public store surface. A table that was not provisioned surfaces here as a
+ * driver error, which {@link runStartupMigration} classifies as an
+ * initialization failure.
+ */
+async function verifyStartupTables(store: RectorStore): Promise<void> {
+  await store.listConversations();
+  await store.listMessages();
+  await store.listRuns();
+  await store.listEvents();
+  await store.listArtifacts();
+}
+
+/**
+ * The boot-time Startup_Migration step (Req 8.4, 8.8).
+ *
+ * Constructs the configured {@link RectorStore} and, for the relational paths,
+ * provisions the five entity tables (the {@link SqlRectorStore} constructor runs
+ * idempotent `CREATE TABLE IF NOT EXISTS` DDL) and then verifies each of the
+ * {@link STARTUP_MIGRATION_TABLES} exists and is queryable — all **before** the
+ * server serves any request. The combined connect + provision work is raced
+ * against a 30 000 ms deadline ({@link DEFAULT_STARTUP_MIGRATION_DEADLINE_MS}).
+ *
+ * On timeout or provision failure the step rejects with a
+ * {@link PersistenceInitializationError} whose message is redacted, so the
+ * caller halts startup and serves nothing. A {@link StoreConfigError} (an
+ * incomplete config detected before any connection, Req 8.2) propagates
+ * unchanged so the operator still sees the named missing field(s).
+ */
+export async function runStartupMigration(
+  config?: PersistenceConfig,
+  overrides?: StartupMigrationOverrides
+): Promise<RectorStore> {
+  const deadlineMs = overrides?.deadlineMs ?? DEFAULT_STARTUP_MIGRATION_DEADLINE_MS;
+
+  const provision = (async (): Promise<RectorStore> => {
+    // Constructing the store opens the (pooled) connection for the `tidb` path
+    // and runs `migrate()` to provision every missing table.
+    const store = createRectorStore(config, overrides);
+    await verifyStartupTables(store);
+    return store;
+  })();
+
+  try {
+    return await withDeadline(
+      provision,
+      deadlineMs,
+      () =>
+        new PersistenceInitializationError(
+          redactString(
+            `Persistence initialization failed: the Startup_Migration did not connect and ` +
+              `provision the ${STARTUP_MIGRATION_TABLES.join(", ")} tables within ${deadlineMs} ms.`
+          )
+        )
+    );
+  } catch (error) {
+    // A timeout is already the right, redacted error.
+    if (error instanceof PersistenceInitializationError) throw error;
+    // An incomplete-config error is raised before any connection and names the
+    // missing field(s); surface it unchanged rather than as a generic failure.
+    if (error instanceof StoreConfigError) throw error;
+    const detail = redactString(error instanceof Error ? error.message : String(error));
+    throw new PersistenceInitializationError(`Persistence initialization failed: ${detail}`);
   }
 }
