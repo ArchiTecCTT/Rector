@@ -6,8 +6,9 @@ import type { DagExecutionResult } from "./executorSimulator";
 import type { PlannerOutput } from "./planner";
 import { buildSynthesizerPrompt, buildSynthesizerRepairPrompt } from "./prompts";
 import type { SkepticReview } from "./skeptic";
-import type { TriageResult } from "./triage";
+import { TRIAGE_ROUTES, type TriageResult } from "./triage";
 import type { HealingLoopResult, HealingLoopStatus } from "./validationHealing";
+import type { OrchestratorMode } from "../deployment";
 import type { ObservabilitySummary } from "../observability";
 import {
   invokeWithBudget,
@@ -223,13 +224,29 @@ export const SynthesisCitationSchema = z.object({
 export type SynthesisCitation = z.infer<typeof SynthesisCitationSchema>;
 
 /**
+ * Req 7.3 / 7.7: the hard upper bound on a Narrative_Answer. A schema-valid live answer is at most
+ * this many characters; an over-length answer is rejected as invalid (routing to repair, then the
+ * deterministic Legacy_Status_Response fallback).
+ */
+export const MAX_NARRATIVE_ANSWER_CHARS = 2000;
+
+/**
+ * Req 7.4: the outer deadline (60 000 ms) the gated synthesizer races the entire live call against.
+ * A live call that does not resolve within this window yields the deterministic Legacy_Status_Response.
+ */
+export const SYNTHESIS_LIVE_DEADLINE_MS = 60_000;
+
+/**
  * The draft the model is asked to return. The model proposes only
  * `{ response, citations }`; the control plane validates it, requires non-empty
  * `citations` whenever the run carried execution/validation evidence, re-redacts
  * the assembled answer, and assembles the full {@link BrainstemSynthesis}.
+ *
+ * Req 7.7: the `response` is bounded to {@link MAX_NARRATIVE_ANSWER_CHARS}; an empty answer
+ * (`.min(1)`) or an over-length answer (`.max(...)`) fails validation and is treated as invalid.
  */
 export const SynthesisDraftSchema = z.object({
-  response: z.string().min(1),
+  response: z.string().min(1).max(MAX_NARRATIVE_ANSWER_CHARS),
   citations: z.array(SynthesisCitationSchema),
 });
 export type SynthesisDraft = z.infer<typeof SynthesisDraftSchema>;
@@ -266,6 +283,106 @@ const ZERO_SYNTHESIS_USAGE: LLMUsage = LLMUsageSchema.parse({
   estimatedUsd: 0,
   modelCalls: 0,
 });
+
+/**
+ * The Heavy_Developer_Routes (Req 7.1): the triage routes that warrant a provider-generated
+ * Narrative_Answer. Every other route keeps the deterministic synthesizer.
+ */
+const HEAVY_DEVELOPER_ROUTES: ReadonlySet<string> = new Set<string>([
+  TRIAGE_ROUTES.RESEARCH,
+  TRIAGE_ROUTES.CODE_EDIT,
+  TRIAGE_ROUTES.PLAN_ONLY,
+  TRIAGE_ROUTES.LONG_RUNNING,
+]);
+
+/** Req 7.1: a triage route is a Heavy_Developer_Route when it is RESEARCH/CODE_EDIT/PLAN_ONLY/LONG_RUNNING. */
+export function isHeavyDeveloperRoute(route: string): boolean {
+  return HEAVY_DEVELOPER_ROUTES.has(route);
+}
+
+/**
+ * The gating inputs that decide whether a run gets a live Narrative_Answer. `mode` is the resolved
+ * Orchestrator_Mode and `flagshipProviderIsValid` reports whether the Active_Route_Map designates a
+ * valid configured provider for the `flagship` role (computed by the Config_Bridge / caller, never a
+ * secret value).
+ */
+export interface SynthesizerGateContext {
+  mode: OrchestratorMode;
+  flagshipProviderIsValid: boolean;
+}
+
+/**
+ * Req 7.1: the live/legacy gate. The Synthesizer requests a Narrative_Answer from the designated
+ * flagship model only when (a) the Orchestrator_Mode is `external`, (b) the run resolved to a
+ * Heavy_Developer_Route, and (c) the Active_Route_Map designates a valid flagship provider. When any
+ * condition is false (local mode, a non-heavy route, or no valid flagship) the gate is closed and the
+ * deterministic Legacy_Status_Response is used with zero provider calls (Req 7.5).
+ */
+export function shouldRunLiveSynthesizer(
+  input: BrainstemSynthesisInput,
+  gate: SynthesizerGateContext
+): boolean {
+  return (
+    gate.mode === "external" &&
+    isHeavyDeveloperRoute(input.triage.route) &&
+    gate.flagshipProviderIsValid
+  );
+}
+
+/** Dependencies for {@link synthesizeHeavyDeveloperRoute}: the live deps plus the gate and an injectable deadline. */
+export interface GatedSynthesizerDeps extends LiveSynthesizerDeps {
+  gate: SynthesizerGateContext;
+  /**
+   * The outer deadline in milliseconds the live call is raced against (Req 7.4). Defaults to
+   * {@link SYNTHESIS_LIVE_DEADLINE_MS}; exposed so tests can exercise the timeout path without
+   * waiting a real minute.
+   */
+  deadlineMs?: number;
+}
+
+/**
+ * Req 7.1–7.6: the gating decision that selects between the live synthesizer and the deterministic
+ * Legacy_Status_Response for a Heavy_Developer_Route.
+ *
+ * - Gate closed ({@link shouldRunLiveSynthesizer} false: local mode, non-heavy route, or no valid
+ *   flagship): returns the deterministic {@link synthesizeChatBrainstemResponse} with
+ *   `providerCalls === 0` and makes no provider call (Req 7.5).
+ * - Gate open: races {@link runLiveSynthesizer} against a {@link SYNTHESIS_LIVE_DEADLINE_MS} deadline.
+ *   A budget denial, provider failure, invalid/over-length/unparseable answer, or a deadline expiry
+ *   all yield the deterministic Legacy_Status_Response (Req 7.4). The live path already redacts the
+ *   answer text and every citation field before returning (Req 7.6).
+ *
+ * No exception escapes: {@link runLiveSynthesizer} never throws for budget/provider/validation
+ * failures, and the deadline branch resolves with the deterministic fallback.
+ */
+export async function synthesizeHeavyDeveloperRoute(
+  input: BrainstemSynthesisInput,
+  deps: GatedSynthesizerDeps
+): Promise<LiveSynthesisResult> {
+  const { provider } = deps;
+  const model = synthesisModel(provider);
+
+  // Req 7.5: gate closed -> deterministic Legacy_Status_Response, zero provider calls, no network I/O.
+  if (!shouldRunLiveSynthesizer(input, deps.gate)) {
+    return synthesisFallbackResult(input, ZERO_SYNTHESIS_USAGE, provider, model, 0);
+  }
+
+  const deadlineMs = deps.deadlineMs ?? SYNTHESIS_LIVE_DEADLINE_MS;
+
+  // Req 7.4: race the entire live call (up to two provider attempts) against the outer deadline. On
+  // timeout, resolve with the deterministic fallback so a stalled provider never hangs the run.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<LiveSynthesisResult>((resolve) => {
+    timer = setTimeout(() => resolve(synthesisFallbackResult(input, ZERO_SYNTHESIS_USAGE, provider, model, 0)), deadlineMs);
+    (timer as { unref?: () => void }).unref?.();
+  });
+
+  try {
+    return await Promise.race([runLiveSynthesizer(input, deps), deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 /**
  * Prompts a configured provider for a final, evidence-cited answer from the run

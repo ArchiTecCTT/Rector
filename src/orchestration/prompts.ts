@@ -337,6 +337,8 @@ export const SYNTHESIZER_SYSTEM_RULES = [
   "Cite your evidence: each citation must reference a concrete execution artifact or validation result from the run state (a file path, command, test/node id, failure, risk, or artifact id).",
   "When the run carried any execution or validation evidence, you MUST include at least one citation.",
   "Never hide or omit failed validation output; report failures honestly and surface unresolved risks.",
+  "State what was attempted, what was fixed, and which files changed, and point the reader to the trace drawer for the raw run data.",
+  "Keep the answer concise: at most 2000 characters.",
   "Return ONLY a single JSON object that conforms exactly to the contract below.",
   "Do not wrap the JSON in markdown code fences, prose, comments, or trailing text.",
   "Never include secrets, API keys, credentials, tokens, or environment variable values in any field.",
@@ -350,7 +352,7 @@ export const SYNTHESIZER_SYSTEM_RULES = [
 export const SYNTHESIZER_JSON_CONTRACT = `Output a JSON object with this exact shape:
 
 {
-  "response": string,                                  // non-empty; the final answer to the user request
+  "response": string,                                  // non-empty; the final answer to the user request (<= 2000 characters); reference the trace drawer for raw run data
   "citations": [
     {
       "kind": "file" | "command" | "test" | "failure" | "risk" | "artifact",
