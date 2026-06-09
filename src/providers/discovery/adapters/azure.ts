@@ -213,6 +213,7 @@ async function discover(ctx: AdapterContext): Promise<AdapterResult> {
         // Azure OpenAI data-plane authenticates with the `api-key` header.
         "api-key": secret as string,
       },
+      signal: ctx.signal,
     });
   } catch {
     return fail("network_error", "Failed to reach the Azure OpenAI model catalog.");

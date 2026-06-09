@@ -42,6 +42,14 @@ export interface AdapterContext {
   fetchImpl: typeof fetch;
   /** Whether models marked deprecated should be included (Requirement 12.4). */
   includeDeprecated: boolean;
+  /**
+   * Abort signal the Model_Discovery_Service wires to its 30 000 ms request
+   * timer (Requirement 2.9). When the timer fires the service aborts this
+   * signal so an adapter's in-flight catalog `fetch` is cancelled rather than
+   * left dangling. Adapters thread it into their `fetchImpl` call and otherwise
+   * ignore it.
+   */
+  signal?: AbortSignal;
 }
 
 /**

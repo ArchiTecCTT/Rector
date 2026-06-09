@@ -180,6 +180,7 @@ async function discover(ctx: AdapterContext): Promise<AdapterResult> {
         Authorization: `Bearer ${secret}`,
         "Content-Type": "application/json",
       },
+      signal: ctx.signal,
     });
   } catch {
     return fail("network_error", "Failed to reach the Cloudflare model catalog.");

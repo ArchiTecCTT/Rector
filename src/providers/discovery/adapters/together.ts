@@ -108,10 +108,11 @@ async function requestList(
   url: string,
   headers: Record<string, string>,
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<FetchOutcome> {
   let response: Response;
   try {
-    response = await fetchImpl(url, { method: "GET", headers });
+    response = await fetchImpl(url, { method: "GET", headers, signal });
   } catch {
     return { kind: "network" };
   }
@@ -154,13 +155,13 @@ export const togetherDiscoveryAdapter: DiscoveryAdapter = {
     const headers = buildHeaders(ctx);
 
     // Native list first (Req 13.1).
-    let outcome = await requestList(joinUrl(baseUrl, NATIVE_PATH), headers, ctx.fetchImpl);
+    let outcome = await requestList(joinUrl(baseUrl, NATIVE_PATH), headers, ctx.fetchImpl, ctx.signal);
 
     // Fall back to the OpenAI-compatible list only when the native endpoint is
     // unavailable (404). Auth, rate-limit, and other errors would recur on the
     // fallback path, so they are classified directly (Req 13.2).
     if (outcome.kind === "http" && outcome.status === 404) {
-      outcome = await requestList(joinUrl(baseUrl, FALLBACK_PATH), headers, ctx.fetchImpl);
+      outcome = await requestList(joinUrl(baseUrl, FALLBACK_PATH), headers, ctx.fetchImpl, ctx.signal);
     }
 
     if (outcome.kind === "network") {

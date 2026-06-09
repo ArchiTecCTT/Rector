@@ -76,6 +76,14 @@ function discoveryError(category: DiscoveryError["category"], message: string): 
 }
 
 /**
+ * Hard ceiling on a single Discovery_Adapter catalog request (Requirement 2.9).
+ * The service aborts any adapter call that does not resolve within this window
+ * and classifies the unanswered request as a `network_error` at the adapter
+ * layer; the Settings_API re-classifies its own outer wait as `timeout`.
+ */
+const DISCOVERY_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
  * Look up the {@link ProviderConfigRecord} for `providerId`, or `undefined` when
  * no record exists. Reads the full state through the store and never throws.
  */
@@ -157,19 +165,46 @@ export function createModelDiscoveryService(deps: ModelDiscoveryServiceDeps): Mo
       //    (Requirement 10.2). Adapters are defensive and return a classified
       //    error rather than throwing, but guard here too so an unexpected throw
       //    still yields a classified, redacted result (Requirement 18.1).
+      //
+      //    The adapter's catalog request is wrapped with an AbortController and
+      //    a 30 000 ms timer (Requirement 2.9): if the adapter has not resolved
+      //    by the deadline the controller is aborted — cancelling the adapter's
+      //    in-flight `fetch` via `ctx.signal` — and the unanswered request is
+      //    classified as a `network_error`.
       const adapter = adapters[record.kind];
+      const controller = new AbortController();
       const context: AdapterContext = {
         record,
         secret,
         fetchImpl: options.fetchImpl ?? globalThis.fetch,
         includeDeprecated: options.includeDeprecated ?? false,
+        signal: controller.signal,
       };
 
       let result: DiscoveryResult;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const adapterResult = await adapter.discover(context);
-        // 5. Normalize the adapter result and redact (Requirement 10.4, 18.2).
-        result = toDiscoveryResult(adapterResult, providerId, lastRefreshedAt);
+        const timeout = new Promise<DiscoveryResult>((resolve) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            resolve({
+              ok: false,
+              providerId,
+              error: discoveryError(
+                "network_error",
+                `Model discovery for "${providerId}" did not respond within ${DISCOVERY_REQUEST_TIMEOUT_MS} ms.`,
+              ),
+              lastRefreshedAt,
+            });
+          }, DISCOVERY_REQUEST_TIMEOUT_MS);
+        });
+
+        const adapterRun = adapter
+          .discover(context)
+          // 5. Normalize the adapter result and redact (Requirement 10.4, 18.2).
+          .then((adapterResult) => toDiscoveryResult(adapterResult, providerId, lastRefreshedAt));
+
+        result = await Promise.race([adapterRun, timeout]);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         result = {
@@ -178,6 +213,10 @@ export function createModelDiscoveryService(deps: ModelDiscoveryServiceDeps): Mo
           error: discoveryError("unknown", message),
           lastRefreshedAt,
         };
+      } finally {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+        }
       }
 
       // 6. Cache the result with its success/error TTL (Requirement 16.1, 16.4).

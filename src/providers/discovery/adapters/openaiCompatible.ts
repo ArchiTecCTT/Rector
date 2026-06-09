@@ -116,10 +116,11 @@ async function requestList(
   url: string,
   headers: Record<string, string>,
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<FetchOutcome> {
   let response: Response;
   try {
-    response = await fetchImpl(url, { method: "GET", headers });
+    response = await fetchImpl(url, { method: "GET", headers, signal });
   } catch {
     return { kind: "network" };
   }
@@ -165,7 +166,7 @@ export const openaiCompatibleDiscoveryAdapter: DiscoveryAdapter = {
       };
     }
 
-    const outcome = await requestList(buildModelsUrl(baseUrl), buildHeaders(ctx), ctx.fetchImpl);
+    const outcome = await requestList(buildModelsUrl(baseUrl), buildHeaders(ctx), ctx.fetchImpl, ctx.signal);
 
     if (outcome.kind === "network") {
       return {
