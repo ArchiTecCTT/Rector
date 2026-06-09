@@ -232,7 +232,7 @@ suite stays hermetic. Local_Mode behavior for every route other than `NEEDS_CLAR
     - Assert the doc contains the required Azure fields, Bedrock notes, data-residency/IAM warning, and separate-adapter note
     - _Requirements: 25.1, 25.2, 25.3, 25.4, 25.5_
 
-- [-] 15. Final checkpoint and verification gates
+- [x] 15. Final checkpoint and verification gates
   - Run `npm test` and `npm run build`; confirm the suite stays hermetic (mocked `fetch`/providers, no live calls) and snapshots/fixtures are scrubbed of secrets; preserve the baseline lower bound of 106 test files and 951 passing tests
   - Ensure all tests pass, ask the user if questions arise.
   - _Requirements: 28.4, 29.1, 29.2, 29.3, 30.1, 30.2, 30.3_
