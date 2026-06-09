@@ -63,6 +63,17 @@ function resolveBaseUrl(ctx: AdapterContext): string {
 }
 
 /**
+ * The transient credential when present and non-blank, otherwise `undefined`.
+ * A missing, empty, or whitespace-only secret is treated as absent so the
+ * adapter can classify it as `auth_invalid` before any network access
+ * (Requirement 2.10).
+ */
+function resolveCredential(ctx: AdapterContext): string | undefined {
+  const trimmed = ctx.secret?.trim();
+  return trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
  * Build the request headers: a JSON `Accept`, any non-secret custom headers
  * from the record, and a bearer `Authorization` when a transient secret is
  * present. The secret is used only to authorize this request and is never
@@ -151,6 +162,15 @@ function classifyStatus(status: number): DiscoveryError {
 export const togetherDiscoveryAdapter: DiscoveryAdapter = {
   kind: "together",
   async discover(ctx: AdapterContext): Promise<AdapterResult> {
+    // An absent required credential is classified up front as `auth_invalid`
+    // without issuing an unauthenticated catalog request (Requirement 2.10).
+    if (resolveCredential(ctx) === undefined) {
+      return {
+        ok: false,
+        error: { category: "auth_invalid", message: "A Together API credential is required to discover models." },
+      };
+    }
+
     const baseUrl = resolveBaseUrl(ctx);
     const headers = buildHeaders(ctx);
 
