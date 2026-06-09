@@ -956,13 +956,35 @@ export const UpsertProviderRequestSchema = z
     baseUrl: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
     models: ProviderModelMapSchema.optional(),
+    /**
+     * Manual_Model_List (Req 3.3): user-entered model identifiers persisted as
+     * non-secret config and used as the `openai-compatible` discovery fallback and as
+     * selectable Active_Route_Map identifiers. Flows through to the persisted
+     * {@link ProviderConfigRecord} unchanged; it never carries secret material.
+     */
+    manualModels: z.array(z.string().min(1)).optional(),
     azure: AzureProviderConfigSchema.optional(),
     cloudflare: CloudflareProviderConfigSchema.optional(),
     headers: z.record(z.string()).optional(),
     /** Optional secret; persisted to the Secret_Store then stripped, never stored in config. */
     apiKey: z.string().min(1).optional(),
   })
-  .strict();
+  .strict()
+  // Provider_Label validation for the BYOK generic provider (Req 3.1, 3.2): an
+  // `openai-compatible` record MUST carry a non-blank label. The base `label` schema
+  // (`z.string().min(1)`) already rejects a missing or empty label for every kind; this
+  // refinement additionally rejects a whitespace-only label for `openai-compatible` so a
+  // blank display name cannot identify a generic provider. On failure the body parse throws
+  // and the route returns a 400 before any record is persisted.
+  .superRefine((value, ctx) => {
+    if (value.kind === "openai-compatible" && value.label.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["label"],
+        message: "label is required for an openai-compatible provider and must not be blank",
+      });
+    }
+  });
 export type UpsertProviderRequest = z.infer<typeof UpsertProviderRequestSchema>;
 
 /** Body for `POST /api/providers/:id/secret`: the secret only (write/replace). */
