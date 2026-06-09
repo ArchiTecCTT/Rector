@@ -58,34 +58,43 @@ function fail(category: DiscoveryError["category"], message: string): AdapterRes
 }
 
 /**
- * The exact set of task values retained from the Cloudflare catalog, mapped to
- * the capability tags each task contributes (Requirement 2.3). Only an entry
- * whose task is exactly `text-generation`, `chat`, or `embeddings` survives;
- * every other task is discarded.
+ * Family markers recognized in a Cloudflare task name, each mapped to the
+ * canonical capability tags that task contributes (Requirement 2.3,
+ * Requirement 12.2). Cloudflare exposes human-readable task names like
+ * `"Text Generation"`, `"Conversational Chat"`, or `"Text Embeddings"` rather
+ * than canonical tokens, so we recognize the real-world task *family* by
+ * substring while still mapping only to the canonical capability set
+ * {text-generation, chat, embeddings}. Order matters: `embedding` is checked
+ * first so an embedding task never collides with the text/chat families.
  */
-const ALLOWED_TASKS: Record<string, string[]> = {
-  // Cloudflare's "Text Generation" task serves chat-style completions.
-  "text-generation": ["text-generation", "chat"],
-  chat: ["chat"],
-  embeddings: ["embeddings"],
-};
+const TASK_FAMILIES: ReadonlyArray<{ marker: string; capabilities: string[] }> = [
+  // Any embedding task (e.g. "Text Embeddings", "Embeddings", "Embedding").
+  { marker: "embedding", capabilities: ["embeddings"] },
+  // Cloudflare's text-generation family serves chat-style completions too.
+  { marker: "text generation", capabilities: ["text-generation", "chat"] },
+  { marker: "text-generation", capabilities: ["text-generation", "chat"] },
+  // Any chat task (e.g. "Chat", "Conversational Chat").
+  { marker: "chat", capabilities: ["chat"] },
+];
 
 /**
- * Normalize a raw task token to its canonical comparison form: trimmed,
- * lower-cased, with internal whitespace collapsed to single hyphens. This lets
- * the human-readable Cloudflare form (e.g. `"Text Generation"`) compare equal
- * to its canonical token (`"text-generation"`) while still requiring an exact
- * match against the allowed set.
+ * Normalize a raw task token to its comparison form: trimmed and lower-cased.
+ * Family matching is substring-based, so internal whitespace is preserved
+ * (unlike an exact-token comparison) — this lets `"Text Generation"` and the
+ * canonical `"text-generation"` both be recognized via their family markers.
  */
 function normalizeTaskToken(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, "-");
+  return value.trim().toLowerCase();
 }
 
 /**
  * The capability tags a Cloudflare task maps to, or `undefined` when the task
- * is not exactly one of the retained categories — `text-generation`, `chat`,
- * or `embeddings` (Requirement 2.3). A Cloudflare entry's `task` is an object
- * like `{ name: "Text Generation" }`, though we also accept a bare string.
+ * belongs to none of the retained families. A task is retained iff its
+ * lower-cased name contains a recognized family marker — `embedding`,
+ * `text generation`/`text-generation`, or `chat` — and maps only to canonical
+ * capabilities drawn from {text-generation, chat, embeddings} (Requirement 2.3,
+ * Requirement 12.2). A Cloudflare entry's `task` is an object like
+ * `{ name: "Text Generation" }`, though we also accept a bare string.
  */
 function classifyTask(entry: Record<string, unknown>): string[] | undefined {
   const taskName = firstString(
@@ -95,7 +104,13 @@ function classifyTask(entry: Record<string, unknown>): string[] | undefined {
   if (taskName === undefined) {
     return undefined;
   }
-  return ALLOWED_TASKS[normalizeTaskToken(taskName)];
+  const normalized = normalizeTaskToken(taskName);
+  for (const { marker, capabilities } of TASK_FAMILIES) {
+    if (normalized.includes(marker)) {
+      return capabilities;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -208,8 +223,9 @@ async function discover(ctx: AdapterContext): Promise<AdapterResult> {
   for (const rawEntry of entries) {
     const entry = asRecord(rawEntry);
 
-    // Retain only entries whose task is exactly text-generation, chat, or
-    // embeddings, discarding all others (Requirement 2.3).
+    // Retain only entries whose task belongs to a recognized Cloudflare task
+    // family — text generation, chat, or embeddings — discarding all others
+    // (Requirement 2.3, Requirement 12.2).
     const capabilities = classifyTask(entry);
     if (capabilities === undefined) {
       continue;

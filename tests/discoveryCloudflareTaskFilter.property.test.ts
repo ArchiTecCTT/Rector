@@ -5,17 +5,21 @@
  * **Validates: Requirements 2.3**
  *
  * For any Cloudflare catalog response, the Cloudflare_Discovery_Adapter's
- * retained entries are exactly those whose task is one of `text-generation`,
- * `chat`, or `embeddings`, and no entry with any other task survives.
+ * retained entries are exactly those whose task name belongs to a recognized
+ * Cloudflare task family — its lower-cased name contains `embedding`,
+ * `chat`, or `text generation`/`text-generation` — each mapping only to the
+ * canonical capability set {text-generation, chat, embeddings}; no entry with
+ * any other task survives.
  *
  * The generator builds an arbitrary catalog whose entries carry *varied* task
- * values: allowed tasks in assorted casings / whitespace forms (the adapter
- * canonicalizes a human "Text Generation" to "text-generation"), interleaved
- * with disallowed tasks — a curated set of real Cloudflare tasks plus fully
- * arbitrary strings that never canonicalize to an allowed token. Each entry's
- * task is presented as either a bare string or a `{ name }` object, since the
- * adapter accepts both shapes. Every entry is non-deprecated so this property
- * isolates the task filter (Req 2.3) from the deprecated gating (Req 12.x).
+ * values: allowed tasks in assorted casings / whitespace forms and real
+ * human-readable Cloudflare family names (e.g. "Conversational Chat", "Text
+ * Embeddings"), interleaved with disallowed tasks — a curated set of real
+ * Cloudflare tasks plus fully arbitrary strings that contain no family marker.
+ * Each entry's task is presented as either a bare string or a `{ name }`
+ * object, since the adapter accepts both shapes. Every entry is non-deprecated
+ * so this property isolates the task filter (Req 2.3) from the deprecated
+ * gating (Req 12.x).
  *
  * The oracle is the per-entry `allowed` tag, so the assertions never re-derive
  * the adapter's classification from its own output. Every run is hermetic: the
@@ -31,21 +35,22 @@ import type { AdapterContext } from "../src/providers/discovery/adapters/index";
 const ACCOUNT_ID = "acct-prop-7";
 
 /**
- * The exact canonical task tokens the adapter retains (Req 2.3). The adapter
- * canonicalizes a raw task by trimming, lower-casing, and collapsing internal
- * whitespace runs to single hyphens before an exact match against this set.
+ * The family markers the adapter retains (Req 2.3 / Req 12.2). A task is kept
+ * iff its lower-cased name contains one of these markers; the family maps only
+ * to canonical capabilities drawn from {text-generation, chat, embeddings}.
  */
-const ALLOWED_CANONICAL = new Set(["text-generation", "chat", "embeddings"]);
+const FAMILY_MARKERS = ["embedding", "chat", "text generation", "text-generation"] as const;
 
-/** Canonicalize a raw task token exactly as the adapter does (the test oracle). */
-function canonicalizeTask(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, "-");
+/** Whether a raw task name belongs to a retained family — the test oracle. */
+function isFamilyTask(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return FAMILY_MARKERS.some((marker) => normalized.includes(marker));
 }
 
 /**
  * Allowed task values in varied surface forms — exact tokens, human casing,
- * surrounding whitespace, and space-for-hyphen — each canonicalizing to one of
- * the three retained tokens.
+ * surrounding whitespace, space-for-hyphen, and real Cloudflare family names —
+ * each containing a retained family marker.
  */
 const ALLOWED_TASK_FORMS = [
   "text-generation",
@@ -55,14 +60,18 @@ const ALLOWED_TASK_FORMS = [
   "chat",
   "Chat",
   " CHAT ",
+  "Conversational Chat",
   "embeddings",
   "Embeddings",
   "  EMBEDDINGS",
+  "Text Embeddings",
+  "Embedding",
 ] as const;
 
 /**
- * Disallowed task values — real Cloudflare catalog tasks that are not one of the
- * three retained categories. None canonicalize to an allowed token.
+ * Disallowed task values — real Cloudflare catalog tasks that belong to no
+ * retained family. None contain an `embedding`, `chat`, or `text generation`
+ * marker.
  */
 const DISALLOWED_TASK_FORMS = [
   "Image Classification",
@@ -74,7 +83,6 @@ const DISALLOWED_TASK_FORMS = [
   "Summarization",
   "Image-to-Text",
   "Text Classification",
-  "embedding", // singular — not the exact "embeddings" token
 ] as const;
 
 /** One arbitrary catalog entry's intent, resolved to a concrete entry by index. */
@@ -90,13 +98,13 @@ interface EntrySpec {
 
 /**
  * An arbitrary disallowed task: either a curated real task or a fully arbitrary
- * string that does not canonicalize to an allowed token. An empty/whitespace
- * string is a valid disallowed task too (the adapter discards an unclassifiable
- * task), so only the allowed tokens are filtered out.
+ * string that belongs to no retained family. An empty/whitespace string is a
+ * valid disallowed task too (the adapter discards an unclassifiable task), so
+ * only strings containing a family marker are filtered out.
  */
 const arbDisallowedTask: fc.Arbitrary<string> = fc.oneof(
   fc.constantFrom(...DISALLOWED_TASK_FORMS),
-  fc.string({ maxLength: 24 }).filter((s) => !ALLOWED_CANONICAL.has(canonicalizeTask(s))),
+  fc.string({ maxLength: 24 }).filter((s) => !isFamilyTask(s)),
 );
 
 const arbEntrySpec: fc.Arbitrary<EntrySpec> = fc.record({
