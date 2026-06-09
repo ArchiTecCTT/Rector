@@ -90,6 +90,14 @@ export const ProviderConfigRecordSchema = z
     model: NonEmptyStringSchema.optional(),
     /** Optional per-role model id overrides. */
     models: ProviderModelMapSchema.optional(),
+    /**
+     * Manual_Model_List: user-entered model identifiers persisted on the
+     * record. Used as a discovery fallback for `openai-compatible` providers and
+     * as selectable model identifiers the Active_Route_Map may designate for the
+     * `flagship` / `slm` roles (Requirements 3.3, 3.8). Non-secret: this list
+     * never carries secret material.
+     */
+    manualModels: z.array(NonEmptyStringSchema).optional(),
     /** Azure OpenAI-specific coordinates. */
     azure: AzureProviderConfigSchema.optional(),
     /** Cloudflare Workers AI-specific coordinates. */
