@@ -95,17 +95,30 @@ export class StoreConfigError extends Error {
 /** The local SQLite file used when `driver === "sqlite"` and no path is configured. */
 export const DEFAULT_SQLITE_PATH = ".rector/rector.db";
 
-/** The TiDB connection fields that must all be present for the hosted path. */
+/**
+ * The TiDB connection fields that must all be present AND non-empty for the
+ * hosted path (Req 8.2: a field that is missing OR empty names that field).
+ *
+ * A string field is treated as absent when it is undefined or trims to empty;
+ * `port` is treated as absent when it is undefined or not a finite number.
+ * Raised before any driver is constructed, so no network connection is
+ * attempted for an incomplete config.
+ */
 function assertCompleteTiDBConfig(
   tidb: TiDBConnectionConfig | undefined
 ): asserts tidb is Required<Pick<TiDBConnectionConfig, "host" | "port" | "user" | "password" | "database">> &
   TiDBConnectionConfig {
+  const isBlankString = (value: unknown): boolean =>
+    typeof value !== "string" || value.trim().length === 0;
+  const isInvalidPort = (value: unknown): boolean =>
+    typeof value !== "number" || !Number.isFinite(value);
+
   const missing: string[] = [];
-  if (!tidb || tidb.host === undefined) missing.push("host");
-  if (!tidb || tidb.port === undefined) missing.push("port");
-  if (!tidb || tidb.user === undefined) missing.push("user");
-  if (!tidb || tidb.password === undefined) missing.push("password");
-  if (!tidb || tidb.database === undefined) missing.push("database");
+  if (!tidb || isBlankString(tidb.host)) missing.push("host");
+  if (!tidb || isInvalidPort(tidb.port)) missing.push("port");
+  if (!tidb || isBlankString(tidb.user)) missing.push("user");
+  if (!tidb || isBlankString(tidb.password)) missing.push("password");
+  if (!tidb || isBlankString(tidb.database)) missing.push("database");
   if (missing.length > 0) {
     throw new StoreConfigError(
       `Persistence driver "tidb" requires a complete connection block; missing: ${missing.join(", ")}.`
