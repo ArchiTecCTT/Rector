@@ -1,29 +1,30 @@
 # Rector — Chat-First Self-Healing AI for Software Engineering
 
-> Open-source Apache-2.0 software that gives users a normal chat experience while hidden deterministic orchestration, validation, and self-healing loops handle the engineering work underneath.
+> Open-source Apache-2.0 software that gives users a normal, **hassle-free** chat experience. Configure providers, memory databases (local, Mem0, TiDB Cloud, etc.), sandbox, and more entirely through the web UI — no file or environment editing required for normal use. Hidden deterministic orchestration, validation, and self-healing loops handle the engineering work underneath. Local mode remains a perfect regression baseline.
 
-[![Status](https://img.shields.io/badge/status-0.1.0--alpha-blue?style=flat-square)](#)
+[![Status](https://img.shields.io/badge/status-cloud--capable--transition-blue?style=flat-square)](#)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square)](#)
 
 ---
 
 ## What Is Rector?
 
-Rector is a chat-first AI engineering system. Users should interact with it like Claude or ChatGPT: open chat, describe the work, watch concise progress, and receive useful output. They should not need to operate model routing, subagents, retries, validation, or repair loops manually.
+Rector is a chat-first AI engineering system designed to be usable daily on a VPS or cloud. Users interact with it like Claude or ChatGPT: open chat, describe the work, watch concise progress, and receive useful output. The app is configurable via the web UI for LLM providers, memory backends (pluggable: local in-memory/SQLite, Mem0, TiDB Cloud, and others), sandbox execution, telemetry, etc. Users should not need to operate model routing, subagents, retries, validation, or repair loops manually, nor edit config files.
 
 Most AI coding agents are brilliant but unreliable. They hallucinate APIs, get stuck in infinite loops, and cost a fortune because they use a frontier model for every single step.
 
-Rector solves this by applying a fundamental principle from manufacturing: **separate planning from execution**.
+Rector solves this by applying a fundamental principle from manufacturing: **separate planning from execution**, combined with a non-rigid, pluggable architecture for real usability.
 
 Behind the chat interface, Rector uses:
 
 1. **A deterministic control plane** — a run state machine that programmatically drives every phase transition, retry, and healing decision, so routing is auditable rather than LLM-guessed
-2. **A tiered intelligence pipeline** — cheap SLMs are intended for the mechanical work; flagship models are reserved strictly for deep reasoning and final synthesis (provider routing ships behind adapters; the alpha runs fully on fake/local adapters)
+2. **A tiered intelligence pipeline** — cheap SLMs for mechanical work (including preprocessing and reflection); flagship models reserved for deep reasoning and synthesis. Routing and backends (including memory) are configurable via UI.
 3. **A bounded self-healing loop** — generated work is validated, and recoverable failures trigger a capped, deterministic repair loop before they cascade
+4. **Neuro-symbolic enhancements** (memory with notes/pruning/time-awareness, proactive "alive" behavior, symbolic rules, optional deep exploration, pondering, decomposition) to make the system remember context, reflect, and feel alive for long-running coding work.
 
-The result: a system that thinks before it acts, debates before it executes, and heals itself when things break — at a fraction of the cost of monolithic LLM approaches.
+The result: a system that thinks before it acts, debates before it executes, heals itself when things break, and can be configured hassle-free for your environment — at a fraction of the cost of monolithic LLM approaches.
 
-> **Alpha status:** This is a local developer preview. The full pipeline runs end-to-end on deterministic fake/local adapters with no API keys and no network. External providers, durable storage, and real sandbox isolation are defined behind contracts but not yet live — see [Status and Current Plan](#status-and-current-plan).
+> **Current direction:** Cloud-capable transition toward a usable VPS/cloud product. The full pipeline supports external BYOK providers, durable storage options, and real sandbox execution behind adapters. Local/provider-free mode is always available as an identical regression baseline (no keys or network required for tests and safe development). See the active spec in `.kiro/specs/cloud-capable-transition/` and [Status and Current Plan](#status-and-current-plan).
 
 ---
 

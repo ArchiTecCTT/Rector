@@ -1,4 +1,13 @@
-# Deployment Prototype — v0.1.0-alpha
+# Deployment Prototype — v0.1.0-alpha (HISTORICAL)
+
+**STATUS: HISTORICAL.** This described early alpha prototype deployment shapes (Heroku etc.) under the old local-first MVP vision.
+
+For the current cloud-capable transition (hassle-free VPS/cloud product with web-UI configuration for providers, memory backends like local/Mem0/TiDB, etc.):
+- See `.kiro/specs/cloud-capable-transition/`
+- See `docs/architecture/current-rector-byok-architecture.md`
+- Real deployment will emphasize UI-driven config and pluggable non-rigid backends.
+
+Original content (kept for reference only):
 
 Rector alpha remains local-first. This document describes deploy-shaped configuration only. It does not perform Heroku, Cloudflare, MongoDB, Redis, Chroma, Sentry, or PostHog network actions.
 

@@ -1,5 +1,18 @@
-# Rector 0.1.0 Architecture
+# Rector 0.1.0 Architecture (HISTORICAL)
 
+> **STATUS: HISTORICAL — v0.1.0-alpha local prototype vision.**
+> This document describes the original lightweight local developer preview / "brainstem" prototype goals.
+> **It is no longer the active architecture.**
+> 
+> See instead:
+> - `.kiro/specs/cloud-capable-transition/` (active spec for cloud-capable, VPS, hassle-free UI-configurable product)
+> - `docs/architecture/current-rector-byok-architecture.md` (current architecture)
+> - `docs/plans/chunks/033-...` and later for transition work
+> - AGENTS.md and docs/README.md (updated vision: non-rigid, pluggable, web-UI configuration for providers including memory DBs like local/Mem0/TiDB Cloud)
+>
+> Local/provider-free mode remains the perfect regression baseline.
+>
+> Original status (kept for reference):
 > Status: Reviewed draft v2 for branch `rector-0.1.0`.
 > Product target: best achievable prototype now, scalable later.
 > Review inputs: GLM product/architecture, implementation/testability, and stack/ops/security reviews on 2026-06-03.

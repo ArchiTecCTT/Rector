@@ -71,6 +71,36 @@
 - **Future work:** Event-driven triggers (e.g. on long NEEDS_DECISION from memory), better frequency control using memory, UI badge using the source field.
 - **Traceability:** `docs/plans/chunks/028-proactive-alive-layer.md`, `src/proactive/proactiveAgent.ts`, wiring in `src/api/server.ts`, `tests/proactive.test.ts`, schema extension in `src/store/schemas.ts`.
 
+### Doc cleanup and vision shift (Chunk 33) + Cloud-capable transition
+
+- **Source:** Direction change from lightweight local alpha MVP to hassle-free, web-UI-configurable cloud-capable VPS product (with pluggable memory providers: local/Mem0/TiDB/etc.).
+- **Severity:** Medium (documentation debt, potential contributor confusion during transition; increased emphasis on UI surfaces for config may expand attack surface or complexity for pluggable backends).
+- **Status:** Open / in progress.
+- **Root cause:** Many docs, AGENTS.md, README, roadmap, architecture, .env, etc., were written for "v0.1.0-alpha local developer preview" as the target. The cloud-capable-transition .kiro spec exists but was not fully reflected in main docs. New requirement for non-rigid architecture + full UI config for memory DB providers adds pluggability needs beyond current persistence driver.
+- **Plan / Mitigations:**
+  - Created Chunk 33 plan + inventory (`docs/stale-docs-inventory.md`).
+  - Updated AGENTS.md, root README, docs/README, added banners to historical architecture/deployment docs, aligned .env.example comments to prefer UI config and note pluggable memory vision.
+  - Local baseline language preserved where it is factually a regression requirement.
+  - Future cloud chunks will extend UI-managed config pattern (already used for providers) to memory/persistence backends.
+  - Non-rigid design: avoid hard dependencies; use adapters/interfaces for memory providers.
+- **Future work:** Complete remaining items from .kiro/cloud-capable-transition (E2B, synthesizer streaming, TiDB, etc.), adapted for hassle-free UI memory config (e.g. new MemoryProvider config store + UI flows, adapters for Mem0/TiDB/local). Update more docs, add cloud quickstart. Verify no breakage to local tests.
+- **Traceability:** `docs/plans/chunks/033-stale-doc-cleanup-vision-alignment.md`, `docs/stale-docs-inventory.md`, edits to AGENTS.md/README/docs/README/etc., `.kiro/specs/cloud-capable-transition/`.
+
+### New risk from user vision: Pluggable memory providers via UI
+
+- **Source:** User requirement for hassle-free configuration of agent memory database (local or Mem0/TiDB cloud) entirely through web UI, non-rigid architecture.
+- **Severity:** Medium (expands config surface; requires careful abstraction so local baseline isn't affected; potential for misconfiguration leading to data loss or cost in cloud backends).
+- **Status:** Open.
+- **Root cause:** Current persistence is driven by RECTOR_PERSISTENCE + env / createRectorStore (memory/sqlite/tidb). Memory is layered on top (truth library + new hierarchical in-memory from 27). No UI-managed "MemoryProvider" equivalent to Provider_Config_Store yet. Adding Mem0 (external) or switching TiDB etc. via UI increases the need for runtime pluggable adapters, secure secret handling for cloud memory, and UI validation.
+- **Plan / Mitigations (to be implemented in follow-on chunks):**
+  - Extend the UI config pattern (non-secret records + encrypted secrets) to memory backends.
+  - Create adapter interface for memory providers (local implementations + Mem0 client, TiDB-backed, etc.).
+  - All config changes via Settings_API; local mode never uses external memory providers.
+  - Redaction, budget (if applicable for cloud memory), and migration paths for data.
+  - Keep in-memory/SQLite as zero-config local defaults.
+  - Update neuro memory code (from 27) to work behind the pluggable layer.
+- **Traceability:** This entry + future chunks after 033; reference in cloud-capable-transition adaptation. Use stack credits (Mem0, TiDB, Chroma) for optional adapters.
+
 ### Chat store is in-memory and resets on restart
 
 - **Source:** Chunk 6 worker/reviewer.

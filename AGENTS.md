@@ -4,25 +4,28 @@
 
 Rector is Apache-2.0 open-source software: a chat-first self-healing AI engineering orchestration system.
 
-User experience goal: user interacts like Claude/ChatGPT. Hidden beneath chat, Rector runs deterministic orchestration: triage, context building, planning, skeptic review, crucible arbitration, DAG compilation, execution, validation, healing, and synthesis. Users should not manage agents, model routing, retries, validation, or repair loops manually.
+User experience goal: user interacts like Claude/ChatGPT in a **hassle-free** way. The app is designed to be configurable entirely through the web UI — users select and configure their own providers for LLMs, memory databases (local in-memory/SQLite, Mem0, TiDB Cloud, and others), sandbox, telemetry, etc., without editing files or environment variables. Hidden beneath chat, Rector runs deterministic orchestration: triage, context building, planning, skeptic review, crucible arbitration, DAG compilation, execution, validation, healing, and synthesis. Users should not manage agents, model routing, retries, validation, or repair loops manually.
+
+The system supports a non-rigid, pluggable architecture so it can run locally for development or scale to a VPS/cloud deployment as a usable daily coding tool.
 
 ## Current Branch / Worktree
 
 - Active branch: `rector-0.1.0`
 - Worktree path: `C:/Users/MharSky/Dev/Projects/Rector/.worktrees/rector-0.1.0`
-- Target first public release: `v0.1.0-alpha` local developer preview, not production SaaS.
+- Primary goal: Cloud-capable, VPS-deployable commercial product with full web-UI configuration for providers and backends (including memory). Local/provider-free mode remains the mandatory perfect regression baseline and contributor-friendly default.
 
 ## Source of Truth
 
 Read these before planning or implementing:
 
-1. `docs/architecture/rector-0.1.0-architecture.md`
-2. `docs/plans/rector-master-roadmap.md`
-3. `docs/plans/chunks/*.md` for completed/current chunk plans
-4. `docs/plans/concerns-and-vulnerabilities.md` for deferred risks
-5. `docs/plans/chunks/002-migration-map.md` before touching old task-MVP modules
+1. `.kiro/specs/cloud-capable-transition/` (requirements.md, design.md, tasks.md) — current active spec for transitioning to a hassle-free, UI-configurable cloud-capable system.
+2. `docs/architecture/current-rector-byok-architecture.md` — current architecture (local-first BYOK with pluggable providers).
+3. `docs/plans/rector-master-roadmap.md` (update in progress for cloud direction).
+4. `docs/plans/chunks/*.md` for completed/current chunk plans (including 26-32 neuro-symbolic enhancements for usability and 033+ for cloud transition).
+5. `docs/plans/concerns-and-vulnerabilities.md` for deferred risks.
+6. `docs/plans/chunks/002-migration-map.md` before touching old task-MVP modules.
 
-Stale/quarantined docs have warning banners. If stale docs conflict with source-of-truth docs, source-of-truth wins.
+Stale/quarantined docs have warning banners. If stale docs conflict with source-of-truth docs, source-of-truth wins. Historical alpha-local docs (e.g. old rector-0.1.0-architecture.md) are retained for reference but are no longer authoritative for the primary product direction.
 
 ## Build / Test Commands
 
@@ -89,18 +92,24 @@ Current test baseline after Chunk 25:
 
 ## Active Development Goal
 
-User approved continuing Alpha Build development through the final roadmap chunk. Optimize for fast, responsive, light system design; credits are available but local/provider-free mode must remain default. Every new feature must be extensively tested. If unsure about architecture/library choices, use web_search and choose the most logical option, not merely the most token-cheap option. At end, run multiple `google-vertex/gemini-3.5-flash` review agents over the full worktree to document only valid bugs/vulnerabilities/issues, including undocumented ones; reviewers must validate findings with code/tests where possible. Keep `docs/plans/concerns-and-vulnerabilities.md` complete.
+Shift to a hassle-free, UI-configurable commercial cloud-capable system suitable for VPS deployment and daily coding work. The app must allow users to configure providers and backends (LLMs, memory databases like local/Mem0/TiDB Cloud, sandbox, etc.) entirely through the web UI without file or env edits. Local/provider-free mode must remain the mandatory, identical regression baseline for tests, contributors, and safe development (never broken by cloud features). 
 
-## Next Chunks Needed for v0.1.0-alpha
+The neuro-symbolic enhancements (chunks 26-32: SLM preprocessing, advanced hierarchical memory with notes/pruning/time-awareness, proactive layer, symbolic engines, MCTS, ponder swarm, task decomposition) are part of making the system actually usable and "alive" for real work.
 
-Roadmap chunks 0–25 are implemented. Remaining pre-release hardening items:
+Every new feature must be extensively tested. Architecture should stay non-rigid and pluggable to support the UI-config vision. Use web_search for choices when unsure. At end of major work, run reviews. Keep `docs/plans/concerns-and-vulnerabilities.md` complete. Follow chunk discipline: plan in `docs/plans/chunks/`, commit separately.
 
-- final multi-agent bug/vulnerability audit
-- dependency audit triage
-- clean local UI demo polish
-- CI workflow enforcement
-- screenshots/GIF
-- release tag
+The .kiro/specs/cloud-capable-transition/ spec (adapted for hassle-free UI config and non-rigid design) is the active guide for the transition work.
+
+## Next Work
+
+Roadmap chunks 0–32 (foundation + neuro-symbolic usability) are implemented. Active focus is the cloud-capable transition per `.kiro/specs/cloud-capable-transition/` (BYOK model discovery, real E2B sandbox, TiDB persistence, boot-tolerant config, streamed answers, UI surfaces for configuration), extended with:
+
+- Full web-UI configurability for all providers and backends, including pluggable memory database providers (local options, Mem0, TiDB Cloud, future).
+- Non-rigid, pluggable architecture to avoid lock-in.
+- Hassle-free experience: minimal or no file/env editing required for normal use.
+- Integration of neuro-symbolic features into the configurable cloud product.
+
+See the cloud-capable-transition tasks for detailed items. Create new chunk plans (starting 033+) for phases of this work.
 
 ## Release Path
 
