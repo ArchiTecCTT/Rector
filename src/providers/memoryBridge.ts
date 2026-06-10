@@ -105,6 +105,32 @@ export function buildMemoryProviderFromRecord(
 }
 
 /**
+ * Resolve a single memory provider by id for connection testing (mirrors
+ * {@link resolveTestProvider} in configBridge). Returns `undefined` when no
+ * persisted record matches the id. Does NOT fall back to local-inmemory — the
+ * caller treats a missing record as not-found and build/validation failures as
+ * `CONFIG_INVALID`.
+ */
+export async function resolveTestMemoryProvider(
+  providerId: string,
+  configStore: MemoryConfigStore,
+  secrets: SecretStore,
+  options: ResolveMemoryProviderOptions = {},
+): Promise<MemoryProvider | undefined> {
+  const state = await configStore.getState();
+  const record = state.providers.find((p) => p.id === providerId);
+  if (!record) return undefined;
+
+  if (record.kind === "local-inmemory" || record.kind === "local-sqlite-mem") {
+    return buildMemoryProviderFromRecord(record, undefined, options);
+  }
+
+  const secretResult = await secrets.getSecret(record.secretRef);
+  const secret = secretResult.ok ? secretResult.value : undefined;
+  return buildMemoryProviderFromRecord(record, secret, options);
+}
+
+/**
  * Resolve the active MemoryProvider from the persisted config + secrets.
  *
  * - If mode === 'local' or there is no active record or the active kind is a

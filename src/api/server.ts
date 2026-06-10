@@ -44,8 +44,14 @@ import { resolveTestProvider } from "../providers/configBridge";
 // live in src/memory/provider.ts. We resolve once per app and use for neuro memory paths.
 import {
   resolveActiveMemoryProvider,
+  resolveTestMemoryProvider,
   createPureLocalMemoryProvider,
-  type MemoryConfigStore as _MemoryConfigStore,
+  MemoryProviderKindSchema,
+  MemoryProviderConfigSchema,
+  MemoryProviderRecordSchema,
+  type MemoryProviderRecord,
+  createInMemoryMemoryConfigStore,
+  type MemoryConfigStore,
 } from "../providers";
 import type { MemoryProvider } from "../memory/provider";
 import { classifyProbeError, ProbeErrorCategorySchema, type ProbeFailureSignal } from "../providers/probe";
@@ -149,7 +155,18 @@ export interface ApiSecurityOptions {
    * Mem0, TiDB-memory, etc.) per the hassle-free vision. Neuro memory paths (notes, context) use
    * the resolved provider; RectorStore.memory* surface remains for main persistence tests.
    */
-  memoryConfigStore?: import("../providers/memoryConfigStore").MemoryConfigStore;
+  memoryConfigStore?: MemoryConfigStore;
+
+  /**
+   * Optional override for {@link resolveTestMemoryProvider} used by
+   * `POST /api/memory-providers/:id/test-connection`. Enables deterministic
+   * doubles in unit tests without touching the route.
+   */
+  resolveTestMemoryProvider?: (
+    providerId: string,
+    configStore: MemoryConfigStore,
+    secrets: SecretStore,
+  ) => Promise<MemoryProvider | undefined>;
 
   /**
    * Optional, read-only {@link WorkspaceSafetyConfig} surfaced by the workspace-safety route
@@ -1051,6 +1068,93 @@ export const SetActiveRouteRequestSchema = z
   .strict();
 export type SetActiveRouteRequest = z.infer<typeof SetActiveRouteRequestSchema>;
 
+// --- Memory_Provider_API request schemas (Chunk 36, mirrors Provider_Config_API) ---
+
+/**
+ * Upsert body for `POST /api/memory-providers`. Mirrors the non-secret
+ * {@link MemoryProviderRecord} the caller may set, plus an OPTIONAL write-once
+ * `apiKey`. Server-managed fields (`secretRef`, `createdAt`, `updatedAt`) are
+ * derived/stamped by the route. `secretRef` is `memory:${id}`.
+ */
+export const UpsertMemoryProviderRequestSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: MemoryProviderKindSchema,
+    label: z.string().min(1),
+    config: MemoryProviderConfigSchema,
+    /** Optional secret; persisted to the Secret_Store then stripped, never stored in config. */
+    apiKey: z.string().min(1).optional(),
+  })
+  .strict();
+export type UpsertMemoryProviderRequest = z.infer<typeof UpsertMemoryProviderRequestSchema>;
+
+/** Body for `POST /api/memory-providers/:id/secret`: the secret only (write/replace). */
+export const SetMemoryProviderSecretRequestSchema = z
+  .object({ apiKey: z.string().min(1) })
+  .strict();
+export type SetMemoryProviderSecretRequest = z.infer<typeof SetMemoryProviderSecretRequestSchema>;
+
+/** Body for `POST /api/memory-providers/active`: designate (or clear, with `null`) the active provider. */
+export const SetActiveMemoryProviderRequestSchema = z
+  .object({
+    providerId: z.string().min(1).nullable(),
+  })
+  .strict();
+export type SetActiveMemoryProviderRequest = z.infer<typeof SetActiveMemoryProviderRequestSchema>;
+
+/** Response for `POST /api/memory-providers/:id/test-connection`. */
+export const TestMemoryProviderConnectionResponseSchema = z.object({
+  ok: z.boolean(),
+  providerId: z.string().min(1),
+  kind: z.string().optional(),
+  code: z.string().optional(),
+  error: z.string().optional(),
+  /** Always false for memory providers (validateConfig only; no network ping). */
+  networkAttempted: z.boolean(),
+});
+export type TestMemoryProviderConnectionResponse = z.infer<typeof TestMemoryProviderConnectionResponseSchema>;
+
+/**
+ * Validates a built memory provider's configuration. Local kinds always succeed
+ * without reading secrets or performing network I/O. External kinds run
+ * `validateConfig()` on the supplied instance.
+ */
+export function runMemoryProviderConnectionTest(input: {
+  providerId: string;
+  provider: MemoryProvider;
+  kind: string;
+}): TestMemoryProviderConnectionResponse {
+  const { providerId, provider, kind } = input;
+
+  if (kind === "local-inmemory" || kind === "local-sqlite-mem") {
+    return TestMemoryProviderConnectionResponseSchema.parse({
+      ok: true,
+      providerId,
+      kind,
+      networkAttempted: false,
+    });
+  }
+
+  try {
+    provider.validateConfig?.();
+    return TestMemoryProviderConnectionResponseSchema.parse({
+      ok: true,
+      providerId,
+      kind,
+      networkAttempted: false,
+    });
+  } catch (error) {
+    return TestMemoryProviderConnectionResponseSchema.parse({
+      ok: false,
+      providerId,
+      kind,
+      code: "CONFIG_INVALID",
+      error: redactString(error instanceof Error ? error.message : String(error)),
+      networkAttempted: false,
+    });
+  }
+}
+
 /**
  * The Settings_API model-discovery deadline (cloud-capable-transition Req 4.6). The discovery
  * handler races the {@link ModelDiscoveryService} call against this outer timer and returns a
@@ -1932,6 +2036,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // tests without forcing a real disk store; the non-test app injects the local
   // `.rector/providers.json` store via `securityOptions.providerConfigStore` (task 5.1).
   const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
+  // Memory_Config_Store backing the Memory_Provider_API routes (Chunk 36). Inert when omitted:
+  // a fresh in-memory store is used so tests work without disk; the real app injects the local
+  // `.rector/memory-providers.json` store via `securityOptions.memoryConfigStore`.
+  const memoryConfigStore = securityOptions.memoryConfigStore ?? createInMemoryMemoryConfigStore();
+  const resolveMemoryProviderForTest =
+    securityOptions.resolveTestMemoryProvider ?? resolveTestMemoryProvider;
   app.get("/api/setup/status", async (_req, res) => {
     try {
       const status = await computeSetupStatus(process.env, setupSecretStore);
@@ -2200,6 +2310,208 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       }
 
       sendRedacted(res, 200, { removed: true, id: existing.id });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // --- Memory_Provider_API: CRUD + selection (Chunk 36, mirrors Provider_Config_API) ---
+  //
+  // Every response is routed through `sendRedacted`/`redactOutbound` so no full or partial secret
+  // value can appear in any response. Secrets are accepted on input, persisted ONLY via the
+  // Secret_Store under `memory:${id}` refs, and never written to the Memory_Config_Store or
+  // echoed back; responses expose a `secretPresent` boolean only.
+
+  // GET /api/memory-providers — non-secret records + activeMemoryProviderId + secretPresent booleans.
+  app.get("/api/memory-providers", async (_req, res) => {
+    try {
+      const state = await memoryConfigStore.getState();
+      const providers = await Promise.all(
+        state.providers.map(async (record) => ({
+          ...record,
+          secretPresent: await setupSecretStore.hasSecret(record.secretRef),
+        })),
+      );
+      const presenceById = new Map(providers.map((p) => [p.id, p.secretPresent]));
+      sendRedactedPreservingPresence(
+        res,
+        200,
+        { providers, activeMemoryProviderId: state.activeMemoryProviderId },
+        (redacted) => {
+          for (const provider of redacted.providers ?? []) {
+            provider.secretPresent = presenceById.get(provider.id) ?? false;
+          }
+          return redacted;
+        },
+      );
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // POST /api/memory-providers — upsert a non-secret record; optional `apiKey` to Secret_Store first.
+  app.post("/api/memory-providers", async (req, res) => {
+    let body: UpsertMemoryProviderRequest;
+    try {
+      body = UpsertMemoryProviderRequestSchema.parse(req.body ?? {});
+    } catch (err: unknown) {
+      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
+    }
+
+    try {
+      const state = await memoryConfigStore.getState();
+      const existing = state.providers.find((record) => record.id === body.id);
+      const now = new Date().toISOString();
+      const { apiKey, ...config } = body;
+      const secretRef = `memory:${body.id}`;
+
+      if (apiKey !== undefined) {
+        const secretResult = await setupSecretStore.setSecret(secretRef, apiKey);
+        if (!secretResult.ok) {
+          return sendRedacted(res, 500, { error: redactString(secretResult.error) });
+        }
+      }
+
+      const record: MemoryProviderRecord = MemoryProviderRecordSchema.parse({
+        ...config,
+        secretRef,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      });
+
+      const upsertResult = await memoryConfigStore.upsertMemoryProvider(record);
+      if (!upsertResult.ok) {
+        return sendRedacted(res, 500, { error: redactString(upsertResult.error) });
+      }
+
+      const secretPresent = await setupSecretStore.hasSecret(secretRef);
+      sendRedactedPreservingPresence(
+        res,
+        200,
+        { provider: { ...upsertResult.value, secretPresent } },
+        (redacted) => {
+          if (redacted.provider) redacted.provider.secretPresent = secretPresent;
+          return redacted;
+        },
+      );
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // POST /api/memory-providers/active — designate (or clear) the active memory provider.
+  app.post("/api/memory-providers/active", async (req, res) => {
+    let body: SetActiveMemoryProviderRequest;
+    try {
+      body = SetActiveMemoryProviderRequestSchema.parse(req.body ?? {});
+    } catch (err: unknown) {
+      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
+    }
+
+    try {
+      const result = await memoryConfigStore.setActiveMemoryProvider(body.providerId);
+      if (!result.ok) {
+        return sendRedacted(res, 500, { error: redactString(result.error) });
+      }
+      const state = await memoryConfigStore.getState();
+      sendRedacted(res, 200, { activeMemoryProviderId: state.activeMemoryProviderId });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // POST /api/memory-providers/:id/secret — write/replace only the secret for an existing record.
+  app.post("/api/memory-providers/:id/secret", async (req, res) => {
+    let body: SetMemoryProviderSecretRequest;
+    try {
+      body = SetMemoryProviderSecretRequestSchema.parse(req.body ?? {});
+    } catch (err: unknown) {
+      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
+    }
+
+    try {
+      const state = await memoryConfigStore.getState();
+      const existing = state.providers.find((record) => record.id === req.params.id);
+      if (!existing) return res.status(404).json({ error: "Memory provider not found" });
+
+      const result = await setupSecretStore.setSecret(existing.secretRef, body.apiKey);
+      if (!result.ok) {
+        return sendRedacted(res, 500, { error: redactString(result.error) });
+      }
+      sendRedactedPreservingPresence(res, 200, { id: existing.id, secretPresent: true }, (redacted) => {
+        redacted.secretPresent = true;
+        return redacted;
+      });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // DELETE /api/memory-providers/:id — remove the record AND its stored secret.
+  app.delete("/api/memory-providers/:id", async (req, res) => {
+    try {
+      const state = await memoryConfigStore.getState();
+      const existing = state.providers.find((record) => record.id === req.params.id);
+      if (!existing) return res.status(404).json({ error: "Memory provider not found" });
+
+      const removeResult = await memoryConfigStore.removeMemoryProvider(existing.id);
+      if (!removeResult.ok) {
+        return sendRedacted(res, 500, { error: redactString(removeResult.error) });
+      }
+
+      if (setupSecretStore.deleteSecret) {
+        const secretResult = await setupSecretStore.deleteSecret(existing.secretRef);
+        if (!secretResult.ok) {
+          return sendRedacted(res, 500, { error: redactString(secretResult.error) });
+        }
+      }
+
+      sendRedacted(res, 200, { removed: true, id: existing.id });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // POST /api/memory-providers/:id/test-connection — validateConfig on a built provider.
+  app.post("/api/memory-providers/:id/test-connection", async (req, res) => {
+    const providerId = req.params.id;
+
+    try {
+      const state = await memoryConfigStore.getState();
+      const record = state.providers.find((candidate) => candidate.id === providerId);
+      if (!record) {
+        return res.status(404).json({ error: "Memory provider not found" });
+      }
+
+      let provider: MemoryProvider;
+      try {
+        const resolved = await resolveMemoryProviderForTest(
+          providerId,
+          memoryConfigStore,
+          setupSecretStore,
+        );
+        if (!resolved) {
+          return res.status(404).json({ error: "Memory provider not found" });
+        }
+        provider = resolved;
+      } catch (error) {
+        const result = TestMemoryProviderConnectionResponseSchema.parse({
+          ok: false,
+          providerId,
+          kind: record.kind,
+          code: "CONFIG_INVALID",
+          error: redactString(errorMessageOf(error)),
+          networkAttempted: false,
+        });
+        return sendRedacted(res, 200, result);
+      }
+
+      const result = runMemoryProviderConnectionTest({
+        providerId,
+        provider,
+        kind: record.kind,
+      });
+      sendRedacted(res, 200, result);
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }
