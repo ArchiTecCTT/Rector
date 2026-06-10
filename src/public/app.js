@@ -4569,6 +4569,7 @@ function init() {
   bindSuggestions();
   bindProviderTest();
   bindProviderConfig();
+  bindMemoryProviderConfig();
   bindSetupWizard();
   bindWorkspaceSafety();
   bindApproval();
