@@ -4,6 +4,14 @@
 
 ## Open
 
+### External mode fail-fast startup check ignores UI-persisted configurations
+
+- **Source:** User report / startup validation audit.
+- **Severity:** High usability/onboarding blocker.
+- **Status:** Open.
+- **Root cause:** When `ORCHESTRATOR_MODE=external`, the server runs a fail-fast synchronous check `parseOrchestrationConfig(process.env)` at startup. This check only reads variables from `process.env` (loaded from `.env`). It does not look at the persisted UI provider store (`.rector/providers.json` & `.rector/secrets.enc`), which is loaded asynchronously later. If the user only sets up their credentials in the browser UI (which writes to the JSON and encrypted key files) but leaves the `.env` variables blank, Rector fails to boot with `EXTERNAL_MODE_NO_PROVIDER`.
+- **Plan:** Fix the startup sequencing so the fail-fast orchestration mode parser either integrates the persisted UI configuration asynchronously, or clearly document that to run in `external` mode, at least one provider's environment variables must be populated in `.env` as a bootstrap signal even if UI-based overrides are configured.
+
 ### Dependency audit: vitest major-upgrade vulnerabilities deferred (require maintainer approval)
 
 - **Source:** `npm audit` during the `dependency-security-triage` spec; see `docs/security/dependency-audit-2026-06-04.md`.
@@ -15,6 +23,22 @@
 - **Status:** Open / deferred — awaiting maintainer approval.
 - **Root cause:** Rector pins `vitest@^2.1.0` (resolves `vitest@2.1.9`). npm's only offered remediation for all four findings is `vitest@4.1.8`, flagged `isSemVerMajor: true` and only applicable via `npm audit fix --force`.
 - **Plan:** Per the no-forced-fix policy (Requirement 4 / steering `security.md`), the `vitest@4` major upgrade was **not** applied autonomously because it requires `npm audit fix --force` and is a breaking change to the test toolchain. Deferred for explicit maintainer approval. When approved, upgrade `vitest` to `>=4.1.8`, re-run the full verification baseline (`npm test`/`build`/`check`), and confirm the advisories clear. Runtime exposure is nil today: these are dev/test dependencies, not shipped in `dist`, and `npm test` runs `vitest run` (no UI server). Traceability: `docs/security/dependency-audit-2026-06-04.md`.
+
+### SLM preprocessor (Chunk 26) adds a new cheap-model call surface before flagship planning in external mode
+
+- **Source:** Chunk 26 (SLM Preprocessor + Structured Tool Calls) implementation.
+- **Severity:** Medium (new LLM surface + JSON proposal boundary, but heavily mitigated).
+- **Status:** Open.
+- **Root cause:** In `runExternalChatRun`, a router-selected cheap/SLM provider is now invoked (via `runSLMPreprocessor`) after context building and before the live planner. It produces `distilledContext` + `proposedToolCalls`. Even though the preprocessor runs `evaluateBudget` + `invokeWithBudget`, forces json_object, validates with Zod, filters tools against a conservative allowlist, and redacts output, this is a new place where model output influences downstream flagship prompts and is visible in traces.
+- **Plan / Mitigations (already implemented in this chunk):**
+  - Local mode (`runFakeChatRun`) is completely untouched — preprocessor is never called.
+  - The preprocessor never throws; every failure path (budget denial, provider error, bad JSON, schema failure) produces a safe deterministic fallback with empty `proposedToolCalls`.
+  - Original `prompt` + full `contextPack` are retained and passed to skeptic/crucible/healing/synthesis for cross-validation.
+  - `proposedToolCalls` are only *proposals*; they are filtered to `ALLOWED_PREPROCESSOR_TOOLS` and still flow through the full symbolic pipeline (`WorkspaceSandboxAdapter` containment/allowlist/approvals, skeptic, crucible, validation/healing, budget).
+  - Usage (if any) is intended to be accounted (Step 1 keeps accounting lightweight; later refinement can commit preprocessor usage explicitly before the planner preflight).
+  - Property test (fast-check) asserts that arbitrary bloat always produces schema-valid output with only allowlisted (or zero) tool proposals and no obvious secret leakage.
+- **Future work:** Prompt hardening / few-shot examples for the preprocessor, richer usage accounting, optional exposure of preprocessor output in the UI trace drawer, and quality metrics once real cheap providers are exercised.
+- **Traceability:** `docs/plans/chunks/026-slm-preprocessor-structured-tool-calls.md`, `src/orchestration/preprocessor.ts`, `tests/preprocessor.test.ts`, wiring in `src/orchestration/chatRunner.ts`.
 
 ### Chat store is in-memory and resets on restart
 
@@ -205,6 +229,46 @@
 - **Status:** Partially mitigated — drift checks now enforced in CI; GitHub/Linear sync still manual.
 - **Plan:** The issue catalog and generated Markdown drafts are deterministic and checked by `node scripts/generate-roadmap-issues.js --check`. As of the `ci-release-workflow` spec, this drift check runs as a required gate in GitHub Actions (`.github/workflows/ci.yml`) on Node 22 and Node 24, so catalog drift now fails CI. A deterministic, provider-free Linear export (`node scripts/export-linear-issues.js`, output under `docs/issues/linear/`) is also generated from the same catalog and drift-checked in CI, giving maintainers import-ready CSV/JSON without any network calls or credentials. The drafts are still not automatically derived from the roadmap text and are not pushed to GitHub or Linear automatically; an API-based importer would require `LINEAR_API_KEY` and a team id and remains deferred behind explicit maintainer approval. When roadmap chunks change, maintainers must update `docs/issues/roadmap-issues.json`, regenerate docs and the Linear export, and run the check commands.
 
+### Safe local sandbox execution uses a dummy mock runner
+
+- **Source:** Codebase audit.
+- **Severity:** High (imminent commercial product blocker).
+- **Status:** Open.
+- **Root cause:** The `WorkspaceSandboxAdapter` executes allowlisted commands via `defaultCommandRunner` which is a dummy mockup returning `${[command, ...args].join(" ").trim()} completed`. It does not spawn any real child processes or apply actual unified patches, meaning code execution and validation is currently a local simulation rather than actual execution.
+- **Plan:** Implement real command execution using Node's `child_process` API and actual unified diff application for local mode, and integrate E2B / Depot sandboxing for isolated cloud execution.
+
+### Sandbox stubs deny cloud execution by default
+
+- **Source:** Codebase audit.
+- **Severity:** Medium.
+- **Status:** Open.
+- **Root cause:** The E2B and Depot adapters in `src/sandbox/index.ts` are completely stubbed out. Invoking them throws a `SANDBOX_PROVIDER_STUB_NO_NETWORK` denial error.
+- **Plan:** Replace stubs with actual `@e2b/sdk` and Depot clients once billing/credentials are integrated in the settings panel.
+
+### Developer-oriented triage routes fall back to diagnostic traces instead of LLM prose
+
+- **Source:** Codebase audit.
+- **Severity:** Medium.
+- **Status:** Open.
+- **Root cause:** In `src/orchestration/synthesizer.ts`, all developer routes (`RESEARCH`, `CODE_EDIT`, `PLAN_ONLY`, `LONG_RUNNING`) default to returning `legacyStatusResponse` which formats diagnostic execution summaries (e.g. `Status: ... Observed: ...`) instead of calling the LLM router to formulate a rich prose response.
+- **Plan:** Connect the synthesizer to the configured model router and instruct flagship models to write user-facing summaries referencing the execution trace.
+
+### Linear workflow integration relies on raw string display labels instead of UUIDs
+
+- **Source:** Codebase audit / workflows inspection.
+- **Severity:** Low.
+- **Status:** Open.
+- **Root cause:** The Linear integration adapter maps raw string display labels (e.g. `["bug", "rector"]`) directly to GraphQL variables `labelIds`. In the Linear API, label IDs are unique team-specific UUIDs. Passing raw string labels will cause mutation errors.
+- **Plan:** Implement a pre-flight resolver query to fetch the team's label catalog and map human-readable names to their corresponding UUIDs.
+
+### Telemetry integrations are all inert no-ops
+
+- **Source:** Codebase audit.
+- **Severity:** Low.
+- **Status:** Open.
+- **Root cause:** Although Sentry, PostHog, and OpenTelemetry adapters are defined in the schema and config check, their runtime implementations are inert mocks that perform no network I/O.
+- **Plan:** Configure and initialize the actual Sentry Node SDK and PostHog Node SDK in `src/observability` behind user configuration toggles.
+
 ## Closed / Mitigated
 
 ### Esbuild dev-server advisory resolved via npm overrides (GHSA-67mh-4wv8-2f99)
@@ -242,3 +306,50 @@
 - **Severity:** Release blocker.
 - **Fix:** Added Apache-2.0 LICENSE, NOTICE, trademarks, contributing, security, CoC, issue/PR templates.
 - **Status:** Closed.
+
+## Cloud-Capable Transition Roadmap
+
+This section documents the transition path from a local-only MVP/simulator to a fully functional commercial cloud product using your active stack credits.
+
+### Integration Matrix & Credit Routing
+
+| Service Layer | Cloud Provider | Credit Allocation | Commercial Role |
+| --- | --- | --- | --- |
+| **Relational Database** | TiDB Cloud | $2,000 | Stores persistent users, conversations, runs, and events. |
+| **Unstructured Store** | MongoDB | $3,600 | Stores temporary cache, runs history, and raw context materials. |
+| **LLM Inference (Flagship)** | Azure OpenAI | $5,000 | Flagship reasoning (planning, skeptic review, crucible). |
+| **LLM Inference (SLM/Fast)** | Cloudflare Workers AI | $10,000 | Runs open-weight models (Llama 3, Phi 3) for fast execution/triage (prioritized initial provider). |
+| **LLM Inference (SLM/Fast)** | Together AI | $15,000 | Alternate fast SLM model provider. |
+| **Sandbox Execution** | E2B / Depot | $5,000 | Containerized build, test, and command sandbox execution. |
+| **Vector Database** | Chroma | $5,000 | Semantic memory search for the truth library. |
+| **Keyword Search** | Algolia | $10,000 | Indexes codebase, documentation, and files. |
+| **Secrets Management** | Doppler | 3 months free | Safe injection of credentials, API keys, and environment variables. |
+| **Observability (Error)** | Sentry | 1 year / 50K errors | Out-of-band error monitoring and diagnostics. |
+| **Observability (Product)** | PostHog | $50,000 | Session recording, usage analytics, and feature flags. |
+| **Observability (APM)** | DataDog / New Relic | 2 years | Real-time performance profiling and infrastructure metrics. |
+| **Workflow Sync** | Linear / Make | 6 months / 240K calls | Issue tracking, escalation tickets, and notification routing. |
+| **Testing** | BrowserStack | 1 parallel / 1 year | Automated browser testing of the frontend chat UI. |
+
+### Architectural Transition Path
+
+To successfully transition Rector to a cloud-ready commercial state, the following implementation order must be pursued:
+
+#### 1. Decouple Config Validation from Boot Sequencing (Fix Startup Catch-22)
+* **Goal**: Enable starting Rector in `external` mode when credentials are stored only in the browser database (`providerConfigStore` and `secretStore`) rather than hardcoded in the server environment (`process.env`).
+* **Implementation**: Modify the server startup block in `src/bin/server.ts` to defer validation of credentials. Check credentials lazily at request time or load them asynchronously from the database at startup, logging a warning rather than crashing with `EXTERNAL_MODE_NO_PROVIDER`.
+
+#### 2. Implement Bring-Your-Own-Key (BYOK) Model Discovery
+* **Goal**: Enable users to input their Cloudflare API Token or Together AI API Key and dynamically view and route models.
+* **Implementation**: Wire the UI to trigger the `ModelDiscoveryService`. Fetch active models directly from the provider API, and write user preferences (role-to-model mappings) directly to the `.rector/providers.json` config store.
+
+#### 3. Transition from Mock to Real Sandboxed Execution
+* **Goal**: Enable executing code patches and shell commands inside containerized environments.
+* **Implementation**: In `src/orchestration/sandboxExecutor.ts`, replace the dummy `defaultCommandRunner` with E2B Node SDK instance calls and Depot image builds to run test suites safely inside micro-containers, enforcing strict timeout and memory limits.
+
+#### 4. Replace Diagnostic Traces with Streamed Assistant Prose
+* **Goal**: Return human-like answers rather than execution traces to the user.
+* **Implementation**: Connect `src/orchestration/synthesizer.ts` to the `ModelRouter` to request a natural language synthesis from the flagship model, instructing it to summarize what was done, what was verified, and what files were modified, referencing the trace drawer metadata only as an option.
+
+#### 5. Implement Vector DB Retrieval and Storage
+* **Goal**: Add durable memory storage for truth validation and user preferences.
+* **Implementation**: Upgrade `src/memory/` and the truth library to sync documents and transcripts to Chroma DB, using Algolia to back fast keyword indexes.

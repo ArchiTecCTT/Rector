@@ -6,6 +6,10 @@ import { compileAcceptedPlanToDag, type CompiledDag } from "./dagCompiler";
 import { executeCompiledDag, type ExecutorSimulatorOptions } from "./executorSimulator";
 import { runLiveDirectAnswer, type LiveDirectAnswerFallback } from "./liveDirectAnswer";
 import { createFakePlan, runLivePlanner, type PlannerBlocker, type PlannerOutput } from "./planner";
+import {
+  runSLMPreprocessor,
+  type PreprocessorOutput,
+} from "./preprocessor";
 import { buildRepairPrompt } from "./prompts";
 import { createDecisionRequest, transitionRun } from "./runStateMachine";
 import { executeDagThroughSandbox } from "./sandboxExecutor";
@@ -311,6 +315,28 @@ export async function runExternalChatRun(
     })
   );
 
+  // --- SLM PREPROCESSOR (neuro-symbolic Step 1) ---
+  // Cheap/SLM model digests raw prompt + contextPack into clean distilledContext + validated
+  // proposedToolCalls. Flagship models only see the distilled form. The preprocessor itself
+  // enforces budget preflight + redaction and returns a safe fallback on any failure.
+  // This step is external-mode only; the local/fake path below never executes it.
+  const preprocessorSelection: ModelSelection = deps.router.select({
+    capability: "cheap",
+    task: "preprocessor",
+    run,
+  });
+  const preprocessorOutput: PreprocessorOutput = await observability.recordSpan("PREPROCESSING", () =>
+    runSLMPreprocessor(
+      { rawPrompt: prompt, contextPack, triage },
+      { slmProvider: preprocessorSelection.provider, run }
+    )
+  );
+
+  // Use the distilled context for the flagship planner (biggest immediate value). The original
+  // prompt and full contextPack remain available to skeptic, crucible, healing, and synthesis
+  // for cross-checks and evidence.
+  const effectiveMessageContent = (preprocessorOutput.distilledContext || "").trim() || prompt;
+
   // Deterministic provider selection; a zero budget or no configured provider falls back to the
   // fake provider (still safe), so selection itself never throws.
   const selection: ModelSelection = deps.router.select({ capability: "flagship", task: "planner", run });
@@ -320,7 +346,7 @@ export async function runExternalChatRun(
   // with a structured, redacted blocker instead of throwing on budget/provider/validation failure.
   const plannerResult = await observability.recordSpan("PLANNING", () =>
     runLivePlanner(
-      { triage, contextPack, messageContent: prompt },
+      { triage, contextPack, messageContent: effectiveMessageContent },
       { provider: selection.provider, run }
     )
   );
@@ -388,6 +414,7 @@ export async function runExternalChatRun(
     planningProviderCall: providerCall,
     skepticProviderCall,
     deps: { ...deps, router: deps.router },
+    preprocessorOutput,
   });
 }
 
@@ -401,6 +428,8 @@ interface ExternalPostPlanningParams {
   planningProviderCall: ProviderCallMetadata;
   skepticProviderCall: ProviderCallMetadata;
   deps: ChatRunnerDeps & { router: ModelRouter };
+  /** Preprocessor result from the neuro-symbolic Step 1 layer (already redacted). */
+  preprocessorOutput?: PreprocessorOutput;
 }
 
 /**
@@ -415,7 +444,7 @@ interface ExternalPostPlanningParams {
  * `transitionRun`) before persistence. No exception escapes for a live-step failure.
  */
 async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams): Promise<ChatRunResult> {
-  const { store, args, run, plannerOutput, skepticReview, crucibleDecision, deps } = params;
+  const { store, args, run, plannerOutput, skepticReview, crucibleDecision, deps, preprocessorOutput } = params;
   const { observability } = args;
   const options = args.options ?? {};
   const traceId = observability.traceId;
@@ -588,7 +617,21 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
         note: "External brainstem run advanced",
         ...(phase === "TRIAGE" ? { triage: args.triage } : {}),
         ...(phase === "CONTEXT_BUILDING" ? { contextPack: args.contextPack } : {}),
-        ...(phase === "PLANNING" ? { plannerOutput, providerCall: params.planningProviderCall } : {}),
+        ...(phase === "PLANNING"
+          ? {
+              plannerOutput,
+              providerCall: params.planningProviderCall,
+              // Chunk 26: preprocessor result is attached for observability and downstream stages.
+              // It is already redacted inside the preprocessor.
+              preprocessor: {
+                distilledContext: preprocessorOutput?.distilledContext,
+                proposedToolCalls: preprocessorOutput?.proposedToolCalls ?? [],
+                intent: preprocessorOutput?.intent,
+                entities: preprocessorOutput?.entities ?? [],
+                constraints: preprocessorOutput?.constraints ?? [],
+              },
+            }
+          : {}),
         ...(phase === "SKEPTIC_REVIEW" ? { skepticReview, providerCall: params.skepticProviderCall } : {}),
         ...(phase === "CRUCIBLE" ? { crucibleDecision } : {}),
         ...(phase === "DAG_COMPILATION" ? dagCompilationPayload : {}),
