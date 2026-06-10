@@ -79,6 +79,22 @@ export const ArtifactSchema = z.object({
 });
 export type Artifact = z.infer<typeof ArtifactSchema>;
 
+export const MemoryLayerSchema = z.enum(["working", "episodic", "core"]);
+export type MemoryLayer = z.infer<typeof MemoryLayerSchema>;
+
+export const MemoryEntrySchema = z.object({
+  id: NonEmptyStringSchema,
+  layer: MemoryLayerSchema,
+  content: z.string(),
+  timestamp: z.string().datetime(),
+  lastMentioned: z.string().datetime(),
+  accessCount: z.number().int().nonnegative(),
+  tags: z.array(NonEmptyStringSchema).default([]),
+  source: z.string().optional(),
+  metadata: MetadataSchema,
+});
+export type MemoryEntry = z.infer<typeof MemoryEntrySchema>;
+
 export { RunEventSchema, type RunEvent };
 export type StoreEvent = RunEvent;
 
@@ -93,3 +109,9 @@ export type UpdateRunInput = Partial<Omit<Run, "id" | "createdAt" | "updatedAt">
 
 export type CreateArtifactInput = Omit<Artifact, "id" | "createdAt">;
 export type UpdateArtifactInput = Partial<Omit<Artifact, "id" | "createdAt">>;
+
+export type CreateMemoryEntryInput = Omit<MemoryEntry, "id" | "accessCount" | "lastMentioned"> & {
+  accessCount?: number;
+  lastMentioned?: string;
+};
+export type UpdateMemoryEntryInput = Partial<Omit<MemoryEntry, "id">>;

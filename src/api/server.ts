@@ -57,7 +57,7 @@ import {
   type ModelRouter,
 } from "../providers/llm";
 import type { OrchestratorMode } from "../deployment";
-import { createRectorStore, type PersistenceConfig, type RectorStore } from "../store";
+import { createRectorStore, type CreateMemoryEntryInput, type MemoryEntry, type PersistenceConfig, type RectorStore } from "../store";
 import { RunEventSchema } from "../store/schemas";
 import type { Artifact, Run, RunEvent } from "../store/schemas";
 import { RunPhaseSchema, isTerminalRunPhase } from "../protocol/phases";
@@ -1263,12 +1263,17 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             retentionPolicy: conversation.retentionPolicy,
             piiState: redactionState,
           });
+
+          // Fetch recent time-aware memory for injection (Chunk 27). Episodic first, limited.
+          const recentMemory = await pipelineStore.searchMemory(undefined, { layer: "episodic", limit: 6 });
+
           return buildContextPack(pipelineStore, {
             conversation,
             messages: await pipelineStore.listMessages(conversation.id),
             userMessage,
             triage,
             materials: [contextMaterial],
+            memoryEntries: recentMemory,
           });
         });
         const result = await runChat(
@@ -1364,6 +1369,44 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         events,
         observability: observabilitySummary,
       });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Quick-capture notes (Chunk 27 / neuro-symbolic Step 2)
+  // Writes to episodic memory layer with time-awareness. Content is redacted.
+  // Local mode only for alpha; future auth + workspace scoping.
+  app.post("/api/notes", async (req, res) => {
+    try {
+      const { content, tags, conversationId } = req.body ?? {};
+      if (!content || typeof content !== "string") {
+        return res.status(400).json({ error: "content (string) is required" });
+      }
+
+      const redacted = redactString(content);
+      const now = new Date().toISOString();
+
+      const entryInput: CreateMemoryEntryInput = {
+        layer: "episodic",
+        content: redacted,
+        timestamp: now,
+        lastMentioned: now,
+        accessCount: 1,
+        tags: Array.isArray(tags) ? tags.filter((t: unknown): t is string => typeof t === "string") : [],
+        source: "user-note",
+        metadata: {
+          conversationId: typeof conversationId === "string" ? conversationId : undefined,
+          redactionState: redacted === content ? "none" : "redacted",
+        },
+      };
+
+      const entry = await rectorStore.createMemoryEntry(entryInput);
+
+      // Opportunistic prune on write (keeps memory bounded)
+      await rectorStore.pruneMemory({ targetLayer: "episodic", maxEntries: 200 });
+
+      res.status(201).json({ note: entry });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { RectorStore } from "../store";
 import type { Artifact, Conversation, Message } from "../store/schemas";
 import { truthItemToArtifactHandle, type TruthLibraryReader } from "../memory";
+import type { MemoryEntry } from "../store";
 import { TriageResultSchema, type TriageResult } from "./triage";
 
 const DEFAULT_ARTIFACT_THRESHOLD_BYTES = 4096;
@@ -63,6 +64,8 @@ export const ContextPackSchema = z.object({
   triage: TriageResultSchema,
   artifactHandles: z.array(ArtifactHandleSchema),
   inlineContext: z.array(InlineContextSchema),
+  /** Time-aware summaries from memory (Chunk 27). */
+  memoryContext: z.array(z.string()).optional(),
 });
 export type ContextPack = z.infer<typeof ContextPackSchema>;
 
@@ -134,6 +137,8 @@ export type BuildContextPackInput = {
   providerInfo?: ContextPack["availableProviders"];
   toolInfo?: ContextPack["availableTools"];
   now?: () => string;
+  /** Time-aware memory entries from episodic/core for injection (Chunk 27). */
+  memoryEntries?: MemoryEntry[];
 };
 
 export async function buildContextPack(
@@ -148,6 +153,20 @@ export async function buildContextPack(
   const localRelevantDocs = input.relevantDocs ?? searchTruthLibrary(input.truthLibrary, truthQuery, "doc", input.truthSearchLimit);
   const localRelevantMemory =
     input.relevantMemory ?? searchTruthLibrary(input.truthLibrary, truthQuery, "memory", input.truthSearchLimit);
+
+  // Time-aware memory context (Chunk 27 / Step 2). Formats entries like "3 days ago you noted: ..."
+  const memoryContext: string[] = [];
+  if (input.memoryEntries && input.memoryEntries.length > 0) {
+    const now = Date.now();
+    for (const mem of input.memoryEntries.slice(0, 8)) {
+      const ageMs = now - (Date.parse(mem.timestamp) || now);
+      const days = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+      const timePhrase = days > 0 ? `${days} day${days === 1 ? "" : "s"} ago` : "recently";
+      const prefix = mem.source === "user-note" || mem.tags.includes("note") ? "you noted" : "you";
+      const short = mem.content.slice(0, 140).replace(/\s+/g, " ");
+      memoryContext.push(`${timePhrase} ${prefix}: ${short}${mem.content.length > 140 ? "…" : ""}`);
+    }
+  }
 
   const pack = {
     id: `ctx-${sha256(`${input.conversation.id}:${input.userMessage.id}:${input.userMessage.createdAt}`).slice(0, 16)}`,
@@ -181,6 +200,7 @@ export async function buildContextPack(
     triage: input.triage,
     artifactHandles,
     inlineContext,
+    ...(memoryContext.length > 0 ? { memoryContext } : {}),
   };
 
   return ContextPackSchema.parse(pack);

@@ -3,13 +3,17 @@ import type {
   Conversation,
   CreateArtifactInput,
   CreateConversationInput,
+  CreateMemoryEntryInput,
   CreateMessageInput,
   CreateRunInput,
+  MemoryEntry,
+  MemoryLayer,
   Message,
   Run,
   RunEvent,
   UpdateArtifactInput,
   UpdateConversationInput,
+  UpdateMemoryEntryInput,
   UpdateMessageInput,
   UpdateRunInput,
 } from "./schemas";
@@ -65,6 +69,15 @@ export interface RectorStore {
   listArtifacts(kind?: string): Promise<Artifact[]>;
   updateArtifact(id: string, patch: UpdateArtifactInput): Promise<Artifact | undefined>;
   deleteArtifact(id: string): Promise<boolean>;
+
+  // Advanced memory (Chunk 27 / neuro-symbolic Step 2)
+  createMemoryEntry(input: CreateMemoryEntryInput): Promise<MemoryEntry>;
+  getMemoryEntry(id: string): Promise<MemoryEntry | undefined>;
+  listMemoryEntries(layer?: MemoryLayer): Promise<MemoryEntry[]>;
+  updateMemoryEntry(id: string, patch: UpdateMemoryEntryInput): Promise<MemoryEntry | undefined>;
+  deleteMemoryEntry(id: string): Promise<boolean>;
+  searchMemory(query?: string, options?: { layer?: MemoryLayer; limit?: number }): Promise<MemoryEntry[]>;
+  pruneMemory(options?: { targetLayer?: MemoryLayer; maxEntries?: number }): Promise<{ pruned: number; summarized: number }>;
 }
 
 /**

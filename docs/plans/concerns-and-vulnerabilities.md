@@ -40,6 +40,22 @@
 - **Future work:** Prompt hardening / few-shot examples for the preprocessor, richer usage accounting, optional exposure of preprocessor output in the UI trace drawer, and quality metrics once real cheap providers are exercised.
 - **Traceability:** `docs/plans/chunks/026-slm-preprocessor-structured-tool-calls.md`, `src/orchestration/preprocessor.ts`, `tests/preprocessor.test.ts`, wiring in `src/orchestration/chatRunner.ts`.
 
+### Advanced memory (Chunk 27) introduces new write path (/api/notes) and pruning logic in the store
+
+- **Source:** Chunk 27 (Advanced Memory System / neuro-symbolic Step 2) implementation.
+- **Severity:** Medium (new persistent-ish state in local mode, pruning decisions, note capture as user-controlled input).
+- **Status:** Open.
+- **Root cause:** New MemoryEntry entities (layered working/episodic/core) stored in InMemoryRectorStore (and interface extended for future durable stores). `POST /api/notes` allows quick capture into episodic. `pruneMemory` uses heuristic scoring (recency + access + source bonuses) and can create auto-summaries in core. Time fields (`timestamp`, `lastMentioned`) are injected into ContextPack as natural language phrases. All new paths must respect redaction.
+- **Plan / Mitigations (implemented in this chunk):**
+  - Local/in-memory baseline only; no new network or paid services required (Chroma/Mem0/TiDB stubs or future adapters follow existing pattern).
+  - All memory content goes through `redactString` on note creation and search results are simple keyword for alpha.
+  - Prune is bounded (`maxEntries`) and opportunistic on note writes; high-value items (user notes, high access) are protected by scoring.
+  - Time context is derived client-side in buildContextPack (no external clock dependency beyond store `now`).
+  - Existing ContextPack consumers (preprocessor, planner, skeptic) see additive `memoryContext` field; original paths unchanged.
+  - Tests include pruning invariants and time fields.
+- **Future work:** Real vector similarity in prune/search when Chroma or Mem0 adapters are activated (using stack credits); durable memory entities in sql/tidb stores; full ponder swarm (Step 6) that reads/writes this memory; UI for captured notes; retention policies per layer.
+- **Traceability:** `docs/plans/chunks/027-advanced-memory-system.md`, `src/store/schemas.ts` (MemoryEntry), `src/store/inMemoryRectorStore.ts` (impl + prune), `src/api/server.ts` (/api/notes + context enrichment), `src/orchestration/contextBuilder.ts` (time-aware injection), `tests/memoryAdvanced.test.ts`.
+
 ### Chat store is in-memory and resets on restart
 
 - **Source:** Chunk 6 worker/reviewer.
