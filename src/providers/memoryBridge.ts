@@ -1,11 +1,15 @@
 import type { SecretStore } from "../security/secretStore";
 import type { MemoryProvider } from "../memory/provider";
 import { LocalMemoryProvider, ExternalMemoryProviderStub } from "../memory/provider";
+import { Mem0MemoryProvider } from "../memory/mem0Adapter";
+import { TiDBMemoryProvider } from "../memory/tidbMemoryAdapter";
+import { ChromaMemoryProvider } from "../memory/chromaMemoryAdapter";
 import type { MemoryConfigStore } from "./memoryConfigStore";
 import type { MemoryProviderRecord } from "./memoryConfig";
+import type { Run } from "../store/schemas";
 
 /**
- * Memory Bridge (Chunk 34).
+ * Memory Bridge (Chunk 34 + 35).
  *
  * Resolves a persisted MemoryProviderRecord (from MemoryConfigStore) + its
  * secret (from the shared SecretStore) into a live {@link MemoryProvider}
@@ -26,7 +30,78 @@ export interface ResolveMemoryProviderOptions {
   /** Injectable now for deterministic tests (passed through to LocalMemoryProvider). */
   now?: () => string;
   /** For tests that want to inject a pre-built delegate (e.g. a real SqlRectorStore). */
-  delegateStoreForLocalSqliteMem?: any;
+  delegateStoreForLocalSqliteMem?: unknown;
+  /** Optional run context for memory-provider budget preflight. */
+  run?: Run;
+}
+
+/**
+ * Build a {@link MemoryProvider} from a single persisted record + secret.
+ * Local kinds never read secrets. External kinds construct real adapters (Chunk 35)
+ * or fall back to stubs for unknown kinds.
+ */
+export function buildMemoryProviderFromRecord(
+  record: MemoryProviderRecord,
+  secret: string | undefined,
+  options: ResolveMemoryProviderOptions = {},
+): MemoryProvider {
+  const now = options.now;
+
+  if (record.kind === "local-inmemory" || record.kind === "local-sqlite-mem") {
+    const delegate = record.kind === "local-sqlite-mem" ? options.delegateStoreForLocalSqliteMem : undefined;
+    return new LocalMemoryProvider({
+      id: record.id,
+      kind: record.kind,
+      label: record.label,
+      now,
+      delegate,
+    });
+  }
+
+  switch (record.kind) {
+    case "mem0": {
+      const provider = new Mem0MemoryProvider({
+        id: record.id,
+        kind: record.kind,
+        label: record.label,
+        apiKey: secret ?? "",
+        config: record.config,
+        now,
+        run: options.run,
+      });
+      provider.validateConfig?.();
+      return provider;
+    }
+    case "tidb-memory": {
+      const provider = TiDBMemoryProvider.fromRecord(record, secret, {
+        now,
+        delegateStore: options.delegateStoreForLocalSqliteMem as
+          | ConstructorParameters<typeof TiDBMemoryProvider>[0]["delegateStore"]
+          | undefined,
+      });
+      provider.validateConfig?.();
+      return provider;
+    }
+    case "chroma": {
+      const provider = new ChromaMemoryProvider({
+        id: record.id,
+        kind: record.kind,
+        label: record.label,
+        config: record.config,
+        apiKey: secret,
+        now,
+        run: options.run,
+      });
+      provider.validateConfig?.();
+      return provider;
+    }
+    default:
+      return new ExternalMemoryProviderStub({
+        id: record.id,
+        kind: record.kind,
+        label: record.label,
+      });
+  }
 }
 
 /**
@@ -36,8 +111,8 @@ export interface ResolveMemoryProviderOptions {
  *   local-* kind: return a LocalMemoryProvider (pure inmem by default, or
  *   delegating if delegateStoreForLocalSqliteMem is supplied).
  * - For external kinds: read the secret (transiently), construct the appropriate
- *   provider (stub in this chunk). Any construction or secret read error
- *   falls back to local-inmemory (redacted).
+ *   provider via {@link buildMemoryProviderFromRecord}. Any construction or
+ *   secret read error falls back to local-inmemory (redacted).
  */
 export async function resolveActiveMemoryProvider(
   configStore: MemoryConfigStore,
@@ -83,15 +158,7 @@ export async function resolveActiveMemoryProvider(
     }
 
     if (record.kind === "local-inmemory" || record.kind === "local-sqlite-mem") {
-      // Local kinds: never touch the secret store.
-      const delegate = record.kind === "local-sqlite-mem" ? options.delegateStoreForLocalSqliteMem : undefined;
-      return new LocalMemoryProvider({
-        id: record.id,
-        kind: record.kind,
-        label: record.label,
-        now,
-        delegate,
-      });
+      return buildMemoryProviderFromRecord(record, undefined, options);
     }
 
     // External kind (mem0, tidb-memory, chroma, ...).
@@ -99,24 +166,20 @@ export async function resolveActiveMemoryProvider(
     const secretResult = await secrets.getSecret(record.secretRef);
     const secret = secretResult.ok ? secretResult.value : undefined;
 
-    // In this chunk we only have the safe stub for external memory providers.
-    // Real adapters can be swapped in later (the stub accepts the secret at
-    // construction but ignores it until a real implementation is provided).
-    const provider = new ExternalMemoryProviderStub({
-      id: record.id,
-      kind: record.kind,
-      label: record.label,
-    });
-
-    // Stubs accept (and ignore) the secret for now; a real impl would use it.
-    // We still call validateConfig if present (no-op on stub).
-    provider.validateConfig?.();
-
-    return provider;
-  } catch (error) {
+    try {
+      return buildMemoryProviderFromRecord(record, secret, options);
+    } catch {
+      // Adapter construction failure (missing secret, bad config, missing optional dep)
+      // → graceful local fallback so the system stays usable.
+      return new LocalMemoryProvider({
+        id: "local-inmemory:default",
+        kind: "local-inmemory",
+        label: "Local (in-memory)",
+        now,
+      });
+    }
+  } catch {
     // Any failure (bad secret read, bad record, etc.) → redacted local fallback.
-    // The caller sees a usable local memory provider; the error is already
-    // redacted by the SecretStore / config layer.
     return new LocalMemoryProvider({
       id: "local-inmemory:default",
       kind: "local-inmemory",
