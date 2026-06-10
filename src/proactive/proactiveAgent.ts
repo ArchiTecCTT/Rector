@@ -145,6 +145,7 @@ export class ProactiveAgent {
         // swallow for timer safety
       }
     }, intervalMs);
+    this.timer.unref?.();
   }
 
   stopTimer() {
