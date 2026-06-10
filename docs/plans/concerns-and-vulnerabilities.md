@@ -94,7 +94,7 @@
 
 - **Source:** User requirement for hassle-free configuration of agent memory database (local or Mem0/TiDB cloud) entirely through web UI, non-rigid architecture.
 - **Severity:** Medium (expands config surface; requires careful abstraction so local baseline isn't affected; potential for misconfiguration leading to data loss or cost in cloud backends).
-- **Status:** Partially resolved (Chunk 34 + 35); `/api/memory-providers` UI routes still open.
+- **Status:** Partially resolved (Chunks 34–36). Settings API + UI panel + setup wizard readiness shipped in Chunk 36; live cloud adapter tuning and migration UX remain open.
 - **Root cause:** Current persistence is driven by RECTOR_PERSISTENCE + env / createRectorStore (memory/sqlite/tidb). Memory is layered on top (truth library + new hierarchical in-memory from 27). No UI-managed "MemoryProvider" equivalent to Provider_Config_Store yet. Adding Mem0 (external) or switching TiDB etc. via UI increases the need for runtime pluggable adapters, secure secret handling for cloud memory, and UI validation.
 - **Plan / Mitigations (to be implemented in follow-on chunks; partial status from 033/transition + 034 plan in progress; see new audit gaps below):**
   - Extend the UI config pattern (non-secret records + encrypted secrets) to memory backends.
@@ -120,7 +120,7 @@
 - Real bootstrap now always creates + passes memoryConfigStore (bin/server.ts); createApp resolves active provider (always a provider, default local-inmemory when omitted or local mode).
 - Neuro call sites (chat context searchMemory for episodic, /api/notes create+prune) now go through activeMemoryProvider.
 - Default path verified identical: memoryAdvanced.test.ts + new memoryConfigStore.test.ts green; build clean; the providerConfigApi harness was updated (await for async createApp) as part of fixing failures surfaced by the wiring.
-- Full UI CRUD routes for memory providers (mirroring /api/providers) remain as a small follow-on polish; the store + resolution are live and UI-drivable.
+- Chunk 36 completed the Settings API (`/api/memory-providers` CRUD + test-connection) and the settings UI memory-provider panel (cards, active toggle, secret-presence-only, test-connection). Setup status/wizard now surfaces memory-provider readiness.
 - Local baseline preserved (pure local-inmemory default, zero net, identical outputs for all pre-34 memory features).
 See the refined 034 plan doc for details + verification steps. The "RectorStore memory methods" High gap (now RESOLVED) was a prerequisite that enabled safe durable + pluggable memory.
 
@@ -389,9 +389,11 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 
 - **Source:** Full system audit (inMemoryRectorStore + memoryAdvanced.test.ts).
 - **Severity:** Medium.
-- **Status:** Open.
-- **Root cause:** `src/store/inMemoryRectorStore.ts:388` (pruneMemory) uses `Date.now() - Date.parse(...)` for recency scoring + opportunistic call only on /api/notes writes (and bounded). Tests (memoryAdvanced.test.ts:62) exercise happy paths but no fast-check property tests asserting survival invariants (high-access/user-note items always survive, core summaries created correctly, time fields, redaction, maxEntries bounds across arbitrary histories).
-- **Plan / Mitigations:** Add property tests for invariants. Consider deterministic clock injection (already partially supported via now:). Tie into 034 pluggable layer.
+- **Status:** **RESOLVED** for survival-invariant property coverage (Chunk 036 Wave 1D). Opportunistic `Date.now()` scoring remains an accepted alpha limitation.
+- **Resolution (Chunk 036):** `tests/memoryPrune.property.test.ts` adds fast-check properties for maxEntries bounds, user-note survival, high-access survival, and core-summary creation via `LocalMemoryProvider` with injected `now()` clock (deterministic prune semantics).
+- **Root cause:** (Historical) `src/store/inMemoryRectorStore.ts:388` (pruneMemory) uses `Date.now() - Date.parse(...)` for recency scoring + opportunistic call only on /api/notes writes (and bounded). Tests (memoryAdvanced.test.ts:62) exercised happy paths but lacked fast-check property tests for survival invariants.
+- **Remaining / follow-on:** Consider deterministic clock injection at all prune call sites (not only tests). Tie durable-store prune parity into future pluggable-layer hardening.
+- **Traceability:** commit `f0d1209`, `docs/plans/chunks/036-hassle-free-ui-neuro-observability.md`.
 
 ### concerns register and some post-033 docs still carry heavy 'alpha prototype / local developer preview' framing; vision lag vs AGENTS + .kiro + user hassle-free UI memory requirement
 

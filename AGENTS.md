@@ -21,7 +21,7 @@ Read these before planning or implementing:
 1. `.kiro/specs/cloud-capable-transition/` (requirements.md, design.md, tasks.md) — current active spec for transitioning to a hassle-free, UI-configurable cloud-capable system.
 2. `docs/architecture/current-rector-byok-architecture.md` — current architecture (local-first BYOK with pluggable providers).
 3. `docs/plans/rector-master-roadmap.md` (update in progress for cloud direction).
-4. `docs/plans/chunks/*.md` for completed/current chunk plans (including 26-32 neuro-symbolic enhancements for usability and 033+ for cloud transition).
+4. `docs/plans/chunks/*.md` for completed/current chunk plans (including 26-32 neuro-symbolic enhancements for usability, 033-036 for cloud transition + hassle-free UI, and 037+ for follow-on work).
 5. `docs/plans/concerns-and-vulnerabilities.md` for deferred risks.
 6. `docs/plans/chunks/002-migration-map.md` before touching old task-MVP modules.
 
@@ -56,7 +56,7 @@ npm run build
 
 ## Current Implemented Chunks
 
-Completed through Chunk 25:
+Completed through Chunk 36 (see `docs/plans/chunks/036-hassle-free-ui-neuro-observability.md` for the latest wave summary). Foundation chunks 0–25:
 
 0. Source-of-truth docs and stale doc quarantine
 1. Open-source foundation and Apache-2.0 setup
@@ -85,9 +85,11 @@ Completed through Chunk 25:
 24. Deployment prototype
 25. Contributor issue breakdown
 
-Current test baseline after Chunk 25:
+Neuro-symbolic + cloud transition chunks (26–36) include SLM preprocessor, advanced memory, proactive layer, symbolic engines, MCTS, ponder swarm, task decomposition, stale-doc cleanup, pluggable memory providers (034), durable memory + neuro wiring (035), and hassle-free UI + neuro observability (036).
 
-- `npm test`: 27 files / 272 tests passing
+Current test baseline after Chunk 36:
+
+- `npm test`: 211 files / 1355 tests passing
 - `npm run build`: passing
 
 ## Active Development Goal
@@ -102,14 +104,14 @@ The .kiro/specs/cloud-capable-transition/ spec (adapted for hassle-free UI confi
 
 ## Next Work
 
-Roadmap chunks 0–32 (foundation + neuro-symbolic usability) are implemented. Active focus is the cloud-capable transition per `.kiro/specs/cloud-capable-transition/` (BYOK model discovery, real E2B sandbox, TiDB persistence, boot-tolerant config, streamed answers, UI surfaces for configuration), extended with:
+Roadmap chunks 0–36 (foundation + neuro-symbolic usability + hassle-free memory UI) are implemented. Active focus is follow-on cloud-capable hardening per `.kiro/specs/cloud-capable-transition/` (live adapter integration tests, event-driven proactive/ponder triggers, streaming answer polish), extended with:
 
 - Full web-UI configurability for all providers and backends, including pluggable memory database providers (local options, Mem0, TiDB Cloud, future).
 - Non-rigid, pluggable architecture to avoid lock-in.
 - Hassle-free experience: minimal or no file/env editing required for normal use.
 - Integration of neuro-symbolic features into the configurable cloud product.
 
-See the cloud-capable-transition tasks for detailed items. Create new chunk plans (starting 033+) for phases of this work.
+See the cloud-capable-transition tasks for detailed items. Create new chunk plans (starting 037+) for phases of this work.
 
 ## Release Path
 
