@@ -122,6 +122,14 @@ toolchain. Applying it could destabilize the 278-test baseline, and it can only 
 `npm audit fix --force`, which the hard constraints (Requirement 4, steering `security.md`)
 forbid without explicit Maintainer approval. Deferred for maintainer follow-up.
 
+### Status note (2026-06-10, Chunk 036 Wave 3)
+
+The `vitest@4` major upgrade **remains deferred** pending explicit maintainer approval. No
+`npm audit fix --force` was applied during Chunk 036 (Waves 1–3). The four dev-tooling findings
+(`vitest`, `vite`, `@vitest/mocker`, `vite-node`) are unchanged; runtime exposure is still nil
+(`npm test` runs `vitest run` without the Vitest UI server). When approved, upgrade to
+`vitest >= 4.1.8`, regenerate the lockfile, and re-run the full verification baseline.
+
 ## Verification Evidence
 
 ### Stage 4 — Verification gate (after applying the esbuild override, before adding the regression test)

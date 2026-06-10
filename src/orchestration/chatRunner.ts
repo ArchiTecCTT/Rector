@@ -457,6 +457,7 @@ export async function runExternalChatRun(
     deps: { ...deps, router: deps.router },
     preprocessorOutput,
     subGoals,
+    pathsExplored: plannerResult.pathsExplored,
   });
 }
 
@@ -474,6 +475,8 @@ interface ExternalPostPlanningParams {
   preprocessorOutput?: PreprocessorOutput;
   /** Sub-goals from task decomposition (external high-complexity only). */
   subGoals?: string[];
+  /** Deep-planner MCTS paths explored (trace drawer observability). */
+  pathsExplored?: string[];
 }
 
 /**
@@ -488,7 +491,18 @@ interface ExternalPostPlanningParams {
  * `transitionRun`) before persistence. No exception escapes for a live-step failure.
  */
 async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams): Promise<ChatRunResult> {
-  const { store, args, run, plannerOutput, skepticReview, crucibleDecision, deps, preprocessorOutput, subGoals = [] } = params;
+  const {
+    store,
+    args,
+    run,
+    plannerOutput,
+    skepticReview,
+    crucibleDecision,
+    deps,
+    preprocessorOutput,
+    subGoals = [],
+    pathsExplored,
+  } = params;
   const { observability } = args;
   const options = args.options ?? {};
   const traceId = observability.traceId;
@@ -688,9 +702,7 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
                 entities: preprocessorOutput?.entities ?? [],
                 constraints: preprocessorOutput?.constraints ?? [],
               },
-              ...(plannerResult.pathsExplored?.length
-                ? { pathsExplored: plannerResult.pathsExplored }
-                : {}),
+              ...(pathsExplored?.length ? { pathsExplored } : {}),
             }
           : {}),
         ...(phase === "SKEPTIC_REVIEW" ? { skepticReview, providerCall: params.skepticProviderCall } : {}),

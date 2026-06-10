@@ -214,11 +214,11 @@ describe("Task 4.4: direct-answer event recording (External_Mode)", () => {
     expect((synthCall!.usage as { modelCalls: number }).modelCalls).toBe(1);
 
     // --- Req 9.2: accumulated cost reflected into the run's cost fields. ---
-    // planner (0.01) + skeptic (0.01) + cheap direct answer (0.02) = 0.04, three model calls.
-    expect((run.actualCost as { usd: number }).usd).toBeCloseTo(0.04, 12);
-    expect((run.actualCost as { modelCalls?: number }).modelCalls).toBe(3);
-    expect((run.costEstimate as { usd: number }).usd).toBeCloseTo(0.04, 12);
-    expect((run.costEstimate as { modelCalls?: number }).modelCalls).toBe(3);
+    // preprocessor (0.01) + planner (0.01) + skeptic (0.01) + cheap direct answer (0.02) = 0.05.
+    expect((run.actualCost as { usd: number }).usd).toBeCloseTo(0.05, 12);
+    expect((run.actualCost as { modelCalls?: number }).modelCalls).toBe(4);
+    expect((run.costEstimate as { usd: number }).usd).toBeCloseTo(0.05, 12);
+    expect((run.costEstimate as { modelCalls?: number }).modelCalls).toBe(4);
 
     // --- A successful direct answer records NO fallback status. ---
     expect(synthPayload!.fallback).toBeUndefined();
@@ -284,9 +284,9 @@ describe("Task 4.4: direct-answer event recording (External_Mode)", () => {
     expect(synthCall!.repaired).toBe(false);
     expect(synthesis.providerCalls).toBe(0);
 
-    // --- The failed cheap call adds no cost: only planner (0.01) + skeptic (0.01) = 0.02. ---
-    expect((run.actualCost as { usd: number }).usd).toBeCloseTo(0.02, 12);
-    expect((run.actualCost as { modelCalls?: number }).modelCalls).toBe(2);
+    // --- The failed cheap call adds no cost: preprocessor (0.01) + planner (0.01) + skeptic (0.01) = 0.03. ---
+    expect((run.actualCost as { usd: number }).usd).toBeCloseTo(0.03, 12);
+    expect((run.actualCost as { modelCalls?: number }).modelCalls).toBe(3);
 
     // No raw provider body leaks into any recorded event.
     expect(JSON.stringify(events)).not.toContain("connection reset");
