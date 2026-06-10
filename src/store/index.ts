@@ -212,6 +212,7 @@ export const STARTUP_MIGRATION_TABLES = [
   "runs",
   "run_events",
   "artifacts",
+  "memories",
 ] as const;
 
 /**
@@ -279,6 +280,7 @@ async function verifyStartupTables(store: RectorStore): Promise<void> {
   await store.listRuns();
   await store.listEvents();
   await store.listArtifacts();
+  await store.listMemoryEntries();
 }
 
 /**

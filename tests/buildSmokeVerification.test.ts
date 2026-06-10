@@ -9,8 +9,8 @@
  * contributes the two in-suite smoke checks that make that end-to-end guarantee
  * concrete and hermetic:
  *
- *  1. The MySQL-dialect DDL is emitted for all five entity tables
- *     (conversations, messages, runs, run_events, artifacts) when a
+ *  1. The MySQL-dialect DDL is emitted for all six entity tables
+ *     (conversations, messages, runs, run_events, artifacts, memories) when a
  *     `SqlRectorStore` is built over an injected `mysql`-dialect `SqlDriver`
  *     double — no real database, no network, and with the optional TiDB MySQL
  *     driver absent (the injected driver short-circuits `createTiDBDriver`).
@@ -42,8 +42,8 @@ import {
 const OPTIONAL_MYSQL_CLIENT = "sync-mysql";
 const OPTIONAL_E2B_CLIENT = "@e2b/code-interpreter";
 
-// The five entity tables the store maps and the Startup_Migration provisions.
-const ENTITY_TABLES = ["conversations", "messages", "runs", "run_events", "artifacts"] as const;
+// The six entity tables the store maps and the Startup_Migration provisions.
+const ENTITY_TABLES = ["conversations", "messages", "runs", "run_events", "artifacts", "memories"] as const;
 
 /**
  * A recording `mysql`-dialect `SqlDriver` double. It captures every DDL string
@@ -93,7 +93,7 @@ describe("optional cloud dependencies are absent (task 15.3 precondition)", () =
   });
 });
 
-describe("MySQL-dialect DDL is emitted for all five tables (task 15.3, Req 11.3)", () => {
+describe("MySQL-dialect DDL is emitted for all six tables (task 15.3, Req 11.3)", () => {
   it("provisions every entity table with the MySQL dialect over an injected driver", () => {
     const driver = recordingMysqlDriver();
 
@@ -104,7 +104,7 @@ describe("MySQL-dialect DDL is emitted for all five tables (task 15.3, Req 11.3)
     const store = createRectorStore({ driver: "memory" }, { driver });
     expect(store).toBeInstanceOf(SqlRectorStore);
 
-    // Exactly the five entity tables were provisioned, one DDL statement each.
+    // Exactly the six entity tables were provisioned, one DDL statement each.
     expect(driver.ddl).toHaveLength(ENTITY_TABLES.length);
 
     for (const table of ENTITY_TABLES) {

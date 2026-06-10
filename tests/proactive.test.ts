@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach } from "vitest";
 
 import { createProactiveAgent } from "../src/proactive";
 import { InMemoryRectorStore } from "../src/store/inMemoryRectorStore";
-import { createFakeRouter } from "./support/testDoubles"; // if exists, else simple mock
+import { SpyLLMProvider, makeContextPack, planToJson, skepticDraftToJson, synthesisDraftToJson } from "./support/byokArbitraries";
+import { triageUserMessage } from "../src/orchestration/triage";
+import { createFakePlan } from "../src/orchestration/planner";
 
 /**
  * Basic tests for Proactive / Alive layer (Chunk 28).
@@ -26,13 +28,42 @@ describe("proactive alive layer", () => {
     const convs = await store.listConversations();
     const convId = convs[0].id;
 
+    const triage = triageUserMessage("proactive check-in");
+    const contextPack = makeContextPack(triage);
+    const plan = createFakePlan({ triage, contextPack, messageContent: "proactive check-in" });
+
+    const provider = new SpyLLMProvider({
+      responses: [
+        // 1st: preprocessor response
+        {
+          content: JSON.stringify({
+            distilledContext: "Proactive check-in suggestion.",
+            proposedToolCalls: [],
+            entities: [],
+            intent: "check-in",
+            constraints: [],
+          }),
+        },
+        // 2nd: planner response
+        { content: planToJson(plan) },
+        // 3rd: skeptic review
+        { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
+        // 4th: synthesizer response
+        {
+          content: synthesisDraftToJson({
+            response: "Proactive suggestion: looks good to proceed.",
+            citations: [
+              { kind: "artifact", ref: "task:answer.synthesize", detail: "no-op execution node succeeded" },
+            ],
+          }),
+        },
+      ],
+    });
+
     const router = {
       select: () => ({ 
-        provider: { 
-          metadata: { id: "fake-proactive" }, 
-          estimateRequest: () => ({ estimatedUsd: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, modelCalls: 0 }),
-          invoke: async () => ({ content: "Proactive suggestion: looks good to proceed.", usage: { estimatedUsd: 0, inputTokens: 10, outputTokens: 20, totalTokens: 30, modelCalls: 1 }, provider: "fake", model: "fake", id: "p1", finishReason: "stop" }),
-        }, 
+        provider,
+        modelRoute: "flagship",
         model: "fake-proactive" 
       } as any),
     };
@@ -45,11 +76,12 @@ describe("proactive alive layer", () => {
 
     const result = await agent.triggerCheckIn({ conversationId: convId });
 
+    const messages = await store.listMessages(convId);
+
     expect(result.runId).toBeDefined();
     expect(result.message).toBeDefined();
 
     // Check that a message with source proactive was created
-    const messages = await store.listMessages(convId);
     const proactiveOne = messages.find(m => (m as any).source === "proactive" || m.role === "assistant");
     // In our impl we set source on the assistant message
     expect(proactiveOne).toBeDefined();

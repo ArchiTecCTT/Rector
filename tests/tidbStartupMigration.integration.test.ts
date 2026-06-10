@@ -289,7 +289,7 @@ describe("TiDB pooled driver + Startup_Migration integration (task 12.5)", () =>
 
   // --- Verify/provision sequence (Req 8.4) ---------------------------------
 
-  it("provisions the five entity tables over the injected pooled driver and verifies them", async () => {
+  it("provisions the six entity tables over the injected pooled driver and verifies them", async () => {
     const driver = newDriver();
 
     const store = await runStartupMigration(TIDB_CONFIG, { driver, now: fixedClock() });
@@ -302,7 +302,7 @@ describe("TiDB pooled driver + Startup_Migration integration (task 12.5)", () =>
     for (const table of STARTUP_MIGRATION_TABLES) {
       expect(provisioned).toContain(table);
     }
-    // ...and exactly the five entity tables, nothing more.
+    // ...and exactly the six entity tables, nothing more.
     expect(provisioned.sort()).toEqual([...STARTUP_MIGRATION_TABLES].sort());
 
     // The DDL was emitted in the MySQL dialect (JSON payload + VARCHAR ids),

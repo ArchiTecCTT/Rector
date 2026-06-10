@@ -423,7 +423,20 @@ describe("external chat runner (ORN-33)", () => {
     const externalStore = new InMemoryRectorStore();
     const externalArgs = await buildChatArgs(externalStore, EDIT_PROMPT);
     const spy = new SpyLLMProvider({
-      responses: [NON_FILE_OPERATION_PLAN_JSON, SOUND_SKEPTIC_JSON, CITED_SYNTHESIS_JSON],
+      responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: EDIT_PROMPT,
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
+        NON_FILE_OPERATION_PLAN_JSON,
+        SOUND_SKEPTIC_JSON,
+        CITED_SYNTHESIS_JSON,
+      ],
     });
 
     const externalResult = await runChat(externalStore, externalArgs, {
@@ -431,10 +444,10 @@ describe("external chat runner (ORN-33)", () => {
       router: makeRouter(spy),
     });
 
-    // The external run completes through the full pipeline (three provider calls).
+    // The external run completes through the full pipeline (four provider calls).
     expect(externalResult.run.phase).toBe("DONE");
     expect(externalResult.run.status).toBe("completed");
-    expect(spy.invokeCount).toBe(3);
+    expect(spy.invokeCount).toBe(4);
 
     const externalEvents = await externalStore.listEvents(externalResult.run.id);
     const externalPlanning = findPlanningEvent(externalEvents);
@@ -472,6 +485,15 @@ describe("external chat runner (ORN-33)", () => {
     };
     const spy = new SpyLLMProvider({
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: EDIT_PROMPT,
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         { content: NON_FILE_OPERATION_PLAN_JSON, usage: reportedUsage },
         SOUND_SKEPTIC_JSON,
         CITED_SYNTHESIS_JSON,
@@ -578,6 +600,15 @@ describe("external chat runner (ORN-33)", () => {
     const spy = new SpyLLMProvider({
       responses: [
         {
+          content: JSON.stringify({
+            distilledContext: EDIT_PROMPT,
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
+        {
           error: new ProviderError({
             code: "PROVIDER_HTTP_ERROR",
             provider: "spy",
@@ -593,8 +624,8 @@ describe("external chat runner (ORN-33)", () => {
     expect(result.run.phase).toBe("NEEDS_DECISION");
     expect(result.run.status).toBe("needs_decision");
     expect(result.synthesis.status).toBe("NEEDS_DECISION");
-    // The provider was invoked exactly once before failing.
-    expect(spy.invokeCount).toBe(1);
+    // The provider was invoked exactly twice (one preprocessor + one planner error).
+    expect(spy.invokeCount).toBe(2);
 
     // The decision request surfaces the PROVIDER_ERROR blocker.
     const events = await store.listEvents(result.run.id);
@@ -607,7 +638,19 @@ describe("external chat runner (ORN-33)", () => {
     const args = await buildChatArgs(store, EDIT_PROMPT);
     // Malformed JSON on BOTH the initial call and the single repair retry.
     const spy = new SpyLLMProvider({
-      responses: ["<<<NOT_JSON first attempt", "<<<NOT_JSON repair attempt"],
+      responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: EDIT_PROMPT,
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
+        " <<<NOT_JSON first attempt",
+        "<<<NOT_JSON repair attempt",
+      ],
     });
 
     const result = await runExternalChatRun(store, args, { mode: "external", router: makeRouter(spy) });
@@ -616,8 +659,8 @@ describe("external chat runner (ORN-33)", () => {
     expect(result.run.phase).toBe("FAILED");
     expect(result.run.status).toBe("failed");
     expect(result.synthesis.status).toBe("FAILED");
-    // Exactly two provider calls: one initial + one repair.
-    expect(spy.invokeCount).toBe(2);
+    // Exactly three provider calls: one preprocessor + one initial + one repair.
+    expect(spy.invokeCount).toBe(3);
 
     const events = await store.listEvents(result.run.id);
     const failedEvent = events.find((event) => event.phase === "FAILED");
@@ -630,6 +673,15 @@ describe("external chat runner (ORN-33)", () => {
     const args = await buildChatArgs(store, EDIT_PROMPT);
     const spy = new SpyLLMProvider({
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: EDIT_PROMPT,
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         {
           error: new ProviderError({
             code: "PROVIDER_HTTP_ERROR",

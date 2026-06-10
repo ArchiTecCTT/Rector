@@ -402,6 +402,15 @@ describe("Property 7: external mode records provider/model/cost on the PLANNING 
         const provider = new SpyLLMProvider({
           estimate: DEFAULT_SPY_USAGE,
           responses: [
+            {
+              content: JSON.stringify({
+                distilledContext: prompt,
+                proposedToolCalls: [],
+                entities: [],
+                intent: "Explain",
+                constraints: [],
+              }),
+            },
             { content: planToJson(NON_FILE_OPERATION_PLAN), usage: reported },
             { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
             {
@@ -424,10 +433,10 @@ describe("Property 7: external mode records provider/model/cost on the PLANNING 
           budget: generousBudget({ maxUsd: 10_000 }),
         });
 
-        // The run completed the full external pipeline: planner + live skeptic + live synthesizer.
+        // The run completed the full external pipeline: preprocessor + planner + live skeptic + live synthesizer.
         expect(run.phase).toBe("DONE");
         expect(run.status).toBe("completed");
-        expect(provider.invokeCount).toBe(3);
+        expect(provider.invokeCount).toBe(4);
 
         // --- (1) PLANNING event carries the provider-call metadata. ---
         const events = await store.listEvents(run.id);
@@ -599,6 +608,15 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: "Explain deterministic orchestration pipeline.",
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         { content: planToJson(NON_FILE_OPERATION_PLAN) },
         { content: SOUND_SKEPTIC_DRAFT },
         { content: CITED_SYNTHESIS_DRAFT },
@@ -613,7 +631,7 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
 
     expect(run.phase).toBe("DONE");
     expect(run.status).toBe("completed");
-    expect(provider.invokeCount).toBe(3);
+    expect(provider.invokeCount).toBe(4);
 
     const events = await store.listEvents(run.id);
 
@@ -641,6 +659,15 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: "Explain deterministic orchestration pipeline.",
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         { content: planToJson(NON_FILE_OPERATION_PLAN) },
         { content: SOUND_SKEPTIC_DRAFT },
         { content: CITED_SYNTHESIS_DRAFT },
@@ -655,7 +682,7 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
 
     expect(run.phase).toBe("DONE");
     expect(run.status).toBe("completed");
-    expect(provider.invokeCount).toBe(2);
+    expect(provider.invokeCount).toBe(3);
     expect((run.actualCost as { usd: number }).usd).toBeCloseTo(0.02, 12);
     expect((run.actualCost as { modelCalls?: number }).modelCalls).toBe(2);
 
@@ -677,6 +704,15 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: "Explain deterministic orchestration pipeline.",
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         { content: planToJson(NON_FILE_OPERATION_PLAN) },
         { error: new Error("skeptic upstream returned 503") },
       ],
@@ -691,8 +727,8 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     // Req 9.3: terminal FAILED rather than an unhandled error.
     expect(result.run.phase).toBe("FAILED");
     expect(result.run.status).toBe("failed");
-    // Skeptic was invoked once (planner #1, skeptic #2); the synthesizer never ran.
-    expect(provider.invokeCount).toBe(2);
+    // Skeptic was invoked once (preprocessor #1, planner #2, skeptic #3); the synthesizer never ran.
+    expect(provider.invokeCount).toBe(3);
 
     const events = await store.listEvents(result.run.id);
 
@@ -718,6 +754,15 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: "Explain deterministic orchestration pipeline.",
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         { content: planToJson(NON_FILE_OPERATION_PLAN) },
         { content: SOUND_SKEPTIC_DRAFT },
         { error: new Error("synthesizer upstream returned 500") },
@@ -733,7 +778,7 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     // The synthesizer failure was absorbed into a fallback: the run still completes.
     expect(run.phase).toBe("DONE");
     expect(run.status).toBe("completed");
-    expect(provider.invokeCount).toBe(3);
+    expect(provider.invokeCount).toBe(4);
     expect(synthesis).toBeDefined();
     expect(synthesis.response.length).toBeGreaterThan(0);
 
@@ -754,7 +799,19 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     // injected repair agent is never consulted for a permission failure).
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
-      responses: [{ content: planToJson(FILE_OPERATION_PLAN) }, { content: SOUND_SKEPTIC_DRAFT }],
+      responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: "Fix the TypeScript bug in src/app.ts and update tests.",
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Fix",
+            constraints: [],
+          }),
+        },
+        { content: planToJson(FILE_OPERATION_PLAN) },
+        { content: SOUND_SKEPTIC_DRAFT },
+      ],
     });
     const noRepair = makeNoRepairAgent();
 
@@ -772,7 +829,7 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     // Req 9.7: terminal NEEDS_DECISION, no synthesizer call.
     expect(run.phase).toBe("NEEDS_DECISION");
     expect(run.status).toBe("needs_decision");
-    expect(provider.invokeCount).toBe(2);
+    expect(provider.invokeCount).toBe(3);
 
     const events = await store.listEvents(run.id);
     const decisionPayload = findEvent(events, "NEEDS_DECISION");
@@ -812,7 +869,19 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
 
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
-      responses: [{ content: planToJson(FILE_OPERATION_PLAN) }, { content: SOUND_SKEPTIC_DRAFT }],
+      responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: "Fix the TypeScript bug in src/app.ts and update tests.",
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Fix",
+            constraints: [],
+          }),
+        },
+        { content: planToJson(FILE_OPERATION_PLAN) },
+        { content: SOUND_SKEPTIC_DRAFT },
+      ],
     });
     const noRepair = makeNoRepairAgent();
 
@@ -830,7 +899,7 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     // Req 9.8: terminal FAILED, no synthesizer call.
     expect(run.phase).toBe("FAILED");
     expect(run.status).toBe("failed");
-    expect(provider.invokeCount).toBe(2);
+    expect(provider.invokeCount).toBe(3);
 
     const events = await store.listEvents(run.id);
     const failedPayload = findEvent(events, "FAILED");

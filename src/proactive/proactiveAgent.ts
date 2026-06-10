@@ -100,19 +100,21 @@ export class ProactiveAgent {
 
     const result = await runChat(this.store, runArgs, runnerDeps);
 
-    // Mark the assistant message as proactive
+    // Create the assistant message and complete the user message in the store
     if (result.synthesis) {
-      // The chatRunner already creates the assistant message inside the pipeline.
-      // We update it post-facto with source.
-      // Find the latest assistant message for this run and tag it.
-      const recentMessages = await this.store.listMessages(conversationId);
-      const assistantMsg = [...recentMessages].reverse().find(m => m.role === "assistant" && m.runId === result.run.id);
-      if (assistantMsg) {
-        await this.store.updateMessage(assistantMsg.id, { 
-          // source is now in schema
-          ...( { source: "proactive" } as any )
-        });
-      }
+      await this.store.createMessage({
+        conversationId,
+        role: "assistant",
+        content: result.synthesis.response,
+        status: "completed",
+        runId: result.run.id,
+        redactionState: "none",
+        source: "proactive",
+      } as any);
+      await this.store.updateMessage(userMessage.id, {
+        status: "completed",
+        runId: result.run.id,
+      });
     }
 
     return {

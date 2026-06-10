@@ -301,6 +301,15 @@ describe("test isolation guard — no outbound network during a guarded run (Req
     const plan = fakePlanFor(PROMPT, args.triage, args.contextPack);
     const provider = new SpyLLMProvider({
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: PROMPT,
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         { content: planToJson(plan) },
         { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
         {

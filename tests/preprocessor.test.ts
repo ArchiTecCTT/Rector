@@ -8,7 +8,7 @@ import {
   ALLOWED_PREPROCESSOR_TOOLS,
   type PreprocessorOutput,
 } from "../src/orchestration/preprocessor";
-import { SpyLLMProvider, makeContextPack, arbPrompt, DEFAULT_SPY_USAGE } from "./support/byokArbitraries";
+import { SpyLLMProvider, makeContextPack, arbPrompt, DEFAULT_SPY_USAGE, generousBudget } from "./support/byokArbitraries";
 import { triageUserMessage } from "../src/orchestration/triage";
 import type { LLMRequest, LLMResponse, LLMUsage } from "../src/providers/llm";
 import { makeExternalRun } from "./support/byokArbitraries";
@@ -28,17 +28,12 @@ function makeSpyThatReturns(json: unknown, usage: LLMUsage = DEFAULT_SPY_USAGE):
   const content = JSON.stringify(json);
   const provider = new SpyLLMProvider({
     estimate: usage,
-    script: [
+    responses: [
       {
-        match: () => true,
-        response: {
-          id: "prep-1",
-          model: "test-slm",
-          content,
-          usage,
-          provider: "spy",
-          finishReason: "stop",
-        } as LLMResponse,
+        content,
+        usage,
+        model: "test-slm",
+        finishReason: "stop",
       },
     ],
   });
@@ -48,17 +43,12 @@ function makeSpyThatReturns(json: unknown, usage: LLMUsage = DEFAULT_SPY_USAGE):
 function makeMalformedSpy(): SpyLLMProvider {
   const provider = new SpyLLMProvider({
     estimate: DEFAULT_SPY_USAGE,
-    script: [
+    responses: [
       {
-        match: () => true,
-        response: {
-          id: "prep-bad",
-          model: "test-slm",
-          content: "this is not valid json {{{",
-          usage: DEFAULT_SPY_USAGE,
-          provider: "spy",
-          finishReason: "stop",
-        } as LLMResponse,
+        content: "this is not valid json {{{",
+        usage: DEFAULT_SPY_USAGE,
+        model: "test-slm",
+        finishReason: "stop",
       },
     ],
   });
@@ -78,9 +68,9 @@ describe("preprocessor contract and safety", () => {
       constraints: ["Keep existing tests green"],
     });
 
-    const contextPack = makeContextPack("Add pagination");
     const triage = triageUserMessage("Add pagination to the user list and update tests.");
-    const run = makeExternalRun();
+    const contextPack = makeContextPack(triage, "Add pagination");
+    const run = makeExternalRun(generousBudget());
 
     const result = await runSLMPreprocessor(
       { rawPrompt: "Add pagination to the user list and update tests.", contextPack, triage },
@@ -108,9 +98,9 @@ describe("preprocessor contract and safety", () => {
       constraints: [],
     });
 
-    const contextPack = makeContextPack("danger");
     const triage = triageUserMessage("danger");
-    const run = makeExternalRun();
+    const contextPack = makeContextPack(triage, "danger");
+    const run = makeExternalRun(generousBudget());
 
     const result = await runSLMPreprocessor(
       { rawPrompt: "danger", contextPack, triage },
@@ -130,9 +120,9 @@ describe("preprocessor contract and safety", () => {
 
   it("returns a safe fallback (no tool calls) on malformed JSON from the SLM", async () => {
     const provider = makeMalformedSpy();
-    const contextPack = makeContextPack("anything");
     const triage = triageUserMessage("anything");
-    const run = makeExternalRun();
+    const contextPack = makeContextPack(triage, "anything");
+    const run = makeExternalRun(generousBudget());
 
     const result = await runSLMPreprocessor(
       { rawPrompt: "anything", contextPack, triage },
@@ -145,8 +135,8 @@ describe("preprocessor contract and safety", () => {
   });
 
   it("runDeterministicPreprocessor produces valid output with no provider and no network", () => {
-    const contextPack = makeContextPack("Refactor the redaction module safely.");
     const triage = triageUserMessage("Refactor the redaction module safely.");
+    const contextPack = makeContextPack(triage, "Refactor the redaction module safely.");
     const result = runDeterministicPreprocessor({
       rawPrompt: "Refactor the redaction module safely.",
       contextPack,
@@ -190,9 +180,9 @@ describe("Property: arbitrary bloat always yields safe valid PreprocessorOutput"
 
           const provider = makeSpyThatReturns(noisyJson);
 
-          const contextPack = makeContextPack(rawPrompt);
           const triage = triageUserMessage(rawPrompt);
-          const run = makeExternalRun();
+          const contextPack = makeContextPack(triage, rawPrompt);
+          const run = makeExternalRun(generousBudget());
 
           const result = await runSLMPreprocessor(
             { rawPrompt, contextPack, triage },

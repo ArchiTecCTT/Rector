@@ -11,3 +11,6 @@ export * from "./skeptic";
 export * from "./synthesizer";
 export * from "./triage";
 export * from "./validationHealing";
+export * from "./deepPlanner";
+export * from "./ponderSwarm";
+export * from "./taskDecomposer";

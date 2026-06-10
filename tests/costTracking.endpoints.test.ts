@@ -114,6 +114,15 @@ function fakePlanJsonFor(prompt: string): string {
  */
 function successResponsesFor(prompt: string, plannerUsage: Partial<typeof DEFAULT_SPY_USAGE>) {
   return [
+    {
+      content: JSON.stringify({
+        distilledContext: prompt,
+        proposedToolCalls: [],
+        entities: [],
+        intent: "Explain",
+        constraints: [],
+      }),
+    },
     { content: fakePlanJsonFor(prompt), usage: plannerUsage },
     { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
     {
@@ -154,8 +163,8 @@ describe("GET /api/runs/:id/cost — run with provider-call events (Req 3.6)", (
         body: JSON.stringify({ content: prompt }),
       });
       expect(sent.status).toBe(201);
-      // planner + live skeptic + live synthesizer — a real external run that recorded provider calls.
-      expect(provider.invokeCount).toBe(3);
+      // preprocessor + planner + live skeptic + live synthesizer — a real external run that recorded provider calls.
+      expect(provider.invokeCount).toBe(4);
       expect(sent.data.run.phase).toBe("DONE");
 
       const runId: string = sent.data.run.id;

@@ -105,6 +105,9 @@ describe("observability baseline", () => {
         body: JSON.stringify({ content: "Explain the Rector brainstem." }),
       });
 
+      if (sent.status !== 201) {
+        console.log("ERROR DATA:", sent.status, sent.data);
+      }
       expect(sent.status).toBe(201);
       const body = sent.data as any;
       const traceId = body.run.traceId;

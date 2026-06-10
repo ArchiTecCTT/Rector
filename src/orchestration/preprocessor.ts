@@ -145,10 +145,10 @@ function buildPreprocessorPrompt(input: {
 
 /** Convert a provider usage estimate into the shape expected by evaluateBudget. */
 function buildPreprocessorBudgetUsage(provider: LLMProvider, estimate: LLMUsage, run: Run): BudgetUsage {
-  const committedUsd = run.actualCost?.usd ?? run.costEstimate.usd ?? 0;
-  const committedInput = run.actualTokens?.input ?? run.tokenEstimate.input ?? 0;
-  const committedOutput = run.actualTokens?.output ?? run.tokenEstimate.output ?? 0;
-  const committedCalls = run.actualCost?.modelCalls ?? run.costEstimate.modelCalls ?? 0;
+  const committedUsd = (run.actualCost as any)?.usd ?? (run.costEstimate as any).usd ?? 0;
+  const committedInput = (run.actualTokens as any)?.input ?? (run.tokenEstimate as any).input ?? 0;
+  const committedOutput = (run.actualTokens as any)?.output ?? (run.tokenEstimate as any).output ?? 0;
+  const committedCalls = (run.actualCost as any)?.modelCalls ?? (run.costEstimate as any).modelCalls ?? 0;
 
   return {
     provider: provider.metadata.id,

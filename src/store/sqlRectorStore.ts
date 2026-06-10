@@ -69,6 +69,7 @@ import {
   MessageSchema,
   RunEventSchema,
   RunSchema,
+  MemoryEntrySchema,
   type Artifact,
   type Conversation,
   type CreateArtifactInput,
@@ -82,6 +83,10 @@ import {
   type UpdateConversationInput,
   type UpdateMessageInput,
   type UpdateRunInput,
+  type MemoryEntry,
+  type MemoryLayer,
+  type CreateMemoryEntryInput,
+  type UpdateMemoryEntryInput,
 } from "./schemas";
 import type { RectorStore } from "./index";
 
@@ -91,7 +96,7 @@ export interface SqlRectorStoreOptions {
 }
 
 /** Prefixes used for store-generated entity ids, mirroring `InMemoryRectorStore`. */
-type IdPrefix = "conv" | "msg" | "run" | "art";
+type IdPrefix = "conv" | "msg" | "run" | "art" | "mem";
 
 /** A persisted row: the indexable filter column plus the canonical JSON payload. */
 interface EntityRow {
@@ -373,6 +378,7 @@ export class SqlRectorStore implements RectorStore {
     this.driver.exec(table("runs", "conversation_id"));
     this.driver.exec(table("run_events", "run_id"));
     this.driver.exec(table("artifacts", "kind"));
+    this.driver.exec(table("memories", "layer"));
   }
 
   /** Map a table name to its indexable filter column. */
@@ -387,6 +393,8 @@ export class SqlRectorStore implements RectorStore {
         return "run_id";
       case "artifacts":
         return "kind";
+      case "memories":
+        return "layer";
       default:
         throw new Error(`Unknown store table: ${table}`);
     }
@@ -498,5 +506,117 @@ export class SqlRectorStore implements RectorStore {
       const message = redactString(error instanceof Error ? error.message : String(error));
       throw new Error(`Corrupt ${label} payload for id ${redactString(id)}: ${message}`);
     }
+  }
+
+  // === Advanced Memory (Chunk 27 / neuro-symbolic Step 2) ===
+  async createMemoryEntry(input: CreateMemoryEntryInput): Promise<MemoryEntry> {
+    const now = this.nowFn();
+    const entry = MemoryEntrySchema.parse({
+      ...structuredClone(input),
+      id: this.nextId("mem", "memories"),
+      accessCount: input.accessCount ?? 0,
+      lastMentioned: input.lastMentioned ?? now,
+      timestamp: input.timestamp ?? now,
+      tags: input.tags ?? [],
+      metadata: input.metadata ?? {},
+    });
+    this.insertRow("memories", entry.id, entry.layer, entry);
+    return entry;
+  }
+
+  async getMemoryEntry(id: string): Promise<MemoryEntry | undefined> {
+    return this.readRow("memories", MemoryEntrySchema, "memory", id);
+  }
+
+  async listMemoryEntries(layer?: MemoryLayer): Promise<MemoryEntry[]> {
+    return this.listRows("memories", MemoryEntrySchema, "memory", layer);
+  }
+
+  async updateMemoryEntry(
+    id: string,
+    patch: UpdateMemoryEntryInput
+  ): Promise<MemoryEntry | undefined> {
+    const current = await this.getMemoryEntry(id);
+    if (!current) return undefined;
+
+    const updated = MemoryEntrySchema.parse({
+      ...current,
+      ...structuredClone(patch),
+      id: current.id,
+    });
+    this.updateRow("memories", updated.id, updated.layer, updated);
+    return updated;
+  }
+
+  async deleteMemoryEntry(id: string): Promise<boolean> {
+    return this.deleteRow("memories", id);
+  }
+
+  async searchMemory(query?: string, options: { layer?: MemoryLayer; limit?: number } = {}): Promise<MemoryEntry[]> {
+    const { layer, limit = 20 } = options;
+    let results = await this.listMemoryEntries(layer);
+
+    if (query && query.trim()) {
+      const q = query.toLowerCase();
+      results = results.filter((e) =>
+        e.content.toLowerCase().includes(q) ||
+        e.tags.some((t) => t.toLowerCase().includes(q)) ||
+        (e.source && e.source.toLowerCase().includes(q))
+      );
+    }
+
+    // Simple recency + access sort for relevance
+    results.sort((a, b) => {
+      const scoreA = a.accessCount * 2 + (Date.parse(a.lastMentioned) || 0);
+      const scoreB = b.accessCount * 2 + (Date.parse(b.lastMentioned) || 0);
+      return scoreB - scoreA;
+    });
+
+    return results.slice(0, limit);
+  }
+
+  async pruneMemory(options: { targetLayer?: MemoryLayer; maxEntries?: number } = {}): Promise<{ pruned: number; summarized: number }> {
+    const { targetLayer = "episodic", maxEntries = 100 } = options;
+    const layerEntries = await this.listMemoryEntries(targetLayer);
+
+    if (layerEntries.length <= maxEntries) {
+      return { pruned: 0, summarized: 0 };
+    }
+
+    // Score: recency (inverse age) + accessCount + bonus for user notes
+    const scored = layerEntries.map((entry) => {
+      const ageMs = Date.now() - (Date.parse(entry.timestamp) || Date.now());
+      const recency = Math.max(0, 100 - Math.floor(ageMs / (1000 * 60 * 60 * 24))); // decay per day rough
+      const accessBonus = Math.min(entry.accessCount * 3, 50);
+      const noteBonus = entry.source === "user-note" || entry.tags.includes("note") ? 30 : 0;
+      const score = recency + accessBonus + noteBonus;
+      return { entry, score };
+    });
+
+    scored.sort((a, b) => a.score - b.score); // lowest first
+
+    let pruned = 0;
+    let summarized = 0;
+    const toPrune = scored.slice(0, Math.max(0, layerEntries.length - maxEntries));
+
+    for (const { entry } of toPrune) {
+      // Simple "summarize" for alpha: if high enough access, move a stub summary to core
+      if (entry.accessCount > 2 && entry.layer === "episodic") {
+        const summaryContent = `[summary] ${entry.content.slice(0, 120)}... (from ${entry.timestamp})`;
+        await this.createMemoryEntry({
+          layer: "core",
+          content: summaryContent,
+          timestamp: this.nowFn(),
+          tags: [...entry.tags, "auto-summary"],
+          source: "prune",
+          metadata: { originalId: entry.id, originalLayer: entry.layer },
+        });
+        summarized++;
+      }
+      await this.deleteMemoryEntry(entry.id);
+      pruned++;
+    }
+
+    return { pruned, summarized };
   }
 }

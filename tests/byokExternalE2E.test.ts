@@ -123,6 +123,15 @@ describe("BYOK external-mode end-to-end", () => {
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: prompt,
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         { content: fakePlanJsonFor(prompt), usage: reportedUsage },
         { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
         {
@@ -153,8 +162,8 @@ describe("BYOK external-mode end-to-end", () => {
       expect(sent.status).toBe(201);
       const body = sent.data as any;
 
-      // Three provider calls were made: planner + live skeptic + live synthesizer.
-      expect(provider.invokeCount).toBe(3);
+      // Four provider calls were made: preprocessor + planner + live skeptic + live synthesizer.
+      expect(provider.invokeCount).toBe(4);
 
       // --- (1) Run reaches DONE/completed via the external path. ---
       expect(body.run.status).toBe("completed");
@@ -187,7 +196,7 @@ describe("BYOK external-mode end-to-end", () => {
       expect(providerCall.usage.inputTokens).toBe("[REDACTED]");
       expect(providerCall.usage.outputTokens).toBe("[REDACTED]");
 
-      // --- (2) Run cost/token fields accumulate planner + skeptic + synthesizer usage (Req 3.6). ---
+      // --- (2) Run cost/token fields accumulate preprocessor + planner + skeptic + synthesizer usage (Req 3.6). ---
       const expectedUsd = reportedUsage.estimatedUsd + DEFAULT_SPY_USAGE.estimatedUsd * 2;
       const expectedModelCalls = reportedUsage.modelCalls + DEFAULT_SPY_USAGE.modelCalls * 2;
       const expectedInputTokens = reportedUsage.inputTokens + DEFAULT_SPY_USAGE.inputTokens * 2;
@@ -214,6 +223,15 @@ describe("BYOK external-mode end-to-end", () => {
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: prompt,
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         {
           error: new ProviderError({
             code: "PROVIDER_HTTP_ERROR",
@@ -245,7 +263,7 @@ describe("BYOK external-mode end-to-end", () => {
       // returned and the run transitions to NEEDS_DECISION.
       expect(sent.status).toBe(201);
       const body = sent.data as any;
-      expect(provider.invokeCount).toBe(1);
+      expect(provider.invokeCount).toBe(2);
       expect(body.run.phase).toBe("NEEDS_DECISION");
       expect(body.run.status).toBe("needs_decision");
 
@@ -360,6 +378,15 @@ describe("BYOK external-mode end-to-end — citations, safe executor, and healin
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: prompt,
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         { content: leakyNoOpPlanJsonFor(prompt, SECRET) },
         { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
         {
@@ -393,8 +420,8 @@ describe("BYOK external-mode end-to-end — citations, safe executor, and healin
       expect(sent.status).toBe(201);
       const body = sent.data as any;
 
-      // planner + live skeptic + live synthesizer.
-      expect(provider.invokeCount).toBe(3);
+      // preprocessor + planner + live skeptic + live synthesizer.
+      expect(provider.invokeCount).toBe(4);
       expect(body.run.status).toBe("completed");
       expect(body.run.phase).toBe("DONE");
 
@@ -435,6 +462,15 @@ describe("BYOK external-mode end-to-end — citations, safe executor, and healin
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: prompt,
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         { content: fileOperationPlanJson(artifactPath, SECRET) },
         { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
       ],
@@ -463,9 +499,9 @@ describe("BYOK external-mode end-to-end — citations, safe executor, and healin
       expect(sent.status).toBe(201);
       const body = sent.data as any;
 
-      // planner + live skeptic only; the run stops before the live synthesizer
+      // preprocessor + planner + live skeptic only; the run stops before the live synthesizer
       // (a PERMISSION failure never consults the repair agent — Req 5.8).
-      expect(provider.invokeCount).toBe(2);
+      expect(provider.invokeCount).toBe(3);
 
       // Req 9.7: a healing NEEDS_DECISION terminates the run in NEEDS_DECISION.
       expect(body.run.phase).toBe("NEEDS_DECISION");

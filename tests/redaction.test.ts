@@ -145,6 +145,15 @@ function leakyResponses(prompt: string, leak: string) {
   const plan = fakePlanFor(prompt);
   const leakyPlan: PlannerOutput = { ...plan, goal: `${plan.goal} (${leak})` };
   return [
+    {
+      content: JSON.stringify({
+        distilledContext: `${prompt} (${leak})`,
+        proposedToolCalls: [],
+        entities: [],
+        intent: "Explain",
+        constraints: [],
+      }),
+    },
     { content: planToJson(leakyPlan) },
     { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
     {
@@ -193,9 +202,12 @@ describe("no secret in any persisted row, SSE frame, or cost aggregate (Property
             method: "POST",
             body: JSON.stringify({ content: `${PROMPT} ${leak}` }),
           });
+          if (sent.status !== 201) {
+            console.error("FAILED RESPONSE:", sent.data);
+          }
           expect(sent.status).toBe(201);
-          // A real external run: planner + live skeptic + live synthesizer reached DONE.
-          expect(provider.invokeCount).toBe(3);
+          // A real external run: preprocessor + planner + live skeptic + live synthesizer reached DONE.
+          expect(provider.invokeCount).toBe(4);
           expect(sent.data.run.phase).toBe("DONE");
           const runId: string = sent.data.run.id;
 

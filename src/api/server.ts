@@ -515,6 +515,14 @@ export function withEventBroadcast(store: RectorStore, broker: RunEventBroker): 
     listArtifacts: (kind) => store.listArtifacts(kind),
     updateArtifact: (id, patch) => store.updateArtifact(id, patch),
     deleteArtifact: (id) => store.deleteArtifact(id),
+
+    createMemoryEntry: (input) => store.createMemoryEntry(input),
+    getMemoryEntry: (id) => store.getMemoryEntry(id),
+    listMemoryEntries: (layer) => store.listMemoryEntries(layer),
+    updateMemoryEntry: (id, patch) => store.updateMemoryEntry(id, patch),
+    deleteMemoryEntry: (id) => store.deleteMemoryEntry(id),
+    searchMemory: (query, options) => store.searchMemory(query, options),
+    pruneMemory: (options) => store.pruneMemory(options),
   };
 }
 
@@ -1154,13 +1162,15 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const runEventBroker = createRunEventBroker();
   const rectorStore = withEventBroadcast(createRectorStore(securityOptions.persistence), runEventBroker);
 
+  const orchestration = securityOptions.orchestration;
+
   // Proactive / Alive agent (Chunk 28). Only auto-starts in external mode.
   // In local mode it is available for manual/dev triggers only.
-  const proactiveAgent: ProactiveAgent | undefined = orchestration?.mode === "external" || securityOptions.orchestration?.mode === "external"
+  const proactiveAgent: ProactiveAgent | undefined = orchestration?.mode === "external"
     ? createProactiveAgent({
         store: rectorStore,
         router: orchestration?.router,
-        mode: orchestration?.mode ?? securityOptions.orchestration?.mode ?? "local",
+        mode: orchestration?.mode ?? "local",
       })
     : undefined;
 

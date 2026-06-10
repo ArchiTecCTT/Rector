@@ -158,6 +158,15 @@ describe("Task 4.4: direct-answer event recording (External_Mode)", () => {
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: "What is Rector?",
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         { content: planToJson(NON_FILE_OPERATION_PLAN) },
         { content: SOUND_SKEPTIC_DRAFT },
         { content: "Rector is a local-first BYOK orchestration agent.", usage: { estimatedUsd: 0.02, modelCalls: 1 } },
@@ -172,8 +181,8 @@ describe("Task 4.4: direct-answer event recording (External_Mode)", () => {
 
     expect(run.phase).toBe("DONE");
     expect(run.status).toBe("completed");
-    // planner + skeptic + cheap direct answer.
-    expect(provider.invokeCount).toBe(3);
+    // preprocessor + planner + skeptic + cheap direct answer.
+    expect(provider.invokeCount).toBe(4);
     // The user-facing reply is the cheap-model answer, not internal trace prose.
     expect(synthesis.response).toBe("Rector is a local-first BYOK orchestration agent.");
 
@@ -231,6 +240,15 @@ describe("Task 4.4: direct-answer event recording (External_Mode)", () => {
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
       responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: "What is Rector?",
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
         { content: planToJson(NON_FILE_OPERATION_PLAN) },
         { content: SOUND_SKEPTIC_DRAFT },
         { error: new Error("transport failure: connection reset xyz") },
@@ -246,8 +264,8 @@ describe("Task 4.4: direct-answer event recording (External_Mode)", () => {
     // The run still reaches DONE: the deterministic fallback text is a usable answer (Req 8.1).
     expect(run.phase).toBe("DONE");
     expect(run.status).toBe("completed");
-    // planner + skeptic + the (failing) cheap-model attempt.
-    expect(provider.invokeCount).toBe(3);
+    // preprocessor + planner + skeptic + the (failing) cheap-model attempt.
+    expect(provider.invokeCount).toBe(4);
     // No raw provider error body survives into the user-facing reply.
     expect(synthesis.response).not.toContain("connection reset");
 

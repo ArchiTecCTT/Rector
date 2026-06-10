@@ -4,13 +4,17 @@
 
 ## Open
 
+> Updated during full system audit 2026-06-09; subagents used; see audits/full-system-audit.md for full matrix + evidence.
+
 ### External mode fail-fast startup check ignores UI-persisted configurations
+
+- **Status:** RESOLVED.
+- **Traceability:** Boot-tolerant async resolution (Req 1) now on live path: `src/bin/server.ts:223` (bootstrap calls `resolveStartupOrchestrationConfig` which uses `resolveOrchestrationConfig` + BYOK stores), `src/providers/orchestrationConfig.ts:270` (full `resolveOrchestrationConfig` + union of env + Provider_Config_Store/Secret_Store presence-only via `hasSecret`; only hard-halt is `ORCHESTRATOR_MODE_INVALID` per Req 1.6; zero-provider external now warns + serves per Req 1.4/1.5/1.7; store-read failures tolerated per Req 1.8). Legacy synchronous env-only `parseOrchestrationConfig` (and `EXTERNAL_MODE_NO_PROVIDER` throw path) retained only in `src/deployment/index.ts` for pure-env callers + existing tests/property tests (e.g. `tests/deployment.test.ts:247` and `tests/deployment.test.ts:414`). Property tests for Req 1 / boot-tolerant resolution + local default + warnings: `tests/orchestrationConfigResolution.property.test.ts`, `tests/startupWarningEnvKeyNaming.property.test.ts`, `tests/orchestrationModeInvalidHalt.property.test.ts`, `tests/defaultLocalModeResolution.property.test.ts`. See `.kiro/specs/cloud-capable-transition/requirements.md` Requirement 1 (Boot-Tolerant Startup Validation) ACs 1-8 + 9.5. (Historical root cause/plan retained below for audit trail.)
 
 - **Source:** User report / startup validation audit.
 - **Severity:** High usability/onboarding blocker.
-- **Status:** Open.
 - **Root cause:** When `ORCHESTRATOR_MODE=external`, the server runs a fail-fast synchronous check `parseOrchestrationConfig(process.env)` at startup. This check only reads variables from `process.env` (loaded from `.env`). It does not look at the persisted UI provider store (`.rector/providers.json` & `.rector/secrets.enc`), which is loaded asynchronously later. If the user only sets up their credentials in the browser UI (which writes to the JSON and encrypted key files) but leaves the `.env` variables blank, Rector fails to boot with `EXTERNAL_MODE_NO_PROVIDER`.
-- **Plan:** Fix the startup sequencing so the fail-fast orchestration mode parser either integrates the persisted UI configuration asynchronously, or clearly document that to run in `external` mode, at least one provider's environment variables must be populated in `.env` as a bootstrap signal even if UI-based overrides are configured.
+- **Plan:** (Resolved on live boot path; legacy parser retained for pure-env/tests only. See traceability above.) Fix the startup sequencing so the fail-fast orchestration mode parser either integrates the persisted UI configuration asynchronously, or clearly document that to run in `external` mode, at least one provider's environment variables must be populated in `.env` as a bootstrap signal even if UI-based overrides are configured. (Historical plan text retained for audit trail.)
 
 ### Dependency audit: vitest major-upgrade vulnerabilities deferred (require maintainer approval)
 
@@ -30,14 +34,14 @@
 - **Severity:** Medium (new LLM surface + JSON proposal boundary, but heavily mitigated).
 - **Status:** Open.
 - **Root cause:** In `runExternalChatRun`, a router-selected cheap/SLM provider is now invoked (via `runSLMPreprocessor`) after context building and before the live planner. It produces `distilledContext` + `proposedToolCalls`. Even though the preprocessor runs `evaluateBudget` + `invokeWithBudget`, forces json_object, validates with Zod, filters tools against a conservative allowlist, and redacts output, this is a new place where model output influences downstream flagship prompts and is visible in traces.
-- **Plan / Mitigations (already implemented in this chunk):**
+- **Plan / Mitigations (already implemented in this chunk; mitigations implemented; see new gaps below):**
   - Local mode (`runFakeChatRun`) is completely untouched — preprocessor is never called.
   - The preprocessor never throws; every failure path (budget denial, provider error, bad JSON, schema failure) produces a safe deterministic fallback with empty `proposedToolCalls`.
   - Original `prompt` + full `contextPack` are retained and passed to skeptic/crucible/healing/synthesis for cross-validation.
   - `proposedToolCalls` are only *proposals*; they are filtered to `ALLOWED_PREPROCESSOR_TOOLS` and still flow through the full symbolic pipeline (`WorkspaceSandboxAdapter` containment/allowlist/approvals, skeptic, crucible, validation/healing, budget).
   - Usage (if any) is intended to be accounted (Step 1 keeps accounting lightweight; later refinement can commit preprocessor usage explicitly before the planner preflight).
   - Property test (fast-check) asserts that arbitrary bloat always produces schema-valid output with only allowlisted (or zero) tool proposals and no obvious secret leakage.
-- **Future work:** Prompt hardening / few-shot examples for the preprocessor, richer usage accounting, optional exposure of preprocessor output in the UI trace drawer, and quality metrics once real cheap providers are exercised.
+- **Future work:** Prompt hardening / few-shot examples for the preprocessor, richer usage accounting, optional exposure of preprocessor output in the UI trace drawer, and quality metrics once real cheap providers are exercised. (See new High gap on Chunks 29-32 stubs below.)
 - **Traceability:** `docs/plans/chunks/026-slm-preprocessor-structured-tool-calls.md`, `src/orchestration/preprocessor.ts`, `tests/preprocessor.test.ts`, wiring in `src/orchestration/chatRunner.ts`.
 
 ### Advanced memory (Chunk 27) introduces new write path (/api/notes) and pruning logic in the store
@@ -46,7 +50,7 @@
 - **Severity:** Medium (new persistent-ish state in local mode, pruning decisions, note capture as user-controlled input).
 - **Status:** Open.
 - **Root cause:** New MemoryEntry entities (layered working/episodic/core) stored in InMemoryRectorStore (and interface extended for future durable stores). `POST /api/notes` allows quick capture into episodic. `pruneMemory` uses heuristic scoring (recency + access + source bonuses) and can create auto-summaries in core. Time fields (`timestamp`, `lastMentioned`) are injected into ContextPack as natural language phrases. All new paths must respect redaction.
-- **Plan / Mitigations (implemented in this chunk):**
+- **Plan / Mitigations (implemented in this chunk; mitigations implemented; see new gaps below):**
   - Local/in-memory baseline only; no new network or paid services required (Chroma/Mem0/TiDB stubs or future adapters follow existing pattern).
   - All memory content goes through `redactString` on note creation and search results are simple keyword for alpha.
   - Prune is bounded (`maxEntries`) and opportunistic on note writes; high-value items (user notes, high access) are protected by scoring.
@@ -54,7 +58,7 @@
   - Existing ContextPack consumers (preprocessor, planner, skeptic) see additive `memoryContext` field; original paths unchanged.
   - Tests include pruning invariants and time fields.
 - **Future work:** Real vector similarity in prune/search when Chroma or Mem0 adapters are activated (using stack credits); durable memory entities in sql/tidb stores; full ponder swarm (Step 6) that reads/writes this memory; UI for captured notes; retention policies per layer.
-- **Traceability:** `docs/plans/chunks/027-advanced-memory-system.md`, `src/store/schemas.ts` (MemoryEntry), `src/store/inMemoryRectorStore.ts` (impl + prune), `src/api/server.ts` (/api/notes + context enrichment), `src/orchestration/contextBuilder.ts` (time-aware injection), `tests/memoryAdvanced.test.ts`.
+- **Traceability:** `docs/plans/chunks/027-advanced-memory-system.md`, `src/store/schemas.ts` (MemoryEntry), `src/store/inMemoryRectorStore.ts` (impl + prune), `src/api/server.ts` (/api/notes + context enrichment), `src/orchestration/contextBuilder.ts` (time-aware injection), `tests/memoryAdvanced.test.ts`. (See new High gap on RectorStore memory methods + 034 plan below.)
 
 ### Proactive alive layer (Chunk 28) adds timer-driven and on-demand message initiation
 
@@ -62,14 +66,14 @@
 - **Severity:** Low-Medium (new initiation path, potential for unwanted messages if timer misconfigured).
 - **Status:** Open.
 - **Root cause:** New ProactiveAgent that can call runChat with synthetic prompts using "proactive-companion" route and marks resulting assistant messages with source "proactive". Timer is strictly guarded (only external mode, long interval). Synthetic messages go through full budget/redaction/pipeline.
-- **Plan / Mitigations:**
+- **Plan / Mitigations:** (mitigations implemented; see new gaps below)
   - Local mode: agent is never instantiated with timer (startTimer is a no-op).
   - All proactive LLM calls (if router present) are budget-gated and redacted.
   - Dev trigger endpoint /api/dev/proactive-trigger is behind dev guard (similar to /api/dev/scenario).
   - Source field added as optional to Message (no breakage to existing creates/updates/tests).
   - Reuses existing runChat pipeline so all symbolic controls (skeptic, crucible, healing, sandbox) apply.
 - **Future work:** Event-driven triggers (e.g. on long NEEDS_DECISION from memory), better frequency control using memory, UI badge using the source field.
-- **Traceability:** `docs/plans/chunks/028-proactive-alive-layer.md`, `src/proactive/proactiveAgent.ts`, wiring in `src/api/server.ts`, `tests/proactive.test.ts`, schema extension in `src/store/schemas.ts`.
+- **Traceability:** `docs/plans/chunks/028-proactive-alive-layer.md`, `src/proactive/proactiveAgent.ts`, wiring in `src/api/server.ts`, `tests/proactive.test.ts`, schema extension in `src/store/schemas.ts`. (See new High gap on Chunks 29-32 stubs below.)
 
 ### Doc cleanup and vision shift (Chunk 33) + Cloud-capable transition
 
@@ -83,8 +87,8 @@
   - Local baseline language preserved where it is factually a regression requirement.
   - Future cloud chunks will extend UI-managed config pattern (already used for providers) to memory/persistence backends.
   - Non-rigid design: avoid hard dependencies; use adapters/interfaces for memory providers.
-- **Future work:** Complete remaining items from .kiro/cloud-capable-transition (E2B, synthesizer streaming, TiDB, etc.), adapted for hassle-free UI memory config (e.g. new MemoryProvider config store + UI flows, adapters for Mem0/TiDB/local). Update more docs, add cloud quickstart. Verify no breakage to local tests.
-- **Traceability:** `docs/plans/chunks/033-stale-doc-cleanup-vision-alignment.md`, `docs/stale-docs-inventory.md`, edits to AGENTS.md/README/docs/README/etc., `.kiro/specs/cloud-capable-transition/`.
+- **Future work:** Complete remaining items from .kiro/cloud-capable-transition (E2B, synthesizer streaming, TiDB, etc.), adapted for hassle-free UI memory config (e.g. new MemoryProvider config store + UI flows, adapters for Mem0/TiDB/local). Update more docs, add cloud quickstart. Verify no breakage to local tests. Partial progress via 033 (see cross-ref); see new Medium/Low-Medium gaps + 034 plan below for pluggable memory + vision lag.
+- **Traceability:** `docs/plans/chunks/033-stale-doc-cleanup-vision-alignment.md`, `docs/stale-docs-inventory.md`, edits to AGENTS.md/README/docs/README/etc., `.kiro/specs/cloud-capable-transition/`. (See 034 plan `docs/plans/chunks/034-ui-configurable-memory-providers.md`.)
 
 ### New risk from user vision: Pluggable memory providers via UI
 
@@ -92,7 +96,7 @@
 - **Severity:** Medium (expands config surface; requires careful abstraction so local baseline isn't affected; potential for misconfiguration leading to data loss or cost in cloud backends).
 - **Status:** Open.
 - **Root cause:** Current persistence is driven by RECTOR_PERSISTENCE + env / createRectorStore (memory/sqlite/tidb). Memory is layered on top (truth library + new hierarchical in-memory from 27). No UI-managed "MemoryProvider" equivalent to Provider_Config_Store yet. Adding Mem0 (external) or switching TiDB etc. via UI increases the need for runtime pluggable adapters, secure secret handling for cloud memory, and UI validation.
-- **Plan / Mitigations (to be implemented in follow-on chunks):**
+- **Plan / Mitigations (to be implemented in follow-on chunks; partial status from 033/transition + 034 plan in progress; see new audit gaps below):**
   - Extend the UI config pattern (non-secret records + encrypted secrets) to memory backends.
   - Create adapter interface for memory providers (local implementations + Mem0 client, TiDB-backed, etc.).
   - All config changes via Settings_API; local mode never uses external memory providers.
@@ -100,6 +104,7 @@
   - Keep in-memory/SQLite as zero-config local defaults.
   - Update neuro memory code (from 27) to work behind the pluggable layer.
 - **Traceability:** This entry + future chunks after 033; reference in cloud-capable-transition adaptation. Use stack credits (Mem0, TiDB, Chroma) for optional adapters.
+ (Cross-ref `docs/plans/chunks/034-ui-configurable-memory-providers.md`; see new High gap on RectorStore memory methods + Medium vision lag gap below.)
 
 ### Chat store is in-memory and resets on restart
 
@@ -108,12 +113,17 @@
 - **Status:** Open until MongoDB/local durable store adapter chunk.
 - **Plan:** Keep documented. Replace/augment with durable store in later persistence/provider chunks.
 
+**Local baseline (intentionally preserved per Req 9 / cloud design):** Chat store (and many other "prototype" behaviors) remain in-memory/deterministic for the mandatory provider-free regression baseline (see `.kiro/specs/cloud-capable-transition/requirements.md` Req 9 + src/api/server.ts + createRectorStore "memory" path). 
+
+**External / Cloud paths (partially advanced by transition: E2B gated, live gated synth, SSE, boot-tolerant, discovery full, etc.):** See updates below for sandbox/synthesizer/streaming/startup (and cross-refs in new gaps + roadmap section). Startup item resolved (see top of Open). 
+
 ### Chat run progress is polling/list only, no SSE/WebSocket
 
 - **Source:** Chunk 6 worker.
 - **Severity:** Product UX limitation.
 - **Status:** Open.
 - **Plan:** Add streaming/SSE in a future chat UX chunk after state/events stabilize.
+ (Updated: SSE events + early 202 for ?stream=1 now implemented on External path in `src/api/server.ts:1332` (runChatPipeline + registerRunStreamRoute + broker-wrapped store); polling preserved as fallback. Full answer streaming still gated.)
 
 ### Chat synthesis is deterministic trace summary, not semantic answer generation
 
@@ -121,6 +131,7 @@
 - **Severity:** Medium product limitation.
 - **Status:** Open until provider-backed/local-model synthesis chunks.
 - **Plan:** Current final assistant response summarizes local trace evidence from triage/context/planning/review/arbitration/DAG/execution/validation/healing without provider calls. It is safe and testable for alpha brainstem proof, but it does not yet generate rich task-specific prose, cite real external sources, or explain code changes from actual filesystem execution.
+ (Updated status: `src/orchestration/synthesizer.ts:56` (synthesizeChatBrainstemResponse + legacyStatusResponse for default/heavy routes), `selectResponseText:91`, `runLiveSynthesizer:401` (gated live flagship prose for Heavy_Developer_Routes in external when router + budget allow; falls back to deterministic Legacy_Status_Response per Req 7.4/7.5). Local always deterministic/0 calls (Req 9). Partial progress on cloud path; see 034 + new gaps.)
 
 ### Store list ordering relies on insertion order
 
@@ -296,7 +307,7 @@
 - **Severity:** High (imminent commercial product blocker).
 - **Status:** Open.
 - **Root cause:** The `WorkspaceSandboxAdapter` executes allowlisted commands via `defaultCommandRunner` which is a dummy mockup returning `${[command, ...args].join(" ").trim()} completed`. It does not spawn any real child processes or apply actual unified patches, meaning code execution and validation is currently a local simulation rather than actual execution.
-- **Plan:** Implement real command execution using Node's `child_process` API and actual unified diff application for local mode, and integrate E2B / Depot sandboxing for isolated cloud execution.
+- **Plan:** (Local baseline intentionally preserved per Req 9 / cloud design in `src/sandbox/index.ts:622` (defaultCommandRunner) + `WorkspaceSandboxAdapter`.) External/Cloud path partially advanced: real E2B wired + gated (key from Secret_Store or E2B_API_KEY fallback) in `src/bin/server.ts:174` (buildStartupSandboxAdapter) + `src/sandbox/e2bSandboxAdapter.ts` (real client + runCommandInContainer when key present; reuses Workspace as gateway for local-only ops). See new High gap (RectorStore memory methods + 034) + roadmap item 3. Dummy/local stub remains for regression baseline + when no E2B key.
 
 ### Sandbox stubs deny cloud execution by default
 
@@ -304,7 +315,7 @@
 - **Severity:** Medium.
 - **Status:** Open.
 - **Root cause:** The E2B and Depot adapters in `src/sandbox/index.ts` are completely stubbed out. Invoking them throws a `SANDBOX_PROVIDER_STUB_NO_NETWORK` denial error.
-- **Plan:** Replace stubs with actual `@e2b/sdk` and Depot clients once billing/credentials are integrated in the settings panel.
+- **Plan:** (Updated: stubs largely replaced by real E2B adapter per above; still gated on config/key per Req 6.1/6.7. Local path + no-key external degrade to the network-free WorkspaceSandboxAdapter/dummy. See `src/sandbox/e2bSandboxAdapter.ts:131` and bin/server.ts wiring. Full UI config + key injection in later 034+ work.)
 
 ### Developer-oriented triage routes fall back to diagnostic traces instead of LLM prose
 
@@ -312,7 +323,7 @@
 - **Severity:** Medium.
 - **Status:** Open.
 - **Root cause:** In `src/orchestration/synthesizer.ts`, all developer routes (`RESEARCH`, `CODE_EDIT`, `PLAN_ONLY`, `LONG_RUNNING`) default to returning `legacyStatusResponse` which formats diagnostic execution summaries (e.g. `Status: ... Observed: ...`) instead of calling the LLM router to formulate a rich prose response.
-- **Plan:** Connect the synthesizer to the configured model router and instruct flagship models to write user-facing summaries referencing the execution trace.
+- **Plan:** (Updated: live path now exists and is gated in `runLiveSynthesizer` + `src/orchestration/synthesizer.ts:401` (and selectResponseText); heavy dev routes fall back to legacy per Req 7.4/7.5 when no router/key/budget or in local. Streaming events partial (see above). See roadmap item 4 + new gaps.)
 
 ### Linear workflow integration relies on raw string display labels instead of UUIDs
 
@@ -329,6 +340,46 @@
 - **Status:** Open.
 - **Root cause:** Although Sentry, PostHog, and OpenTelemetry adapters are defined in the schema and config check, their runtime implementations are inert mocks that perform no network I/O.
 - **Plan:** Configure and initialize the actual Sentry Node SDK and PostHog Node SDK in `src/observability` behind user configuration toggles.
+
+### RectorStore memory methods missing from sql/tidb implementations (Chunk 27 interface extension incomplete)
+
+- **Source:** Full system audit (server + store wiring + createRectorStore tests).
+- **Severity:** High (blocks durable/TiDB VPS + 034 pluggable memory).
+- **Status:** Open.
+- **Root cause:** `RectorStore` interface in `src/store/index.ts:74` (post-Chunk 27) declares `createMemoryEntry`/`searchMemory`/`pruneMemory` + siblings. Only `InMemoryRectorStore` implements them (src/store/inMemoryRectorStore.ts:309+). `SqlRectorStore` (used for both sqlite + tidb via `createRectorStore` in src/store/index.ts:164 and src/api/server.ts:1155) has no implementations (file ends after artifacts without the methods). `src/api/server.ts:1284` (chat runChatPipeline, unconditional `searchMemory` for episodic injection into contextPack) + `src/api/server.ts:1420` (/api/notes POST, unconditional `createMemoryEntry` + `pruneMemory`) + proactive + other call sites will crash (or fail to type) on any durable/persistent driver. `runStartupMigration` + TiDB path (and 034 MemoryProvider abstraction) blocked. createRectorStore tests (persistentStore.test.ts etc.) do not cover the advanced memory surface for sql/tidb.
+- **Plan / Mitigations:** Short-term: backfill minimal no-op/throwing impls in SqlRectorStore (e.g. `searchMemory` returns `[]`, `pruneMemory` returns `{pruned:0,summarized:0}`, clear "not supported on this driver" errors) + update/add tests exercising createRectorStore("sqlite") + createRectorStore("tidb" mock) through the memory methods + server chat/notes paths. Long-term: proper MemoryProvider abstraction + pluggable impls (see 034 plan `docs/plans/chunks/034-ui-configurable-memory-providers.md`); keep in-memory as local baseline (Req 9). Do not assume all stores are equivalent until fixed.
+
+### Neuro-symbolic chunks 29-32 (symbolic engine, deep planner, ponder swarm, task decomposer) are dead/unwired stubs with zero callsites in main pipeline
+
+- **Source:** Full system audit (orchestration/chat wiring + src/orchestration/index.ts + chunk plans).
+- **Severity:** High ( "alive" usability goal from AGENTS.md + neuro vision not realized).
+- **Status:** Open.
+- **Root cause:** Artifacts exist (`src/symbolic/symbolicEngine.ts`, `src/orchestration/deepPlanner.ts`, `src/orchestration/ponderSwarm.ts`, `src/orchestration/taskDecomposer.ts`, registry, etc.) and are exported. `proposedToolCalls` (from Chunk 26 preprocessor in chatRunner.ts) + `memoryContext` (from 27) are produced/attached to traces/observability but never consumed by later stages in the main pipeline (runExternalChatRun / runFakeChatRun / runChat / triage / contextBuilder / planner / skeptic / crucible / DAG / executor / validation / synthesizer). No calls to symbolic engines, MCTS, ponder swarm, or task decomposer in the critical path. No tests for 29-32 (only preprocessor/memoryAdvanced/proactive). Chunk 31 plan is minimal ("using existing live modules"). Per AGENTS.md and 033 plan, these were intended to make the system "alive" for real work and integrate with configurable cloud product. Current: isolated research stubs. Test coverage: 0 for integration. Readiness for 034: none—ponder is explicitly noted in register (line 56) as future consumer of advanced memory.
+- **Plan / Mitigations:** Wire into chatRunner (post-preprocessor, pre- or post-crucible) with full controls (budget/redaction/skeptic/crucible/sandbox). Add property tests + E2E exercising the outputs. See AGENTS.md neuro goals + new gaps + 034 (memory pluggability for ponder etc.).
+
+### TiDB Startup_Migration (with 30s deadline + verify + redacted halt) fully coded but not invoked on live boot path (bin/server.ts + createApp)
+
+- **Source:** Full system audit (store/index.ts vs. bin/server.ts + api/server.ts).
+- **Severity:** Medium (TiDB path per Req 8 incomplete on boot; tests pass because they call it explicitly).
+- **Status:** Open.
+- **Root cause:** Full `runStartupMigration` + `verifyStartupTables` + `withDeadline` + `PersistenceInitializationError` (redacted, 30s `DEFAULT_STARTUP_MIGRATION_DEADLINE_MS`) + `STARTUP_MIGRATION_TABLES` implemented in `src/store/index.ts:300` (and used in tidb integration tests + buildSmoke). But live boot (`src/bin/server.ts:223` bootstrap (resolve, build router/sandbox, createApp with persistence) and `src/api/server.ts:1155` (direct `createRectorStore(securityOptions.persistence)`) never call it. (See also new High RectorStore memory gap.)
+- **Plan / Mitigations:** Wire `runStartupMigration` (or equivalent) into the createApp / server bootstrap for tidb driver (before serving), preserving local/memory/sqlite fast paths and Req 9. Include memory tables post-backfill. Add to main smoke paths. Update tests + 034.
+
+### pruneMemory heuristic is non-deterministic (Date.now()) and only opportunistic; missing property tests for survival invariants
+
+- **Source:** Full system audit (inMemoryRectorStore + memoryAdvanced.test.ts).
+- **Severity:** Medium.
+- **Status:** Open.
+- **Root cause:** `src/store/inMemoryRectorStore.ts:388` (pruneMemory) uses `Date.now() - Date.parse(...)` for recency scoring + opportunistic call only on /api/notes writes (and bounded). Tests (memoryAdvanced.test.ts:62) exercise happy paths but no fast-check property tests asserting survival invariants (high-access/user-note items always survive, core summaries created correctly, time fields, redaction, maxEntries bounds across arbitrary histories).
+- **Plan / Mitigations:** Add property tests for invariants. Consider deterministic clock injection (already partially supported via now:). Tie into 034 pluggable layer.
+
+### concerns register and some post-033 docs still carry heavy 'alpha prototype / local developer preview' framing; vision lag vs AGENTS + .kiro + user hassle-free UI memory requirement
+
+- **Source:** Full system audit (docs + AGENTS.md + .kiro + 033/034 plans).
+- **Severity:** Low-Medium.
+- **Status:** Open / partial.
+- **Root cause:** Post-033 cleanup (Chunk 33 plan) + banners + AGENTS/README updates done, but many entries here + some roadmap/deployment docs still frame as "local alpha prototype / v0.1.0-alpha local developer preview" as the primary target (vs. current hassle-free UI-configurable cloud/VPS product with pluggable memory per user vision + AGENTS.md + .kiro/specs/cloud-capable-transition/ + 034). Local baseline language is factually required (Req 9) but framing lags.
+- **Plan / Mitigations:** Continue 033/034 doc sweeps. Update this register + remaining chunks/docs on each cloud chunk. Cross-ref 034.
 
 ## Closed / Mitigated
 
@@ -397,20 +448,25 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 
 #### 1. Decouple Config Validation from Boot Sequencing (Fix Startup Catch-22)
 * **Goal**: Enable starting Rector in `external` mode when credentials are stored only in the browser database (`providerConfigStore` and `secretStore`) rather than hardcoded in the server environment (`process.env`).
+* **Status (post-audit)**: IMPLEMENTED (boot-tolerant path live). See `src/bin/server.ts:223` (resolveStartupOrchestrationConfig), `src/providers/orchestrationConfig.ts:270` (store-aware union + presence-only), property tests, and top resolved item in this register + `.kiro/specs/cloud-capable-transition/requirements.md` Req 1. (Legacy parser retained in deployment/index.ts for tests only.)
 * **Implementation**: Modify the server startup block in `src/bin/server.ts` to defer validation of credentials. Check credentials lazily at request time or load them asynchronously from the database at startup, logging a warning rather than crashing with `EXTERNAL_MODE_NO_PROVIDER`.
 
 #### 2. Implement Bring-Your-Own-Key (BYOK) Model Discovery
 * **Goal**: Enable users to input their Cloudflare API Token or Together AI API Key and dynamically view and route models.
+* **Status (post-audit)**: Partial / advanced in transition work (configBridge, discovery adapters, Settings_API, providerConfigStore + secretStore, route maps). Full UI flows + 034 memory extension pending. See providers/ + api/server.ts.
 * **Implementation**: Wire the UI to trigger the `ModelDiscoveryService`. Fetch active models directly from the provider API, and write user preferences (role-to-model mappings) directly to the `.rector/providers.json` config store.
 
 #### 3. Transition from Mock to Real Sandboxed Execution
 * **Goal**: Enable executing code patches and shell commands inside containerized environments.
+* **Status (post-audit)**: PARTIAL (External/Cloud advanced + gated; local baseline preserved per Req 9). Real E2B adapter implemented + wired when key present (`src/sandbox/e2bSandboxAdapter.ts`, `src/bin/server.ts:174` (buildStartupSandboxAdapter + resolveE2BApiKey)). Local uses `src/sandbox/index.ts:622` (defaultCommandRunner dummy in WorkspaceSandboxAdapter) + SafeLocalSandboxAdapter. See new High gap (RectorStore memory methods + 034) + "Safe local sandbox" item. Full unconditional real execution + UI key config in follow-on.
 * **Implementation**: In `src/orchestration/sandboxExecutor.ts`, replace the dummy `defaultCommandRunner` with E2B Node SDK instance calls and Depot image builds to run test suites safely inside micro-containers, enforcing strict timeout and memory limits.
 
 #### 4. Replace Diagnostic Traces with Streamed Assistant Prose
 * **Goal**: Return human-like answers rather than execution traces to the user.
+* **Status (post-audit)**: PARTIAL (live gated synth + SSE events advanced on cloud path; legacy/deterministic preserved for local + fallbacks per Req 7/9). See `src/orchestration/synthesizer.ts:401` (runLiveSynthesizer + 60s deadline + fallback to legacyStatusResponse), `src/api/server.ts:1332` (SSE ?stream=1 + 202 early + broker events; polling preserved). Heavy dev routes still often legacy. See updated prototype items + new gaps + roadmap item 4 cross-ref in synthesizer.
 * **Implementation**: Connect `src/orchestration/synthesizer.ts` to the `ModelRouter` to request a natural language synthesis from the flagship model, instructing it to summarize what was done, what was verified, and what files were modified, referencing the trace drawer metadata only as an option.
 
 #### 5. Implement Vector DB Retrieval and Storage
 * **Goal**: Add durable memory storage for truth validation and user preferences.
+* **Status (post-audit)**: Not yet (still future per 034 + stack credits). Current memory is Chunk 27 in-memory hierarchical (notes/prune/search/time) + truth library (keyword) behind RectorStore. Blocked on new High gap (RectorStore sql/tidb memory methods missing) + pluggable MemoryProvider work in `docs/plans/chunks/034-ui-configurable-memory-providers.md`. Local baseline + redaction preserved.
 * **Implementation**: Upgrade `src/memory/` and the truth library to sync documents and transcripts to Chroma DB, using Algolia to back fast keyword indexes.
