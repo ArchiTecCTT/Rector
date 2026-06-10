@@ -315,6 +315,12 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
   padding: var(--space-4) var(--space-4) var(--space-3);
 }
 
+.rail__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -708,6 +714,65 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
   outline: none;
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
+}
+
+/* Quick note capture (Chunk 036 Wave 2B) — composer-adjacent episodic write */
+.note-capture {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5) 0;
+  border-top: 1px solid var(--border);
+}
+
+.note-capture__input {
+  flex: 1;
+  min-width: 12rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.4;
+  padding: var(--space-2) var(--space-3);
+}
+
+.note-capture__input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.note-capture__save {
+  flex-shrink: 0;
+}
+
+.note-capture__status {
+  flex: 1 1 100%;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.note-capture__status[hidden] {
+  display: none;
+}
+
+.note-capture__status--ok {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.note-capture__status--err {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
 }
 
 .composer__options {

@@ -12,6 +12,7 @@ const RUN_PHASES = [
   "CHAT_RECEIVED",
   "TRIAGE",
   "CONTEXT_BUILDING",
+  "PREPROCESSING",
   "PLANNING",
   "SKEPTIC_REVIEW",
   "CRUCIBLE",
@@ -70,6 +71,7 @@ const PHASE_STATUS_LABELS = {
   CHAT_RECEIVED: "Thinking",
   TRIAGE: "Thinking",
   CONTEXT_BUILDING: "Thinking",
+  PREPROCESSING: "Thinking",
   PLANNING: "Planning",
   SKEPTIC_REVIEW: "Planning",
   CRUCIBLE: "Planning",
@@ -86,14 +88,16 @@ const PHASE_STATUS_LABELS = {
 
 // --- Phase_Cards (Trace_Drawer supervision surface, Req 7.1–7.3, 7.6) ---
 //
-// The nine canonical pipeline phases rendered as collapsible cards, in order
-// (Req 7.1). Each card maps to one or more real RUN_PHASES; a card's status,
-// duration, and evidence are derived ONLY from the actual persisted run events
-// (Req 7.5 / Property 9) — never fabricated. Validation and healing are a single
-// "Validation & healing" card because healing is a conditional follow-on phase.
+// The canonical pipeline phases rendered as collapsible cards, in order (Req 7.1).
+// Each card maps to one or more real RUN_PHASES; a card's status, duration, and
+// evidence are derived ONLY from the actual persisted run events (Req 7.5 / Property 9)
+// — never fabricated. Validation and healing are a single "Validation & healing" card
+// because healing is a conditional follow-on phase. Preprocessing (Chunk 36 Wave 2C)
+// surfaces SLM distillation before planning.
 const PHASE_CARDS = [
   { id: "triage", label: "Triage", phases: ["TRIAGE"] },
   { id: "context", label: "Context building", phases: ["CONTEXT_BUILDING"] },
+  { id: "preprocessing", label: "Preprocessing", phases: ["PREPROCESSING"] },
   { id: "planning", label: "Planning", phases: ["PLANNING"] },
   { id: "skeptic", label: "Skeptic review", phases: ["SKEPTIC_REVIEW"] },
   { id: "crucible", label: "Crucible arbitration", phases: ["CRUCIBLE"] },
@@ -166,6 +170,11 @@ function cacheEls() {
     "composer",
     "composer-input",
     "composer-send",
+    "note-capture-form",
+    "note-capture-input",
+    "note-capture-save",
+    "note-capture-status",
+    "open-note-capture",
     "deep-planning-wrap",
     "deep-planning-toggle",
     "trace-drawer",
@@ -2657,6 +2666,102 @@ function bindDeepPlanning() {
   });
 }
 
+// --- Notes quick-capture (Chunk 036 Wave 2B) ---
+// Composer-adjacent capture writes episodic notes via POST /api/notes. Content is redacted server-side;
+// the client never stores note text in browser storage.
+const NOTE_CAPTURE_STATUS_MS = 3000;
+let noteCaptureStatusTimer = null;
+
+function clearNoteCaptureStatus() {
+  if (noteCaptureStatusTimer) {
+    clearTimeout(noteCaptureStatusTimer);
+    noteCaptureStatusTimer = null;
+  }
+  const box = els["note-capture-status"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+  box.className = "note-capture__status";
+}
+
+function showNoteCaptureStatus(kind, message) {
+  const box = els["note-capture-status"];
+  if (!box) return;
+  if (noteCaptureStatusTimer) {
+    clearTimeout(noteCaptureStatusTimer);
+    noteCaptureStatusTimer = null;
+  }
+  box.hidden = false;
+  box.textContent = message;
+  box.className = `note-capture__status note-capture__status--${kind === "ok" ? "ok" : "err"}`;
+  if (kind === "ok") {
+    noteCaptureStatusTimer = setTimeout(() => clearNoteCaptureStatus(), NOTE_CAPTURE_STATUS_MS);
+  }
+}
+
+// Focus the quick-capture input (sidebar button + global hotkey entry point).
+function focusNoteCapture() {
+  const input = els["note-capture-input"];
+  if (!input) return;
+  input.focus();
+}
+
+// POST note content to episodic memory. Optional `content` overrides the input value (tests).
+async function submitQuickNote(content) {
+  const input = els["note-capture-input"];
+  const saveBtn = els["note-capture-save"];
+  const trimmed = String(content != null ? content : input?.value ?? "")
+    .trim();
+  if (!trimmed) return;
+
+  try {
+    if (saveBtn) saveBtn.disabled = true;
+    clearNoteCaptureStatus();
+
+    const body = { content: trimmed };
+    if (state.conversationId) body.conversationId = state.conversationId;
+
+    await api("/notes", { method: "POST", body: JSON.stringify(body) });
+
+    if (input && content == null) input.value = "";
+    showNoteCaptureStatus("ok", "Note saved to episodic memory.");
+  } catch (err) {
+    showNoteCaptureStatus("err", err.message || "Could not save note.");
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+function onGlobalNoteCaptureHotkey(event) {
+  if ((event.metaKey || event.ctrlKey) && event.shiftKey && (event.key === "n" || event.key === "N")) {
+    event.preventDefault();
+    focusNoteCapture();
+  }
+}
+
+function bindNoteCapture() {
+  const form = els["note-capture-form"];
+  const input = els["note-capture-input"];
+  if (!form || !input) {
+    console.error("[note-capture] missing #note-capture-form and/or #note-capture-input; note capture disabled");
+    return;
+  }
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitQuickNote();
+  });
+
+  const launcher = els["open-note-capture"];
+  if (launcher) {
+    launcher.addEventListener("click", () => focusNoteCapture());
+  } else {
+    console.error("[note-capture] missing #open-note-capture; sidebar note launcher disabled");
+  }
+
+  document.addEventListener("keydown", onGlobalNoteCaptureHotkey);
+}
+
 // --- Workspace safety panel (Workspace_Safety_Panel, Requirement 3) ---
 
 // Human-readable labels for the approval-required operation categories returned by the Setup_API
@@ -3499,6 +3604,7 @@ function commandRegistry() {
     },
     { id: "toggle-trace", label: "Toggle trace panel", run: () => toggleTrace() },
     { id: "new-conversation", label: "New conversation", run: () => startNewConversation() },
+    { id: "capture-note", label: "Capture note", run: () => focusNoteCapture() },
   ];
 }
 
@@ -3794,6 +3900,7 @@ function init() {
   cacheEls();
   bindComposer();
   bindDeepPlanning();
+  bindNoteCapture();
   bindSuggestions();
   bindProviderTest();
   bindProviderConfig();

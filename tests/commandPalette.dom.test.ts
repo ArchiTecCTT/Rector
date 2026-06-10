@@ -48,6 +48,7 @@ const COMMANDS: Array<{ id: string; label: string; fn: string }> = [
   { id: "approval", label: "Pending approvals", fn: "openApprovalPanel" },
   { id: "toggle-trace", label: "Toggle trace panel", fn: "toggleTrace" },
   { id: "new-conversation", label: "New conversation", fn: "startNewConversation" },
+  { id: "capture-note", label: "Capture note", fn: "focusNoteCapture" },
 ];
 
 // ---------------------------------------------------------------------------
