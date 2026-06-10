@@ -3,7 +3,7 @@ import type { LLMProvider } from "../providers/llm";
 import type { Run } from "../store/schemas";
 import { runLiveSynthesizer } from "./synthesizer";
 import { createFakePlan } from "./planner";
-import type { CrucibleDecision } from "./crucible";
+import { CRUCIBLE_MAX_ROUNDS, type CrucibleDecision } from "./crucible";
 import type { SkepticReview } from "./skeptic";
 import { triageUserMessage } from "./triage";
 import { redactString } from "../security/redaction";
@@ -61,7 +61,7 @@ export async function runPonderSwarm(entries: MemoryEntry[], deps: PonderSwarmDe
         createdAt: new Date().toISOString(),
         blockerFindings: [],
         round: 1,
-        maxRounds: 1,
+        maxRounds: CRUCIBLE_MAX_ROUNDS,
       } as CrucibleDecision,
     },
     { provider: deps.provider, run: deps.run },

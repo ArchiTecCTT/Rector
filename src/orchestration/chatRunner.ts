@@ -865,14 +865,14 @@ function createLiveRepairAgent(deps: {
   getRun?: () => Run;
   commitUsage?: (usage: LLMUsage, provider: string) => Promise<void>;
 }): LiveRepairAgent {
-  return async ({ failure, failedOutput, contextPack, run }) => {
+  return async ({ failure, failedOutput, contextPack, run, symbolicHints }) => {
     try {
       const messages = buildRepairPrompt({
         classification: failure.classification,
         failedOutput,
         nodeId: failure.nodeId,
         contextPack,
-        symbolicHints: input.symbolicHints,
+        symbolicHints,
       });
       const request: LLMRequest = {
         messages,

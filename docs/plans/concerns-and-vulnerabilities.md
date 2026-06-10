@@ -94,7 +94,7 @@
 
 - **Source:** User requirement for hassle-free configuration of agent memory database (local or Mem0/TiDB cloud) entirely through web UI, non-rigid architecture.
 - **Severity:** Medium (expands config surface; requires careful abstraction so local baseline isn't affected; potential for misconfiguration leading to data loss or cost in cloud backends).
-- **Status:** Open.
+- **Status:** Partially resolved (Chunk 34 + 35); `/api/memory-providers` UI routes still open.
 - **Root cause:** Current persistence is driven by RECTOR_PERSISTENCE + env / createRectorStore (memory/sqlite/tidb). Memory is layered on top (truth library + new hierarchical in-memory from 27). No UI-managed "MemoryProvider" equivalent to Provider_Config_Store yet. Adding Mem0 (external) or switching TiDB etc. via UI increases the need for runtime pluggable adapters, secure secret handling for cloud memory, and UI validation.
 - **Plan / Mitigations (to be implemented in follow-on chunks; partial status from 033/transition + 034 plan in progress; see new audit gaps below):**
   - Extend the UI config pattern (non-secret records + encrypted secrets) to memory backends.
@@ -106,9 +106,16 @@
 - **Traceability:** This entry + future chunks after 033; reference in cloud-capable-transition adaptation. Use stack credits (Mem0, TiDB, Chroma) for optional adapters.
  (Cross-ref `docs/plans/chunks/034-ui-configurable-memory-providers.md`; see new High gap on RectorStore memory methods + Medium vision lag gap below.)
 
+**Chunk 35 progress:** Real external memory adapters + neuro-symbolic wiring (see `docs/plans/chunks/035-durable-memory-neuro-symbolic-wiring.md`):
+- Mem0/TiDB/Chroma `MemoryProvider` adapters with lazy optional deps, budget preflight, bridge factory (`src/memory/*Adapter.ts`, `src/providers/memoryBridge.ts`).
+- Boot migration wired; store injection avoids double init.
+- Neuro steps 4–7 wired in external pipeline (symbolic, deepPlanning, decomposition, ponder hooks).
+- Optional `npm install mem0ai chromadb` for live cloud memory; build/tests pass without them.
+- Ponder background jobs: budget-gated, 2h idle timer, fire-and-forget on run complete — monitor latency/cost in production.
+
 **Chunk 34 progress (post-audit):** Core pluggable layer implemented and wired:
 - MemoryConfigStore + schemas + local atomic + in-memory double (src/providers/memoryConfig*.ts) mirroring the Provider_Config_Store pattern exactly.
-- MemoryProvider interface + LocalMemoryProvider (faithful reproduction of Chunk 27 inmem logic + sqlite-mem delegation using the backfilled sql methods) + safe external stubs (src/memory/provider.ts).
+- MemoryProvider interface + LocalMemoryProvider (faithful reproduction of Chunk 27 inmem logic + sqlite-mem delegation using the backfilled sql methods) + external adapters (Chunk 35; stubs retained as unknown-kind fallback only).
 - Bridge with local-mode guards, secret reuse (prefixed), graceful fallback (src/providers/memoryBridge.ts).
 - Real bootstrap now always creates + passes memoryConfigStore (bin/server.ts); createApp resolves active provider (always a provider, default local-inmemory when omitted or local mode).
 - Neuro call sites (chat context searchMemory for episodic, /api/notes create+prune) now go through activeMemoryProvider.
@@ -364,18 +371,19 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 ### Neuro-symbolic chunks 29-32 (symbolic engine, deep planner, ponder swarm, task decomposer) are dead/unwired stubs with zero callsites in main pipeline
 
 - **Source:** Full system audit (orchestration/chat wiring + src/orchestration/index.ts + chunk plans).
-- **Severity:** High ( "alive" usability goal from AGENTS.md + neuro vision not realized).
-- **Status:** Open (modules landed; integration still absent).
-- **Root cause:** Artifacts exist (`src/symbolic/symbolicEngine.ts`, `src/orchestration/deepPlanner.ts`, `src/orchestration/ponderSwarm.ts`, `src/orchestration/taskDecomposer.ts`, registry, etc.) and are exported (orchestration/index.ts re-exports). `proposedToolCalls` (from Chunk 26 preprocessor in chatRunner.ts) + `memoryContext` (from 27) are produced/attached to traces/observability but never consumed by later stages in the main pipeline (runExternalChatRun / runFakeChatRun / runChat / triage / contextBuilder / planner / skeptic / crucible / DAG / executor / validation / synthesizer). No calls to symbolic engines, MCTS, ponder swarm, or task decomposer in the critical path (fresh grep post-chore commits: only internal/definition sites + deepPlanner's use of symbolic + ponder's internal synthesizer call). No tests for 29-32 (only preprocessor/memoryAdvanced/proactive). Chunk 31 plan is minimal ("using existing live modules"). Per AGENTS.md and 033 plan, these were intended to make the system "alive" for real work and integrate with configurable cloud product. Current: isolated research stubs (files added via chore(chunk-29/31/32) commits). Test coverage: 0 for integration. Readiness for 034: none—ponder is explicitly noted in register as future consumer of advanced memory.
-- **Plan / Mitigations:** (Updated post-audit/Gemini fixes): Modules committed; decide explicitly — wire (e.g. ponder hook on memory writes or periodic via proactive/subconsciousDaemon, symbolic/MCTS in planner paths, taskDecomp for concurrent exec) with full controls (budget/redaction/skeptic/crucible/sandbox) + property/E2E tests, or quarantine as research + add "unwired" banners to the chunk plans + update "implemented chunks" lists/AGENTS counts. Prioritize after memory durable (now resolved) + 034 pluggable layer. See AGENTS.md neuro goals + 034 (memory pluggability for ponder etc.).
+- **Severity:** High (was blocking "alive" usability goal from AGENTS.md + neuro vision).
+- **Status:** **RESOLVED** (Chunk 35).
+- **Resolution (Chunk 35):** Wired into external chat pipeline: symbolic tool validation in preprocessor + healing hints; opt-in `deepPlanning` → `runDeepPlanner`; high-complexity `decomposeIntoTasks` + concurrent sandbox execution; `createNeuroBackgroundHooks` for ponder/subconscious (external mode). Local `runFakeChatRun` path unchanged. Tests: symbolicEngine, preprocessorSymbolic, deepPlanner, taskDecomposer, ponderSwarm, backgroundHooks + E2E regression green.
+- **Remaining limitations:** `memoryContext` time phrases still not in all LLM prompts; ponder uses fixed 2h idle timer (not event-driven); task decomposition is alpha heuristic (max 4 sub-goals).
+- **Traceability:** `docs/plans/chunks/035-durable-memory-neuro-symbolic-wiring.md`, commits `6da4800`, `b4c2181`.
 
 ### TiDB Startup_Migration (with 30s deadline + verify + redacted halt) fully coded but not invoked on live boot path (bin/server.ts + createApp)
 
 - **Source:** Full system audit (store/index.ts vs. bin/server.ts + api/server.ts).
-- **Severity:** Medium (TiDB path per Req 8 incomplete on boot; tests pass because they call it explicitly).
-- **Status:** Open (helper + verify now covers memories; wire still missing on main path).
-- **Root cause:** Full `runStartupMigration` + `verifyStartupTables` + `withDeadline` + `PersistenceInitializationError` (redacted, 30s `DEFAULT_STARTUP_MIGRATION_DEADLINE_MS`) + `STARTUP_MIGRATION_TABLES` (now includes "memories") implemented in `src/store/index.ts:300` (and used in tidb integration tests + buildSmokeVerification). `verify` calls listMemoryEntries post-27 backfill. But live boot (`src/bin/server.ts:223` bootstrap (resolve, build router/sandbox, createApp with persistence) and `src/api/server.ts:1155` (direct `createRectorStore(securityOptions.persistence)`) never call it. (See also the now-RESOLVED RectorStore memory gap.)
-- **Plan / Mitigations:** Wire `await runStartupMigration(...)` (or equivalent guarded path) into `src/bin/server.ts` bootstrap (after config resolve, for tidb/sqlite drivers or always for the verify/halt-before-serve behavior per cloud Req 8.4/8.8 + design + tasks 12.2/12.5), preserving local/memory/sqlite fast paths and Req 9. Centralize store construction if helpful. Add to main smoke + update integration. Cross-ref 034. (Post-audit note: the full timed+redacted+memory-aware helper exists and is ready; only the call site in the external boot path is missing.)
+- **Severity:** Medium (was blocking TiDB path per Req 8 on live boot).
+- **Status:** **RESOLVED** (Chunk 35).
+- **Resolution (Chunk 35):** `src/bin/server.ts` bootstrap awaits `runStartupMigration` for `sqlite`/`tidb` drivers; passes pre-migrated store via `ApiSecurityOptions.store`; memory driver skips migration (Req 9). `tests/startupMigrationBoot.test.ts` + deadline timeout test added.
+- **Traceability:** commit `c212b89`, `docs/plans/chunks/035-durable-memory-neuro-symbolic-wiring.md`.
 
 ### pruneMemory heuristic is non-deterministic (Date.now()) and only opportunistic; missing property tests for survival invariants
 

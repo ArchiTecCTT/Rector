@@ -114,8 +114,10 @@ This refined plan turns the original high-level stub into an executable, evidenc
 (Expanded during Chunk 34 execution per the session plan. Original stub content preserved in spirit above.)
 
 ## Post-Implementation Notes (to be filled during execution)
-- Baseline verification output: ...
+- Baseline verification output: 1241+ tests green at chunk end; Chunk 35 extended to 1281 tests.
 - Any fixes applied (with file:line): the providerConfigApi.test.ts it() timeout hardening (tests/providerConfigApi.test.ts:523).
-- Final test count + build status: ...
-- Concerns updates: ...
-- Commit hash / message: ...
+- Real external adapters deferred in 034 were implemented in Chunk 35 (`c34939f`): Mem0, TiDB memory, Chroma with lazy deps + bridge factory.
+- `/api/memory-providers` CRUD routes remain deferred polish.
+- Final test count + build status: 1281 tests / build green (post-035).
+- Concerns updates: neuro 29-32 + startup migration gaps marked RESOLVED in concerns register.
+- See `docs/plans/chunks/035-durable-memory-neuro-symbolic-wiring.md` for full traceability.
