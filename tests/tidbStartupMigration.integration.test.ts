@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  PersistenceInitializationError,
   runStartupMigration,
   STARTUP_MIGRATION_TABLES,
   SqlRectorStore,
@@ -277,6 +278,7 @@ describe("TiDB pooled driver + Startup_Migration integration (task 12.5)", () =>
   }
 
   afterEach(() => {
+    vi.restoreAllMocks();
     for (const driver of drivers) {
       try {
         driver.close();
@@ -325,6 +327,19 @@ describe("TiDB pooled driver + Startup_Migration integration (task 12.5)", () =>
     // them across its connection slots rather than funnelling them through one.
     expect(driver.totalQueries()).toBeGreaterThan(0);
     expect(driver.connectionsUsed()).toBeGreaterThan(1);
+  });
+
+  // --- Startup_Migration deadline (Req 8.8) --------------------------------
+
+  it("rejects with PersistenceInitializationError when migration exceeds deadlineMs", async () => {
+    const driver = newDriver();
+    vi.spyOn(SqlRectorStore.prototype, "listConversations").mockImplementation(
+      () => new Promise<never>(() => {}),
+    );
+
+    await expect(
+      runStartupMigration(TIDB_CONFIG, { driver, deadlineMs: 10, now: fixedClock() }),
+    ).rejects.toBeInstanceOf(PersistenceInitializationError);
   });
 
   // --- Entity write/read after migration (Req 8.4, then 8.1) ---------------

@@ -22,6 +22,12 @@ import { createLocalSecretStore } from "../security/secretStore";
 import { createLocalProviderConfigStore } from "../providers/configStore";
 import { createLocalMemoryConfigStore } from "../providers/memoryConfigStore";
 import { redactString } from "../security/redaction";
+import {
+  PersistenceInitializationError,
+  StoreConfigError,
+  runStartupMigration,
+  type RectorStore,
+} from "../store";
 import { TaskManager } from "../thalamus/router";
 
 const deploymentConfig = parseDeploymentEnvironment();
@@ -246,15 +252,27 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   const orchestrationRouter = await buildStartupRouter(orchestrationConfig);
   const orchestrationSandbox = await buildStartupSandboxAdapter(orchestrationConfig);
 
+  const persistenceDriver = deploymentConfig.persistence?.driver;
+  let bootstrappedStore: RectorStore | undefined;
+  if (persistenceDriver === "sqlite" || persistenceDriver === "tidb") {
+    bootstrappedStore = await runStartupMigration(deploymentConfig.persistence);
+  }
+
   const app = createApp(manager, {
     orchestration: { mode: orchestrationConfig.mode, router: orchestrationRouter, sandbox: orchestrationSandbox },
     persistence: deploymentConfig.persistence,
+    ...(bootstrappedStore !== undefined ? { store: bootstrappedStore } : {}),
     secretStore,
     providerConfigStore,
     memoryConfigStore,
   });
   const server = http.createServer(app);
-  const gracefulShutdown = createGracefulShutdownHandler({ server });
+  const gracefulShutdown = createGracefulShutdownHandler({
+    server,
+    cleanup: () => {
+      app.locals.neuroBackgroundHooks?.stop();
+    },
+  });
 
   server.listen({ port, host }, () => {
     console.log(`Rector MVP running on http://${host}:${port} (orchestration mode: ${orchestrationConfig.mode})`);
@@ -266,7 +284,13 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
 }
 
 const bootstrapPromise = bootstrap().catch((error) => {
-  console.error(`Rector startup failed: ${error instanceof Error ? error.message : String(error)}`);
+  const message =
+    error instanceof PersistenceInitializationError || error instanceof StoreConfigError
+      ? redactString(error instanceof Error ? error.message : String(error))
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  console.error(`Rector startup failed: ${message}`);
   process.exit(1);
 });
 
