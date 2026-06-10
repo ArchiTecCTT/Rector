@@ -94,7 +94,7 @@ npm run build
 | `7ed68bd` | feat(chunk-036): update index meta for cloud-capable product framing |
 | `7a40467` | chore(chunk-036): security hardening for memory API and prompt size guards |
 | `35dd1cc` | perf(chunk-036): verify memory provider caching and bound context injection |
-| `c40463c` | docs(chunk-036): add chunk plan and update concerns register |
+| *(latest)* | docs(chunk-036): add chunk plan and update concerns register |
 
 ## Verification (Wave 3 close)
 
