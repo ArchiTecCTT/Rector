@@ -19,10 +19,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { createProviderPanelHarness, type ProviderPanelHarness } from "./support/providerPanelHarness";
 
-// The nine canonical phase cards, in the order Req 7.1 mandates.
+// The canonical phase cards, in the order Req 7.1 mandates (includes preprocessing, Chunk 36).
 const EXPECTED_CARDS = [
   { id: "triage", label: "Triage" },
   { id: "context", label: "Context building" },
+  { id: "preprocessing", label: "Preprocessing" },
   { id: "planning", label: "Planning" },
   { id: "skeptic", label: "Skeptic review" },
   { id: "crucible", label: "Crucible arbitration" },
@@ -129,6 +130,11 @@ describe("Trace_Drawer Phase_Cards", () => {
     harness.sandbox.renderPhaseCards({ phase: "DONE", status: "completed" }, events);
 
     for (const { id } of EXPECTED_CARDS) {
+      // Preprocessing is external-only; without a preprocessor payload it stays honestly pending.
+      if (id === "preprocessing") {
+        expect(cardById(harness, id).dataset.status).toBe("pending");
+        continue;
+      }
       expect(cardById(harness, id).dataset.status).toBe("done");
     }
   });

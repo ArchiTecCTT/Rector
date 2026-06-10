@@ -224,6 +224,22 @@ function cacheEls() {
     "provider-config-adv-key-toggle",
     "provider-config-adv-add",
     "provider-config-adv-result",
+    "open-memory-provider-config",
+    "close-memory-provider-config",
+    "memory-provider-config-modal",
+    "memory-provider-config-backdrop",
+    "memory-provider-config-loading",
+    "memory-provider-config-error",
+    "memory-provider-config-cards",
+    "memory-provider-config-add-form",
+    "memory-provider-config-kind",
+    "memory-provider-config-id",
+    "memory-provider-config-add-label",
+    "memory-provider-config-add-fields",
+    "memory-provider-config-add-key",
+    "memory-provider-config-add-key-toggle",
+    "memory-provider-config-add",
+    "memory-provider-config-add-result",
     "open-setup-wizard",
     "close-setup-wizard",
     "setup-wizard-modal",
@@ -427,7 +443,7 @@ async function openConversation(id) {
     clearMessages(false);
     const messages = data.messages || [];
     for (const message of messages) {
-      renderMessage(message.role, message.content, { messageId: message.id });
+      renderMessage(message.role, message.content, { messageId: message.id, source: message.source });
     }
     // We don't have stored run events for historical messages here; trace is
     // available for messages sent in this session.
@@ -468,7 +484,16 @@ function renderMessage(role, content, opts = {}) {
 
   const roleEl = document.createElement("div");
   roleEl.className = "msg__role";
-  roleEl.textContent = role === "user" ? "You" : "Rector";
+  const roleName = document.createElement("span");
+  roleName.className = "msg__role-name";
+  roleName.textContent = role === "user" ? "You" : "Rector";
+  roleEl.appendChild(roleName);
+  if (role === "assistant" && opts.source === "proactive") {
+    const badge = document.createElement("span");
+    badge.className = "msg__badge msg__badge--proactive";
+    badge.textContent = "Proactive";
+    roleEl.appendChild(badge);
+  }
 
   const bubble = document.createElement("div");
   bubble.className = "msg__bubble";
@@ -767,7 +792,11 @@ async function finalizeRun({ conversationId, runId, pending, phase }) {
 
   if (assistant) {
     state.lastResultByMessage.set(assistant.id, result);
-    renderMessage("assistant", assistant.content, { messageId: assistant.id, withTraceLink: true });
+    renderMessage("assistant", assistant.content, {
+      messageId: assistant.id,
+      withTraceLink: true,
+      source: assistant.source,
+    });
   } else {
     renderMessage("assistant", "Run finished, but its response could not be loaded.", {});
   }
@@ -827,6 +856,7 @@ async function sendMessage(content) {
       renderMessage("assistant", response.assistantMessage.content, {
         messageId: assistantId,
         withTraceLink: true,
+        source: response.assistantMessage.source,
       });
       const phase = response.run?.phase;
       setRunStatus(PHASE_STATUS_LABELS[phase] || phase || "Done", statusPillClass(phase, response.run?.status));
@@ -929,10 +959,20 @@ function phaseRunIndex(phase) {
   return RUN_PHASES.indexOf(phase);
 }
 
+// Derive which run phases were reached, including preprocessing inferred from a
+// PLANNING event that carries preprocessor output (external-mode observability).
+function buildReachedPhases(events) {
+  const reached = new Set(events.map((e) => e.phase));
+  if (events.some((e) => e.phase === "PLANNING" && e.payload?.preprocessor)) {
+    reached.add("PREPROCESSING");
+  }
+  return reached;
+}
+
 // Build the shared derivation context for all Phase_Cards from real run data
 // (the persisted events + the run's terminal phase/status). No fabrication.
 function buildPhaseCardContext(run, events) {
-  const reachedPhases = new Set(events.map((e) => e.phase));
+  const reachedPhases = buildReachedPhases(events);
   const realReachedIdx = events
     .map((e) => phaseRunIndex(e.phase))
     .filter((i) => i >= 0);
@@ -992,6 +1032,58 @@ function setPhaseCardExpanded(cardId, header, body, expanded) {
   body.hidden = !expanded;
   if (expanded) phaseCardExpanded.add(cardId);
   else phaseCardExpanded.delete(cardId);
+}
+
+function findPreprocessorPayload(events) {
+  const preEvt = events.find((e) => e.phase === "PREPROCESSING");
+  if (preEvt?.payload?.preprocessor) return preEvt.payload.preprocessor;
+  if (preEvt?.payload && (preEvt.payload.intent || preEvt.payload.constraints || preEvt.payload.proposedToolCalls)) {
+    return preEvt.payload;
+  }
+  const planEvt = events.find((e) => e.phase === "PLANNING" && e.payload?.preprocessor);
+  return planEvt?.payload?.preprocessor ?? null;
+}
+
+function truncateSnippet(text, maxLen) {
+  const value = String(text ?? "");
+  if (value.length <= maxLen) return value;
+  return `${value.slice(0, maxLen)}…`;
+}
+
+function appendCollapsedDetail(body, label, value) {
+  const details = document.createElement("details");
+  details.className = "phase-card__details";
+  const summary = document.createElement("summary");
+  summary.className = "phase-card__details-summary";
+  summary.textContent = label;
+  const pre = document.createElement("pre");
+  pre.className = "phase-card__details-pre";
+  pre.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  details.appendChild(summary);
+  details.appendChild(pre);
+  body.appendChild(details);
+}
+
+function appendPhaseNeuroDetails(cardId, body, events) {
+  if (cardId === "preprocessing") {
+    const pre = findPreprocessorPayload(events);
+    if (!pre) return;
+    if (pre.intent) appendCollapsedDetail(body, "Intent", pre.intent);
+    if (pre.constraints?.length) appendCollapsedDetail(body, "Constraints", pre.constraints);
+    if (pre.proposedToolCalls?.length) appendCollapsedDetail(body, "Proposed tool calls", pre.proposedToolCalls);
+    return;
+  }
+  if (cardId === "planning") {
+    const planEvt = events.find((e) => e.phase === "PLANNING");
+    const paths = planEvt?.payload?.pathsExplored;
+    if (paths) appendCollapsedDetail(body, "Paths explored", paths);
+    return;
+  }
+  if (cardId === "synthesis") {
+    const synthEvt = events.find((e) => e.phase === "SYNTHESIZING");
+    const snippet = synthEvt?.payload?.decomposedResults;
+    if (snippet) appendCollapsedDetail(body, "Decomposed results", truncateSnippet(snippet, 500));
+  }
 }
 
 // Render the Phase_Card list from real run events. Reuses the existing
@@ -1099,6 +1191,8 @@ function renderPhaseCards(run, events) {
       body.appendChild(none);
     }
 
+    appendPhaseNeuroDetails(card.id, body, events);
+
     header.addEventListener("click", () => {
       const next = header.getAttribute("aria-expanded") !== "true";
       setPhaseCardExpanded(card.id, header, body, next);
@@ -1134,9 +1228,31 @@ function buildPhaseEvidence(events) {
     if (event.phase === "VALIDATING" && p.validationHealingResult) {
       evidence.VALIDATING = p.validationHealingResult.status;
     }
-    if (event.phase === "PLANNING" && p.plannerOutput) {
-      const t = p.plannerOutput.tasks ? p.plannerOutput.tasks.length : 0;
-      evidence.PLANNING = `${t} tasks`;
+    if (event.phase === "PREPROCESSING") {
+      const pre = p.preprocessor ?? p;
+      const tools = pre.proposedToolCalls ? pre.proposedToolCalls.length : 0;
+      const intent = pre.intent ? String(pre.intent).slice(0, 48) : "";
+      evidence.PREPROCESSING = intent || `${tools} tool call(s)`;
+    }
+    if (event.phase === "PLANNING") {
+      if (p.plannerOutput) {
+        const t = p.plannerOutput.tasks ? p.plannerOutput.tasks.length : 0;
+        evidence.PLANNING = `${t} tasks`;
+      }
+      if (p.preprocessor && !evidence.PREPROCESSING) {
+        const pre = p.preprocessor;
+        const tools = pre.proposedToolCalls ? pre.proposedToolCalls.length : 0;
+        const intent = pre.intent ? String(pre.intent).slice(0, 48) : "";
+        evidence.PREPROCESSING = intent || `${tools} tool call(s)`;
+      }
+      if (p.pathsExplored) {
+        const count = Array.isArray(p.pathsExplored) ? p.pathsExplored.length : 1;
+        const base = evidence.PLANNING ? `${evidence.PLANNING} · ` : "";
+        evidence.PLANNING = `${base}${count} path(s)`;
+      }
+    }
+    if (event.phase === "SYNTHESIZING" && p.decomposedResults) {
+      evidence.SYNTHESIZING = truncateSnippet(p.decomposedResults, 80);
     }
   }
   return evidence;
@@ -2429,6 +2545,555 @@ function bindProviderConfig() {
   els["provider-config-adv-form"]?.addEventListener("submit", (event) => {
     event.preventDefault();
     void addOpenAICompatibleProvider();
+  });
+}
+
+// --- Memory provider configuration panel (Memory_Provider_Config_UI, Chunk 36) ---
+//
+// Mirrors Provider_Config_UI but talks to the Memory_Provider_API:
+//   GET    /api/memory-providers                      -> { providers, activeMemoryProviderId }
+//   POST   /api/memory-providers                      -> upsert (apiKey ONLY when entered)
+//   DELETE /api/memory-providers/:id                  -> remove record + secret
+//   POST   /api/memory-providers/active               -> { providerId|null }
+//   POST   /api/memory-providers/:id/test-connection  -> validateConfig result
+//
+// Secrets only travel browser -> server; responses expose `secretPresent` booleans only.
+
+const MEMORY_PROVIDER_KIND_SPECS = {
+  "local-inmemory": {
+    kind: "local-inmemory",
+    label: "Local (in-memory)",
+    fields: [],
+    needsSecret: false,
+  },
+  "local-sqlite-mem": {
+    kind: "local-sqlite-mem",
+    label: "Local SQLite",
+    fields: [
+      {
+        name: "config.database",
+        label: "Database path (optional)",
+        placeholder: ".rector/memory.sqlite",
+        optional: true,
+      },
+    ],
+    needsSecret: false,
+  },
+  mem0: {
+    kind: "mem0",
+    label: "Mem0",
+    fields: [
+      {
+        name: "config.baseUrl",
+        label: "API base URL (optional)",
+        placeholder: "https://api.mem0.ai",
+        optional: true,
+      },
+    ],
+    needsSecret: true,
+  },
+  "tidb-memory": {
+    kind: "tidb-memory",
+    label: "TiDB Cloud memory",
+    fields: [
+      { name: "config.baseUrl", label: "Host URL", placeholder: "https://gateway01.example:4000" },
+      { name: "config.accountId", label: "Username / account ID", placeholder: "user" },
+      { name: "config.database", label: "Database", placeholder: "rector_memory" },
+    ],
+    needsSecret: true,
+  },
+  chroma: {
+    kind: "chroma",
+    label: "Chroma",
+    fields: [{ name: "config.baseUrl", label: "Chroma server URL", placeholder: "http://localhost:8000" }],
+    needsSecret: false,
+  },
+};
+
+const MEMORY_PROVIDER_CONFIG_STATUS_META = {
+  "not-configured": { label: "Not configured", icon: "○" },
+  configured: { label: "Configured", icon: "●" },
+  active: { label: "Active", icon: "★" },
+};
+
+const memoryProviderConfigState = {
+  providers: [],
+  activeMemoryProviderId: null,
+};
+
+const memoryProviderConfigTest = {
+  inFlight: false,
+  abort: null,
+  timer: null,
+};
+
+function memoryProviderKindSpec(kind) {
+  return MEMORY_PROVIDER_KIND_SPECS[kind] || {
+    kind,
+    label: kind,
+    fields: [
+      { name: "config.baseUrl", label: "Base URL", optional: true },
+      { name: "config.accountId", label: "Account ID", optional: true },
+      { name: "config.database", label: "Database", optional: true },
+    ],
+    needsSecret: false,
+  };
+}
+
+function memoryProviderConfigStatus(providerId, hasRecord, activeMemoryProviderId) {
+  if (hasRecord && activeMemoryProviderId === providerId) return "active";
+  if (hasRecord) return "configured";
+  return "not-configured";
+}
+
+function buildMemoryProviderUpsertBody(spec, id, label, fieldValues, apiKey) {
+  const body = { id: String(id).trim(), kind: spec.kind, label: String(label).trim(), config: {} };
+  for (const field of spec.fields || []) {
+    const raw = (fieldValues[field.name] ?? "").trim();
+    if (raw) setNestedField(body, field.name, raw);
+  }
+  const key = (apiKey ?? "").trim();
+  if (key) body.apiKey = key;
+  return body;
+}
+
+function findMemoryProviderRecord(providerId) {
+  return memoryProviderConfigState.providers.find((p) => p.id === providerId) || null;
+}
+
+function setMemoryProviderConfigLoading(loading) {
+  const indicator = els["memory-provider-config-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+function showMemoryProviderConfigError(message) {
+  const box = els["memory-provider-config-error"];
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+}
+
+function hideMemoryProviderConfigError() {
+  const box = els["memory-provider-config-error"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+}
+
+function showMemoryProviderConfigResult(box, kind, message) {
+  showProviderConfigResult(box, kind, message);
+}
+
+function clearMemoryProviderConfigResult(box) {
+  clearProviderConfigResult(box);
+}
+
+function renderMemoryProviderAddFields() {
+  const container = els["memory-provider-config-add-fields"];
+  const kind = els["memory-provider-config-kind"]?.value || "local-inmemory";
+  if (!container) return;
+  container.innerHTML = "";
+  const spec = memoryProviderKindSpec(kind);
+  for (const field of spec.fields || []) {
+    const row = document.createElement("label");
+    row.className = "provider-config-field-row";
+    const label = document.createElement("span");
+    label.className = "provider-config-label";
+    label.textContent = field.label;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "provider-config-input provider-config-field memory-provider-add-field";
+    input.dataset.field = field.name;
+    if (field.placeholder) input.setAttribute("placeholder", field.placeholder);
+    if (!field.optional) input.required = true;
+    row.appendChild(label);
+    row.appendChild(input);
+    container.appendChild(row);
+  }
+}
+
+async function runMemoryProviderConfigTest(providerId, label, resultBox, testBtn, loadingEl) {
+  if (memoryProviderConfigTest.inFlight) return;
+  memoryProviderConfigTest.inFlight = true;
+  clearMemoryProviderConfigResult(resultBox);
+  if (testBtn) testBtn.disabled = true;
+  if (loadingEl) loadingEl.hidden = false;
+
+  const controller = new AbortController();
+  memoryProviderConfigTest.abort = controller;
+  let timedOut = false;
+  memoryProviderConfigTest.timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, PROVIDER_TEST_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${API}/memory-providers/${encodeURIComponent(providerId)}/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+    if (res.ok && body.ok) {
+      showMemoryProviderConfigResult(resultBox, "ok", `${label} memory provider is ready. Configuration is valid.`);
+    } else {
+      const reason = (body && (body.error || body.code)) || "configuration validation failed";
+      showMemoryProviderConfigResult(resultBox, "err", `${label} connection failed: ${reason}`);
+    }
+  } catch (err) {
+    if (timedOut || (err && err.name === "AbortError")) {
+      showMemoryProviderConfigResult(
+        resultBox,
+        "err",
+        `${label} connection test timed out after 30 seconds. No result was received.`,
+      );
+    } else {
+      showMemoryProviderConfigResult(resultBox, "err", `${label} connection failed: could not reach the server.`);
+    }
+  } finally {
+    clearTimeout(memoryProviderConfigTest.timer);
+    memoryProviderConfigTest.timer = null;
+    memoryProviderConfigTest.abort = null;
+    memoryProviderConfigTest.inFlight = false;
+    if (testBtn) testBtn.disabled = false;
+    if (loadingEl) loadingEl.hidden = true;
+  }
+}
+
+async function saveMemoryProviderConfig(spec, providerId, label, inputs, keyInput, resultBox) {
+  const fieldValues = {};
+  for (const field of spec.fields || []) {
+    const input = inputs[field.name];
+    fieldValues[field.name] = input ? input.value : "";
+  }
+  const body = buildMemoryProviderUpsertBody(spec, providerId, label, fieldValues, keyInput ? keyInput.value : "");
+  try {
+    await api("/memory-providers", { method: "POST", body: JSON.stringify(body) });
+    if (keyInput) keyInput.value = "";
+    showMemoryProviderConfigResult(resultBox, "ok", `${spec.label} saved.`);
+    await loadMemoryProviderConfig();
+  } catch (err) {
+    showMemoryProviderConfigResult(resultBox, "err", `Could not save ${spec.label}: ${err.message}`);
+  }
+}
+
+async function removeMemoryProviderConfig(spec, resultBox) {
+  try {
+    await api(`/memory-providers/${encodeURIComponent(spec.id)}`, { method: "DELETE" });
+    await loadMemoryProviderConfig();
+  } catch (err) {
+    showMemoryProviderConfigResult(resultBox, "err", `Could not remove ${spec.label}: ${err.message}`);
+  }
+}
+
+async function toggleActiveMemoryProvider(spec, resultBox) {
+  const current = memoryProviderConfigState.activeMemoryProviderId;
+  const providerId = current === spec.id ? null : spec.id;
+  try {
+    await api("/memory-providers/active", { method: "POST", body: JSON.stringify({ providerId }) });
+    await loadMemoryProviderConfig();
+  } catch (err) {
+    showMemoryProviderConfigResult(resultBox, "err", `Could not update active memory provider: ${err.message}`);
+  }
+}
+
+function createMemoryProviderConfigCard(record) {
+  const spec = memoryProviderKindSpec(record.kind);
+  const recordEntry = findMemoryProviderRecord(record.id);
+  const secretPresent = recordEntry ? recordEntry.secretPresent === true : false;
+  const status = memoryProviderConfigStatus(
+    record.id,
+    Boolean(recordEntry),
+    memoryProviderConfigState.activeMemoryProviderId,
+  );
+  const meta = MEMORY_PROVIDER_CONFIG_STATUS_META[status];
+
+  const card = document.createElement("div");
+  card.className = `provider-config-card provider-config-card--${status}`;
+  card.dataset.providerId = record.id;
+  card.dataset.status = status;
+
+  const head = document.createElement("div");
+  head.className = "provider-config-card__head";
+  const icon = document.createElement("span");
+  icon.className = "provider-config-card__icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = meta.icon;
+  const name = document.createElement("span");
+  name.className = "provider-config-card__name";
+  name.textContent = record.label || spec.label;
+  const statusEl = document.createElement("span");
+  statusEl.className = "provider-config-card__status";
+  statusEl.textContent = meta.label;
+  head.appendChild(icon);
+  head.appendChild(name);
+  head.appendChild(statusEl);
+  card.appendChild(head);
+
+  const fields = document.createElement("div");
+  fields.className = "provider-config-card__fields";
+  const inputs = {};
+
+  const idRow = document.createElement("div");
+  idRow.className = "provider-config-field-row";
+  const idLabel = document.createElement("span");
+  idLabel.className = "provider-config-label";
+  idLabel.textContent = "Id";
+  const idValue = document.createElement("span");
+  idValue.className = "provider-config-input provider-config-field";
+  idValue.dataset.field = "id";
+  idValue.textContent = record.id;
+  idRow.appendChild(idLabel);
+  idRow.appendChild(idValue);
+  fields.appendChild(idRow);
+
+  const labelRow = document.createElement("label");
+  labelRow.className = "provider-config-field-row";
+  const labelLabel = document.createElement("span");
+  labelLabel.className = "provider-config-label";
+  labelLabel.textContent = "Label";
+  const labelInput = document.createElement("input");
+  labelInput.type = "text";
+  labelInput.className = "provider-config-input provider-config-field";
+  labelInput.dataset.field = "label";
+  labelInput.value = record.label || spec.label;
+  inputs.label = labelInput;
+  labelRow.appendChild(labelLabel);
+  labelRow.appendChild(labelInput);
+  fields.appendChild(labelRow);
+
+  const kindRow = document.createElement("div");
+  kindRow.className = "provider-config-field-row";
+  const kindLabel = document.createElement("span");
+  kindLabel.className = "provider-config-label";
+  kindLabel.textContent = "Kind";
+  const kindValue = document.createElement("span");
+  kindValue.className = "provider-config-input provider-config-field";
+  kindValue.dataset.field = "kind";
+  kindValue.textContent = spec.label;
+  kindRow.appendChild(kindLabel);
+  kindRow.appendChild(kindValue);
+  fields.appendChild(kindRow);
+
+  for (const field of spec.fields || []) {
+    const row = document.createElement("label");
+    row.className = "provider-config-field-row";
+    const label = document.createElement("span");
+    label.className = "provider-config-label";
+    label.textContent = field.label;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "provider-config-input provider-config-field";
+    input.dataset.field = field.name;
+    input.value = providerConfigFieldValue(record, field.name);
+    if (field.placeholder) input.setAttribute("placeholder", field.placeholder);
+    inputs[field.name] = input;
+    row.appendChild(label);
+    row.appendChild(input);
+    fields.appendChild(row);
+  }
+
+  const keyRow = document.createElement("label");
+  keyRow.className = "provider-config-field-row";
+  const keyLabel = document.createElement("span");
+  keyLabel.className = "provider-config-label";
+  keyLabel.textContent = "API key";
+  const keyWrap = document.createElement("span");
+  keyWrap.className = "provider-config-key-wrap";
+  const keyInput = document.createElement("input");
+  keyInput.type = "password";
+  keyInput.className = "provider-config-input provider-config-key";
+  keyInput.setAttribute("autocomplete", "off");
+  keyInput.setAttribute(
+    "placeholder",
+    secretPresent ? "•••••• stored — leave blank to keep" : "Enter API key",
+  );
+  const keyToggle = document.createElement("button");
+  keyToggle.type = "button";
+  keyToggle.className = "btn btn--ghost btn--sm provider-config-key-toggle";
+  keyToggle.setAttribute("aria-pressed", "false");
+  keyToggle.textContent = "Show";
+  bindKeyToggle(keyInput, keyToggle);
+  keyWrap.appendChild(keyInput);
+  keyWrap.appendChild(keyToggle);
+  keyRow.appendChild(keyLabel);
+  keyRow.appendChild(keyWrap);
+  fields.appendChild(keyRow);
+
+  const keyHint = document.createElement("span");
+  keyHint.className = "provider-config-key-hint";
+  keyHint.textContent = secretPresent ? "A key is stored for this provider." : "No key stored yet.";
+  fields.appendChild(keyHint);
+  card.appendChild(fields);
+
+  const activeRow = document.createElement("div");
+  activeRow.className = "provider-config-card__roles";
+  const activeLabel = document.createElement("span");
+  activeLabel.className = "provider-config-roles__label";
+  activeLabel.textContent = "Active memory provider:";
+  activeRow.appendChild(activeLabel);
+  const resultBox = document.createElement("div");
+  resultBox.className = "provider-config-result";
+  resultBox.setAttribute("role", "status");
+  resultBox.setAttribute("aria-live", "polite");
+  resultBox.hidden = true;
+  const isActive = memoryProviderConfigState.activeMemoryProviderId === record.id;
+  const activeBtn = document.createElement("button");
+  activeBtn.type = "button";
+  activeBtn.className = "provider-config-role" + (isActive ? " is-active" : "");
+  activeBtn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  activeBtn.textContent = isActive ? "Active ✓" : "Set active";
+  activeBtn.addEventListener("click", () => void toggleActiveMemoryProvider({ id: record.id, label: spec.label }, resultBox));
+  activeRow.appendChild(activeBtn);
+  card.appendChild(activeRow);
+
+  const actions = document.createElement("div");
+  actions.className = "provider-config-card__actions";
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "btn btn--primary btn--sm provider-config-save";
+  saveBtn.textContent = "Save";
+  saveBtn.addEventListener("click", () =>
+    void saveMemoryProviderConfig(spec, record.id, inputs.label.value, inputs, keyInput, resultBox),
+  );
+
+  const testLoading = document.createElement("span");
+  testLoading.className = "provider-config-test-loading";
+  testLoading.setAttribute("aria-hidden", "true");
+  testLoading.hidden = true;
+
+  const testBtn = document.createElement("button");
+  testBtn.type = "button";
+  testBtn.className = "btn btn--sm provider-config-test";
+  testBtn.textContent = "Test connection";
+  testBtn.addEventListener("click", () =>
+    void runMemoryProviderConfigTest(record.id, record.label || spec.label, resultBox, testBtn, testLoading),
+  );
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "btn btn--sm provider-config-remove";
+  removeBtn.textContent = "Remove";
+  removeBtn.addEventListener("click", () =>
+    void removeMemoryProviderConfig({ id: record.id, label: record.label || spec.label }, resultBox),
+  );
+
+  actions.appendChild(saveBtn);
+  actions.appendChild(testBtn);
+  actions.appendChild(testLoading);
+  actions.appendChild(removeBtn);
+  card.appendChild(actions);
+  card.appendChild(resultBox);
+
+  return card;
+}
+
+function renderMemoryProviderConfig() {
+  const container = els["memory-provider-config-cards"];
+  if (!container) return;
+  container.innerHTML = "";
+  for (const record of memoryProviderConfigState.providers) {
+    container.appendChild(createMemoryProviderConfigCard(record));
+  }
+}
+
+async function loadMemoryProviderConfig() {
+  setMemoryProviderConfigLoading(true);
+  hideMemoryProviderConfigError();
+  try {
+    const data = await api("/memory-providers");
+    memoryProviderConfigState.providers = Array.isArray(data.providers) ? data.providers : [];
+    memoryProviderConfigState.activeMemoryProviderId =
+      typeof data.activeMemoryProviderId === "string" ? data.activeMemoryProviderId : null;
+    renderMemoryProviderConfig();
+    renderMemoryProviderAddFields();
+  } catch {
+    memoryProviderConfigState.providers = [];
+    memoryProviderConfigState.activeMemoryProviderId = null;
+    renderMemoryProviderConfig();
+    renderMemoryProviderAddFields();
+    showMemoryProviderConfigError(
+      "Memory provider configuration could not be loaded. Chat and trace remain available.",
+    );
+  } finally {
+    setMemoryProviderConfigLoading(false);
+  }
+}
+
+async function addMemoryProviderFromForm() {
+  const kind = (els["memory-provider-config-kind"]?.value ?? "").trim();
+  const id = (els["memory-provider-config-id"]?.value ?? "").trim();
+  const label = (els["memory-provider-config-add-label"]?.value ?? "").trim();
+  const apiKey = (els["memory-provider-config-add-key"]?.value ?? "").trim();
+  const resultBox = els["memory-provider-config-add-result"];
+  const spec = memoryProviderKindSpec(kind);
+
+  if (!kind || !id || !label) {
+    showMemoryProviderConfigResult(resultBox, "err", "Kind, id, and label are all required.");
+    return;
+  }
+
+  const fieldValues = {};
+  const addFields = els["memory-provider-config-add-fields"];
+  if (addFields) {
+    for (const input of addFields.querySelectorAll(".memory-provider-add-field")) {
+      const fieldName = input.dataset.field;
+      if (fieldName) fieldValues[fieldName] = input.value;
+    }
+  }
+
+  const body = buildMemoryProviderUpsertBody(spec, id, label, fieldValues, apiKey);
+  try {
+    await api("/memory-providers", { method: "POST", body: JSON.stringify(body) });
+    if (els["memory-provider-config-id"]) els["memory-provider-config-id"].value = "";
+    if (els["memory-provider-config-add-label"]) els["memory-provider-config-add-label"].value = "";
+    if (els["memory-provider-config-add-key"]) els["memory-provider-config-add-key"].value = "";
+    if (addFields) {
+      for (const input of addFields.querySelectorAll(".memory-provider-add-field")) input.value = "";
+    }
+    showMemoryProviderConfigResult(resultBox, "ok", `${label} added.`);
+    await loadMemoryProviderConfig();
+  } catch (err) {
+    showMemoryProviderConfigResult(resultBox, "err", `Could not add provider: ${err.message}`);
+  }
+}
+
+function openMemoryProviderConfig() {
+  const modal = els["memory-provider-config-modal"];
+  if (!modal) return;
+  modal.hidden = false;
+  renderMemoryProviderAddFields();
+  void loadMemoryProviderConfig();
+}
+
+function closeMemoryProviderConfig() {
+  if (memoryProviderConfigTest.abort) {
+    try {
+      memoryProviderConfigTest.abort.abort();
+    } catch {
+      /* ignore */
+    }
+  }
+  if (memoryProviderConfigTest.timer) {
+    clearTimeout(memoryProviderConfigTest.timer);
+    memoryProviderConfigTest.timer = null;
+  }
+  memoryProviderConfigTest.inFlight = false;
+  const modal = els["memory-provider-config-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindMemoryProviderConfig() {
+  els["open-memory-provider-config"]?.addEventListener("click", openMemoryProviderConfig);
+  els["close-memory-provider-config"]?.addEventListener("click", closeMemoryProviderConfig);
+  els["memory-provider-config-backdrop"]?.addEventListener("click", closeMemoryProviderConfig);
+  bindKeyToggle(els["memory-provider-config-add-key"], els["memory-provider-config-add-key-toggle"]);
+  els["memory-provider-config-kind"]?.addEventListener("change", renderMemoryProviderAddFields);
+  els["memory-provider-config-add-form"]?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void addMemoryProviderFromForm();
   });
 }
 

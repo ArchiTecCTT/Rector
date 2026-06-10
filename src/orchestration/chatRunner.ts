@@ -688,6 +688,9 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
                 entities: preprocessorOutput?.entities ?? [],
                 constraints: preprocessorOutput?.constraints ?? [],
               },
+              ...(plannerResult.pathsExplored?.length
+                ? { pathsExplored: plannerResult.pathsExplored }
+                : {}),
             }
           : {}),
         ...(phase === "SKEPTIC_REVIEW" ? { skepticReview, providerCall: params.skepticProviderCall } : {}),
@@ -719,6 +722,7 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
             ? {
                 synthesis,
                 providerCall: synthProviderCall,
+                ...(decomposedResults ? { decomposedResults } : {}),
                 // Record the route and (when present) the fallback status for a DIRECT_ANSWER turn so
                 // an auditor can see the cheap-model attempt and whether it fell back (Req 8.4, 9.1, 9.3).
                 ...(args.triage.route === "DIRECT_ANSWER"

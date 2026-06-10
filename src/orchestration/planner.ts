@@ -436,6 +436,8 @@ export interface LivePlannerResult {
   provider: string;
   model: string;
   attempts: number;
+  /** MCTS / deep-planning candidate goals explored before selection (Chunk 30). */
+  pathsExplored?: string[];
 }
 
 /** Dependencies for {@link runLivePlanner}. The provider is mocked in tests. */

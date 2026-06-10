@@ -56,6 +56,7 @@ export async function runDeepPlanner(
 
   const surviving = candidates.filter((plan) => !planBlockedBySymbolicRules(plan, engine));
   const selected = pickBestPlan(surviving.length > 0 ? surviving : [base.plan], base.plan);
+  const pathsExplored = candidates.map((plan) => plan.goal);
 
   return {
     status: "ok",
@@ -64,6 +65,7 @@ export async function runDeepPlanner(
     provider: base.provider,
     model: base.model,
     attempts: base.attempts,
+    pathsExplored,
   };
 }
 
