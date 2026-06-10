@@ -430,6 +430,7 @@ export const SynthesizerPromptInputSchema = z.object({
     })
     .passthrough()
     .optional(),
+  decomposedResults: z.string().optional(),
 });
 
 /**
@@ -487,6 +488,7 @@ function buildSynthesizerContextMessage(input: SynthesizerPromptInput): string {
     executionResult,
     validationHealingResult,
     observabilitySummary,
+    decomposedResults,
   } = input;
 
   // Redact the entire payload so no configured secret can reach the provider, even if a plan field,
@@ -578,6 +580,7 @@ function buildSynthesizerContextMessage(input: SynthesizerPromptInput): string {
           estimatedCostUsd: observabilitySummary.estimatedCostUsd,
         }
       : undefined,
+    decomposedResults: decomposedResults || undefined,
   });
 
   return [
@@ -635,6 +638,7 @@ export interface RepairPromptInput {
   failedOutput: string;
   nodeId?: string;
   contextPack: ContextPack;
+  symbolicHints?: string[];
 }
 
 /**
@@ -654,6 +658,7 @@ export function buildRepairPrompt(input: RepairPromptInput): LLMMessage[] {
       constraints: input.contextPack.constraints,
       riskFlags: input.contextPack.riskFlags,
     },
+    symbolicHints: input.symbolicHints ?? [],
   });
 
   return [

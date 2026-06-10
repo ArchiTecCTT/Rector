@@ -5,7 +5,8 @@ import { arbitratePlanWithCrucible, type CrucibleDecision } from "./crucible";
 import { compileAcceptedPlanToDag, type CompiledDag } from "./dagCompiler";
 import { executeCompiledDag, type ExecutorSimulatorOptions } from "./executorSimulator";
 import { runLiveDirectAnswer, type LiveDirectAnswerFallback } from "./liveDirectAnswer";
-import { createFakePlan, runLivePlanner, type PlannerBlocker, type PlannerOutput } from "./planner";
+import { createFakePlan, runLivePlanner, type LivePlannerResult, type PlannerBlocker, type PlannerOutput } from "./planner";
+import { runDeepPlanner } from "./deepPlanner";
 import {
   runSLMPreprocessor,
   type PreprocessorOutput,
@@ -13,6 +14,11 @@ import {
 import { buildRepairPrompt } from "./prompts";
 import { createDecisionRequest, transitionRun } from "./runStateMachine";
 import { executeDagThroughSandbox } from "./sandboxExecutor";
+import {
+  decomposeIntoTasks,
+  executeDecomposedSubGoals,
+  stitchResults,
+} from "./taskDecomposer";
 import { reviewPlanWithSkeptic, runLiveSkeptic, type SkepticBlocker, type SkepticReview } from "./skeptic";
 import {
   runLiveSynthesizer,
@@ -64,6 +70,8 @@ import type { Budget, Run, RunEvent } from "../store/schemas";
 export interface ChatRunOptions {
   executorOptions?: ExecutorSimulatorOptions;
   maxHealingAttempts?: number;
+  /** Opt-in MCTS-style multi-path planning (external mode only). */
+  deepPlanning?: boolean;
 }
 
 /**
@@ -337,18 +345,36 @@ export async function runExternalChatRun(
   // for cross-checks and evidence.
   const effectiveMessageContent = (preprocessorOutput.distilledContext || "").trim() || prompt;
 
+  // --- TASK DECOMPOSITION (neuro-symbolic Step 7, external-only) ---
+  // High-complexity requests are split into up to four sub-goals for concurrent sandbox execution.
+  let subGoals: string[] = [];
+  let plannerContextPack = contextPack;
+  if (triage.complexity === "high") {
+    const decomposition = decomposeIntoTasks(effectiveMessageContent, contextPack);
+    subGoals = decomposition.subGoals;
+    if (subGoals.length > 0) {
+      plannerContextPack = { ...contextPack, subGoals };
+    }
+  }
+
   // Deterministic provider selection; a zero budget or no configured provider falls back to the
   // fake provider (still safe), so selection itself never throws.
   const selection: ModelSelection = deps.router.select({ capability: "flagship", task: "planner", run });
 
   // --- PLANNER STEP (the only divergence from local mode) ---
-  // runLivePlanner runs the budget preflight BEFORE any provider call (Req 3.3/3.4) and resolves
-  // with a structured, redacted blocker instead of throwing on budget/provider/validation failure.
-  const plannerResult = await observability.recordSpan("PLANNING", () =>
-    runLivePlanner(
-      { triage, contextPack, messageContent: effectiveMessageContent },
-      { provider: selection.provider, run }
-    )
+  // runLivePlanner (or opt-in runDeepPlanner) runs the budget preflight BEFORE any provider call
+  // (Req 3.3/3.4) and resolves with a structured, redacted blocker instead of throwing on
+  // budget/provider/validation failure.
+  const plannerResult: LivePlannerResult = await observability.recordSpan("PLANNING", () =>
+    options.deepPlanning === true
+      ? runDeepPlanner(
+          { triage, contextPack: plannerContextPack, messageContent: effectiveMessageContent, deepPlanning: true },
+          { provider: selection.provider, run }
+        )
+      : runLivePlanner(
+          { triage, contextPack: plannerContextPack, messageContent: effectiveMessageContent },
+          { provider: selection.provider, run }
+        )
   );
 
   if (plannerResult.status === "blocked" || !plannerResult.plan) {
@@ -404,9 +430,12 @@ export async function runExternalChatRun(
     arbitratePlanWithCrucible({ plannerOutput, skepticReview })
   );
 
+  const enrichedArgs =
+    subGoals.length > 0 ? { ...args, contextPack: plannerContextPack } : args;
+
   return runExternalPostPlanningPhases({
     store,
-    args,
+    args: enrichedArgs,
     run: skepticCostedRun,
     plannerOutput,
     skepticReview,
@@ -415,6 +444,7 @@ export async function runExternalChatRun(
     skepticProviderCall,
     deps: { ...deps, router: deps.router },
     preprocessorOutput,
+    subGoals,
   });
 }
 
@@ -430,6 +460,8 @@ interface ExternalPostPlanningParams {
   deps: ChatRunnerDeps & { router: ModelRouter };
   /** Preprocessor result from the neuro-symbolic Step 1 layer (already redacted). */
   preprocessorOutput?: PreprocessorOutput;
+  /** Sub-goals from task decomposition (external high-complexity only). */
+  subGoals?: string[];
 }
 
 /**
@@ -444,7 +476,7 @@ interface ExternalPostPlanningParams {
  * `transitionRun`) before persistence. No exception escapes for a live-step failure.
  */
 async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams): Promise<ChatRunResult> {
-  const { store, args, run, plannerOutput, skepticReview, crucibleDecision, deps, preprocessorOutput } = params;
+  const { store, args, run, plannerOutput, skepticReview, crucibleDecision, deps, preprocessorOutput, subGoals = [] } = params;
   const { observability } = args;
   const options = args.options ?? {};
   const traceId = observability.traceId;
@@ -489,6 +521,19 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
   const executionResult = await observability.recordSpan("EXECUTING", () =>
     compiledDag ? executeDagThroughSandbox(compiledDag, { sandbox, now: deps.now }) : undefined
   );
+
+  let decomposedResults: string | undefined;
+  if (
+    args.triage.complexity === "high" &&
+    crucibleDecision.verdict === "ACCEPTED" &&
+    subGoals.length > 1
+  ) {
+    const decomposed = await observability.recordSpan("EXECUTING", () =>
+      executeDecomposedSubGoals(subGoals, { sandbox, run: budgetRun, now: deps.now })
+    );
+    decomposedResults = stitchResults(decomposed);
+  }
+
   const executionArtifacts = executionResult?.artifacts ?? [];
   const executionPayload = executionResult
     ? { executionResult, executionArtifacts }
@@ -529,6 +574,7 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
     executionResult,
     validationHealingResult,
     observabilitySummary: observability.getSummary(),
+    decomposedResults,
   };
 
   let synthesis: BrainstemSynthesis;
@@ -826,6 +872,7 @@ function createLiveRepairAgent(deps: {
         failedOutput,
         nodeId: failure.nodeId,
         contextPack,
+        symbolicHints: input.symbolicHints,
       });
       const request: LLMRequest = {
         messages,

@@ -918,3 +918,54 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     expect(Array.isArray(failedPayload!.executionArtifacts)).toBe(true);
   });
 });
+
+describe("external mode deepPlanning flag", () => {
+  it("uses deep planner when deepPlanning is enabled", async () => {
+    const store = new InMemoryRectorStore();
+    const baseArgs = await buildArgs(store, "What is Rector and how does it work?");
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: "What is Rector and how does it work?",
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
+        { content: planToJson(NON_FILE_OPERATION_PLAN) },
+        { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
+        {
+          content: synthesisDraftToJson({
+            response: "Rector is a neuro-symbolic orchestration agent.",
+            citations: [{ kind: "artifact", ref: "task:answer.synthesize", detail: "synthesis" }],
+          }),
+        },
+      ],
+    });
+
+    const { run } = await runChat(
+      store,
+      { ...baseArgs, options: { deepPlanning: true } },
+      {
+        mode: "external",
+        router: spyRouter(provider),
+        budget: generousBudget({ maxUsd: 10_000 }),
+      }
+    );
+
+    expect(run.phase).toBe("DONE");
+    expect(provider.invokeCount).toBeGreaterThanOrEqual(4);
+  });
+
+  it("does not enable deep planner in local mode even when deepPlanning is set", async () => {
+    const store = new InMemoryRectorStore();
+    const args = await buildArgs(store, "What is Rector?");
+    const { run } = await runChat(store, { ...args, options: { deepPlanning: true } }, { mode: "local" });
+
+    expect(run.phase).toBe("DONE");
+    expect(run.costEstimate.usd).toBe(0);
+  });
+});

@@ -46,14 +46,27 @@ export class SimpleRuleEngine implements SymbolicEngine {
     const path = String((facts.args as any)?.path ?? "");
 
     for (const rule of [...rules].sort((a, b) => (b.priority || 0) - (a.priority || 0))) {
-      let match = false;
+      const hasToolCondition = rule.condition.includes("tool ===");
+      const hasPathCondition = rule.condition.includes("path") && rule.condition.includes("startsWith");
+      const requiresBoth = rule.condition.includes("&&");
 
-      if (rule.condition.includes("tool ===") && rule.condition.includes(`'${tool}'`)) {
-        match = true;
+      const toolMatch = hasToolCondition ? rule.condition.includes(`'${tool}'`) : false;
+      let pathMatch = false;
+      if (hasPathCondition && path) {
+        if (rule.condition.includes("!src/")) {
+          pathMatch = !path.startsWith("src/");
+        } else if (rule.condition.includes("src/")) {
+          pathMatch = path.startsWith("src/");
+        }
       }
-      if (rule.condition.includes("path") && rule.condition.includes("startsWith") && path) {
-        if (rule.condition.includes("!src/") && !path.startsWith("src/")) match = true;
-      }
+
+      const match = requiresBoth
+        ? toolMatch && pathMatch
+        : hasToolCondition
+          ? toolMatch
+          : hasPathCondition
+            ? pathMatch
+            : false;
 
       if (match) {
         matched.push(rule);

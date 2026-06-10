@@ -4,6 +4,8 @@ import type { PatchOperation, WorkspaceSandboxAdapter } from "../sandbox";
 import { redactString } from "../security/redaction";
 import type { Run } from "../store";
 import type { ContextPack } from "./contextBuilder";
+import { DEFAULT_PREPROCESSOR_RULES } from "../symbolic/defaultRules";
+import { getSymbolicEngine } from "../symbolic/symbolicEngine";
 import {
   DagExecutionResultSchema,
   DagExecutionStatusSchema,
@@ -104,6 +106,7 @@ export type LiveRepairAgent = (input: {
   failedOutput: string;
   contextPack: ContextPack;
   run: Run;
+  symbolicHints?: string[];
 }) => Promise<RepairPatchProposal | undefined>;
 
 export interface ValidateAndHealExecutionInput {
@@ -291,11 +294,13 @@ async function healWithLiveRepair(
     attempts += 1;
 
     const failedOutput = redactString(extractFailedOutput(current, target));
+    const symbolicHints = collectSymbolicHealingHints(target, failedOutput);
     const proposal = await safeProposeRepair(repairAgent, {
       failure: target,
       failedOutput,
       contextPack: input.contextPack as ContextPack,
       run: input.run as Run,
+      symbolicHints,
     });
 
     let repairApplied = false;
@@ -365,10 +370,47 @@ async function healWithLiveRepair(
   }
 }
 
+/** Collects symbolic suggest:* hints from failure facts for the repair prompt. */
+export function collectSymbolicHealingHints(failure: ValidationFailure, failedOutput: string): string[] {
+  const engine = getSymbolicEngine();
+  const facts = buildHealingSymbolicFacts(failure, failedOutput);
+  const evaluation = engine.evaluate(DEFAULT_PREPROCESSOR_RULES, facts);
+  return [
+    ...new Set(
+      evaluation.actions
+        .filter((action) => action.startsWith("suggest:"))
+        .map((action) => redactString(action.slice("suggest:".length)))
+    ),
+  ];
+}
+
+function buildHealingSymbolicFacts(failure: ValidationFailure, failedOutput: string): Record<string, unknown> {
+  const details = recordFrom(failure.details) ?? {};
+  const path = String(details.path ?? extractPathHint(failedOutput) ?? "");
+  const tool = String(details.tool ?? (path ? "write_file" : ""));
+  return {
+    tool,
+    args: { path },
+    classification: failure.classification,
+    nodeId: failure.nodeId,
+  };
+}
+
+function extractPathHint(text: string): string | undefined {
+  const match = text.match(/\b((?:src\/|\.\/)?[\w.-]+\/[\w./-]+\.(?:ts|tsx|js|jsx|json|md))\b/);
+  return match?.[1];
+}
+
 /** Invokes the repair agent without letting a thrown error escape the healing loop (req 9.6). */
 async function safeProposeRepair(
   repairAgent: LiveRepairAgent,
-  input: { failure: ValidationFailure; failedOutput: string; contextPack: ContextPack; run: Run },
+  input: {
+    failure: ValidationFailure;
+    failedOutput: string;
+    contextPack: ContextPack;
+    run: Run;
+    symbolicHints?: string[];
+  },
 ): Promise<RepairPatchProposal | undefined> {
   try {
     return await repairAgent(input);

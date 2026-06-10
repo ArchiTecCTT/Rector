@@ -11,6 +11,8 @@ import {
 } from "../providers/llm";
 import { evaluateBudget, type BudgetUsage } from "../security/budget";
 import { redactSecrets, redactString } from "../security/redaction";
+import { DEFAULT_PREPROCESSOR_RULES } from "../symbolic/defaultRules";
+import { getSymbolicEngine, type Rule } from "../symbolic/symbolicEngine";
 import type { Run } from "../store";
 
 /**
@@ -229,8 +231,8 @@ export async function runSLMPreprocessor(
 
   let output = validated.data;
 
-  // Deterministic safety filter on tool proposals.
-  const filteredToolCalls = output.proposedToolCalls
+  // Deterministic safety filter on tool proposals (allowlist).
+  const allowlistedToolCalls = output.proposedToolCalls
     .filter((tc) => ALLOWED_PREPROCESSOR_TOOLS.includes(tc.tool as AllowedPreprocessorTool))
     .map((tc) => ({
       tool: tc.tool,
@@ -243,17 +245,55 @@ export async function runSLMPreprocessor(
       ),
     }));
 
+  // Symbolic engine validation: block unsafe proposals and collect suggest:* hints.
+  const symbolicValidation = validateToolCallsWithSymbolicEngine(allowlistedToolCalls);
+
   output = {
     ...output,
     distilledContext: redactString(output.distilledContext),
     intent: redactString(output.intent),
     entities: output.entities.map((e) => redactString(e)),
-    constraints: output.constraints.map((c) => redactString(c)),
-    proposedToolCalls: filteredToolCalls,
+    constraints: [
+      ...output.constraints.map((c) => redactString(c)),
+      ...symbolicValidation.constraints.map((c) => redactString(c)),
+    ],
+    proposedToolCalls: symbolicValidation.allowed,
   };
 
   // Final schema enforcement after filtering.
   return PreprocessorOutputSchema.parse(output);
+}
+
+export interface SymbolicToolValidationResult {
+  allowed: Array<{ tool: string; args: Record<string, unknown> }>;
+  constraints: string[];
+}
+
+/**
+ * Validates proposed tool calls against the symbolic rule engine.
+ * Blocked tools are removed; `suggest:*` actions are collected as constraint hints.
+ */
+export function validateToolCallsWithSymbolicEngine(
+  toolCalls: Array<{ tool: string; args: Record<string, unknown> }>,
+  rules: Rule[] = DEFAULT_PREPROCESSOR_RULES
+): SymbolicToolValidationResult {
+  const engine = getSymbolicEngine();
+  const allowed: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const constraintHints: string[] = [];
+
+  for (const toolCall of toolCalls) {
+    const evaluation = engine.evaluate(rules, { tool: toolCall.tool, args: toolCall.args });
+    if (!evaluation.blocked) {
+      allowed.push(toolCall);
+    }
+    for (const action of evaluation.actions) {
+      if (action.startsWith("suggest:")) {
+        constraintHints.push(action.slice("suggest:".length));
+      }
+    }
+  }
+
+  return { allowed, constraints: [...new Set(constraintHints)] };
 }
 
 /**

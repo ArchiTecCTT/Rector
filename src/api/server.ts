@@ -57,6 +57,7 @@ import { createDiscoveryCache } from "../providers/discovery/cache";
 import { createDefaultDiscoveryAdapterRegistry } from "../providers/discovery/adapters/registry";
 import type { DiscoveryResult } from "../providers/discovery/types";
 import { createProactiveAgent, type ProactiveAgent } from "../proactive";
+import { createNeuroBackgroundHooks, type NeuroBackgroundHooks } from "../orchestration/backgroundHooks";
 import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
@@ -67,7 +68,14 @@ import {
   type ModelRouter,
 } from "../providers/llm";
 import type { OrchestratorMode } from "../deployment";
-import { createRectorStore, type CreateMemoryEntryInput, type MemoryEntry, type PersistenceConfig, type RectorStore } from "../store";
+import {
+  createRectorStore,
+  SqlRectorStore,
+  type CreateMemoryEntryInput,
+  type MemoryEntry,
+  type PersistenceConfig,
+  type RectorStore,
+} from "../store";
 import { RunEventSchema } from "../store/schemas";
 import type { Artifact, Run, RunEvent } from "../store/schemas";
 import { RunPhaseSchema, isTerminalRunPhase } from "../protocol/phases";
@@ -104,6 +112,12 @@ export interface ApiSecurityOptions {
    * regression baseline byte-for-byte.
    */
   persistence?: PersistenceConfig;
+
+  /**
+   * Pre-constructed store from boot-time Startup_Migration. When supplied, createApp skips
+   * createRectorStore.
+   */
+  store?: RectorStore;
 
   /**
    * Optional {@link SecretStore} backing for the setup-status route's secret-presence booleans.
@@ -1169,8 +1183,27 @@ function settingsDiscoveryStatus(result: DiscoveryResult): number {
   }
 }
 
+/** True when the store is a SqlRectorStore (sqlite or tidb), exposing SQL-backed memory methods. */
+function isSqlBackedStore(store: RectorStore): boolean {
+  return store instanceof SqlRectorStore;
+}
+
 export function createApp(manager: TaskManager, securityOptions: ApiSecurityOptions = {}): express.Application {
   const app = express();
+
+  // Select the store from boot-time migration or the deployment persistence config (ORN-39).
+  // When a pre-constructed store is injected (Startup_Migration on sqlite/tidb), createApp skips
+  // createRectorStore. Otherwise, when no persistence config is supplied (or its driver is
+  // `memory`), createRectorStore returns the default InMemoryRectorStore.
+  //
+  // Streaming (ORN-40): create one in-process RunEventBroker per app and wrap the selected store
+  // with `withEventBroadcast` so every persisted/redacted appended or committed event is published
+  // to the broker for live SSE subscribers. The wrapper preserves the RectorStore interface, so the
+  // synchronous POST chat flow and the `GET /api/runs/:id/events` polling endpoint use it
+  // transparently with no behavior change.
+  const runEventBroker = createRunEventBroker();
+  const baseStore = securityOptions.store ?? createRectorStore(securityOptions.persistence);
+  const rectorStore = withEventBroadcast(baseStore, runEventBroker);
 
   // Chunk 34 (pluggable memory providers): resolve the active MemoryProvider for neuro/agent
   // memory (notes, episodic context for contextBuilder/preprocessor/planner, prune, etc.).
@@ -1188,6 +1221,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       activeMemoryProvider = securityOptions.memoryConfigStore
         ? await resolveActiveMemoryProvider(securityOptions.memoryConfigStore, securityOptions.secretStore!, {
             mode: securityOptions.orchestration?.mode,
+            delegateStoreForLocalSqliteMem: isSqlBackedStore(baseStore) ? rectorStore : undefined,
           })
         : createPureLocalMemoryProvider();
     } catch {
@@ -1199,18 +1233,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     await resolvePromise;
     return activeMemoryProvider ?? createPureLocalMemoryProvider();
   };
-
-  // Select the store from the deployment persistence config (ORN-39). When no persistence config
-  // is supplied (or its driver is `memory`), `createRectorStore` returns the default
-  // InMemoryRectorStore, keeping the provider-free path the regression baseline and unchanged.
-  //
-  // Streaming (ORN-40): create one in-process RunEventBroker per app and wrap the selected store
-  // with `withEventBroadcast` so every persisted/redacted appended or committed event is published
-  // to the broker for live SSE subscribers. The wrapper preserves the RectorStore interface, so the
-  // synchronous POST chat flow and the `GET /api/runs/:id/events` polling endpoint use it
-  // transparently with no behavior change.
-  const runEventBroker = createRunEventBroker();
-  const rectorStore = withEventBroadcast(createRectorStore(securityOptions.persistence), runEventBroker);
 
   const orchestration = securityOptions.orchestration;
 
@@ -1227,6 +1249,22 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   if (proactiveAgent) {
     // Demo timer (long interval). Real systems would use event-driven triggers.
     proactiveAgent.startTimer(1000 * 60 * 60 * 6); // 6h for demo
+  }
+
+  // Ponder swarm + subconscious background hooks (Chunk 31 / Step 6). External mode only.
+  const neuroBackgroundHooks: NeuroBackgroundHooks | undefined =
+    orchestration?.mode === "external"
+      ? createNeuroBackgroundHooks({
+          getMemoryProvider,
+          router: orchestration?.router,
+          mode: orchestration?.mode ?? "local",
+          store: rectorStore,
+        })
+      : undefined;
+
+  if (neuroBackgroundHooks) {
+    neuroBackgroundHooks.startIdleTimer();
+    app.locals.neuroBackgroundHooks = neuroBackgroundHooks;
   }
   app.use(securityHeadersMiddleware);
   app.use(corsMiddleware(securityOptions));
@@ -1307,10 +1345,11 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const conversation = await rectorStore.getConversation(req.params.id);
       if (!conversation) return res.status(404).json({ error: "Conversation not found" });
 
-      const { content } = req.body ?? {};
+      const { content, deepPlanning } = req.body ?? {};
       if (!content || typeof content !== "string") {
         return res.status(400).json({ error: "content (string) is required" });
       }
+      const requestDeepPlanning = deepPlanning === true;
 
       const redactedContent = redactString(content);
       const redactionState = redactedContent === content ? "none" : "redacted";
@@ -1365,7 +1404,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             triage,
             contextPack,
             observability,
-            options: orchestration,
+            options: {
+              ...orchestration,
+              ...(orchestration?.mode === "external" && requestDeepPlanning ? { deepPlanning: true } : {}),
+            },
           },
           {
             // Default to local (provider-free) when no orchestration option is configured so existing
@@ -1423,9 +1465,13 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         // frame); a failure BEFORE the run is created rejects `runCreated` so the request returns a
         // redacted error and no stream is ever opened. The `.catch` keeps the rejection handled, so a
         // background failure never produces an unhandled promise rejection or crashes the process.
-        void runChatPipeline(capturingStore).catch((error) => {
-          rejectRun(error);
-        });
+        void runChatPipeline(capturingStore)
+          .then((result) => {
+            neuroBackgroundHooks?.onRunCompleted(result.run);
+          })
+          .catch((error) => {
+            rejectRun(error);
+          });
 
         try {
           const run = await runCreated;
@@ -1439,6 +1485,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
       // Synchronous (non-stream) path — unchanged behavior, preserved as the streaming fallback.
       const { run, synthesis, observabilitySummary, assistantMessage } = await runChatPipeline(rectorStore);
+      neuroBackgroundHooks?.onRunCompleted(run);
       const events = await rectorStore.listEvents(run.id);
       const completedRun = await rectorStore.getRun(run.id);
 
