@@ -710,6 +710,14 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
   box-shadow: var(--focus-ring);
 }
 
+.composer__options {
+  padding: var(--space-2) var(--space-5) 0;
+}
+
+.composer__options .appearance-toggle {
+  max-width: fit-content;
+}
+
 .composer__hint {
   text-align: center;
   font-size: 11px;

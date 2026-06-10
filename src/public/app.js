@@ -53,6 +53,9 @@ const PROVIDER_LABELS = new Map(PROVIDERS.map((p) => [p.id, p.label]));
 // request is aborted and the wizard shows an error state while chat/trace stay accessible.
 const SETUP_STATUS_TIMEOUT_MS = 10_000;
 
+// Opt-in deep planning toggle (Chunk 36 Wave 2D). Persisted as a non-secret boolean preference.
+const DEEP_PLANNING_STORAGE_KEY = "rector.deepPlanning";
+
 // Static, non-secret display labels for the five configuration categories (Requirement 1.2 + Chunk 36).
 const SETUP_CATEGORY_LABELS = {
   provider: "Provider",
@@ -123,6 +126,11 @@ const state = {
   lastResultByMessage: new Map(), // assistantMessageId -> result payload (for trace)
 };
 
+// Orchestration mode derived from GET /api/setup/status (local until a valid status loads).
+const orchestration = {
+  mode: "local",
+};
+
 // --- Live run state (SSE stream with polling fallback, ORN-40) ---
 // Holds the in-flight run's transport (EventSource or poll timer) and the events seen so far so the
 // timeline can render incrementally. Only one run streams at a time; starting a new run or switching
@@ -158,6 +166,8 @@ function cacheEls() {
     "composer",
     "composer-input",
     "composer-send",
+    "deep-planning-wrap",
+    "deep-planning-toggle",
     "trace-drawer",
     "trace-empty",
     "trace-body",
@@ -779,9 +789,11 @@ async function sendMessage(content) {
     // Primary path: stream the run. The streaming branch creates the run and returns
     // { runId, traceId } with 202 before any Terminal_Phase, then runs the pipeline in the
     // background while events are published to the SSE broker.
+    const payload = { content: trimmed };
+    if (isDeepPlanningEnabled()) payload.deepPlanning = true;
     const response = await api(`/chat/conversations/${conversationId}/messages?stream=1`, {
       method: "POST",
-      body: JSON.stringify({ content: trimmed }),
+      body: JSON.stringify(payload),
     });
 
     // Title the conversation from the first message if still default.
@@ -2456,6 +2468,9 @@ function showSetupWizardError(message) {
 function renderSetupStatus(status) {
   if (els["setup-wizard-error"]) els["setup-wizard-error"].hidden = true;
 
+  orchestration.mode = status.mode === "external" ? "external" : "local";
+  updateDeepPlanningVisibility();
+
   const modeEl = els["setup-wizard-mode"];
   if (modeEl) modeEl.textContent = setupModeLabel(status.mode);
 
@@ -2570,6 +2585,76 @@ function bindSetupWizard() {
   els["open-setup-wizard"]?.addEventListener("click", openSetupWizard);
   els["close-setup-wizard"]?.addEventListener("click", closeSetupWizard);
   els["setup-wizard-backdrop"]?.addEventListener("click", closeSetupWizard);
+}
+
+// --- Deep planning toggle (Chunk 36 Wave 2D) ---
+//
+// Opt-in MCTS-style planner branching for External mode only. The toggle is hidden in Local mode,
+// persists a non-secret boolean to localStorage["rector.deepPlanning"], and passes deepPlanning: true
+// on chat POST when enabled.
+
+function readDeepPlanningPref() {
+  try {
+    const raw = window.localStorage.getItem(DEEP_PLANNING_STORAGE_KEY);
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+  } catch {
+    /* unreadable storage — treat as disabled */
+  }
+  return false;
+}
+
+function writeDeepPlanningPref(enabled) {
+  try {
+    window.localStorage.setItem(DEEP_PLANNING_STORAGE_KEY, enabled ? "true" : "false");
+  } catch {
+    /* persistence unavailable — preference applies for this session only */
+  }
+}
+
+function syncDeepPlanningToggle() {
+  const toggle = els["deep-planning-toggle"];
+  if (!toggle) return;
+  toggle.checked = readDeepPlanningPref();
+}
+
+function updateDeepPlanningVisibility() {
+  const wrap = els["deep-planning-wrap"];
+  if (!wrap) return;
+  wrap.hidden = orchestration.mode !== "external";
+}
+
+function isDeepPlanningEnabled() {
+  if (orchestration.mode !== "external") return false;
+  const toggle = els["deep-planning-toggle"];
+  return !!(toggle && toggle.checked);
+}
+
+// Fetch orchestration mode from the setup status API so the deep-planning toggle can reflect
+// External vs Local mode without opening the wizard.
+async function refreshOrchestrationMode() {
+  try {
+    const res = await fetch(`${API}/setup/status`, {
+      headers: { "Content-Type": "application/json" },
+    });
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+    if (res.ok && body && Array.isArray(body.categories)) {
+      orchestration.mode = body.mode === "external" ? "external" : "local";
+    }
+  } catch {
+    /* keep prior mode on failure */
+  }
+  updateDeepPlanningVisibility();
+}
+
+function bindDeepPlanning() {
+  syncDeepPlanningToggle();
+  updateDeepPlanningVisibility();
+  const toggle = els["deep-planning-toggle"];
+  toggle?.addEventListener("change", () => {
+    writeDeepPlanningPref(toggle.checked);
+  });
 }
 
 // --- Workspace safety panel (Workspace_Safety_Panel, Requirement 3) ---
@@ -3708,6 +3793,7 @@ function bindSuggestions() {
 function init() {
   cacheEls();
   bindComposer();
+  bindDeepPlanning();
   bindSuggestions();
   bindProviderTest();
   bindProviderConfig();
@@ -3738,6 +3824,7 @@ function init() {
 
   checkHealth();
   loadConversations();
+  void refreshOrchestrationMode();
   els["composer-input"]?.focus();
 }
 

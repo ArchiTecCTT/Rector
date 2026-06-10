@@ -91,6 +91,10 @@
       <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 5v14M5 12h14" />
       </symbol>
+      <symbol id="i-note" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+      </symbol>
       <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="m6 9 6 6 6-6" />
       </symbol>
@@ -151,6 +155,7 @@
             <div class="menu__popover" id="settings-menu" role="menu" aria-label="System actions" hidden>
               <button class="menu__item" id="open-setup-wizard" role="menuitem" type="button">Setup status</button>
               <button class="menu__item" id="open-provider-config" role="menuitem" type="button">Provider configuration</button>
+              <button class="menu__item" id="open-memory-provider-config" role="menuitem" type="button">Memory provider configuration</button>
               <button class="menu__item" id="open-provider-test" role="menuitem" type="button">Test provider connection</button>
               <button class="menu__item" id="open-workspace-safety" role="menuitem" type="button">Workspace safety</button>
               <button class="menu__item" id="open-appearance" role="menuitem" type="button">Appearance</button>
@@ -183,9 +188,19 @@
               <span class="brand__name">RECTOR</span>
               <span class="brand__tag">local</span>
             </div>
-            <button class="btn btn--ghost btn--sm" id="new-conversation" type="button" title="New conversation">
-              <svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg> New
-            </button>
+            <div class="rail__actions">
+              <button
+                class="btn btn--ghost btn--sm"
+                id="open-note-capture"
+                type="button"
+                title="Quick note (Ctrl/Cmd+Shift+N)"
+              >
+                <svg class="icon" aria-hidden="true"><use href="#i-note" /></svg> Note
+              </button>
+              <button class="btn btn--ghost btn--sm" id="new-conversation" type="button" title="New conversation">
+                <svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg> New
+              </button>
+            </div>
           </div>
 
           <nav class="conversation-list" id="conversation-list" aria-live="polite">
@@ -227,6 +242,34 @@
               </div>
             </div>
           </section>
+
+          <form class="note-capture" id="note-capture-form" aria-label="Quick note capture">
+            <input
+              id="note-capture-input"
+              class="note-capture__input"
+              type="text"
+              placeholder="Quick note to episodic memory…  (Ctrl/Cmd+Shift+N)"
+              autocomplete="off"
+            />
+            <button class="btn btn--sm note-capture__save" id="note-capture-save" type="submit" title="Save note">
+              Save note
+            </button>
+            <div
+              class="note-capture__status"
+              id="note-capture-status"
+              role="status"
+              aria-live="polite"
+              hidden
+            ></div>
+          </form>
+
+          <div class="composer__options" id="deep-planning-wrap" hidden>
+            <label class="composer__option appearance-toggle" for="deep-planning-toggle">
+              <input type="checkbox" id="deep-planning-toggle" />
+              <span class="appearance-toggle__label">Deep planning</span>
+              <span class="appearance-toggle__hint">MCTS-style branching in the planner phase (external mode)</span>
+            </label>
+          </div>
 
           <form class="composer" id="composer">
             <textarea
@@ -712,6 +755,126 @@
                 <button class="btn btn--primary" id="provider-config-adv-add" type="submit">Add endpoint</button>
               </div>
               <div class="provider-config-result" id="provider-config-adv-result" role="status" aria-live="polite" hidden></div>
+            </form>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Memory provider configuration panel (Memory_Provider_Config_UI, Chunk 36).
+         Modal overlay; chat + trace stay mounted and accessible. Talks to
+         GET/POST/DELETE /api/memory-providers, POST /api/memory-providers/active,
+         and POST /api/memory-providers/:id/test-connection. Cards are rendered by
+         app.js (renderMemoryProviderConfig) from GET /api/memory-providers, which
+         exposes a `secretPresent` presence boolean only — never a secret value.
+         API keys are masked inputs with show/hide and write-once behavior; no secret
+         is stored in browser storage. Each card shows not-configured / configured /
+         active status, Save, Remove, active-provider selection, and Test connection. -->
+    <div
+      class="modal"
+      id="memory-provider-config-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="memory-provider-config-title"
+    >
+      <div class="modal__backdrop" id="memory-provider-config-backdrop"></div>
+      <div class="modal__panel modal__panel--wide" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="memory-provider-config-title">Memory provider configuration</h2>
+          <button class="btn btn--ghost btn--sm" id="close-memory-provider-config" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            Configure the agent memory backend (local in-memory, SQLite, Mem0, TiDB Cloud, or Chroma).
+            API keys are sent to the local server, stored encrypted on disk, and never returned to the
+            browser or kept in browser storage. Leave a key field blank to keep an already-stored key.
+          </p>
+
+          <div class="provider-config-loading" id="memory-provider-config-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Loading memory provider configuration…</span>
+          </div>
+
+          <div class="provider-config-error" id="memory-provider-config-error" role="alert" hidden></div>
+
+          <section class="provider-config-tier" aria-labelledby="memory-provider-config-cards-title">
+            <h3 class="provider-config-tier__title" id="memory-provider-config-cards-title">Configured providers</h3>
+            <div class="provider-config-cards" id="memory-provider-config-cards"></div>
+          </section>
+
+          <section class="provider-config-tier" aria-labelledby="memory-provider-config-add-title">
+            <h3 class="provider-config-tier__title" id="memory-provider-config-add-title">Add memory provider</h3>
+            <p class="provider-config-tier__desc">
+              Choose a backend kind, give it a stable id and display label, then fill in any required
+              connection coordinates. External backends may require an API key.
+            </p>
+
+            <form class="provider-config-adv" id="memory-provider-config-add-form">
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="memory-provider-config-kind">Kind</label>
+                <select class="provider-config-input" id="memory-provider-config-kind" required>
+                  <option value="local-inmemory">Local (in-memory)</option>
+                  <option value="local-sqlite-mem">Local SQLite</option>
+                  <option value="mem0">Mem0</option>
+                  <option value="tidb-memory">TiDB Cloud memory</option>
+                  <option value="chroma">Chroma</option>
+                </select>
+              </div>
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="memory-provider-config-id">Id</label>
+                <input
+                  class="provider-config-input"
+                  id="memory-provider-config-id"
+                  type="text"
+                  placeholder="mem0:main"
+                  autocomplete="off"
+                  required
+                />
+              </div>
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="memory-provider-config-add-label">Label</label>
+                <input
+                  class="provider-config-input"
+                  id="memory-provider-config-add-label"
+                  type="text"
+                  placeholder="Mem0 production"
+                  autocomplete="off"
+                  required
+                />
+              </div>
+              <div id="memory-provider-config-add-fields"></div>
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="memory-provider-config-add-key">API key</label>
+                <span class="provider-config-key-wrap">
+                  <input
+                    class="provider-config-input provider-config-key"
+                    id="memory-provider-config-add-key"
+                    type="password"
+                    placeholder="Enter API key (external backends)"
+                    autocomplete="off"
+                  />
+                  <button
+                    class="btn btn--ghost btn--sm provider-config-key-toggle"
+                    id="memory-provider-config-add-key-toggle"
+                    type="button"
+                    aria-pressed="false"
+                  >
+                    Show
+                  </button>
+                </span>
+              </div>
+              <div class="provider-config-adv__foot">
+                <button class="btn btn--primary" id="memory-provider-config-add" type="submit">Add provider</button>
+              </div>
+              <div
+                class="provider-config-result"
+                id="memory-provider-config-add-result"
+                role="status"
+                aria-live="polite"
+                hidden
+              ></div>
             </form>
           </section>
         </div>
