@@ -25,6 +25,7 @@ export const MessageSchema = z.object({
   runId: NonEmptyStringSchema.optional(),
   redactionState: NonEmptyStringSchema,
   createdAt: z.string().datetime(),
+  source: z.string().optional(), // e.g. "proactive" for alive layer (Chunk 28)
 });
 export type Message = z.infer<typeof MessageSchema>;
 

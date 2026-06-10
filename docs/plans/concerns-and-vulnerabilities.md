@@ -56,6 +56,21 @@
 - **Future work:** Real vector similarity in prune/search when Chroma or Mem0 adapters are activated (using stack credits); durable memory entities in sql/tidb stores; full ponder swarm (Step 6) that reads/writes this memory; UI for captured notes; retention policies per layer.
 - **Traceability:** `docs/plans/chunks/027-advanced-memory-system.md`, `src/store/schemas.ts` (MemoryEntry), `src/store/inMemoryRectorStore.ts` (impl + prune), `src/api/server.ts` (/api/notes + context enrichment), `src/orchestration/contextBuilder.ts` (time-aware injection), `tests/memoryAdvanced.test.ts`.
 
+### Proactive alive layer (Chunk 28) adds timer-driven and on-demand message initiation
+
+- **Source:** Chunk 28 (Proactive / "Alive" Layer / neuro-symbolic Step 3).
+- **Severity:** Low-Medium (new initiation path, potential for unwanted messages if timer misconfigured).
+- **Status:** Open.
+- **Root cause:** New ProactiveAgent that can call runChat with synthetic prompts using "proactive-companion" route and marks resulting assistant messages with source "proactive". Timer is strictly guarded (only external mode, long interval). Synthetic messages go through full budget/redaction/pipeline.
+- **Plan / Mitigations:**
+  - Local mode: agent is never instantiated with timer (startTimer is a no-op).
+  - All proactive LLM calls (if router present) are budget-gated and redacted.
+  - Dev trigger endpoint /api/dev/proactive-trigger is behind dev guard (similar to /api/dev/scenario).
+  - Source field added as optional to Message (no breakage to existing creates/updates/tests).
+  - Reuses existing runChat pipeline so all symbolic controls (skeptic, crucible, healing, sandbox) apply.
+- **Future work:** Event-driven triggers (e.g. on long NEEDS_DECISION from memory), better frequency control using memory, UI badge using the source field.
+- **Traceability:** `docs/plans/chunks/028-proactive-alive-layer.md`, `src/proactive/proactiveAgent.ts`, wiring in `src/api/server.ts`, `tests/proactive.test.ts`, schema extension in `src/store/schemas.ts`.
+
 ### Chat store is in-memory and resets on restart
 
 - **Source:** Chunk 6 worker/reviewer.

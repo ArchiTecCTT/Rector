@@ -47,6 +47,7 @@ import {
 import { createDiscoveryCache } from "../providers/discovery/cache";
 import { createDefaultDiscoveryAdapterRegistry } from "../providers/discovery/adapters/registry";
 import type { DiscoveryResult } from "../providers/discovery/types";
+import { createProactiveAgent, type ProactiveAgent } from "../proactive";
 import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
@@ -1152,6 +1153,21 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // transparently with no behavior change.
   const runEventBroker = createRunEventBroker();
   const rectorStore = withEventBroadcast(createRectorStore(securityOptions.persistence), runEventBroker);
+
+  // Proactive / Alive agent (Chunk 28). Only auto-starts in external mode.
+  // In local mode it is available for manual/dev triggers only.
+  const proactiveAgent: ProactiveAgent | undefined = orchestration?.mode === "external" || securityOptions.orchestration?.mode === "external"
+    ? createProactiveAgent({
+        store: rectorStore,
+        router: orchestration?.router,
+        mode: orchestration?.mode ?? securityOptions.orchestration?.mode ?? "local",
+      })
+    : undefined;
+
+  if (proactiveAgent) {
+    // Demo timer (long interval). Real systems would use event-driven triggers.
+    proactiveAgent.startTimer(1000 * 60 * 60 * 6); // 6h for demo
+  }
   app.use(securityHeadersMiddleware);
   app.use(corsMiddleware(securityOptions));
   app.use(chatRateLimitMiddleware(securityOptions));
@@ -2194,10 +2210,34 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
+  // Manual trigger for proactive "alive" behavior (Chunk 28).
+  app.post("/api/dev/proactive-trigger", async (req, res) => {
+    try {
+      if (!proactiveAgent) {
+        return res.status(400).json({ error: "Proactive agent not enabled (local mode or no router)" });
+      }
+      const { conversationId } = req.body ?? {};
+      if (!conversationId) {
+        return res.status(400).json({ error: "conversationId required" });
+      }
+      const result = await proactiveAgent.triggerCheckIn({ conversationId });
+      res.json({ triggered: true, ...result });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // --- SPA fallback ---
   app.get("*", (_req, res) => {
     res.sendFile(path.join(publicDir, "index.html"));
   });
+
+  // Manual trigger for proactive "alive" behavior (Chunk 28). Useful for demo and tests.
+  // (Placed late so it doesn't interfere with earlier routes during registration.)
+  // Note: duplicate safety - the real one is registered earlier; this is a no-op guard.
+  if (false) {
+    app.post("/api/dev/proactive-trigger", async (_req, res) => res.json({}));
+  }
 
   return app;
 }
