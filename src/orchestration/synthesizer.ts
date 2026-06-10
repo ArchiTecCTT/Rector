@@ -35,6 +35,8 @@ export interface BrainstemSynthesisInput {
   executionResult?: DagExecutionResult;
   validationHealingResult?: HealingLoopResult;
   observabilitySummary?: ObservabilitySummary;
+  /** Stitched concurrent sub-goal results for high-complexity decomposition (Chunk 32). */
+  decomposedResults?: string;
 }
 
 export interface BrainstemSynthesis {

@@ -285,6 +285,8 @@ export interface GracefulShutdownHandlerOptions {
   timeoutMs?: number;
   logger?: ShutdownLogger;
   exit?: (code: 0 | 1) => void;
+  /** Optional cleanup invoked before the server begins closing (e.g. background timers). */
+  cleanup?: () => void;
 }
 
 export interface GracefulShutdownHandler {
@@ -307,6 +309,11 @@ export function createGracefulShutdownHandler(options: GracefulShutdownHandlerOp
     if (shutdownPromise) return shutdownPromise;
 
     logger.info(`Rector graceful shutdown started after ${signal}`);
+    try {
+      options.cleanup?.();
+    } catch {
+      // Cleanup failures must not block shutdown.
+    }
     shutdownPromise = closeServerWithTimeout(options.server, timeoutMs)
       .then((result) => {
         const finalResult: GracefulShutdownResult = { signal, ...result };

@@ -14,3 +14,4 @@ export * from "./validationHealing";
 export * from "./deepPlanner";
 export * from "./ponderSwarm";
 export * from "./taskDecomposer";
+export * from "./backgroundHooks";

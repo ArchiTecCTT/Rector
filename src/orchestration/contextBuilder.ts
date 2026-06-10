@@ -66,6 +66,8 @@ export const ContextPackSchema = z.object({
   inlineContext: z.array(InlineContextSchema),
   /** Time-aware summaries from memory (Chunk 27). */
   memoryContext: z.array(z.string()).optional(),
+  /** Decomposed sub-goals for high-complexity external runs (Chunk 32 / Step 7). */
+  subGoals: z.array(z.string().min(1)).optional(),
 });
 export type ContextPack = z.infer<typeof ContextPackSchema>;
 
