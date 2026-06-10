@@ -53,12 +53,13 @@ const PROVIDER_LABELS = new Map(PROVIDERS.map((p) => [p.id, p.label]));
 // request is aborted and the wizard shows an error state while chat/trace stay accessible.
 const SETUP_STATUS_TIMEOUT_MS = 10_000;
 
-// Static, non-secret display labels for the four configuration categories (Requirement 1.2).
+// Static, non-secret display labels for the five configuration categories (Requirement 1.2 + Chunk 36).
 const SETUP_CATEGORY_LABELS = {
   provider: "Provider",
   persistence: "Persistence",
   workspace: "Workspace",
   budget: "Budget",
+  memory: "Memory",
 };
 
 // User-facing status labels per phase (mirror of RUN_PHASE_STATUS_LABELS).

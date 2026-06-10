@@ -11,7 +11,7 @@ import type { SecretStore, SecretStoreResult } from "../src/security/secretStore
  * **Validates: Requirements 1.2**
  *
  * For any environment map, the setup status response contains exactly one
- * readiness entry per category (provider, persistence, workspace, budget) with
+ * readiness entry per category (provider, persistence, workspace, budget, memory) with
  * no duplicate categories, and each entry's status is exactly one member of
  * {Ready, Incomplete, Error}.
  *
@@ -22,7 +22,7 @@ import type { SecretStore, SecretStoreResult } from "../src/security/secretStore
  */
 
 /** The closed set of categories that must each appear exactly once (Requirement 1.2). */
-const ALL_CATEGORIES: readonly SetupCategory[] = ["provider", "persistence", "workspace", "budget"];
+const ALL_CATEGORIES: readonly SetupCategory[] = ["provider", "persistence", "workspace", "budget", "memory"];
 
 /** The closed set of valid readiness statuses (Requirement 1.2). */
 const VALID_STATUSES = ["Ready", "Incomplete", "Error"] as const;
@@ -89,6 +89,9 @@ const envArbitrary = (): fc.Arbitrary<Record<string, string | undefined>> => {
       AZURE_OPENAI_API_KEY: maybe(fc.string()),
       AZURE_OPENAI_ENDPOINT: maybe(fc.string()),
       AZURE_OPENAI_DEPLOYMENT: maybe(fc.string()),
+      RECTOR_MEMORY_PROVIDER: maybe(fc.constantFrom("local-inmemory", "mem0", "chroma", "bogus", "")),
+      MEM0_API_KEY: maybe(fc.string()),
+      CHROMA_URL: maybe(fc.string()),
     },
     { requiredKeys: [] }
   );

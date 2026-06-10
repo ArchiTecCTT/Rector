@@ -1,5 +1,11 @@
 import { redactSecrets } from "./security/redaction";
 import type { SecretStore } from "./security/secretStore";
+import {
+  MEMORY_PROVIDER_KINDS,
+  type MemoryProviderKind,
+  type MemoryProviderRecord,
+} from "./providers/memoryConfig";
+import type { MemoryConfigStore } from "./providers/memoryConfigStore";
 
 /**
  * Setup Status Service (Requirement 1).
@@ -21,8 +27,8 @@ export type SetupMode = "local" | "external";
 /** The closed set of readiness states reported per category (Requirement 1.2). */
 export type ReadinessStatus = "Ready" | "Incomplete" | "Error";
 
-/** The four configuration categories the wizard reports on (Requirement 1.2). */
-export type SetupCategory = "provider" | "persistence" | "workspace" | "budget";
+/** The five configuration categories the wizard reports on (Requirement 1.2 + Chunk 36 memory). */
+export type SetupCategory = "provider" | "persistence" | "workspace" | "budget" | "memory";
 
 /** One category's readiness: exactly one {@link ReadinessStatus} plus a redacted explanation. */
 export interface CategoryReadiness {
@@ -78,7 +84,8 @@ function isPresent(value: string | undefined): boolean {
  */
 export async function computeSetupStatus(
   env: Record<string, string | undefined>,
-  secretStore: SecretStore
+  secretStore: SecretStore,
+  memoryConfigStore?: MemoryConfigStore,
 ): Promise<SetupStatusResponse> {
   // Requirement 1.1: External_Mode only when ORCHESTRATOR_MODE is exactly "external"; Local otherwise.
   const mode: SetupMode = env.ORCHESTRATOR_MODE === "external" ? "external" : "local";
@@ -96,6 +103,7 @@ export async function computeSetupStatus(
     derivePersistenceReadiness(env),
     deriveWorkspaceReadiness(env),
     deriveBudgetReadiness(),
+    await computeMemoryReadiness(env, secretStore, memoryConfigStore),
   ];
 
   // Requirements 1.3, 1.10: redact at the boundary; omit any value whose redaction fails.
@@ -213,6 +221,207 @@ function deriveWorkspaceReadiness(env: Record<string, string | undefined>): Cate
     status: "Error",
     detail: `Unknown sandbox runtime "${runtime}"; expected one of local, depot.`,
   };
+}
+
+/** Env key that selects the memory provider kind when no {@link MemoryConfigStore} is injected. */
+const MEMORY_PROVIDER_ENV_KEY = "RECTOR_MEMORY_PROVIDER";
+
+/** Env keys required per external memory kind for the env-only fallback path. */
+const MEMORY_ENV_REQUIREMENTS: Readonly<
+  Record<MemoryProviderKind, readonly string[] | "none">
+> = {
+  "local-inmemory": "none",
+  "local-sqlite-mem": "none",
+  mem0: ["MEM0_API_KEY"],
+  "tidb-memory": TIDB_REQUIRED_KEYS,
+  chroma: ["CHROMA_URL"],
+};
+
+function isKnownMemoryKind(value: string): value is MemoryProviderKind {
+  return (MEMORY_PROVIDER_KINDS as readonly string[]).includes(value);
+}
+
+function memoryReadiness(
+  status: ReadinessStatus,
+  kind: string,
+  detail: string,
+): CategoryReadiness {
+  return {
+    category: "memory",
+    status,
+    detail: `Active memory provider kind "${kind}". ${detail}`,
+  };
+}
+
+/**
+ * Memory category readiness from the optional {@link MemoryConfigStore} or, when omitted, from
+ * `RECTOR_MEMORY_PROVIDER` and related env key NAMES (never values). Local_Mode always reports the
+ * zero-config `local-inmemory` default as Ready. External kinds are Incomplete when required
+ * non-secret coordinates or secret presence are missing; unknown kinds are Error.
+ */
+export async function computeMemoryReadiness(
+  env: Record<string, string | undefined>,
+  secretStore: SecretStore,
+  memoryConfigStore?: MemoryConfigStore,
+): Promise<CategoryReadiness> {
+  const mode: SetupMode = env.ORCHESTRATOR_MODE === "external" ? "external" : "local";
+
+  if (mode === "local") {
+    return memoryReadiness(
+      "Ready",
+      "local-inmemory",
+      "Local mode uses the zero-config in-memory provider (no secrets or network required).",
+    );
+  }
+
+  if (memoryConfigStore) {
+    return deriveMemoryReadinessFromStore(memoryConfigStore, secretStore);
+  }
+
+  return deriveMemoryReadinessFromEnv(env);
+}
+
+async function deriveMemoryReadinessFromStore(
+  memoryConfigStore: MemoryConfigStore,
+  secretStore: SecretStore,
+): Promise<CategoryReadiness> {
+  try {
+    const state = await memoryConfigStore.getState();
+    const activeId = state.activeMemoryProviderId;
+
+    if (!activeId) {
+      return memoryReadiness(
+        "Ready",
+        "local-inmemory",
+        "No active memory provider is selected; the default zero-config in-memory provider is in use.",
+      );
+    }
+
+    const record = state.providers.find((candidate) => candidate.id === activeId);
+    if (!record) {
+      return {
+        category: "memory",
+        status: "Error",
+        detail: `Active memory provider id "${activeId}" does not match any configured record.`,
+      };
+    }
+
+    return evaluateMemoryProviderRecord(record, secretStore);
+  } catch {
+    return {
+      category: "memory",
+      status: "Error",
+      detail: "Memory provider configuration could not be read from the Memory_Config_Store.",
+    };
+  }
+}
+
+async function evaluateMemoryProviderRecord(
+  record: MemoryProviderRecord,
+  secretStore: SecretStore,
+): Promise<CategoryReadiness> {
+  const { kind } = record;
+
+  if (!isKnownMemoryKind(kind)) {
+    return {
+      category: "memory",
+      status: "Error",
+      detail: `Unknown memory provider kind "${kind}"; expected one of ${MEMORY_PROVIDER_KINDS.join(", ")}.`,
+    };
+  }
+
+  if (kind === "local-inmemory" || kind === "local-sqlite-mem") {
+    return memoryReadiness(
+      "Ready",
+      kind,
+      "Local memory provider is configured and ready (zero network).",
+    );
+  }
+
+  if (kind === "mem0") {
+    const hasSecret = await secretStore.hasSecret(record.secretRef);
+    if (!hasSecret) {
+      return memoryReadiness(
+        "Incomplete",
+        kind,
+        "A stored secret is required but secretRef is not present in the Secret_Store yet.",
+      );
+    }
+    return memoryReadiness("Ready", kind, "API key secret is present in the Secret_Store.");
+  }
+
+  if (kind === "chroma") {
+    if (!isPresent(record.config?.baseUrl)) {
+      return memoryReadiness(
+        "Incomplete",
+        kind,
+        "config.baseUrl (Chroma server URL) is not set on the active record.",
+      );
+    }
+    return memoryReadiness("Ready", kind, "Chroma base URL is configured on the active record.");
+  }
+
+  if (kind === "tidb-memory") {
+    const missing: string[] = [];
+    if (!isPresent(record.config?.baseUrl)) missing.push("config.baseUrl");
+    if (!isPresent(record.config?.accountId)) missing.push("config.accountId");
+    if (!isPresent(record.config?.database)) missing.push("config.database");
+    if (!(await secretStore.hasSecret(record.secretRef))) missing.push("secretRef presence");
+    if (missing.length > 0) {
+      return memoryReadiness(
+        "Incomplete",
+        kind,
+        `These required fields are missing: ${missing.join(", ")}.`,
+      );
+    }
+    return memoryReadiness(
+      "Ready",
+      kind,
+      "Connection coordinates and secret presence are configured on the active record.",
+    );
+  }
+
+  return {
+    category: "memory",
+    status: "Error",
+    detail: `Unknown memory provider kind "${kind}".`,
+  };
+}
+
+function deriveMemoryReadinessFromEnv(env: Record<string, string | undefined>): CategoryReadiness {
+  const kind = (env[MEMORY_PROVIDER_ENV_KEY] ?? "").trim() || "local-inmemory";
+
+  if (!isKnownMemoryKind(kind)) {
+    return {
+      category: "memory",
+      status: "Error",
+      detail: `Unknown memory provider kind "${kind}"; expected one of ${MEMORY_PROVIDER_KINDS.join(", ")}.`,
+    };
+  }
+
+  const requirements = MEMORY_ENV_REQUIREMENTS[kind];
+  if (requirements === "none") {
+    return memoryReadiness(
+      "Ready",
+      kind,
+      `RECTOR_MEMORY_PROVIDER selects "${kind}" (local, zero network).`,
+    );
+  }
+
+  const missing = requirements.filter((key) => !isPresent(env[key]));
+  if (missing.length > 0) {
+    return memoryReadiness(
+      "Incomplete",
+      kind,
+      `These env keys are missing: ${missing.join(", ")}.`,
+    );
+  }
+
+  return memoryReadiness(
+    "Ready",
+    kind,
+    `RECTOR_MEMORY_PROVIDER selects "${kind}" and all required env keys are present.`,
+  );
 }
 
 /**

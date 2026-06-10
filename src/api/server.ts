@@ -2044,7 +2044,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     securityOptions.resolveTestMemoryProvider ?? resolveTestMemoryProvider;
   app.get("/api/setup/status", async (_req, res) => {
     try {
-      const status = await computeSetupStatus(process.env, setupSecretStore);
+      const status = await computeSetupStatus(process.env, setupSecretStore, memoryConfigStore);
       // `computeSetupStatus` is itself the redaction boundary for this payload: it routes every
       // field through the Redaction_Layer per-field (and omits any value whose redaction fails,
       // Req 1.10) precisely because a blanket `redactSecrets` pass would treat the legitimately

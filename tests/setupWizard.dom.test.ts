@@ -2,7 +2,7 @@
 //
 // Validates (by example/DOM assertion): Requirements 1.5, 1.6, 1.7, 1.8, 1.9
 //   - 1.1/1.2: the wizard renders the orchestration mode plus exactly one readiness pill per
-//     configuration category (provider, persistence, workspace, budget).
+//     configuration category (provider, persistence, workspace, budget, memory).
 //   - 1.5: the wizard writes no secret values to localStorage/sessionStorage (it touches no storage).
 //   - 1.6: the wizard renders no configuration-mutation controls (no inputs/buttons in the pills).
 //   - 1.7: while the wizard is displayed (including error/timeout states) the chat and trace UI stay
@@ -34,6 +34,7 @@ function statusResponse(mode: "local" | "external") {
       { category: "persistence", status: "Ready", detail: "SQLite default in use." },
       { category: "workspace", status: "Incomplete", detail: "Workspace root not set." },
       { category: "budget", status: "Error", detail: "Budget configuration invalid." },
+      { category: "memory", status: "Ready", detail: "Local in-memory provider active." },
     ],
     secretPresence: { together: true },
   };
@@ -72,7 +73,7 @@ describe("Setup_Wizard panel", () => {
     vi.useRealTimers();
   });
 
-  it("renders the mode and exactly four category pills, with no mutation controls or storage writes (Req 1.1, 1.2, 1.5, 1.6, 1.7)", async () => {
+  it("renders the mode and exactly five category pills, with no mutation controls or storage writes (Req 1.1, 1.2, 1.5, 1.6, 1.7)", async () => {
     let requestedUrl: string | undefined;
     harness.setFetchHandler(async (url) => {
       requestedUrl = url;
@@ -87,14 +88,14 @@ describe("Setup_Wizard panel", () => {
 
     // Req 1.2: exactly one pill per category, in order, each carrying one closed-set status.
     const container = harness.getEl("setup-wizard-categories");
-    expect(container.children.length).toBe(4);
+    expect(container.children.length).toBe(5);
     for (const pill of container.children) {
       expect(pill.className).toContain("wizard-pill");
     }
     const names = container.querySelectorAll(".wizard-pill__name").map((e) => e.textContent);
-    expect(names).toEqual(["Provider", "Persistence", "Workspace", "Budget"]);
+    expect(names).toEqual(["Provider", "Persistence", "Workspace", "Budget", "Memory"]);
     const statuses = container.querySelectorAll(".wizard-pill__status").map((e) => e.textContent);
-    expect(statuses).toEqual(["Ready", "Ready", "Incomplete", "Error"]);
+    expect(statuses).toEqual(["Ready", "Ready", "Incomplete", "Error", "Ready"]);
 
     // Status body visible, error hidden.
     expect(harness.getEl("setup-wizard-body").hidden).toBe(false);
@@ -118,7 +119,7 @@ describe("Setup_Wizard panel", () => {
     await harness.sandbox.loadSetupStatus();
 
     expect(harness.getEl("setup-wizard-mode").textContent).toBe("External mode");
-    expect(harness.getEl("setup-wizard-categories").children.length).toBe(4);
+    expect(harness.getEl("setup-wizard-categories").children.length).toBe(5);
   });
 
   it("shows an error state on an API failure and keeps chat/trace accessible (Req 1.8)", async () => {
