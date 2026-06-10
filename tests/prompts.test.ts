@@ -2,15 +2,20 @@ import { describe, it, expect } from "vitest";
 import {
   buildPlannerPrompt,
   buildPlannerRepairPrompt,
+  buildRepairPrompt,
   buildSkepticPrompt,
   buildSkepticRepairPrompt,
+  buildSynthesizerPrompt,
   PLANNER_SYSTEM_RULES,
   PLANNER_JSON_CONTRACT,
   SKEPTIC_SYSTEM_RULES,
   SKEPTIC_JSON_CONTRACT,
+  sanitizeMemoryContextForPrompt,
   type SkepticPromptInput,
 } from "../src/orchestration/prompts";
 import { createFakePlan, type PlannerInput, type PlannerOutput } from "../src/orchestration/planner";
+import { arbitratePlanWithCrucible } from "../src/orchestration/crucible";
+import { reviewPlanWithSkeptic } from "../src/orchestration/skeptic";
 import { triageUserMessage, type TriageResult } from "../src/orchestration/triage";
 import type { ContextPack } from "../src/orchestration/contextBuilder";
 
@@ -177,5 +182,96 @@ describe("skeptic prompt construction", () => {
 
     expect(repair[0]).toEqual(initial[0]);
     expect(repair[1]).toEqual(initial[1]);
+  });
+});
+
+const MEMORY_NOTE = "3 days ago you noted: prefer integration tests for API changes";
+
+function contextPackWithMemory(triage: TriageResult, intent = "Test user intent"): ContextPack {
+  return {
+    ...contextPackFor(triage, intent),
+    memoryContext: [MEMORY_NOTE],
+  };
+}
+
+describe("memoryContext prompt injection", () => {
+  it("includes memoryContext in planner prompts when present", () => {
+    const triage = triageUserMessage("Fix the flaky login test");
+    const input: PlannerInput = {
+      triage,
+      contextPack: contextPackWithMemory(triage, "Fix the flaky login test"),
+      messageContent: "Fix the flaky login test",
+    };
+
+    const messages = buildPlannerPrompt(input);
+    expect(messages[1].content).toContain('"memoryContext"');
+    expect(messages[1].content).toContain(MEMORY_NOTE);
+  });
+
+  it("includes memoryContext in skeptic prompts when present", () => {
+    const planner = inputFor("Fix the flaky login test");
+    planner.contextPack = contextPackWithMemory(planner.triage, "Fix the flaky login test");
+    const messages = buildSkepticPrompt({
+      plannerOutput: createFakePlan(planner),
+      contextPack: planner.contextPack,
+      triage: planner.triage,
+    });
+
+    expect(messages[1].content).toContain('"memoryContext"');
+    expect(messages[1].content).toContain(MEMORY_NOTE);
+  });
+
+  it("includes memoryContext in synthesizer prompts when present", () => {
+    const planner = inputFor("Fix the flaky login test");
+    planner.contextPack = contextPackWithMemory(planner.triage, "Fix the flaky login test");
+    const plannerOutput = createFakePlan(planner);
+    const skepticReview = reviewPlanWithSkeptic(plannerOutput, planner.contextPack);
+    const crucibleDecision = arbitratePlanWithCrucible({
+      plannerOutput,
+      skepticReview,
+      now: () => "2026-01-01T00:00:00.000Z",
+    });
+
+    const messages = buildSynthesizerPrompt({
+      traceId: "trace-memory-context",
+      triage: planner.triage,
+      contextPack: planner.contextPack,
+      plannerOutput,
+      skepticReview,
+      crucibleDecision,
+    });
+
+    expect(messages[1].content).toContain('"memoryContext"');
+    expect(messages[1].content).toContain(MEMORY_NOTE);
+  });
+
+  it("includes memoryContext in repair prompts when present", () => {
+    const triage = triageUserMessage("Fix the flaky login test");
+    const messages = buildRepairPrompt({
+      classification: "test_failure",
+      failedOutput: "AssertionError: expected 200",
+      contextPack: contextPackWithMemory(triage, "Fix the flaky login test"),
+    });
+
+    expect(messages[1].content).toContain('"memoryContext"');
+    expect(messages[1].content).toContain(MEMORY_NOTE);
+  });
+
+  it("omits memoryContext when absent", () => {
+    const messages = buildPlannerPrompt(inputFor("Explain Rector"));
+    expect(messages[1].content).not.toContain('"memoryContext"');
+  });
+
+  it("caps memoryContext entries and line length for prompt safety", () => {
+    const longLine = "x".repeat(300);
+    const sanitized = sanitizeMemoryContextForPrompt([
+      longLine,
+      ...Array.from({ length: 10 }, (_, index) => `entry-${index}`),
+    ]);
+
+    expect(sanitized).toHaveLength(8);
+    expect(sanitized?.every((line) => line.length <= 200)).toBe(true);
+    expect(sanitized?.[0]).toBe("x".repeat(200));
+    expect(sanitized?.[7]).toBe("entry-6");
   });
 });

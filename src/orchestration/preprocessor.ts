@@ -64,6 +64,19 @@ export const PreprocessorInputSchema = z.object({
 });
 export type PreprocessorInput = z.infer<typeof PreprocessorInputSchema>;
 
+const ZERO_USAGE: LLMUsage = LLMUsageSchema.parse({
+  inputTokens: 0,
+  outputTokens: 0,
+  totalTokens: 0,
+  estimatedUsd: 0,
+  modelCalls: 0,
+});
+
+export interface SLMPreprocessorResult {
+  output: PreprocessorOutput;
+  usage: LLMUsage;
+}
+
 /**
  * Safe fallback when the SLM call is denied, fails, or returns unparseable / unsafe output.
  * Preserves the original user signal while ensuring zero unsafe tool proposals.
@@ -106,9 +119,12 @@ function buildPreprocessorPrompt(input: {
   const constraints = (input.contextPack.constraints ?? []).map((c: string) => redactString(c)).slice(0, 8);
   const riskFlags = (input.contextPack.riskFlags ?? []).map((r: string) => redactString(r)).slice(0, 6);
   const tools = (input.contextPack.availableTools?.names ?? []).map((t: string) => redactString(t)).slice(0, 12);
+  const memoryContext = (input.contextPack.memoryContext ?? [])
+    .slice(0, 8)
+    .map((line: string) => redactString(line).slice(0, 200));
 
   // The instruction forces a strict JSON shape. The SLM must return *only* this object.
-  return [
+  const lines = [
     "You are a fast, cheap preprocessor for a symbolic AI orchestration system.",
     "Your job is to turn a potentially long/bloated user request and its context into a compact, structured summary.",
     "Respond with ONLY a single JSON object matching this exact shape (no markdown, no extra text):",
@@ -131,6 +147,9 @@ function buildPreprocessorPrompt(input: {
     "Known constraints:",
     constraints.join(" | ") || "(none)",
     "",
+    ...(memoryContext.length > 0
+      ? ["Time-aware memory context:", ...memoryContext, ""]
+      : []),
     "Risk flags from triage:",
     riskFlags.join(", ") || "(none)",
     "",
@@ -142,7 +161,8 @@ function buildPreprocessorPrompt(input: {
     "- proposedToolCalls must only reference the allowed tool names listed above. Drop any others.",
     "- Keep distilledContext under ~1200 characters when possible.",
     "- If the request is ambiguous or unsafe, still produce the best possible distillation and leave proposedToolCalls empty.",
-  ].join("\n");
+  ];
+  return lines.join("\n");
 }
 
 /** Convert a provider usage estimate into the shape expected by evaluateBudget. */
@@ -178,7 +198,7 @@ function buildPreprocessorBudgetUsage(provider: LLMProvider, estimate: LLMUsage,
 export async function runSLMPreprocessor(
   input: { rawPrompt: string; contextPack: ContextPack; triage: TriageResult },
   deps: { slmProvider: LLMProvider; run: Run }
-): Promise<PreprocessorOutput> {
+): Promise<SLMPreprocessorResult> {
   const { slmProvider, run } = deps;
 
   // Always produce a redacted view of the input for the prompt.
@@ -204,14 +224,14 @@ export async function runSLMPreprocessor(
   const estimate = slmProvider.estimateRequest(request);
   const decision = evaluateBudget(run, buildPreprocessorBudgetUsage(slmProvider, estimate, run));
   if (decision.status !== "allowed") {
-    return createFallbackPreprocessorOutput(input);
+    return { output: createFallbackPreprocessorOutput(input), usage: ZERO_USAGE };
   }
 
   let response: LLMResponse;
   try {
     response = await invokeWithBudget(slmProvider, request, run);
   } catch {
-    return createFallbackPreprocessorOutput(input);
+    return { output: createFallbackPreprocessorOutput(input), usage: ZERO_USAGE };
   }
 
   // Redact anything that came back from the provider before we trust it.
@@ -221,12 +241,12 @@ export async function runSLMPreprocessor(
   try {
     parsed = JSON.parse(rawContent);
   } catch {
-    return createFallbackPreprocessorOutput(input);
+    return { output: createFallbackPreprocessorOutput(input), usage: response.usage };
   }
 
   const validated = PreprocessorOutputSchema.safeParse(parsed);
   if (!validated.success) {
-    return createFallbackPreprocessorOutput(input);
+    return { output: createFallbackPreprocessorOutput(input), usage: response.usage };
   }
 
   let output = validated.data;
@@ -261,7 +281,10 @@ export async function runSLMPreprocessor(
   };
 
   // Final schema enforcement after filtering.
-  return PreprocessorOutputSchema.parse(output);
+  return {
+    output: PreprocessorOutputSchema.parse(output),
+    usage: response.usage,
+  };
 }
 
 export interface SymbolicToolValidationResult {

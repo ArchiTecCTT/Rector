@@ -484,10 +484,10 @@ describe("Property 7: external mode records provider/model/cost on the PLANNING 
         expect(ProviderCallMetadataSchema.safeParse(reunited).success).toBe(true);
 
         // --- (2) Run cost/token fields reflect cumulative live-step usage. ---
-        const expectedUsd = reported.estimatedUsd + DEFAULT_SPY_USAGE.estimatedUsd * 2;
-        const expectedModelCalls = reported.modelCalls + DEFAULT_SPY_USAGE.modelCalls * 2;
-        const expectedInputTokens = reported.inputTokens + DEFAULT_SPY_USAGE.inputTokens * 2;
-        const expectedOutputTokens = reported.outputTokens + DEFAULT_SPY_USAGE.outputTokens * 2;
+        const expectedUsd = reported.estimatedUsd + DEFAULT_SPY_USAGE.estimatedUsd * 3;
+        const expectedModelCalls = reported.modelCalls + DEFAULT_SPY_USAGE.modelCalls * 3;
+        const expectedInputTokens = reported.inputTokens + DEFAULT_SPY_USAGE.inputTokens * 3;
+        const expectedOutputTokens = reported.outputTokens + DEFAULT_SPY_USAGE.outputTokens * 3;
         expect((run.costEstimate as { usd: number }).usd).toBeCloseTo(expectedUsd, 12);
         expect((run.costEstimate as { modelCalls?: number }).modelCalls).toBe(expectedModelCalls);
         expect((run.actualCost as { usd: number }).usd).toBeCloseTo(expectedUsd, 12);
@@ -652,7 +652,7 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     expect(synthCall!.modelRoute).toBe("flagship");
   });
 
-  it("denies the synthesizer when planner plus skeptic usage exhausts max calls/cost", async () => {
+  it("denies the synthesizer when preprocessor plus planner plus skeptic usage exhausts max calls/cost", async () => {
     const store = new InMemoryRectorStore();
     const args = await buildArgs(store, "Explain the deterministic orchestration pipeline.");
 
@@ -677,14 +677,14 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     const { run } = await runChat(store, args, {
       mode: "external",
       router: spyRouter(provider),
-      budget: generousBudget({ maxUsd: 0.02, maxModelCalls: 2 }),
+      budget: generousBudget({ maxUsd: 0.03, maxModelCalls: 3 }),
     });
 
     expect(run.phase).toBe("DONE");
     expect(run.status).toBe("completed");
     expect(provider.invokeCount).toBe(3);
-    expect((run.actualCost as { usd: number }).usd).toBeCloseTo(0.02, 12);
-    expect((run.actualCost as { modelCalls?: number }).modelCalls).toBe(2);
+    expect((run.actualCost as { usd: number }).usd).toBeCloseTo(0.03, 12);
+    expect((run.actualCost as { modelCalls?: number }).modelCalls).toBe(3);
 
     const events = await store.listEvents(run.id);
     const synthCall = findProviderCallEvent(events, "SYNTHESIZING");

@@ -333,12 +333,24 @@ export async function runExternalChatRun(
     task: "preprocessor",
     run,
   });
-  const preprocessorOutput: PreprocessorOutput = await observability.recordSpan("PREPROCESSING", () =>
+  const preprocessorResult = await observability.recordSpan("PREPROCESSING", () =>
     runSLMPreprocessor(
       { rawPrompt: prompt, contextPack, triage },
       { slmProvider: preprocessorSelection.provider, run }
     )
   );
+  const preprocessorOutput = preprocessorResult.output;
+
+  // Commit preprocessor usage before the planner preflight so later live steps see the spend.
+  let budgetRun = run;
+  if (preprocessorResult.usage.modelCalls > 0) {
+    budgetRun = await addProviderUsageToRun(
+      store,
+      run,
+      preprocessorResult.usage,
+      preprocessorSelection.provider.metadata.id
+    );
+  }
 
   // Use the distilled context for the flagship planner (biggest immediate value). The original
   // prompt and full contextPack remain available to skeptic, crucible, healing, and synthesis
@@ -359,7 +371,7 @@ export async function runExternalChatRun(
 
   // Deterministic provider selection; a zero budget or no configured provider falls back to the
   // fake provider (still safe), so selection itself never throws.
-  const selection: ModelSelection = deps.router.select({ capability: "flagship", task: "planner", run });
+  const selection: ModelSelection = deps.router.select({ capability: "flagship", task: "planner", run: budgetRun });
 
   // --- PLANNER STEP (the only divergence from local mode) ---
   // runLivePlanner (or opt-in runDeepPlanner) runs the budget preflight BEFORE any provider call
@@ -369,11 +381,11 @@ export async function runExternalChatRun(
     options.deepPlanning === true
       ? runDeepPlanner(
           { triage, contextPack: plannerContextPack, messageContent: effectiveMessageContent, deepPlanning: true },
-          { provider: selection.provider, run }
+          { provider: selection.provider, run: budgetRun }
         )
       : runLivePlanner(
           { triage, contextPack: plannerContextPack, messageContent: effectiveMessageContent },
-          { provider: selection.provider, run }
+          { provider: selection.provider, run: budgetRun }
         )
   );
 
@@ -382,7 +394,7 @@ export async function runExternalChatRun(
       code: "PLANNER_INVALID" as const,
       message: "Planner returned no plan",
     };
-    return resolvePlannerBlocker(store, args, run, blocker, deps);
+    return resolvePlannerBlocker(store, args, budgetRun, blocker, deps);
   }
 
   const plannerOutput = plannerResult.plan;
@@ -391,7 +403,7 @@ export async function runExternalChatRun(
   // preflight sees the committed spend from earlier live steps (planner → skeptic → repair → synth).
   // Recorded as both estimate and actual because BYOK currently commits usage after each response.
   const usage = plannerResult.usage;
-  const costedRun = await addProviderUsageToRun(store, run, usage, plannerResult.provider);
+  const costedRun = await addProviderUsageToRun(store, budgetRun, usage, plannerResult.provider);
 
   // Provider/model/cost metadata recorded on the PLANNING event (Req 3.5).
   const providerCall = buildProviderCallMetadata(selection, plannerResult.provider, plannerResult.model, usage, plannerResult.attempts);

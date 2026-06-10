@@ -77,11 +77,11 @@ describe("preprocessor contract and safety", () => {
       { slmProvider: provider, run }
     );
 
-    expect(() => PreprocessorOutputSchema.parse(result)).not.toThrow();
-    expect(result.distilledContext).toContain("pagination");
-    expect(result.proposedToolCalls.length).toBe(2);
-    expect(result.entities).toContain("pagination");
-    expect(result.intent).toBe("Add pagination support");
+    expect(() => PreprocessorOutputSchema.parse(result.output)).not.toThrow();
+    expect(result.output.distilledContext).toContain("pagination");
+    expect(result.output.proposedToolCalls.length).toBe(2);
+    expect(result.output.entities).toContain("pagination");
+    expect(result.output.intent).toBe("Add pagination support");
   });
 
   it("filters out tool proposals that are not on the allowlist", async () => {
@@ -107,7 +107,7 @@ describe("preprocessor contract and safety", () => {
       { slmProvider: provider, run }
     );
 
-    const tools = result.proposedToolCalls.map((t) => t.tool);
+    const tools = result.output.proposedToolCalls.map((t) => t.tool);
     expect(tools).toContain("read_file");
     expect(tools).toContain("write_file");
     expect(tools).not.toContain("rm");
@@ -129,9 +129,10 @@ describe("preprocessor contract and safety", () => {
       { slmProvider: provider, run }
     );
 
-    expect(result.proposedToolCalls).toEqual([]);
-    expect(result.distilledContext.length).toBeGreaterThan(0);
-    expect(() => PreprocessorOutputSchema.parse(result)).not.toThrow();
+    expect(result.output.proposedToolCalls).toEqual([]);
+    expect(result.output.distilledContext.length).toBeGreaterThan(0);
+    expect(() => PreprocessorOutputSchema.parse(result.output)).not.toThrow();
+    expect(result.usage.modelCalls).toBe(1);
   });
 
   it("runDeterministicPreprocessor produces valid output with no provider and no network", () => {
@@ -190,21 +191,21 @@ describe("Property: arbitrary bloat always yields safe valid PreprocessorOutput"
           );
 
           // Must always be schema valid
-          const parsed = PreprocessorOutputSchema.safeParse(result);
+          const parsed = PreprocessorOutputSchema.safeParse(result.output);
           expect(parsed.success).toBe(true);
 
           // Tool names must be from the documented allowlist (or the list is empty)
-          for (const call of result.proposedToolCalls) {
+          for (const call of result.output.proposedToolCalls) {
             expect(ALLOWED_PREPROCESSOR_TOOLS).toContain(call.tool as (typeof ALLOWED_PREPROCESSOR_TOOLS)[number]);
           }
 
           // Redaction should have removed obvious secret-like content from string fields
           const allText = [
-            result.distilledContext,
-            result.intent,
-            ...result.entities,
-            ...result.constraints,
-            ...result.proposedToolCalls.flatMap((c) => Object.values(c.args).filter((v): v is string => typeof v === "string")),
+            result.output.distilledContext,
+            result.output.intent,
+            ...result.output.entities,
+            ...result.output.constraints,
+            ...result.output.proposedToolCalls.flatMap((c) => Object.values(c.args).filter((v): v is string => typeof v === "string")),
           ].join(" ");
 
           // Very conservative secret smell check (the real redaction tests are elsewhere)

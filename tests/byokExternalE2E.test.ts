@@ -197,10 +197,10 @@ describe("BYOK external-mode end-to-end", () => {
       expect(providerCall.usage.outputTokens).toBe("[REDACTED]");
 
       // --- (2) Run cost/token fields accumulate preprocessor + planner + skeptic + synthesizer usage (Req 3.6). ---
-      const expectedUsd = reportedUsage.estimatedUsd + DEFAULT_SPY_USAGE.estimatedUsd * 2;
-      const expectedModelCalls = reportedUsage.modelCalls + DEFAULT_SPY_USAGE.modelCalls * 2;
-      const expectedInputTokens = reportedUsage.inputTokens + DEFAULT_SPY_USAGE.inputTokens * 2;
-      const expectedOutputTokens = reportedUsage.outputTokens + DEFAULT_SPY_USAGE.outputTokens * 2;
+      const expectedUsd = reportedUsage.estimatedUsd + DEFAULT_SPY_USAGE.estimatedUsd * 3;
+      const expectedModelCalls = reportedUsage.modelCalls + DEFAULT_SPY_USAGE.modelCalls * 3;
+      const expectedInputTokens = reportedUsage.inputTokens + DEFAULT_SPY_USAGE.inputTokens * 3;
+      const expectedOutputTokens = reportedUsage.outputTokens + DEFAULT_SPY_USAGE.outputTokens * 3;
       expect(body.run.costEstimate.usd).toBeCloseTo(expectedUsd, 12);
       expect(body.run.costEstimate.modelCalls).toBe(expectedModelCalls);
       expect(body.run.actualCost.usd).toBeCloseTo(expectedUsd, 12);

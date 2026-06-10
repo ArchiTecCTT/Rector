@@ -557,10 +557,10 @@ describe("external chat runner (ORN-33)", () => {
     expect(metadata.usage.modelCalls).toBe(reportedUsage.modelCalls);
 
     // Run cost/token fields are cumulative across planner + skeptic + synthesizer (Req 3.6).
-    const expectedUsd = reportedUsage.estimatedUsd + DEFAULT_SPY_USAGE.estimatedUsd * 2;
-    const expectedInputTokens = reportedUsage.inputTokens + DEFAULT_SPY_USAGE.inputTokens * 2;
-    const expectedOutputTokens = reportedUsage.outputTokens + DEFAULT_SPY_USAGE.outputTokens * 2;
-    const expectedModelCalls = reportedUsage.modelCalls + DEFAULT_SPY_USAGE.modelCalls * 2;
+    const expectedUsd = reportedUsage.estimatedUsd + DEFAULT_SPY_USAGE.estimatedUsd * 3;
+    const expectedInputTokens = reportedUsage.inputTokens + DEFAULT_SPY_USAGE.inputTokens * 3;
+    const expectedOutputTokens = reportedUsage.outputTokens + DEFAULT_SPY_USAGE.outputTokens * 3;
+    const expectedModelCalls = reportedUsage.modelCalls + DEFAULT_SPY_USAGE.modelCalls * 3;
     expect(result.run.costEstimate.usd).toBeCloseTo(expectedUsd, 12);
     expect((result.run.tokenEstimate as any).input).toBe(expectedInputTokens);
     expect((result.run.tokenEstimate as any).output).toBe(expectedOutputTokens);

@@ -57,9 +57,9 @@ describe("preprocessor symbolic validation", () => {
       { slmProvider: provider, run }
     );
 
-    expect(result.proposedToolCalls).toEqual([
+    expect(result.output.proposedToolCalls).toEqual([
       { tool: "write_file", args: { path: "src/config/app.json" } },
     ]);
-    expect(result.constraints.length).toBeGreaterThan(0);
+    expect(result.output.constraints.length).toBeGreaterThan(0);
   });
 });

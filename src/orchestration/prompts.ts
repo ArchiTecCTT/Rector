@@ -4,7 +4,23 @@ import { PlannerInputSchema, PlannerOutputSchema, type PlannerInput, type Planne
 import { ContextPackSchema, type ContextPack } from "./contextBuilder";
 import { TriageResultSchema, type TriageResult } from "./triage";
 import type { BrainstemSynthesisInput } from "./synthesizer";
-import { redactSecrets } from "../security/redaction";
+import { redactSecrets, redactString } from "../security/redaction";
+
+const MEMORY_CONTEXT_MAX_ENTRIES = 8;
+const MEMORY_CONTEXT_MAX_CHARS_PER_LINE = 200;
+
+/** Caps and redacts time-aware memory lines before they reach any LLM prompt. */
+export function sanitizeMemoryContextForPrompt(memoryContext: string[] | undefined): string[] | undefined {
+  if (!memoryContext || memoryContext.length === 0) return undefined;
+  const sanitized = memoryContext
+    .slice(0, MEMORY_CONTEXT_MAX_ENTRIES)
+    .map((line) => redactString(line).slice(0, MEMORY_CONTEXT_MAX_CHARS_PER_LINE));
+  return sanitized.length > 0 ? sanitized : undefined;
+}
+
+function contextPackMemoryContext(contextPack: ContextPack): string[] | undefined {
+  return sanitizeMemoryContextForPrompt(contextPack.memoryContext);
+}
 
 /**
  * System rules that anchor the live planner. The LLM only *proposes* a plan; the symbolic
@@ -116,6 +132,7 @@ function buildContextMessage(input: PlannerInput): string {
   const { triage, contextPack } = input;
   const requestText = (input.messageContent ?? input.intent ?? contextPack.userIntentSummary ?? "").trim();
 
+  const memoryContext = contextPackMemoryContext(contextPack);
   const context = {
     request: requestText,
     triage: {
@@ -131,6 +148,7 @@ function buildContextMessage(input: PlannerInput): string {
       riskFlags: contextPack.riskFlags,
       relevantDocs: contextPack.relevantDocs.map((doc) => ({ kind: doc.kind, summary: doc.summary })),
       relevantMemory: contextPack.relevantMemory.map((item) => ({ kind: item.kind, summary: item.summary })),
+      ...(memoryContext ? { memoryContext } : {}),
       artifactHandles: contextPack.artifactHandles.map((handle) => ({ kind: handle.kind, summary: handle.summary })),
       inlineContext: contextPack.inlineContext.map((entry) => ({ kind: entry.kind, summary: entry.summary })),
       availableProviders: contextPack.availableProviders,
@@ -269,6 +287,7 @@ function buildSkepticContextMessage(input: SkepticPromptInput): string {
 
   // Redact the entire payload so no configured secret can reach the provider, even if a plan field
   // or context summary echoed one.
+  const memoryContext = contextPackMemoryContext(contextPack);
   const payload = redactSecrets({
     plan: {
       goal: plannerOutput.goal,
@@ -301,6 +320,7 @@ function buildSkepticContextMessage(input: SkepticPromptInput): string {
       riskFlags: contextPack.riskFlags,
       relevantDocs: contextPack.relevantDocs.map((doc) => ({ kind: doc.kind, summary: doc.summary })),
       relevantMemory: contextPack.relevantMemory.map((item) => ({ kind: item.kind, summary: item.summary })),
+      ...(memoryContext ? { memoryContext } : {}),
       artifactHandles: contextPack.artifactHandles.map((handle) => ({ kind: handle.kind, summary: handle.summary })),
       inlineContext: contextPack.inlineContext.map((entry) => ({ kind: entry.kind, summary: entry.summary })),
       availableProviders: contextPack.availableProviders,
@@ -493,6 +513,7 @@ function buildSynthesizerContextMessage(input: SynthesizerPromptInput): string {
 
   // Redact the entire payload so no configured secret can reach the provider, even if a plan field,
   // context summary, command output, or failure message echoed one.
+  const memoryContext = contextPackMemoryContext(contextPack);
   const payload = redactSecrets({
     request: contextPack.userIntentSummary,
     triage: {
@@ -508,6 +529,7 @@ function buildSynthesizerContextMessage(input: SynthesizerPromptInput): string {
       riskFlags: contextPack.riskFlags,
       relevantDocs: contextPack.relevantDocs.map((doc) => ({ kind: doc.kind, summary: doc.summary })),
       relevantMemory: contextPack.relevantMemory.map((item) => ({ kind: item.kind, summary: item.summary })),
+      ...(memoryContext ? { memoryContext } : {}),
       artifactHandles: contextPack.artifactHandles.map((handle) => ({ kind: handle.kind, summary: handle.summary })),
       inlineContext: contextPack.inlineContext.map((entry) => ({ kind: entry.kind, summary: entry.summary })),
     },
@@ -647,6 +669,7 @@ export interface RepairPromptInput {
  * configured secret reaches the provider even if the failed output or context echoed one.
  */
 export function buildRepairPrompt(input: RepairPromptInput): LLMMessage[] {
+  const memoryContext = contextPackMemoryContext(input.contextPack);
   const payload = redactSecrets({
     failure: {
       classification: input.classification,
@@ -657,6 +680,7 @@ export function buildRepairPrompt(input: RepairPromptInput): LLMMessage[] {
       userIntentSummary: input.contextPack.userIntentSummary,
       constraints: input.contextPack.constraints,
       riskFlags: input.contextPack.riskFlags,
+      ...(memoryContext ? { memoryContext } : {}),
     },
     symbolicHints: input.symbolicHints ?? [],
   });
