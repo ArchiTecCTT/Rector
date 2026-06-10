@@ -1855,6 +1855,112 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
 }
 
 /* ============================================================
+   Memory browser (Chunk 36 stretch)
+   ============================================================ */
+.memory-browser__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.memory-browser__filter--active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.memory-browser__provider {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.memory-browser__loading,
+.memory-browser__error,
+.memory-browser__empty {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.memory-browser__error {
+  color: var(--danger);
+}
+
+.memory-browser__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 420px;
+  overflow: auto;
+}
+
+.memory-browser__item {
+  padding: var(--space-3);
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.memory-browser__item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.memory-browser__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid var(--border);
+}
+
+.memory-browser__badge--episodic {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.memory-browser__badge--core {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+
+.memory-browser__badge--working {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.memory-browser__time {
+  font-size: 11px;
+}
+
+.memory-browser__content {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-browser__meta {
+  margin-top: var(--space-2);
+  font-size: 11px;
+}
+
+/* ============================================================
    Sidebar badge (pending approvals count)
    ============================================================ */
 .sidebar__badge {

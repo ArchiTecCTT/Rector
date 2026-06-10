@@ -156,6 +156,7 @@
               <button class="menu__item" id="open-setup-wizard" role="menuitem" type="button">Setup status</button>
               <button class="menu__item" id="open-provider-config" role="menuitem" type="button">Provider configuration</button>
               <button class="menu__item" id="open-memory-provider-config" role="menuitem" type="button">Memory provider configuration</button>
+              <button class="menu__item" id="open-memory-browser" role="menuitem" type="button">Browse memory</button>
               <button class="menu__item" id="open-provider-test" role="menuitem" type="button">Test provider connection</button>
               <button class="menu__item" id="open-workspace-safety" role="menuitem" type="button">Workspace safety</button>
               <button class="menu__item" id="open-appearance" role="menuitem" type="button">Appearance</button>
@@ -877,6 +878,76 @@
               ></div>
             </form>
           </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Memory browser panel (Chunk 36 stretch): read-only episodic/core entry list with layer badges.
+         Fetches GET /api/memory/entries?layer=episodic|core; content is redacted server-side. -->
+    <div
+      class="modal"
+      id="memory-browser-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="memory-browser-title"
+    >
+      <div class="modal__backdrop" id="memory-browser-backdrop"></div>
+      <div class="modal__panel modal__panel--wide" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="memory-browser-title">Memory browser</h2>
+          <button class="btn btn--ghost btn--sm" id="close-memory-browser" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            A read-only view of recent episodic and core memory entries from the active memory provider.
+            Content is redacted by the server; this panel does not edit or delete entries.
+          </p>
+
+          <div class="memory-browser__toolbar" role="toolbar" aria-label="Memory layer filter">
+            <button
+              class="btn btn--sm memory-browser__filter memory-browser__filter--active"
+              id="memory-browser-filter-all"
+              type="button"
+              data-layer=""
+              aria-pressed="true"
+            >
+              All
+            </button>
+            <button
+              class="btn btn--sm memory-browser__filter"
+              id="memory-browser-filter-episodic"
+              type="button"
+              data-layer="episodic"
+              aria-pressed="false"
+            >
+              Episodic
+            </button>
+            <button
+              class="btn btn--sm memory-browser__filter"
+              id="memory-browser-filter-core"
+              type="button"
+              data-layer="core"
+              aria-pressed="false"
+            >
+              Core
+            </button>
+            <span class="memory-browser__provider t-mono muted" id="memory-browser-provider" hidden></span>
+          </div>
+
+          <div class="memory-browser__loading" id="memory-browser-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Loading memory entries…</span>
+          </div>
+
+          <div class="memory-browser__error" id="memory-browser-error" role="alert" hidden></div>
+
+          <div class="memory-browser__empty" id="memory-browser-empty" hidden>
+            No memory entries yet. Save a quick note or run a conversation to populate episodic memory.
+          </div>
+
+          <ul class="memory-browser__list" id="memory-browser-list" aria-label="Memory entries" hidden></ul>
         </div>
       </div>
     </div>

@@ -24,6 +24,7 @@ import http from "node:http";
 import fc from "fast-check";
 
 import { createApp } from "../src/api/server";
+import type { MemoryProvider } from "../src/memory/provider";
 import { TaskManager } from "../src/thalamus/router";
 import { createLocalSecretStore, type SecretFs, type SecretStore } from "../src/security/secretStore";
 import {
@@ -399,7 +400,68 @@ describe("Memory_Provider_API — test-connection", () => {
     expect(res.data.code).toBe("CONFIG_INVALID");
     expect(res.data.networkAttempted).toBe(false);
   });
+
+  it("uses injectable resolveTestMemoryProvider double and redacts validateConfig errors", async () => {
+    const secret = "sk-INJECTABLE-TEST-CONNECTION-1234567890";
+    const doubleHarness = await startHarnessWithResolver(async () =>
+      ({
+        id: "mem0:main",
+        kind: "mem0",
+        metadata: { id: "mem0:main", kind: "mem0" },
+        validateConfig() {
+          throw new Error(`invalid apiKey=${secret}`);
+        },
+        createMemoryEntry: async () => {
+          throw new Error("not used");
+        },
+        getMemoryEntry: async () => undefined,
+        listMemoryEntries: async () => [],
+        updateMemoryEntry: async () => undefined,
+        deleteMemoryEntry: async () => false,
+        searchMemory: async () => [],
+        pruneMemory: async () => ({ pruned: 0, summarized: 0 }),
+      }) satisfies MemoryProvider,
+    );
+
+    await api(doubleHarness.base, "/api/memory-providers", {
+      method: "POST",
+      body: JSON.stringify(mem0Body()),
+    });
+
+    const res = await api(doubleHarness.base, "/api/memory-providers/mem0:main/test-connection", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.data.ok).toBe(false);
+    expect(res.data.code).toBe("CONFIG_INVALID");
+    expect(res.text).not.toContain(secret);
+    await stopHarness(doubleHarness);
+  });
 });
+
+async function startHarnessWithResolver(
+  resolver: (
+    providerId: string,
+    configStore: MemoryConfigStore,
+    secrets: SecretStore,
+  ) => Promise<MemoryProvider | undefined>,
+): Promise<Harness> {
+  const secretStore = makeSecretStore();
+  const configStore = createInMemoryMemoryConfigStore();
+  const app = await createApp(new TaskManager(), {
+    secretStore,
+    memoryConfigStore: configStore,
+    resolveTestMemoryProvider: resolver,
+  });
+  const server = await new Promise<http.Server>((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  const addr = server.address();
+  const port = typeof addr === "object" && addr ? addr.port : 3000;
+  return { app, server, base: `http://localhost:${port}`, secretStore, configStore };
+}
 
 // ---------------------------------------------------------------------------
 // Property 1 — no secret egress across every Memory_Provider_API response

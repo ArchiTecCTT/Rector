@@ -54,6 +54,7 @@ import {
   type MemoryConfigStore,
 } from "../providers";
 import type { MemoryProvider } from "../memory/provider";
+import { redactMemoryContent } from "../memory/adapterBase";
 import { classifyProbeError, ProbeErrorCategorySchema, type ProbeFailureSignal } from "../providers/probe";
 import {
   createModelDiscoveryService,
@@ -82,8 +83,8 @@ import {
   type PersistenceConfig,
   type RectorStore,
 } from "../store";
-import { RunEventSchema } from "../store/schemas";
-import type { Artifact, Run, RunEvent } from "../store/schemas";
+import { MemoryLayerSchema, RunEventSchema } from "../store/schemas";
+import type { Artifact, MemoryLayer, Run, RunEvent } from "../store/schemas";
 import { RunPhaseSchema, isTerminalRunPhase } from "../protocol/phases";
 
 export interface ApiSecurityOptions {
@@ -634,6 +635,12 @@ export type SseFrame = z.infer<typeof SseFrameSchema>;
 const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
 
 /**
+ * Episodic memory search cap for the chat pipeline context builder (Chunk 36).
+ * Bounds token injection from recent notes/episodic entries into each run's ContextPack.
+ */
+const EPISODIC_MEMORY_SEARCH_LIMIT = 6;
+
+/**
  * Serialize an {@link SseFrame} to the Server-Sent Events wire format.
  *
  * Every frame is validated through {@link SseFrameSchema} BEFORE it is written, so only persisted,
@@ -1119,6 +1126,71 @@ export type TestMemoryProviderConnectionResponse = z.infer<typeof TestMemoryProv
  * without reading secrets or performing network I/O. External kinds run
  * `validateConfig()` on the supplied instance.
  */
+/** Maximum entries returned by `GET /api/memory/entries` (Chunk 36 stretch). */
+export const MEMORY_ENTRIES_API_LIMIT = 50;
+
+/** Allowed `layer` query values for the memory browser list endpoint. */
+export const MemoryEntriesLayerQuerySchema = z.enum(["episodic", "core"]);
+export type MemoryEntriesLayerQuery = z.infer<typeof MemoryEntriesLayerQuerySchema>;
+
+/** Response body for `GET /api/memory/entries`. */
+export const MemoryEntriesListResponseSchema = z.object({
+  entries: z.array(
+    z.object({
+      id: z.string().min(1),
+      layer: MemoryLayerSchema,
+      content: z.string(),
+      timestamp: z.string().datetime(),
+      lastMentioned: z.string().datetime(),
+      accessCount: z.number().int().nonnegative(),
+      tags: z.array(z.string()),
+      source: z.string().optional(),
+      metadata: z.record(z.unknown()),
+    }),
+  ),
+  count: z.number().int().nonnegative(),
+  provider: z.object({
+    id: z.string().min(1),
+    kind: z.string().min(1),
+    label: z.string().optional(),
+  }),
+});
+export type MemoryEntriesListResponse = z.infer<typeof MemoryEntriesListResponseSchema>;
+
+/** Redact a single memory entry before API egress. */
+export function redactMemoryEntryForEgress(entry: MemoryEntry): MemoryEntry {
+  return {
+    ...entry,
+    content: redactMemoryContent(entry.content),
+    metadata: redactSecrets(entry.metadata) as Record<string, unknown>,
+  };
+}
+
+/**
+ * List recent memory entries from the active provider for the read-only memory browser.
+ * Results are sorted newest-first and capped at {@link MEMORY_ENTRIES_API_LIMIT}.
+ */
+export async function listMemoryEntriesForApi(
+  provider: MemoryProvider,
+  options: { layer?: MemoryLayer; limit?: number } = {},
+): Promise<MemoryEntriesListResponse> {
+  const limit = Math.min(Math.max(1, options.limit ?? MEMORY_ENTRIES_API_LIMIT), MEMORY_ENTRIES_API_LIMIT);
+  const all = await provider.listMemoryEntries(options.layer);
+  const sorted = [...all].sort(
+    (a, b) => (Date.parse(b.timestamp) || 0) - (Date.parse(a.timestamp) || 0),
+  );
+  const entries = sorted.slice(0, limit).map(redactMemoryEntryForEgress);
+  return MemoryEntriesListResponseSchema.parse({
+    entries,
+    count: entries.length,
+    provider: {
+      id: provider.id,
+      kind: provider.kind,
+      label: provider.metadata.label,
+    },
+  });
+}
+
 export function runMemoryProviderConnectionTest(input: {
   providerId: string;
   provider: MemoryProvider;
@@ -1333,6 +1405,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   })();
 
+  // Single-resolve cache: resolveActiveMemoryProvider runs once per app lifetime;
+  // subsequent calls await the same promise and return the cached instance.
   const getMemoryProvider = async (): Promise<MemoryProvider> => {
     await resolvePromise;
     return activeMemoryProvider ?? createPureLocalMemoryProvider();
@@ -1488,7 +1562,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
           // local-sqlite-mem, or external like Mem0). For the default provider this is byte-identical
           // to the pre-34 direct store call, preserving all existing memoryAdvanced / context tests.
           const memoryProviderInstance = await getMemoryProvider();
-          const recentMemory = await memoryProviderInstance.searchMemory(undefined, { layer: "episodic", limit: 6 });
+          const recentMemory = await memoryProviderInstance.searchMemory(undefined, {
+            layer: "episodic",
+            limit: EPISODIC_MEMORY_SEARCH_LIMIT,
+          });
 
           return buildContextPack(pipelineStore, {
             conversation,
@@ -1612,7 +1689,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     try {
       const { content, tags, conversationId } = req.body ?? {};
       if (!content || typeof content !== "string") {
-        return res.status(400).json({ error: "content (string) is required" });
+        return sendRedacted(res, 400, { error: "content (string) is required" });
       }
 
       const redacted = redactString(content);
@@ -1642,9 +1719,34 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       // Opportunistic prune on write (keeps memory bounded)
       await memoryProviderInstance.pruneMemory({ targetLayer: "episodic", maxEntries: 200 });
 
-      res.status(201).json({ note: entry });
+      sendRedacted(res, 201, { note: redactMemoryEntryForEgress(entry) });
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedacted(res, 400, { error: redactString(err?.message ?? String(err)) });
+    }
+  });
+
+  // Read-only memory browser list (Chunk 36 stretch). Returns redacted episodic/core entries from
+  // the resolved MemoryProvider — no secrets, no mutation.
+  app.get("/api/memory/entries", async (req, res) => {
+    try {
+      const layerRaw = req.query.layer;
+      let layer: MemoryLayer | undefined;
+      if (layerRaw !== undefined) {
+        if (typeof layerRaw !== "string") {
+          return sendRedacted(res, 400, { error: "layer must be episodic or core" });
+        }
+        const parsed = MemoryEntriesLayerQuerySchema.safeParse(layerRaw);
+        if (!parsed.success) {
+          return sendRedacted(res, 400, { error: "layer must be episodic or core" });
+        }
+        layer = parsed.data;
+      }
+
+      const memoryProviderInstance = await getMemoryProvider();
+      const payload = await listMemoryEntriesForApi(memoryProviderInstance, { layer });
+      sendRedacted(res, 200, payload);
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }
   });
 
@@ -2432,7 +2534,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     try {
       const state = await memoryConfigStore.getState();
       const existing = state.providers.find((record) => record.id === req.params.id);
-      if (!existing) return res.status(404).json({ error: "Memory provider not found" });
+      if (!existing) return sendRedacted(res, 404, { error: "Memory provider not found" });
 
       const result = await setupSecretStore.setSecret(existing.secretRef, body.apiKey);
       if (!result.ok) {
@@ -2452,7 +2554,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     try {
       const state = await memoryConfigStore.getState();
       const existing = state.providers.find((record) => record.id === req.params.id);
-      if (!existing) return res.status(404).json({ error: "Memory provider not found" });
+      if (!existing) return sendRedacted(res, 404, { error: "Memory provider not found" });
 
       const removeResult = await memoryConfigStore.removeMemoryProvider(existing.id);
       if (!removeResult.ok) {
@@ -2480,7 +2582,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const state = await memoryConfigStore.getState();
       const record = state.providers.find((candidate) => candidate.id === providerId);
       if (!record) {
-        return res.status(404).json({ error: "Memory provider not found" });
+        return sendRedacted(res, 404, { error: "Memory provider not found" });
       }
 
       let provider: MemoryProvider;
@@ -2491,7 +2593,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
           setupSecretStore,
         );
         if (!resolved) {
-          return res.status(404).json({ error: "Memory provider not found" });
+          return sendRedacted(res, 404, { error: "Memory provider not found" });
         }
         provider = resolved;
       } catch (error) {

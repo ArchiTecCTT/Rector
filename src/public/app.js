@@ -240,6 +240,18 @@ function cacheEls() {
     "memory-provider-config-add-key-toggle",
     "memory-provider-config-add",
     "memory-provider-config-add-result",
+    "open-memory-browser",
+    "close-memory-browser",
+    "memory-browser-modal",
+    "memory-browser-backdrop",
+    "memory-browser-loading",
+    "memory-browser-error",
+    "memory-browser-empty",
+    "memory-browser-list",
+    "memory-browser-provider",
+    "memory-browser-filter-all",
+    "memory-browser-filter-episodic",
+    "memory-browser-filter-core",
     "open-setup-wizard",
     "close-setup-wizard",
     "setup-wizard-modal",
@@ -3097,6 +3109,185 @@ function bindMemoryProviderConfig() {
   });
 }
 
+// --- Memory browser panel (Chunk 36 stretch) ---
+//
+// Read-only list of recent episodic/core entries from GET /api/memory/entries?layer=episodic|core.
+// Content is redacted server-side; the panel performs no writes.
+
+const MEMORY_BROWSER_LAYER_META = {
+  episodic: { label: "Episodic", className: "memory-browser__badge--episodic" },
+  core: { label: "Core", className: "memory-browser__badge--core" },
+  working: { label: "Working", className: "memory-browser__badge--working" },
+};
+
+const memoryBrowserState = {
+  layer: "",
+};
+
+function memoryBrowserLayerMeta(layer) {
+  return MEMORY_BROWSER_LAYER_META[layer] || { label: layer || "Unknown", className: "" };
+}
+
+function formatMemoryBrowserTimestamp(iso) {
+  if (!iso || typeof iso !== "string") return "—";
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
+function setMemoryBrowserLoading(loading) {
+  const indicator = els["memory-browser-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+function showMemoryBrowserError(message) {
+  const box = els["memory-browser-error"];
+  if (box) {
+    box.hidden = false;
+    box.textContent = message;
+  }
+  if (els["memory-browser-list"]) els["memory-browser-list"].hidden = true;
+  if (els["memory-browser-empty"]) els["memory-browser-empty"].hidden = true;
+}
+
+function hideMemoryBrowserError() {
+  const box = els["memory-browser-error"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+}
+
+function setMemoryBrowserLayerFilter(layer) {
+  memoryBrowserState.layer = layer || "";
+  const buttons = [
+    els["memory-browser-filter-all"],
+    els["memory-browser-filter-episodic"],
+    els["memory-browser-filter-core"],
+  ].filter(Boolean);
+  for (const btn of buttons) {
+    const active = (btn.dataset.layer || "") === memoryBrowserState.layer;
+    btn.classList.toggle("memory-browser__filter--active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+}
+
+function renderMemoryEntries(payload) {
+  const list = els["memory-browser-list"];
+  const empty = els["memory-browser-empty"];
+  const providerEl = els["memory-browser-provider"];
+  if (!list || !empty) return;
+
+  hideMemoryBrowserError();
+  list.innerHTML = "";
+
+  const provider = payload && payload.provider ? payload.provider : null;
+  if (providerEl) {
+    if (provider && provider.id) {
+      const label = provider.label || provider.kind || provider.id;
+      providerEl.textContent = `Provider: ${label} (${provider.kind})`;
+      providerEl.hidden = false;
+    } else {
+      providerEl.hidden = true;
+      providerEl.textContent = "";
+    }
+  }
+
+  const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+  if (entries.length === 0) {
+    list.hidden = true;
+    empty.hidden = false;
+    return;
+  }
+
+  empty.hidden = true;
+  list.hidden = false;
+
+  for (const entry of entries) {
+    const item = document.createElement("li");
+    item.className = "memory-browser__item";
+    item.dataset.entryId = entry.id || "";
+
+    const head = document.createElement("div");
+    head.className = "memory-browser__item-head";
+
+    const layerMeta = memoryBrowserLayerMeta(entry.layer);
+    const badge = document.createElement("span");
+    badge.className = `memory-browser__badge ${layerMeta.className}`.trim();
+    badge.textContent = layerMeta.label;
+    head.appendChild(badge);
+
+    const time = document.createElement("time");
+    time.className = "memory-browser__time t-mono muted";
+    time.dateTime = entry.timestamp || "";
+    time.textContent = formatMemoryBrowserTimestamp(entry.timestamp);
+    head.appendChild(time);
+
+    const content = document.createElement("p");
+    content.className = "memory-browser__content";
+    content.textContent = entry.content || "";
+
+    const meta = document.createElement("div");
+    meta.className = "memory-browser__meta t-mono muted";
+    const parts = [];
+    if (entry.source) parts.push(entry.source);
+    if (Array.isArray(entry.tags) && entry.tags.length) parts.push(entry.tags.join(", "));
+    meta.textContent = parts.join(" · ");
+
+    item.appendChild(head);
+    item.appendChild(content);
+    if (parts.length) item.appendChild(meta);
+    list.appendChild(item);
+  }
+}
+
+async function loadMemoryBrowser(layer) {
+  if (layer !== undefined) setMemoryBrowserLayerFilter(layer);
+  hideMemoryBrowserError();
+  if (els["memory-browser-list"]) els["memory-browser-list"].hidden = true;
+  if (els["memory-browser-empty"]) els["memory-browser-empty"].hidden = true;
+  setMemoryBrowserLoading(true);
+
+  try {
+    const query = memoryBrowserState.layer ? `?layer=${encodeURIComponent(memoryBrowserState.layer)}` : "";
+    const data = await api(`/memory/entries${query}`);
+    renderMemoryEntries(data);
+  } catch (err) {
+    showMemoryBrowserError(`Could not load memory entries: ${err.message}`);
+  } finally {
+    setMemoryBrowserLoading(false);
+  }
+}
+
+function openMemoryBrowser() {
+  const modal = els["memory-browser-modal"];
+  if (!modal) return;
+  modal.hidden = false;
+  void loadMemoryBrowser(memoryBrowserState.layer || "");
+}
+
+function closeMemoryBrowser() {
+  const modal = els["memory-browser-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindMemoryBrowser() {
+  els["open-memory-browser"]?.addEventListener("click", openMemoryBrowser);
+  els["close-memory-browser"]?.addEventListener("click", closeMemoryBrowser);
+  els["memory-browser-backdrop"]?.addEventListener("click", closeMemoryBrowser);
+  for (const id of [
+    "memory-browser-filter-all",
+    "memory-browser-filter-episodic",
+    "memory-browser-filter-core",
+  ]) {
+    els[id]?.addEventListener("click", () => {
+      const layer = els[id]?.dataset.layer ?? "";
+      void loadMemoryBrowser(layer);
+    });
+  }
+}
+
 // --- Setup Wizard panel (Setup_Wizard, Requirement 1) ---
 //
 // A read-only status surface rendered as a modal overlay so the chat + trace UI stay mounted and
@@ -4570,6 +4761,7 @@ function init() {
   bindProviderTest();
   bindProviderConfig();
   bindMemoryProviderConfig();
+  bindMemoryBrowser();
   bindSetupWizard();
   bindWorkspaceSafety();
   bindApproval();
