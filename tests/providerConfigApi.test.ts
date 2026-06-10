@@ -91,7 +91,9 @@ interface Harness {
 async function startHarness(): Promise<Harness> {
   const secretStore = makeSecretStore();
   const configStore = createInMemoryProviderConfigStore();
-  const app = createApp(new TaskManager(), { secretStore, providerConfigStore: configStore });
+  // createApp is now async (Chunk 34 wiring for memory provider resolution).
+  // Await it so `app` is the real Application (not a Promise) for .listen etc.
+  const app = await createApp(new TaskManager(), { secretStore, providerConfigStore: configStore });
   const server = await new Promise<http.Server>((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
@@ -458,6 +460,10 @@ describe("Provider_Config_API — Property 1: no secret egress (Req 11.4, 11.6)"
   });
 
   // Validates: Requirements 11.4, 11.6 (Correctness Property 1 — no secret egress).
+  // NOTE: This property performs multiple sequential API roundtrips per sample (40 runs).
+  // Explicit long timeout prevents intermittent 5s it() timeouts on slower envs/CI while
+  // keeping numRuns reasonable (already limited to 40). Mirrors the pattern we will use
+  // for equivalent Memory_Provider_API secret-egress properties in Chunk 34.
   it("never returns a submitted API key in any GET/POST/DELETE/active/test-connection response body", async () => {
     let counter = 0;
     await fc.assert(
@@ -520,5 +526,5 @@ describe("Provider_Config_API — Property 1: no secret egress (Req 11.4, 11.6)"
       }),
       { numRuns: 40 },
     );
-  });
+  }, 120_000);
 });

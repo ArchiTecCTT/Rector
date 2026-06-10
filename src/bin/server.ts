@@ -20,6 +20,7 @@ import {
 } from "../providers/orchestrationConfig";
 import { createLocalSecretStore } from "../security/secretStore";
 import { createLocalProviderConfigStore } from "../providers/configStore";
+import { createLocalMemoryConfigStore } from "../providers/memoryConfigStore";
 import { redactString } from "../security/redaction";
 import { TaskManager } from "../thalamus/router";
 
@@ -95,6 +96,11 @@ const secretStore = createLocalSecretStore({
   encryptionKey: resolveSecretEncryptionKey(),
 });
 const providerConfigStore = createLocalProviderConfigStore({ filePath: PROVIDER_CONFIG_FILE });
+
+// Chunk 34: always create the memory config store for the real app. When no
+// .rector/memory-providers.json exists yet we get the empty state + default
+// local-inmemory provider (zero-config, identical to pre-34 baseline).
+const memoryConfigStore = createLocalMemoryConfigStore({ filePath: ".rector/memory-providers.json" });
 
 /**
  * Build the model router for the resolved orchestration mode (design C6, Req 13.3/14.3).
@@ -220,7 +226,7 @@ async function resolveStartupOrchestrationConfig(): Promise<OrchestrationConfig>
  * redacted warning naming each provider's required env keys is emitted (Req 1.4, 1.7) and the server
  * binds + listens so credentials can be entered through the UI.
  */
-async function bootstrap(): Promise<{ app: ReturnType<typeof createApp>; server: http.Server; gracefulShutdown: ReturnType<typeof createGracefulShutdownHandler> }> {
+async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>; server: http.Server; gracefulShutdown: ReturnType<typeof createGracefulShutdownHandler> }> {
   orchestrationConfig = await resolveStartupOrchestrationConfig();
 
   // Req 1.4 / 1.5 / 1.7: external mode with no configured provider warns and serves (rather than
@@ -245,6 +251,7 @@ async function bootstrap(): Promise<{ app: ReturnType<typeof createApp>; server:
     persistence: deploymentConfig.persistence,
     secretStore,
     providerConfigStore,
+    memoryConfigStore,
   });
   const server = http.createServer(app);
   const gracefulShutdown = createGracefulShutdownHandler({ server });

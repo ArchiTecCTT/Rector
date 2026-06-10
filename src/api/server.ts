@@ -39,6 +39,15 @@ import {
   type ProviderConfigRecord,
 } from "../providers/config";
 import { resolveTestProvider } from "../providers/configBridge";
+
+// Chunk 34 memory providers (config + resolution). The runtime MemoryProvider + Local impl
+// live in src/memory/provider.ts. We resolve once per app and use for neuro memory paths.
+import {
+  resolveActiveMemoryProvider,
+  createPureLocalMemoryProvider,
+  type MemoryConfigStore as _MemoryConfigStore,
+} from "../providers";
+import type { MemoryProvider } from "../memory/provider";
 import { classifyProbeError, ProbeErrorCategorySchema, type ProbeFailureSignal } from "../providers/probe";
 import {
   createModelDiscoveryService,
@@ -115,6 +124,18 @@ export interface ApiSecurityOptions {
    * tests.
    */
   providerConfigStore?: ProviderConfigStore;
+
+  /**
+   * Optional {@link MemoryConfigStore} backing for the in-app pluggable memory provider
+   * configuration (Chunk 34). Stores **non-secret** MemoryProviderRecords + the active id only;
+   * secrets live in {@link ApiSecurityOptions.secretStore} (reused, with "memory:" prefixed refs).
+   * Additive and inert when omitted: the real app injects createLocalMemoryConfigStore
+   * (`.rector/memory-providers.json`); tests get a pure local-inmemory default via the bridge.
+   * This is the UI-configurable "agent memory database provider" (local-inmemory, local-sqlite-mem,
+   * Mem0, TiDB-memory, etc.) per the hassle-free vision. Neuro memory paths (notes, context) use
+   * the resolved provider; RectorStore.memory* surface remains for main persistence tests.
+   */
+  memoryConfigStore?: import("../providers/memoryConfigStore").MemoryConfigStore;
 
   /**
    * Optional, read-only {@link WorkspaceSafetyConfig} surfaced by the workspace-safety route
@@ -1150,6 +1171,35 @@ function settingsDiscoveryStatus(result: DiscoveryResult): number {
 
 export function createApp(manager: TaskManager, securityOptions: ApiSecurityOptions = {}): express.Application {
   const app = express();
+
+  // Chunk 34 (pluggable memory providers): resolve the active MemoryProvider for neuro/agent
+  // memory (notes, episodic context for contextBuilder/preprocessor/planner, prune, etc.).
+  // - When memoryConfigStore is supplied (real app bootstrap), resolveActiveMemoryProvider
+  //   honors orchestration mode, falls back safely to pure local-inmemory, and only reads
+  //   secrets transiently for external kinds.
+  // - When omitted (the common case for unit/integration tests), we synthesize a pure
+  //   local-inmemory provider so *all* pre-34 memory behavior (memoryAdvanced.test.ts,
+  //   chat context enrichment, /api/notes, prune scoring, time phrases, etc.) remains
+  //   byte-identical for the local baseline.
+  // Closed over by the route handlers and context code below.
+  let activeMemoryProvider: MemoryProvider | undefined;
+  const resolvePromise = (async () => {
+    try {
+      activeMemoryProvider = securityOptions.memoryConfigStore
+        ? await resolveActiveMemoryProvider(securityOptions.memoryConfigStore, securityOptions.secretStore!, {
+            mode: securityOptions.orchestration?.mode,
+          })
+        : createPureLocalMemoryProvider();
+    } catch {
+      activeMemoryProvider = createPureLocalMemoryProvider();
+    }
+  })();
+
+  const getMemoryProvider = async (): Promise<MemoryProvider> => {
+    await resolvePromise;
+    return activeMemoryProvider ?? createPureLocalMemoryProvider();
+  };
+
   // Select the store from the deployment persistence config (ORN-39). When no persistence config
   // is supplied (or its driver is `memory`), `createRectorStore` returns the default
   // InMemoryRectorStore, keeping the provider-free path the regression baseline and unchanged.
@@ -1290,8 +1340,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             piiState: redactionState,
           });
 
-          // Fetch recent time-aware memory for injection (Chunk 27). Episodic first, limited.
-          const recentMemory = await pipelineStore.searchMemory(undefined, { layer: "episodic", limit: 6 });
+          // Fetch recent time-aware memory for injection (Chunk 27 + 34). Episodic first, limited.
+          // Now sourced from the resolved active MemoryProvider (pluggable: local-inmemory default,
+          // local-sqlite-mem, or external like Mem0). For the default provider this is byte-identical
+          // to the pre-34 direct store call, preserving all existing memoryAdvanced / context tests.
+          const memoryProviderInstance = await getMemoryProvider();
+          const recentMemory = await memoryProviderInstance.searchMemory(undefined, { layer: "episodic", limit: 6 });
 
           return buildContextPack(pipelineStore, {
             conversation,
@@ -1427,10 +1481,15 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         },
       };
 
-      const entry = await rectorStore.createMemoryEntry(entryInput);
+      // Chunk 34: notes (episodic memory writes + opportunistic prune) now go through the
+      // resolved pluggable MemoryProvider. For the default local-inmemory provider this is
+      // identical to the previous direct rectorStore call (preserves all existing behavior
+      // and tests for /api/notes + context injection).
+      const memoryProviderInstance = await getMemoryProvider();
+      const entry = await memoryProviderInstance.createMemoryEntry(entryInput);
 
       // Opportunistic prune on write (keeps memory bounded)
-      await rectorStore.pruneMemory({ targetLayer: "episodic", maxEntries: 200 });
+      await memoryProviderInstance.pruneMemory({ targetLayer: "episodic", maxEntries: 200 });
 
       res.status(201).json({ note: entry });
     } catch (err: any) {
