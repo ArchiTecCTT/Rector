@@ -1452,15 +1452,44 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     securityOptions.moduleConfigStore ??
     createLocalModuleConfigStore({ filePath: ".rector/modules.json" });
   const moduleRegistry: ModuleRegistry = createBuiltinModuleRegistry();
-  void applyModuleConfigToRegistry(moduleRegistry, moduleConfigStore);
-  void moduleRegistry.invokeOnBoot({
-    mode: orchestration?.mode ?? "local",
-    store: rectorStore,
-    router: orchestration?.router,
-    getMemoryProvider: getMemoryProvider,
-  });
+  let moduleBootReady = false;
+  let moduleBootPromise: Promise<void> | undefined;
+  const ensureModuleBoot = (): Promise<void> => {
+    if (moduleBootReady) return Promise.resolve();
+    if (!moduleBootPromise) {
+      moduleBootPromise = (async () => {
+        await applyModuleConfigToRegistry(moduleRegistry, moduleConfigStore);
+        await moduleRegistry.invokeOnBoot({
+          mode: orchestration?.mode ?? "local",
+          store: rectorStore,
+          router: orchestration?.router,
+          getMemoryProvider: getMemoryProvider,
+        });
+        moduleBootReady = true;
+      })().catch((error) => {
+        moduleBootPromise = undefined;
+        console.error(
+          `Module boot failed: ${redactString(error instanceof Error ? error.message : String(error))}`,
+        );
+        throw error;
+      });
+    }
+    return moduleBootPromise;
+  };
   app.locals.moduleRegistry = moduleRegistry;
   app.locals.moduleConfigStore = moduleConfigStore;
+  app.locals.ensureModuleBoot = ensureModuleBoot;
+
+  app.use(async (_req, res, next) => {
+    try {
+      await ensureModuleBoot();
+      next();
+    } catch (error) {
+      res.status(503).json({
+        error: redactString(error instanceof Error ? error.message : String(error)),
+      });
+    }
+  });
 
   app.locals.neuroAliveState = getNeuroAliveState;
   app.use(securityHeadersMiddleware);
@@ -1552,17 +1581,13 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.use(createAuthMiddleware(authConfig, resolveUserStores));
 
   const memoryProviderByUser = new Map<string, MemoryProvider>();
-  const getMemoryProviderFor = async (req?: express.Request): Promise<MemoryProvider> => {
-    if (!authConfig.enabled || !req?.rectorAuth) {
-      await resolvePromise;
-      return activeMemoryProvider ?? createPureLocalMemoryProvider();
-    }
-
-    const userId = req.rectorAuth.userId;
+  const getMemoryProviderForUserStores = async (
+    userId: string,
+    stores: UserStores,
+  ): Promise<MemoryProvider> => {
     const cached = memoryProviderByUser.get(userId);
     if (cached) return cached;
 
-    const stores = storesFor(req);
     try {
       const provider = await resolveActiveMemoryProvider(stores.memoryConfigStore, stores.secretStore, {
         mode: securityOptions.orchestration?.mode,
@@ -1575,6 +1600,26 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       memoryProviderByUser.set(userId, fallback);
       return fallback;
     }
+  };
+
+  const getMemoryProviderFor = async (req?: express.Request): Promise<MemoryProvider> => {
+    if (!authConfig.enabled || !req?.rectorAuth) {
+      await resolvePromise;
+      return activeMemoryProvider ?? createPureLocalMemoryProvider();
+    }
+
+    return getMemoryProviderForUserStores(req.rectorAuth.userId, storesFor(req));
+  };
+
+  const createMemoryProviderResolver = (
+    req: express.Request,
+  ): (() => Promise<MemoryProvider>) => {
+    if (!authConfig.enabled || !req.rectorAuth) {
+      return () => getMemoryProvider();
+    }
+    const userId = req.rectorAuth.userId;
+    const stores = storesFor(req);
+    return () => getMemoryProviderForUserStores(userId, stores);
   };
 
   // --- Chat routes ---
@@ -1773,6 +1818,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         // frame); a failure BEFORE the run is created rejects `runCreated` so the request returns a
         // redacted error and no stream is ever opened. The `.catch` keeps the rejection handled, so a
         // background failure never produces an unhandled promise rejection or crashes the process.
+        const resolveMemoryProvider = createMemoryProviderResolver(req);
         void runChatPipeline(capturingStore)
           .then(async (result) => {
             await moduleRegistry.invokeOnRunCompleted({
@@ -1780,7 +1826,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
               run: result.run,
               mode: orchestration?.mode ?? "local",
               router: orchestration?.router,
-              getMemoryProvider: () => getMemoryProviderFor(req),
+              getMemoryProvider: resolveMemoryProvider,
             });
           })
           .catch((error) => {
@@ -1804,7 +1850,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         run,
         mode: orchestration?.mode ?? "local",
         router: orchestration?.router,
-        getMemoryProvider: () => getMemoryProviderFor(req),
+        getMemoryProvider: createMemoryProviderResolver(req),
       });
       const events = await rectorStore.listEvents(run.id);
       const completedRun = await rectorStore.getRun(run.id);
@@ -2604,6 +2650,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         moduleId: body.moduleId,
         enabled: body.enabled,
         disabledModuleIds: persisted.value.disabledModuleIds,
+        enabledModuleIds: persisted.value.enabledModuleIds,
       });
     } catch (error) {
       sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });

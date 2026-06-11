@@ -14,11 +14,16 @@ const memoryProviderRegistry = new KindProviderRegistry<
 
 function registerMemoryProviderModules(): void {
   memoryProviderRegistry.register("mem0", (record, secret, options) => {
+    if (!secret?.trim()) {
+      throw new Error(
+        "Mem0 memory provider requires an API key (secretRef must resolve to a non-empty value).",
+      );
+    }
     const provider = new Mem0MemoryProvider({
       id: record.id,
       kind: record.kind,
       label: record.label,
-      apiKey: secret ?? "",
+      apiKey: secret,
       config: record.config,
       now: options.now,
       run: options.run,
