@@ -14,6 +14,7 @@ import {
 } from "./llm";
 import type { ProviderConfigRecord, ProviderModelRole } from "./config";
 import type { ProviderConfigStore } from "./configStore";
+import { getLlmProviderRegistry } from "../modules/builtin/llmProviderModules";
 
 /**
  * Config_Bridge (design section C5/C6).
@@ -176,45 +177,11 @@ function buildProviderFromRecord(
   // candidate is addressed by its deployment name; for the OpenAI-compatible
   // kind it is addressed by its model id. The override is applied here only when
   // supplied, so a plain connection test (no target) builds the record verbatim.
-  const azureTarget = target.deployment ?? target.model;
-  switch (record.kind) {
-    case "together":
-      return new TogetherAIProvider({
-        apiKey: secret,
-        baseUrl: record.baseUrl,
-        enableNetwork,
-        fetchImpl,
-      });
-    case "cloudflare":
-      return new CloudflareWorkersAIProvider({
-        apiToken: secret,
-        accountId: record.cloudflare?.accountId,
-        baseUrl: record.baseUrl,
-        enableNetwork,
-        fetchImpl,
-      });
-    case "azure-openai":
-      return new AzureOpenAIProvider({
-        apiKey: secret,
-        endpoint: record.azure?.endpoint ?? record.baseUrl,
-        apiVersion: record.azure?.apiVersion,
-        deployments: {
-          fast: azureTarget ?? record.models?.slm ?? record.azure?.deployment ?? record.model,
-          flagship: azureTarget ?? record.models?.flagship ?? record.azure?.deployment ?? record.model,
-        },
-        enableNetwork,
-        fetchImpl,
-      });
-    case "openai-compatible":
-      return new OpenAICompatibleProvider({
-        apiKey: secret,
-        baseUrl: record.baseUrl,
-        model: target.model ?? record.model ?? record.models?.flagship,
-        headers: record.headers,
-        enableNetwork,
-        fetchImpl,
-      });
+  const built = getLlmProviderRegistry().build(record, secret, { enableNetwork, fetchImpl }, target);
+  if (!built) {
+    throw new Error(`No LLM provider module registered for kind: ${record.kind}`);
   }
+  return built;
 }
 
 /**
@@ -370,14 +337,7 @@ export async function buildConfiguredRouter(options: BuildConfiguredRouterOption
   for (const record of state.providers) {
     if (record.kind === "openai-compatible") {
       const secret = await readSecretValue(secrets, record.secretRef);
-      const provider = new OpenAICompatibleProvider({
-        apiKey: secret,
-        baseUrl: record.baseUrl,
-        model: record.model ?? record.models?.flagship,
-        headers: record.headers,
-        enableNetwork: resolveOptions.enableNetwork,
-        fetchImpl: resolveOptions.fetchImpl,
-      });
+      const provider = buildProviderFromRecord(record, secret, resolveOptions);
       providers.push(provider);
       providerByRecordId.set(record.id, provider);
     } else if (record.kind === "cloudflare") {
