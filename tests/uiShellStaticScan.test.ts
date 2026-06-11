@@ -52,8 +52,8 @@ const BASE_CSS = readPublic("styles/base.css");
  */
 function markupOnly(html: string): string {
   return html
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/(<script\b[^>]*>)[\s\S]*?(<\/script>)/gi, "$1$2");
+    .replace(/<!--[\s\S]*?(--!?>)/g, "")
+    .replace(/(<script\b[^>]*>)[\s\S]*?(<\/script\s*[^>]*>)/gi, "$1$2");
 }
 
 /** A reference is remote if it is absolute-with-scheme or protocol-relative. */
@@ -120,7 +120,14 @@ describe("Property 4: No external network calls", () => {
     // https URL inside a non-asset attribute (a form placeholder). It must NOT
     // appear among the inspected href/src asset references.
     expect(INDEX_HTML).toContain('placeholder="https://api.example.com/v1"');
-    expect(assetRefs(INDEX_HTML).some((r) => r.includes("api.example.com"))).toBe(false);
+    expect(assetRefs(INDEX_HTML).some((r) => {
+      try {
+        const url = new URL(r, "http://localhost");
+        return url.hostname === "api.example.com";
+      } catch {
+        return false;
+      }
+    })).toBe(false);
   });
 
   it("base.css has no remote url() reference", () => {

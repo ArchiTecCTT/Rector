@@ -365,7 +365,7 @@ describe("Property 8: the no-flash boot script is present and unchanged (Req 12.
   const normalize = (s: string): string => s.replace(/\s+/g, " ").trim();
 
   // Every inline (no-src) <script> declared in the <head>.
-  const headInlineScripts = [...head.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)]
+  const headInlineScripts = [...head.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*[^>]*>/gi)]
     .filter((m) => !/\bsrc\s*=/.test(m[1]))
     .map((m) => m[2]);
 

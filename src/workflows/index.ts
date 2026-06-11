@@ -180,7 +180,11 @@ export class LinearWorkflowAdapter {
   constructor(options: LinearWorkflowAdapterOptions = {}) {
     this.apiKey = options.apiKey ?? process.env.LINEAR_API_KEY ?? "";
     this.teamId = options.teamId ?? process.env.LINEAR_TEAM_ID ?? "";
-    this.baseUrl = (options.baseUrl ?? process.env.LINEAR_BASE_URL ?? "https://api.linear.app/graphql").replace(/\/+$/, "");
+    let baseUrl = options.baseUrl ?? process.env.LINEAR_BASE_URL ?? "https://api.linear.app/graphql";
+    while (baseUrl.endsWith("/")) {
+      baseUrl = baseUrl.slice(0, -1);
+    }
+    this.baseUrl = baseUrl;
     this.enableNetwork = options.enableNetwork ?? envFlag("WORKFLOW_INTEGRATIONS_ENABLE_NETWORK");
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
   }

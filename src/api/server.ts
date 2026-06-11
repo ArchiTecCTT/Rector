@@ -2967,46 +2967,76 @@ function corsMiddleware(options: ApiSecurityOptions): express.RequestHandler {
 function chatRateLimitMiddleware(options: ApiSecurityOptions): express.RequestHandler {
   const windowMs = options.rateLimit?.windowMs ?? numberFromEnv("CHAT_RATE_LIMIT_WINDOW_MS", 60_000);
   const maxRequests = options.rateLimit?.maxRequests ?? numberFromEnv("CHAT_RATE_LIMIT_MAX", 60);
-  const buckets = new Map<string, { resetAt: number; count: number }>();
+
+  const chatBuckets = new Map<string, { resetAt: number; count: number }>();
+  const authBuckets = new Map<string, { resetAt: number; count: number }>();
+  const generalBuckets = new Map<string, { resetAt: number; count: number }>();
+
+  const chatMax = maxRequests;
+  const authMax = Math.max(10, chatMax * 5);
+  const generalMax = Math.max(10, chatMax * 5);
 
   return (req, res, next) => {
-    if (req.method !== "POST" || !req.path.startsWith("/api/chat/")) {
-      next();
-      return;
-    }
-    if (maxRequests <= 0) {
-      next();
-      return;
-    }
-
     const now = Date.now();
+    const key = req.ip || req.socket.remoteAddress || "unknown";
 
     // Clean up expired buckets opportunistically to prevent memory growth
-    for (const [k, b] of buckets.entries()) {
-      if (b.resetAt <= now) {
-        buckets.delete(k);
-      }
+    for (const [k, b] of chatBuckets.entries()) {
+      if (b.resetAt <= now) chatBuckets.delete(k);
+    }
+    for (const [k, b] of authBuckets.entries()) {
+      if (b.resetAt <= now) authBuckets.delete(k);
+    }
+    for (const [k, b] of generalBuckets.entries()) {
+      if (b.resetAt <= now) generalBuckets.delete(k);
     }
 
-    const key = req.ip || req.socket.remoteAddress || "unknown";
+    const isChatPost = req.method === "POST" && req.path.startsWith("/api/chat/");
+    const isAuth = req.path.startsWith("/api/auth/");
+
+    let buckets: Map<string, { resetAt: number; count: number }>;
+    let limit: number;
+    let errMsg: string;
+
+    if (isChatPost) {
+      buckets = chatBuckets;
+      limit = chatMax;
+      errMsg = "Too many chat requests";
+    } else if (isAuth) {
+      buckets = authBuckets;
+      limit = authMax;
+      errMsg = "Too many authentication requests";
+    } else {
+      buckets = generalBuckets;
+      limit = generalMax;
+      errMsg = "Too many requests";
+    }
+
+    if (limit <= 0) {
+      next();
+      return;
+    }
+
     const bucket = buckets.get(key);
     if (!bucket) {
       buckets.set(key, { resetAt: now + windowMs, count: 1 });
-      res.setHeader("X-RateLimit-Limit", String(maxRequests));
-      res.setHeader("X-RateLimit-Remaining", String(Math.max(0, maxRequests - 1)));
+      res.setHeader("X-RateLimit-Limit", String(limit));
+      res.setHeader("X-RateLimit-Remaining", String(Math.max(0, limit - 1)));
       next();
       return;
     }
 
-    if (bucket.count >= maxRequests) {
+    if (bucket.count >= limit) {
       res.setHeader("Retry-After", String(Math.ceil((bucket.resetAt - now) / 1000)));
-      res.status(429).json({ error: "Too many chat requests" });
+      res.setHeader("X-RateLimit-Limit", String(limit));
+      res.setHeader("X-RateLimit-Remaining", "0");
+      res.status(429).json({ error: errMsg });
       return;
     }
 
     bucket.count += 1;
-    res.setHeader("X-RateLimit-Limit", String(maxRequests));
-    res.setHeader("X-RateLimit-Remaining", String(Math.max(0, maxRequests - bucket.count)));
+    res.setHeader("X-RateLimit-Limit", String(limit));
+    res.setHeader("X-RateLimit-Remaining", String(Math.max(0, limit - bucket.count)));
     next();
   };
 }
