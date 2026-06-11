@@ -78,6 +78,12 @@ import type { DiscoveryResult } from "../providers/discovery/types";
 import { createBuiltinModuleRegistry, type ModuleRegistry } from "../modules";
 import { getNeuroAliveState } from "../modules/builtin/neuro-alive";
 import {
+  applyModuleConfigToRegistry,
+  createInMemoryModuleConfigStore,
+  createLocalModuleConfigStore,
+  type ModuleConfigStore,
+} from "../modules/moduleConfigStore";
+import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
   ProviderError,
@@ -169,6 +175,9 @@ export interface ApiSecurityOptions {
    * the resolved provider; RectorStore.memory* surface remains for main persistence tests.
    */
   memoryConfigStore?: MemoryConfigStore;
+
+  /** Optional persisted module enable/disable state (Chunk 041). */
+  moduleConfigStore?: ModuleConfigStore;
 
   /**
    * Optional override for {@link resolveTestMemoryProvider} used by
@@ -1439,7 +1448,11 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   const orchestration = securityOptions.orchestration;
 
+  const moduleConfigStore =
+    securityOptions.moduleConfigStore ??
+    createLocalModuleConfigStore({ filePath: ".rector/modules.json" });
   const moduleRegistry: ModuleRegistry = createBuiltinModuleRegistry();
+  void applyModuleConfigToRegistry(moduleRegistry, moduleConfigStore);
   void moduleRegistry.invokeOnBoot({
     mode: orchestration?.mode ?? "local",
     store: rectorStore,
@@ -1447,6 +1460,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     getMemoryProvider: getMemoryProvider,
   });
   app.locals.moduleRegistry = moduleRegistry;
+  app.locals.moduleConfigStore = moduleConfigStore;
 
   app.locals.neuroAliveState = getNeuroAliveState;
   app.use(securityHeadersMiddleware);
@@ -2535,6 +2549,64 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       sendRedacted(res, 200, { removed: true, id: existing.id });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  const ModuleToggleSchema = z.object({
+    moduleId: z.string().min(1),
+    enabled: z.boolean(),
+  });
+
+  // GET /api/modules — list builtin modules and enabled state (Chunk 041).
+  app.get("/api/modules", async (_req, res) => {
+    try {
+      const modules = moduleRegistry.list().map((manifest) => ({
+        id: manifest.id,
+        name: manifest.name,
+        description: manifest.description,
+        tier: manifest.tier,
+        hooks: manifest.hooks,
+        externalModeOnly: manifest.externalModeOnly,
+        enabled: moduleRegistry.isEnabled(manifest.id),
+      }));
+      sendRedacted(res, 200, { modules });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // POST /api/modules — enable or disable a module (Chunk 041).
+  app.post("/api/modules", async (req, res) => {
+    try {
+      const body = ModuleToggleSchema.parse(req.body ?? {});
+      if (!moduleRegistry.list().some((manifest) => manifest.id === body.moduleId)) {
+        return sendRedacted(res, 404, { error: "Module not found" });
+      }
+
+      if (body.enabled) {
+        moduleRegistry.enable(body.moduleId);
+      } else {
+        try {
+          moduleRegistry.disable(body.moduleId);
+        } catch (error) {
+          return sendRedacted(res, 400, {
+            error: redactString(error instanceof Error ? error.message : String(error)),
+          });
+        }
+      }
+
+      const persisted = await moduleConfigStore.setModuleEnabled(body.moduleId, body.enabled);
+      if (!persisted.ok) {
+        return sendRedacted(res, 500, { error: redactString(persisted.error) });
+      }
+
+      sendRedacted(res, 200, {
+        moduleId: body.moduleId,
+        enabled: body.enabled,
+        disabledModuleIds: persisted.value.disabledModuleIds,
+      });
+    } catch (error) {
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
     }
   });
 
