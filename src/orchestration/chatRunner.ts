@@ -6,19 +6,11 @@ import { compileAcceptedPlanToDag, type CompiledDag } from "./dagCompiler";
 import { executeCompiledDag, type ExecutorSimulatorOptions } from "./executorSimulator";
 import { runLiveDirectAnswer, type LiveDirectAnswerFallback } from "./liveDirectAnswer";
 import { createFakePlan, runLivePlanner, type LivePlannerResult, type PlannerBlocker, type PlannerOutput } from "./planner";
-import { runDeepPlanner } from "./deepPlanner";
-import {
-  runSLMPreprocessor,
-  type PreprocessorOutput,
-} from "./preprocessor";
+import type { PreprocessorOutput } from "./preprocessor";
 import { buildRepairPrompt } from "./prompts";
 import { createDecisionRequest, transitionRun } from "./runStateMachine";
 import { executeDagThroughSandbox } from "./sandboxExecutor";
-import {
-  decomposeIntoTasks,
-  executeDecomposedSubGoals,
-  stitchResults,
-} from "./taskDecomposer";
+import { executeDecomposedSubGoals, stitchResults } from "./taskDecomposer";
 import { reviewPlanWithSkeptic, runLiveSkeptic, type SkepticBlocker, type SkepticReview } from "./skeptic";
 import {
   runLiveSynthesizer,
@@ -62,6 +54,17 @@ import { OrchestratorModeSchema, type OrchestratorMode } from "../deployment";
 import type { RectorStore } from "../store";
 import type { Budget, Run, RunEvent } from "../store/schemas";
 import type { ModuleRegistry } from "../modules";
+import {
+  executePreprocessorPassthrough,
+  executePreprocessorPhase,
+  NEURO_PREPROCESS_MODULE_ID,
+} from "../modules/builtin/neuro-preprocess";
+import {
+  executePlanningPhase,
+  preparePlanningPhase,
+  NEURO_PLANNING_MODULE_ID,
+} from "../modules/builtin/neuro-planning";
+import { resolveNeuroFeatureFlags, type NeuroFeatureFlags } from "../modules/featureFlags";
 
 /**
  * Options that tune the deterministic phases shared by both runners (executor simulator behaviour
@@ -124,6 +127,7 @@ export interface ChatRunnerDeps {
   repairAgent?: LiveRepairAgent;
   /** Optional module registry (Chunk 038+). Local baseline ignores external-only hooks. */
   moduleRegistry?: ModuleRegistry;
+  neuroFlags?: Partial<NeuroFeatureFlags>;
 }
 
 export interface ChatRunResult {
@@ -344,71 +348,73 @@ export async function runExternalChatRun(
     }
   }
 
-  // --- SLM PREPROCESSOR (neuro-symbolic Step 1) ---
-  // Cheap/SLM model digests raw prompt + contextPack into clean distilledContext + validated
-  // proposedToolCalls. Flagship models only see the distilled form. The preprocessor itself
-  // enforces budget preflight + redaction and returns a safe fallback on any failure.
-  // This step is external-mode only; the local/fake path below never executes it.
-  const preprocessorSelection: ModelSelection = deps.router.select({
-    capability: "cheap",
-    task: "preprocessor",
-    run,
-  });
-  const preprocessorResult = await observability.recordSpan("PREPROCESSING", () =>
-    runSLMPreprocessor(
-      { rawPrompt: prompt, contextPack: activeContextPack, triage },
-      { slmProvider: preprocessorSelection.provider, run }
-    )
-  );
-  const preprocessorOutput = preprocessorResult.output;
+  const neuroFlags = resolveNeuroFeatureFlags(deps.neuroFlags);
+  const preprocessEnabled =
+    neuroFlags.preprocessor &&
+    (!deps.moduleRegistry || deps.moduleRegistry.isEnabled(NEURO_PREPROCESS_MODULE_ID));
 
-  // Commit preprocessor usage before the planner preflight so later live steps see the spend.
-  let budgetRun = run;
-  if (preprocessorResult.usage.modelCalls > 0) {
-    budgetRun = await addProviderUsageToRun(
-      store,
-      run,
-      preprocessorResult.usage,
-      preprocessorSelection.provider.metadata.id
-    );
-  }
+  const prepPhase = preprocessEnabled
+    ? await executePreprocessorPhase({
+        store,
+        run,
+        prompt,
+        contextPack: activeContextPack,
+        triage,
+        router: deps.router,
+        recordSpan: (name, fn) => observability.recordSpan(name, fn),
+        addProviderUsage: (currentRun, usage, providerId) =>
+          addProviderUsageToRun(store, currentRun, usage, providerId),
+      })
+    : executePreprocessorPassthrough(run, prompt);
 
-  // Use the distilled context for the flagship planner (biggest immediate value). The original
-  // prompt and full contextPack remain available to skeptic, crucible, healing, and synthesis
-  // for cross-checks and evidence.
-  const effectiveMessageContent = (preprocessorOutput.distilledContext || "").trim() || prompt;
+  const budgetRun = prepPhase.budgetRun;
+  const preprocessorOutput = prepPhase.preprocessorOutput;
+  const effectiveMessageContent = prepPhase.effectiveMessageContent;
 
-  // --- TASK DECOMPOSITION (neuro-symbolic Step 7, external-only) ---
-  // High-complexity requests are split into up to four sub-goals for concurrent sandbox execution.
-  let subGoals: string[] = [];
-  let plannerContextPack = contextPack;
-  if (triage.complexity === "high") {
-    const decomposition = decomposeIntoTasks(effectiveMessageContent, contextPack);
-    subGoals = decomposition.subGoals;
-    if (subGoals.length > 0) {
-      plannerContextPack = { ...contextPack, subGoals };
-    }
-  }
+  const planningEnabled =
+    !deps.moduleRegistry || deps.moduleRegistry.isEnabled(NEURO_PLANNING_MODULE_ID);
+  const planningPrep = planningEnabled
+    ? preparePlanningPhase({
+        triage,
+        contextPack: activeContextPack,
+        effectiveMessageContent,
+        deepPlanning: options.deepPlanning === true,
+        router: deps.router,
+        budgetRun,
+        flags: neuroFlags,
+        recordSpan: (name, fn) => observability.recordSpan(name, fn),
+      })
+    : { subGoals: [] as string[], plannerContextPack: activeContextPack };
 
-  // Deterministic provider selection; a zero budget or no configured provider falls back to the
-  // fake provider (still safe), so selection itself never throws.
-  const selection: ModelSelection = deps.router.select({ capability: "flagship", task: "planner", run: budgetRun });
+  const { subGoals, plannerContextPack } = planningPrep;
 
-  // --- PLANNER STEP (the only divergence from local mode) ---
-  // runLivePlanner (or opt-in runDeepPlanner) runs the budget preflight BEFORE any provider call
-  // (Req 3.3/3.4) and resolves with a structured, redacted blocker instead of throwing on
-  // budget/provider/validation failure.
-  const plannerResult: LivePlannerResult = await observability.recordSpan("PLANNING", () =>
-    options.deepPlanning === true
-      ? runDeepPlanner(
-          { triage, contextPack: plannerContextPack, messageContent: effectiveMessageContent, deepPlanning: true },
-          { provider: selection.provider, run: budgetRun }
-        )
-      : runLivePlanner(
+  const plannerResult: LivePlannerResult = planningEnabled
+    ? await executePlanningPhase(
+        {
+          triage,
+          contextPack: activeContextPack,
+          effectiveMessageContent,
+          deepPlanning: options.deepPlanning === true,
+          router: deps.router,
+          budgetRun,
+          flags: neuroFlags,
+          recordSpan: (name, fn) => observability.recordSpan(name, fn),
+        },
+        planningPrep,
+      )
+    : await observability.recordSpan("PLANNING", () =>
+        runLivePlanner(
           { triage, contextPack: plannerContextPack, messageContent: effectiveMessageContent },
-          { provider: selection.provider, run: budgetRun }
-        )
-  );
+          {
+            provider: deps.router.select({
+              capability: "flagship",
+              task: "planner",
+              run: budgetRun,
+            }).provider,
+            run: budgetRun,
+          },
+        ),
+      );
 
   if (plannerResult.status === "blocked" || !plannerResult.plan) {
     const blocker = plannerResult.blocker ?? {
@@ -427,7 +433,18 @@ export async function runExternalChatRun(
   const costedRun = await addProviderUsageToRun(store, budgetRun, usage, plannerResult.provider);
 
   // Provider/model/cost metadata recorded on the PLANNING event (Req 3.5).
-  const providerCall = buildProviderCallMetadata(selection, plannerResult.provider, plannerResult.model, usage, plannerResult.attempts);
+  const plannerSelection = deps.router.select({
+    capability: "flagship",
+    task: "planner",
+    run: budgetRun,
+  });
+  const providerCall = buildProviderCallMetadata(
+    plannerSelection,
+    plannerResult.provider,
+    plannerResult.model,
+    usage,
+    plannerResult.attempts,
+  );
 
   // --- SKEPTIC STEP (live, ORN-35) ---
   // runLiveSkeptic runs the budget preflight BEFORE any provider call and resolves with a
