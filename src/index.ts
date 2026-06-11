@@ -12,5 +12,6 @@ export * as providers from "./providers";
 export * as sandbox from "./sandbox";
 export * as store from "./store";
 export * as workflows from "./workflows";
+export * as modules from "./modules";
 
 export { parseDeploymentEnvironment, createGracefulShutdownHandler } from "./deployment";

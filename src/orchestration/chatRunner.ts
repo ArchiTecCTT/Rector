@@ -61,6 +61,7 @@ import {
 import { OrchestratorModeSchema, type OrchestratorMode } from "../deployment";
 import type { RectorStore } from "../store";
 import type { Budget, Run, RunEvent } from "../store/schemas";
+import type { ModuleRegistry } from "../modules";
 
 /**
  * Options that tune the deterministic phases shared by both runners (executor simulator behaviour
@@ -121,6 +122,8 @@ export interface ChatRunnerDeps {
    * provider. Injected in tests to exercise the healing path deterministically.
    */
   repairAgent?: LiveRepairAgent;
+  /** Optional module registry (Chunk 038+). Local baseline ignores external-only hooks. */
+  moduleRegistry?: ModuleRegistry;
 }
 
 export interface ChatRunResult {
@@ -323,6 +326,24 @@ export async function runExternalChatRun(
     })
   );
 
+  let activeContextPack = contextPack;
+  if (deps.moduleRegistry) {
+    const hookResult = await deps.moduleRegistry.invokeOnExternalRunStart(
+      {
+        store,
+        run,
+        prompt,
+        triage,
+        contextPack: activeContextPack,
+        router: deps.router,
+      },
+      deps.mode,
+    );
+    if (hookResult.contextPack) {
+      activeContextPack = hookResult.contextPack;
+    }
+  }
+
   // --- SLM PREPROCESSOR (neuro-symbolic Step 1) ---
   // Cheap/SLM model digests raw prompt + contextPack into clean distilledContext + validated
   // proposedToolCalls. Flagship models only see the distilled form. The preprocessor itself
@@ -335,7 +356,7 @@ export async function runExternalChatRun(
   });
   const preprocessorResult = await observability.recordSpan("PREPROCESSING", () =>
     runSLMPreprocessor(
-      { rawPrompt: prompt, contextPack, triage },
+      { rawPrompt: prompt, contextPack: activeContextPack, triage },
       { slmProvider: preprocessorSelection.provider, run }
     )
   );
