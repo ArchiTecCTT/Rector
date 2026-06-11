@@ -38,11 +38,25 @@ export const ModuleManifestSchema = z.object({
 });
 export type ModuleManifest = z.infer<typeof ModuleManifestSchema>;
 
+export type ModuleManifestCompatibilityResult =
+  | { compatible: true; errors: []; manifest: ModuleManifest }
+  | { compatible: false; errors: string[]; manifest?: undefined };
+
 export function checkModuleManifestCompatibility(
   manifestInput: unknown,
   options: { supportedApiVersion?: string } = {},
-): { compatible: boolean; errors: string[]; manifest: ModuleManifest } {
-  const manifest = ModuleManifestSchema.parse(manifestInput);
+): ModuleManifestCompatibilityResult {
+  const parsed = ModuleManifestSchema.safeParse(manifestInput);
+  if (!parsed.success) {
+    return {
+      compatible: false,
+      errors: parsed.error.issues.map(
+        (issue) => `${issue.path.join(".") || "manifest"}: ${issue.message}`,
+      ),
+    };
+  }
+
+  const manifest = parsed.data;
   const supportedApiVersion = options.supportedApiVersion ?? PUBLIC_MODULE_API_VERSION;
   const errors: string[] = [];
 
@@ -52,5 +66,9 @@ export function checkModuleManifestCompatibility(
     );
   }
 
-  return { compatible: errors.length === 0, errors, manifest };
+  if (errors.length > 0) {
+    return { compatible: false, errors };
+  }
+
+  return { compatible: true, errors: [], manifest };
 }

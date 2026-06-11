@@ -53,13 +53,19 @@ export function createInMemoryModuleConfigStore(
       return state;
     },
     async setModuleEnabled(moduleId, enabled) {
-      const ids = new Set(state.disabledModuleIds);
+      const disabledIds = new Set(state.disabledModuleIds);
+      const enabledIds = new Set(state.enabledModuleIds);
       if (enabled) {
-        ids.delete(moduleId);
+        disabledIds.delete(moduleId);
+        enabledIds.add(moduleId);
       } else {
-        ids.add(moduleId);
+        disabledIds.add(moduleId);
+        enabledIds.delete(moduleId);
       }
-      state = ModuleConfigStateSchema.parse({ disabledModuleIds: [...ids] });
+      state = ModuleConfigStateSchema.parse({
+        disabledModuleIds: [...disabledIds],
+        enabledModuleIds: [...enabledIds],
+      });
       return { ok: true, value: state };
     },
   };
@@ -98,10 +104,19 @@ export function createLocalModuleConfigStore(options: {
     getState: readState,
     async setModuleEnabled(moduleId, enabled) {
       const state = await readState();
-      const ids = new Set(state.disabledModuleIds);
-      if (enabled) ids.delete(moduleId);
-      else ids.add(moduleId);
-      const next = ModuleConfigStateSchema.parse({ disabledModuleIds: [...ids] });
+      const disabledIds = new Set(state.disabledModuleIds);
+      const enabledIds = new Set(state.enabledModuleIds);
+      if (enabled) {
+        disabledIds.delete(moduleId);
+        enabledIds.add(moduleId);
+      } else {
+        disabledIds.add(moduleId);
+        enabledIds.delete(moduleId);
+      }
+      const next = ModuleConfigStateSchema.parse({
+        disabledModuleIds: [...disabledIds],
+        enabledModuleIds: [...enabledIds],
+      });
       const wrote = await writeState(next);
       if (!wrote.ok) return wrote;
       return { ok: true, value: next };
@@ -114,12 +129,23 @@ export async function applyModuleConfigToRegistry(
   store: ModuleConfigStore,
 ): Promise<void> {
   const state = await store.getState();
-  for (const moduleId of state.disabledModuleIds) {
-    if (!registry.list().some((manifest) => manifest.id === moduleId)) continue;
-    try {
-      registry.disable(moduleId);
-    } catch {
-      // Core-tier modules cannot be disabled; ignore persisted entry.
+  const disabled = new Set(state.disabledModuleIds);
+  const enabled = new Set(state.enabledModuleIds);
+
+  for (const manifest of registry.list()) {
+    if (manifest.tier === "core") continue;
+
+    if (disabled.has(manifest.id)) {
+      try {
+        registry.disable(manifest.id);
+      } catch {
+        // Core-tier modules cannot be disabled; ignore persisted entry.
+      }
+      continue;
+    }
+
+    if (enabled.has(manifest.id)) {
+      registry.enable(manifest.id);
     }
   }
 }

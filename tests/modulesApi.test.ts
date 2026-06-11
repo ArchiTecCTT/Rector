@@ -70,6 +70,7 @@ describe("Modules API (Chunk 041)", () => {
     });
     expect(on.status).toBe(200);
     expect(on.data.enabled).toBe(true);
+    expect(on.data.enabledModuleIds).toContain(NEURO_PREPROCESS_MODULE_ID);
   });
 
   it("rejects unknown module ids", async () => {

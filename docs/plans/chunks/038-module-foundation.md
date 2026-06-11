@@ -9,6 +9,7 @@ Introduce a runtime module registry and hook system with **zero behavior change*
 ## Implemented
 
 ### `src/modules/`
+
 - `manifest.ts` — `ModuleManifestSchema`, tiers (`core` | `builtin` | `optional`), hook names
 - `context.ts` — boot, external-run, run-completed, enrich-context contexts
 - `registry.ts` — `ModuleRegistry` with enable/disable and ordered hook invocation
@@ -16,11 +17,13 @@ Introduce a runtime module registry and hook system with **zero behavior change*
 - `loadBuiltinModules.ts` — `createBuiltinModuleRegistry()`
 
 ### Wiring
-- [`src/api/server.ts`](src/api/server.ts) — boot registry, `app.locals.moduleRegistry`, pass to `runChat`, `onRunCompleted` hooks
-- [`src/orchestration/chatRunner.ts`](src/orchestration/chatRunner.ts) — optional `moduleRegistry` dep, `onExternalRunStart` before preprocessor
-- [`src/index.ts`](src/index.ts) — export `modules` namespace
+
+- [`/src/api/server.ts`](/src/api/server.ts) — boot registry, `app.locals.moduleRegistry`, pass to `runChat`, `onRunCompleted` hooks
+- [`/src/orchestration/chatRunner.ts`](/src/orchestration/chatRunner.ts) — optional `moduleRegistry` dep, `onExternalRunStart` before preprocessor
+- [`/src/index.ts`](/src/index.ts) — export `modules` namespace
 
 ### Tests
+
 - `tests/moduleRegistry.test.ts` — register, enable/disable, local vs external gating, enrichContext merge
 
 ## Core vs module boundary
@@ -34,7 +37,7 @@ Introduce a runtime module registry and hook system with **zero behavior change*
 
 ## Verification
 
-```
+```bash
 npm test   → 214 files (incl. moduleRegistry)
 npm run build → clean
 ```

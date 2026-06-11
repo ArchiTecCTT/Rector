@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ModuleRegistry,
+  applyModuleConfigToRegistry,
+  checkModuleManifestCompatibility,
   createBuiltinModuleRegistry,
+  createInMemoryModuleConfigStore,
   PUBLIC_MODULE_API_VERSION,
   type ModuleManifest,
 } from "../src/modules";
+import { NEURO_PREPROCESS_MODULE_ID } from "../src/modules/builtin/neuro-preprocess";
 
 const testManifest: ModuleManifest = {
   id: "@rector/test/sample",
@@ -133,5 +137,22 @@ describe("ModuleRegistry", () => {
       "local",
     );
     expect(result.contextPack.memoryContext).toBe("from-a-b");
+  });
+
+  it("reports malformed manifests as incompatible without throwing", () => {
+    const result = checkModuleManifestCompatibility({ id: "" });
+    expect(result.compatible).toBe(false);
+    expect(result.errors.length).toBeGreaterThan(0);
+  });
+
+  it("re-enables feature-flag-disabled modules when persisted as enabled", async () => {
+    const registry = createBuiltinModuleRegistry({ neuroFlags: { preprocessor: false } });
+    expect(registry.isEnabled(NEURO_PREPROCESS_MODULE_ID)).toBe(false);
+
+    const store = createInMemoryModuleConfigStore();
+    await store.setModuleEnabled(NEURO_PREPROCESS_MODULE_ID, true);
+    await applyModuleConfigToRegistry(registry, store);
+
+    expect(registry.isEnabled(NEURO_PREPROCESS_MODULE_ID)).toBe(true);
   });
 });
