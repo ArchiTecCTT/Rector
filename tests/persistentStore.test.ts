@@ -278,7 +278,10 @@ describe("SqlRectorStore persisted-then-reloaded round-trip (Property 2 — rest
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("reloads every conversation, message, run, event, and artifact deep-equal with order preserved", async () => {
+  // Heavy SqlRectorStore property: allow extra time under Vitest 4 / slow WSL I/O (Chunk 37).
+  it(
+    "reloads every conversation, message, run, event, and artifact deep-equal with order preserved",
+    async () => {
     await fc.assert(
       fc.asyncProperty(scenarioArb, async (rawScenario) => {
         const scenario = rawScenario as GeneratedScenario;
@@ -352,7 +355,9 @@ describe("SqlRectorStore persisted-then-reloaded round-trip (Property 2 — rest
       }),
       { numRuns: 20 }
     );
-  });
+  },
+  120_000,
+  );
 
   it("reloads a concrete cross-entity scenario after re-instantiation (deterministic example)", async () => {
     const dbPath = join(dir, `store-example-${counter++}.db`);
