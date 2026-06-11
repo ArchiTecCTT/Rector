@@ -51,9 +51,14 @@ const BASE_CSS = readPublic("styles/base.css");
  * markup never masquerade as real asset references.
  */
 function markupOnly(html: string): string {
-  return html
-    .replace(/<!--[\s\S]*?(--!?>)/g, "")
-    .replace(/(<script\b[^>]*>)[\s\S]*?(<\/script\s*[^>]*>)/gi, "$1$2");
+  let previous: string;
+  let current = html;
+  do {
+    previous = current;
+    current = current.replace(/<!--[\s\S]*?(--!?>)/g, "");
+  } while (current !== previous);
+
+  return current.replace(/(<script\b[^>]*>)[\s\S]*?(<\/script\s*[^>]*>)/gi, "$1$2");
 }
 
 /** A reference is remote if it is absolute-with-scheme or protocol-relative. */
