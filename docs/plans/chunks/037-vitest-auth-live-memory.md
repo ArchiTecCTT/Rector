@@ -48,4 +48,4 @@ npm run build → clean
 - `b42b4eb` test(chunk-037): live Mem0/Chroma integration tests
 - `3ff24ba` feat(chunk-037): multi-user session auth
 - `5d04499` chore(chunk-037): vitest 4.x + persistentStore timeout
-- `34a46b0` docs(chunk-037): chunk plan, concerns, AGENTS, dependency audit
+- `60f67c9` docs(chunk-037): chunk plan, concerns, AGENTS, dependency audit
