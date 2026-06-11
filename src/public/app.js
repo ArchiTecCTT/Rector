@@ -240,6 +240,13 @@ function cacheEls() {
     "memory-provider-config-add-key-toggle",
     "memory-provider-config-add",
     "memory-provider-config-add-result",
+    "open-module-manager",
+    "close-module-manager",
+    "module-manager-modal",
+    "module-manager-backdrop",
+    "module-manager-loading",
+    "module-manager-error",
+    "module-manager-list",
     "open-memory-browser",
     "close-memory-browser",
     "memory-browser-modal",
@@ -3111,6 +3118,124 @@ function bindMemoryProviderConfig() {
   });
 }
 
+// --- Module manager (Chunk 041) ---
+
+function setModuleManagerLoading(loading) {
+  const indicator = els["module-manager-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+function showModuleManagerError(message) {
+  const box = els["module-manager-error"];
+  if (box) {
+    box.hidden = false;
+    box.textContent = message;
+  }
+}
+
+function clearModuleManagerError() {
+  const box = els["module-manager-error"];
+  if (box) {
+    box.hidden = true;
+    box.textContent = "";
+  }
+}
+
+function renderModuleManagerList(modules) {
+  const container = els["module-manager-list"];
+  if (!container) return;
+  container.replaceChildren();
+  for (const mod of modules) {
+    const card = document.createElement("article");
+    card.className = "provider-config-card";
+    card.dataset.moduleId = mod.id;
+
+    const head = document.createElement("div");
+    head.className = "provider-config-card__head";
+    const title = document.createElement("h4");
+    title.className = "provider-config-card__title";
+    title.textContent = mod.name;
+    head.append(title);
+
+    const body = document.createElement("div");
+    body.className = "provider-config-card__body";
+    const desc = document.createElement("p");
+    desc.className = "provider-config-card__desc";
+    desc.textContent = mod.description || mod.id;
+    body.append(desc);
+
+    const tier = document.createElement("p");
+    tier.className = "provider-config-card__meta";
+    tier.textContent = `Tier: ${mod.tier}${mod.externalModeOnly ? " · external mode only" : ""}`;
+    body.append(tier);
+
+    const toggleRow = document.createElement("label");
+    toggleRow.className = "provider-config-field-row";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = Boolean(mod.enabled);
+    checkbox.disabled = mod.tier === "core";
+    checkbox.addEventListener("change", () => {
+      void toggleModuleEnabled(mod.id, checkbox.checked, checkbox);
+    });
+    toggleRow.append(checkbox, document.createTextNode(" Enabled"));
+    body.append(toggleRow);
+
+    card.append(head, body);
+    container.append(card);
+  }
+}
+
+async function toggleModuleEnabled(moduleId, enabled, checkbox) {
+  try {
+    const res = await fetch("/api/modules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ moduleId, enabled }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || `Request failed (${res.status})`);
+    }
+  } catch (err) {
+    if (checkbox) checkbox.checked = !enabled;
+    showModuleManagerError(`Could not update module: ${err.message}`);
+  }
+}
+
+async function loadModuleManager() {
+  clearModuleManagerError();
+  setModuleManagerLoading(true);
+  try {
+    const res = await fetch("/api/modules");
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    renderModuleManagerList(data.modules || []);
+  } catch (err) {
+    showModuleManagerError(`Could not load modules: ${err.message}`);
+  } finally {
+    setModuleManagerLoading(false);
+  }
+}
+
+function openModuleManager() {
+  const modal = els["module-manager-modal"];
+  if (!modal) return;
+  modal.hidden = false;
+  void loadModuleManager();
+}
+
+function closeModuleManager() {
+  const modal = els["module-manager-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindModuleManager() {
+  els["open-module-manager"]?.addEventListener("click", openModuleManager);
+  els["close-module-manager"]?.addEventListener("click", closeModuleManager);
+  els["module-manager-backdrop"]?.addEventListener("click", closeModuleManager);
+}
+
 // --- Memory browser panel (Chunk 36 stretch) ---
 //
 // Read-only list of recent episodic/core entries from GET /api/memory/entries?layer=episodic|core.
@@ -4763,6 +4888,7 @@ function init() {
   bindProviderTest();
   bindProviderConfig();
   bindMemoryProviderConfig();
+  bindModuleManager();
   bindMemoryBrowser();
   bindSetupWizard();
   bindWorkspaceSafety();
