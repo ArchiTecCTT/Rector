@@ -77,6 +77,7 @@ import { createDefaultDiscoveryAdapterRegistry } from "../providers/discovery/ad
 import type { DiscoveryResult } from "../providers/discovery/types";
 import { createProactiveAgent, type ProactiveAgent } from "../proactive";
 import { createNeuroBackgroundHooks, type NeuroBackgroundHooks } from "../orchestration/backgroundHooks";
+import { createBuiltinModuleRegistry, type ModuleRegistry } from "../modules";
 import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
@@ -1439,6 +1440,15 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   const orchestration = securityOptions.orchestration;
 
+  const moduleRegistry: ModuleRegistry = createBuiltinModuleRegistry();
+  void moduleRegistry.invokeOnBoot({
+    mode: orchestration?.mode ?? "local",
+    store: rectorStore,
+    router: orchestration?.router,
+    getMemoryProvider: getMemoryProvider,
+  });
+  app.locals.moduleRegistry = moduleRegistry;
+
   // Proactive / Alive agent (Chunk 28). Only auto-starts in external mode.
   // In local mode it is available for manual/dev triggers only.
   const proactiveAgent: ProactiveAgent | undefined = orchestration?.mode === "external"
@@ -1728,6 +1738,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             mode: orchestration?.mode ?? "local",
             router: orchestration?.router,
             enableNetwork: orchestration?.mode === "external",
+            moduleRegistry,
           }
         );
         const assistantMessage = await pipelineStore.createMessage({
@@ -1779,8 +1790,15 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         // redacted error and no stream is ever opened. The `.catch` keeps the rejection handled, so a
         // background failure never produces an unhandled promise rejection or crashes the process.
         void runChatPipeline(capturingStore)
-          .then((result) => {
+          .then(async (result) => {
             neuroBackgroundHooks?.onRunCompleted(result.run);
+            await moduleRegistry.invokeOnRunCompleted({
+              store: rectorStore,
+              run: result.run,
+              mode: orchestration?.mode ?? "local",
+              router: orchestration?.router,
+              getMemoryProvider: () => getMemoryProviderFor(req),
+            });
           })
           .catch((error) => {
             rejectRun(error);
@@ -1799,6 +1817,13 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       // Synchronous (non-stream) path — unchanged behavior, preserved as the streaming fallback.
       const { run, synthesis, observabilitySummary, assistantMessage } = await runChatPipeline(rectorStore);
       neuroBackgroundHooks?.onRunCompleted(run);
+      await moduleRegistry.invokeOnRunCompleted({
+        store: rectorStore,
+        run,
+        mode: orchestration?.mode ?? "local",
+        router: orchestration?.router,
+        getMemoryProvider: () => getMemoryProviderFor(req),
+      });
       const events = await rectorStore.listEvents(run.id);
       const completedRun = await rectorStore.getRun(run.id);
 
