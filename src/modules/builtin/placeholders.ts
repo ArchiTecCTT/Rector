@@ -3,46 +3,9 @@ import type { ModuleManifest } from "../manifest";
 import { PUBLIC_MODULE_API_VERSION } from "../manifest";
 
 /**
- * Builtin module manifests reserved for Chunk 039–040 extraction.
- * Chunk 038 registers them with no handlers (zero behavior change).
+ * Provider and integration module manifests reserved for Chunk 040 extraction.
  */
-const BUILTIN_PLACEHOLDER_MANIFESTS: ModuleManifest[] = [
-  {
-    id: "@rector/builtin/neuro-preprocess",
-    name: "Neuro Preprocessor",
-    version: "0.2.0",
-    apiVersion: PUBLIC_MODULE_API_VERSION,
-    description: "SLM preprocessor and structured tool-call validation (Chunk 26).",
-    tier: "builtin",
-    hooks: ["onExternalRunStart"],
-    capabilities: [],
-    defaultEnabled: true,
-    externalModeOnly: true,
-  },
-  {
-    id: "@rector/builtin/neuro-planning",
-    name: "Neuro Planning",
-    version: "0.2.0",
-    apiVersion: PUBLIC_MODULE_API_VERSION,
-    description: "Deep planning (MCTS) and task decomposition (Chunks 30, 32).",
-    tier: "builtin",
-    hooks: ["onExternalRunPhase"],
-    capabilities: [],
-    defaultEnabled: true,
-    externalModeOnly: true,
-  },
-  {
-    id: "@rector/builtin/neuro-alive",
-    name: "Neuro Alive",
-    version: "0.2.0",
-    apiVersion: PUBLIC_MODULE_API_VERSION,
-    description: "Proactive companion and ponder swarm background hooks (Chunks 28, 31).",
-    tier: "builtin",
-    hooks: ["onBoot", "onRunCompleted"],
-    capabilities: [],
-    defaultEnabled: true,
-    externalModeOnly: true,
-  },
+const PROVIDER_PLACEHOLDER_MANIFESTS: ModuleManifest[] = [
   {
     id: "@rector/builtin/memory-cloud",
     name: "Cloud Memory Backends",
@@ -94,7 +57,7 @@ const BUILTIN_PLACEHOLDER_MANIFESTS: ModuleManifest[] = [
 ];
 
 export function registerBuiltinPlaceholders(registry: ModuleRegistry): void {
-  for (const manifest of BUILTIN_PLACEHOLDER_MANIFESTS) {
+  for (const manifest of PROVIDER_PLACEHOLDER_MANIFESTS) {
     registry.register({ manifest });
   }
 }

@@ -276,7 +276,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   const gracefulShutdown = createGracefulShutdownHandler({
     server,
     cleanup: () => {
-      app.locals.neuroBackgroundHooks?.stop();
+      app.locals.neuroAliveState?.()?.backgroundHooks?.stop();
     },
   });
 

@@ -23,7 +23,8 @@ describe("ModuleRegistry", () => {
     const ids = registry.list().map((m) => m.id);
     expect(ids).toContain("@rector/builtin/neuro-preprocess");
     expect(ids).toContain("@rector/builtin/neuro-alive");
-    expect(ids.length).toBeGreaterThanOrEqual(7);
+    expect(ids).toContain("@rector/builtin/memory-cloud");
+    expect(ids.length).toBe(7);
   });
 
   it("rejects duplicate module ids", () => {

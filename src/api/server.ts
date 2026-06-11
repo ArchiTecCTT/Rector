@@ -75,9 +75,8 @@ import {
 import { createDiscoveryCache } from "../providers/discovery/cache";
 import { createDefaultDiscoveryAdapterRegistry } from "../providers/discovery/adapters/registry";
 import type { DiscoveryResult } from "../providers/discovery/types";
-import { createProactiveAgent, type ProactiveAgent } from "../proactive";
-import { createNeuroBackgroundHooks, type NeuroBackgroundHooks } from "../orchestration/backgroundHooks";
 import { createBuiltinModuleRegistry, type ModuleRegistry } from "../modules";
+import { getNeuroAliveState } from "../modules/builtin/neuro-alive";
 import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
@@ -1449,36 +1448,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   });
   app.locals.moduleRegistry = moduleRegistry;
 
-  // Proactive / Alive agent (Chunk 28). Only auto-starts in external mode.
-  // In local mode it is available for manual/dev triggers only.
-  const proactiveAgent: ProactiveAgent | undefined = orchestration?.mode === "external"
-    ? createProactiveAgent({
-        store: rectorStore,
-        router: orchestration?.router,
-        mode: orchestration?.mode ?? "local",
-      })
-    : undefined;
-
-  if (proactiveAgent) {
-    // Demo timer (long interval). Real systems would use event-driven triggers.
-    proactiveAgent.startTimer(1000 * 60 * 60 * 6); // 6h for demo
-  }
-
-  // Ponder swarm + subconscious background hooks (Chunk 31 / Step 6). External mode only.
-  const neuroBackgroundHooks: NeuroBackgroundHooks | undefined =
-    orchestration?.mode === "external"
-      ? createNeuroBackgroundHooks({
-          getMemoryProvider,
-          router: orchestration?.router,
-          mode: orchestration?.mode ?? "local",
-          store: rectorStore,
-        })
-      : undefined;
-
-  if (neuroBackgroundHooks) {
-    neuroBackgroundHooks.startIdleTimer();
-    app.locals.neuroBackgroundHooks = neuroBackgroundHooks;
-  }
+  app.locals.neuroAliveState = getNeuroAliveState;
   app.use(securityHeadersMiddleware);
   app.use(corsMiddleware(securityOptions));
   app.use(chatRateLimitMiddleware(securityOptions));
@@ -1791,7 +1761,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         // background failure never produces an unhandled promise rejection or crashes the process.
         void runChatPipeline(capturingStore)
           .then(async (result) => {
-            neuroBackgroundHooks?.onRunCompleted(result.run);
             await moduleRegistry.invokeOnRunCompleted({
               store: rectorStore,
               run: result.run,
@@ -1816,7 +1785,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
       // Synchronous (non-stream) path — unchanged behavior, preserved as the streaming fallback.
       const { run, synthesis, observabilitySummary, assistantMessage } = await runChatPipeline(rectorStore);
-      neuroBackgroundHooks?.onRunCompleted(run);
       await moduleRegistry.invokeOnRunCompleted({
         store: rectorStore,
         run,
@@ -2919,6 +2887,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // Manual trigger for proactive "alive" behavior (Chunk 28).
   app.post("/api/dev/proactive-trigger", async (req, res) => {
     try {
+      const proactiveAgent = getNeuroAliveState().proactiveAgent;
       if (!proactiveAgent) {
         return res.status(400).json({ error: "Proactive agent not enabled (local mode or no router)" });
       }
