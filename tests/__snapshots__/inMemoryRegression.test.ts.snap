@@ -1,0 +1,469 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`In-memory baseline regression (Requirements 5.2, 5.4) > locks the exact serialized shape of the in-memory baseline dump against drift 1`] = `
+"{
+  "conversations": [
+    {
+      "id": "conv-1",
+      "title": "Build Rector",
+      "workspaceId": "ws-1",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z",
+      "retentionPolicy": "default"
+    },
+    {
+      "id": "conv-2",
+      "title": "Second thread",
+      "workspaceId": "ws-2",
+      "createdAt": "2026-01-01T00:00:01.000Z",
+      "updatedAt": "2026-01-01T00:00:01.000Z",
+      "retentionPolicy": "short"
+    },
+    {
+      "id": "conv-1",
+      "title": "Build Rector (renamed)",
+      "workspaceId": "ws-1",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:02.000Z",
+      "retentionPolicy": "default"
+    }
+  ],
+  "messages": [
+    {
+      "id": "msg-1",
+      "conversationId": "conv-1",
+      "role": "user",
+      "content": "Implement persistence",
+      "status": "complete",
+      "redactionState": "none",
+      "createdAt": "2026-01-01T00:00:03.000Z"
+    },
+    {
+      "id": "msg-2",
+      "conversationId": "conv-1",
+      "role": "assistant",
+      "content": "Persistence implemented.",
+      "status": "complete",
+      "runId": "run-1",
+      "redactionState": "none",
+      "createdAt": "2026-01-01T00:00:06.000Z"
+    }
+  ],
+  "runs": [
+    {
+      "id": "run-1",
+      "conversationId": "conv-1",
+      "userMessageId": "msg-1",
+      "status": "running",
+      "phase": "TRIAGE",
+      "route": "local",
+      "complexity": "simple",
+      "budget": {
+        "maxUsd": 2,
+        "maxInputTokens": 10000,
+        "maxOutputTokens": 5000,
+        "maxModelCalls": 8,
+        "maxRuntimeMs": 60000,
+        "maxHealingAttempts": 2,
+        "allowedProviders": [
+          "local"
+        ],
+        "approvalRequiredAboveUsd": 1
+      },
+      "costEstimate": {
+        "usd": 0.5
+      },
+      "tokenEstimate": {
+        "input": 100,
+        "output": 200
+      },
+      "traceId": "trace-1",
+      "attempts": 0,
+      "healingAttempts": 0,
+      "validationAttempts": 0,
+      "createdAt": "2026-01-01T00:00:04.000Z",
+      "updatedAt": "2026-01-01T00:00:04.000Z"
+    },
+    {
+      "id": "run-1",
+      "conversationId": "conv-1",
+      "userMessageId": "msg-1",
+      "status": "completed",
+      "phase": "TRIAGE",
+      "route": "local",
+      "complexity": "simple",
+      "budget": {
+        "maxUsd": 2,
+        "maxInputTokens": 10000,
+        "maxOutputTokens": 5000,
+        "maxModelCalls": 8,
+        "maxRuntimeMs": 60000,
+        "maxHealingAttempts": 2,
+        "allowedProviders": [
+          "local"
+        ],
+        "approvalRequiredAboveUsd": 1
+      },
+      "costEstimate": {
+        "usd": 0.5
+      },
+      "actualCost": {
+        "usd": 0.42
+      },
+      "tokenEstimate": {
+        "input": 100,
+        "output": 200
+      },
+      "actualTokens": {
+        "input": 90,
+        "output": 180
+      },
+      "traceId": "trace-1",
+      "attempts": 0,
+      "healingAttempts": 0,
+      "validationAttempts": 0,
+      "createdAt": "2026-01-01T00:00:04.000Z",
+      "updatedAt": "2026-01-01T00:00:05.000Z"
+    },
+    {
+      "id": "run-1",
+      "conversationId": "conv-1",
+      "userMessageId": "msg-1",
+      "status": "completed",
+      "phase": "DONE",
+      "route": "local",
+      "complexity": "simple",
+      "budget": {
+        "maxUsd": 2,
+        "maxInputTokens": 10000,
+        "maxOutputTokens": 5000,
+        "maxModelCalls": 8,
+        "maxRuntimeMs": 60000,
+        "maxHealingAttempts": 2,
+        "allowedProviders": [
+          "local"
+        ],
+        "approvalRequiredAboveUsd": 1
+      },
+      "costEstimate": {
+        "usd": 0.5
+      },
+      "actualCost": {
+        "usd": 0.42
+      },
+      "tokenEstimate": {
+        "input": 100,
+        "output": 200
+      },
+      "actualTokens": {
+        "input": 90,
+        "output": 180
+      },
+      "traceId": "trace-1",
+      "attempts": 0,
+      "healingAttempts": 0,
+      "validationAttempts": 0,
+      "createdAt": "2026-01-01T00:00:04.000Z",
+      "updatedAt": "2026-01-01T00:00:07.000Z"
+    }
+  ],
+  "events": [
+    {
+      "id": "evt-1",
+      "runId": "run-1",
+      "type": "RUN_CREATED",
+      "phase": "TRIAGE",
+      "payload": {
+        "step": 1
+      },
+      "traceId": "trace-1",
+      "createdAt": "2026-06-03T00:00:00.000Z"
+    },
+    {
+      "id": "evt-2",
+      "runId": "run-1",
+      "type": "RUN_COMPLETED",
+      "phase": "DONE",
+      "payload": {
+        "step": 2
+      },
+      "traceId": "trace-1",
+      "createdAt": "2026-06-03T00:00:01.000Z"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "art-1",
+      "kind": "patch",
+      "uri": "file://changes.patch",
+      "summary": "Generated patch",
+      "hash": "sha256:abc",
+      "sizeBytes": 123,
+      "piiState": "none",
+      "retentionPolicy": "default",
+      "metadata": {
+        "labels": [
+          "chunk-4"
+        ]
+      },
+      "createdAt": "2026-01-01T00:00:08.000Z"
+    },
+    {
+      "id": "art-1",
+      "kind": "patch",
+      "uri": "file://changes.patch",
+      "summary": "Generated patch (reviewed)",
+      "hash": "sha256:abc",
+      "sizeBytes": 123,
+      "piiState": "none",
+      "retentionPolicy": "default",
+      "metadata": {
+        "labels": [
+          "chunk-4"
+        ]
+      },
+      "createdAt": "2026-01-01T00:00:08.000Z"
+    }
+  ],
+  "listConversations": [
+    {
+      "id": "conv-1",
+      "title": "Build Rector (renamed)",
+      "workspaceId": "ws-1",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:02.000Z",
+      "retentionPolicy": "default"
+    },
+    {
+      "id": "conv-2",
+      "title": "Second thread",
+      "workspaceId": "ws-2",
+      "createdAt": "2026-01-01T00:00:01.000Z",
+      "updatedAt": "2026-01-01T00:00:01.000Z",
+      "retentionPolicy": "short"
+    }
+  ],
+  "listConversationsByWorkspace": [
+    {
+      "id": "conv-1",
+      "title": "Build Rector (renamed)",
+      "workspaceId": "ws-1",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:02.000Z",
+      "retentionPolicy": "default"
+    }
+  ],
+  "listMessages": [
+    {
+      "id": "msg-1",
+      "conversationId": "conv-1",
+      "role": "user",
+      "content": "Implement persistence",
+      "status": "complete",
+      "redactionState": "none",
+      "createdAt": "2026-01-01T00:00:03.000Z"
+    },
+    {
+      "id": "msg-2",
+      "conversationId": "conv-1",
+      "role": "assistant",
+      "content": "Persistence implemented.",
+      "status": "complete",
+      "runId": "run-1",
+      "redactionState": "none",
+      "createdAt": "2026-01-01T00:00:06.000Z"
+    }
+  ],
+  "listMessagesByConversation": [
+    {
+      "id": "msg-1",
+      "conversationId": "conv-1",
+      "role": "user",
+      "content": "Implement persistence",
+      "status": "complete",
+      "redactionState": "none",
+      "createdAt": "2026-01-01T00:00:03.000Z"
+    },
+    {
+      "id": "msg-2",
+      "conversationId": "conv-1",
+      "role": "assistant",
+      "content": "Persistence implemented.",
+      "status": "complete",
+      "runId": "run-1",
+      "redactionState": "none",
+      "createdAt": "2026-01-01T00:00:06.000Z"
+    }
+  ],
+  "listRuns": [
+    {
+      "id": "run-1",
+      "conversationId": "conv-1",
+      "userMessageId": "msg-1",
+      "status": "completed",
+      "phase": "DONE",
+      "route": "local",
+      "complexity": "simple",
+      "budget": {
+        "maxUsd": 2,
+        "maxInputTokens": 10000,
+        "maxOutputTokens": 5000,
+        "maxModelCalls": 8,
+        "maxRuntimeMs": 60000,
+        "maxHealingAttempts": 2,
+        "allowedProviders": [
+          "local"
+        ],
+        "approvalRequiredAboveUsd": 1
+      },
+      "costEstimate": {
+        "usd": 0.5
+      },
+      "actualCost": {
+        "usd": 0.42
+      },
+      "tokenEstimate": {
+        "input": 100,
+        "output": 200
+      },
+      "actualTokens": {
+        "input": 90,
+        "output": 180
+      },
+      "traceId": "trace-1",
+      "attempts": 0,
+      "healingAttempts": 0,
+      "validationAttempts": 0,
+      "createdAt": "2026-01-01T00:00:04.000Z",
+      "updatedAt": "2026-01-01T00:00:07.000Z"
+    }
+  ],
+  "listRunsByConversation": [
+    {
+      "id": "run-1",
+      "conversationId": "conv-1",
+      "userMessageId": "msg-1",
+      "status": "completed",
+      "phase": "DONE",
+      "route": "local",
+      "complexity": "simple",
+      "budget": {
+        "maxUsd": 2,
+        "maxInputTokens": 10000,
+        "maxOutputTokens": 5000,
+        "maxModelCalls": 8,
+        "maxRuntimeMs": 60000,
+        "maxHealingAttempts": 2,
+        "allowedProviders": [
+          "local"
+        ],
+        "approvalRequiredAboveUsd": 1
+      },
+      "costEstimate": {
+        "usd": 0.5
+      },
+      "actualCost": {
+        "usd": 0.42
+      },
+      "tokenEstimate": {
+        "input": 100,
+        "output": 200
+      },
+      "actualTokens": {
+        "input": 90,
+        "output": 180
+      },
+      "traceId": "trace-1",
+      "attempts": 0,
+      "healingAttempts": 0,
+      "validationAttempts": 0,
+      "createdAt": "2026-01-01T00:00:04.000Z",
+      "updatedAt": "2026-01-01T00:00:07.000Z"
+    }
+  ],
+  "listEvents": [
+    {
+      "id": "evt-1",
+      "runId": "run-1",
+      "type": "RUN_CREATED",
+      "phase": "TRIAGE",
+      "payload": {
+        "step": 1
+      },
+      "traceId": "trace-1",
+      "createdAt": "2026-06-03T00:00:00.000Z"
+    },
+    {
+      "id": "evt-2",
+      "runId": "run-1",
+      "type": "RUN_COMPLETED",
+      "phase": "DONE",
+      "payload": {
+        "step": 2
+      },
+      "traceId": "trace-1",
+      "createdAt": "2026-06-03T00:00:01.000Z"
+    }
+  ],
+  "listEventsByRun": [
+    {
+      "id": "evt-1",
+      "runId": "run-1",
+      "type": "RUN_CREATED",
+      "phase": "TRIAGE",
+      "payload": {
+        "step": 1
+      },
+      "traceId": "trace-1",
+      "createdAt": "2026-06-03T00:00:00.000Z"
+    },
+    {
+      "id": "evt-2",
+      "runId": "run-1",
+      "type": "RUN_COMPLETED",
+      "phase": "DONE",
+      "payload": {
+        "step": 2
+      },
+      "traceId": "trace-1",
+      "createdAt": "2026-06-03T00:00:01.000Z"
+    }
+  ],
+  "listArtifacts": [
+    {
+      "id": "art-1",
+      "kind": "patch",
+      "uri": "file://changes.patch",
+      "summary": "Generated patch (reviewed)",
+      "hash": "sha256:abc",
+      "sizeBytes": 123,
+      "piiState": "none",
+      "retentionPolicy": "default",
+      "metadata": {
+        "labels": [
+          "chunk-4"
+        ]
+      },
+      "createdAt": "2026-01-01T00:00:08.000Z"
+    }
+  ],
+  "listArtifactsByKind": [
+    {
+      "id": "art-1",
+      "kind": "patch",
+      "uri": "file://changes.patch",
+      "summary": "Generated patch (reviewed)",
+      "hash": "sha256:abc",
+      "sizeBytes": 123,
+      "piiState": "none",
+      "retentionPolicy": "default",
+      "metadata": {
+        "labels": [
+          "chunk-4"
+        ]
+      },
+      "createdAt": "2026-01-01T00:00:08.000Z"
+    }
+  ]
+}"
+`;

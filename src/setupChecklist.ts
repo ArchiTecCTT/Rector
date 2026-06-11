@@ -4,13 +4,15 @@ export interface SetupItem {
   description: string;
   required: boolean;
   defaultValue?: string;
-  category: "core" | "event-bus" | "database" | "llm" | "sandbox" | "memory" | "integrations" | "telemetry";
+  category: "core" | "event-bus" | "database" | "llm" | "sandbox" | "memory" | "integrations" | "telemetry" | "persistence";
 }
 
 export const SETUP_ITEMS: SetupItem[] = [
   { key: "NODE_ENV", label: "Environment", description: "Use development for local mode; production enables real adapter wiring later.", required: false, defaultValue: "development", category: "core" },
   { key: "PORT", label: "HTTP Port", description: "Local API/UI port.", required: false, defaultValue: "3000", category: "core" },
+  { key: "HOST", label: "HTTP Host", description: "Bind host for local API/UI. Defaults to loopback for local safety.", required: false, defaultValue: "127.0.0.1", category: "core" },
   { key: "DOPPLER_TOKEN", label: "Doppler Token", description: "Service token used to load production secrets.", required: false, category: "core" },
+  { key: "ORCHESTRATOR_MODE", label: "Orchestration Mode", description: "Chat pipeline mode: local (default) runs provider-free with zero network calls and zero cost; external enables the Bring-Your-Own-Key planner, which requires at least one configured provider validated at startup.", required: false, defaultValue: "local", category: "core" },
 
   { key: "KAFKA_BROKERS", label: "Kafka Brokers", description: "Comma-separated Kafka bootstrap servers.", required: false, defaultValue: "localhost:9092", category: "event-bus" },
   { key: "KAFKA_CLIENT_ID", label: "Kafka Client ID", description: "Client ID for Thalamus and worker consumers.", required: false, defaultValue: "rector-local", category: "event-bus" },
@@ -20,6 +22,15 @@ export const SETUP_ITEMS: SetupItem[] = [
 
   { key: "MONGO_URI", label: "MongoDB URI", description: "Mongo connection string for persistent task storage.", required: false, defaultValue: "mongodb://localhost:27017/rector", category: "database" },
   { key: "MONGO_DB", label: "MongoDB Database", description: "Database name for Rector state documents.", required: false, defaultValue: "rector_core", category: "database" },
+
+  { key: "RECTOR_PERSISTENCE", label: "RectorStore Driver", description: "Selects the RectorStore backend: memory (default) keeps the in-memory provider-free store and is the regression baseline (no file, no network); sqlite is the local file-backed store; tidb is the optional hosted TiDB Cloud path. Mongo/Redis vars are ignored by store selection.", required: false, defaultValue: "memory", category: "persistence" },
+  { key: "RECTOR_SQLITE_PATH", label: "SQLite Path", description: "Local file path for the sqlite driver (used only when RECTOR_PERSISTENCE=sqlite). Defaults to a local file; no cloud account and no network are required.", required: false, defaultValue: ".rector/rector.db", category: "persistence" },
+  { key: "TIDB_HOST", label: "TiDB Host", description: "TiDB Cloud host (used only when RECTOR_PERSISTENCE=tidb). The full TIDB_* block must be set for the hosted path.", required: false, category: "persistence" },
+  { key: "TIDB_PORT", label: "TiDB Port", description: "TiDB Cloud port (used only when RECTOR_PERSISTENCE=tidb).", required: false, defaultValue: "4000", category: "persistence" },
+  { key: "TIDB_USER", label: "TiDB User", description: "TiDB Cloud username (used only when RECTOR_PERSISTENCE=tidb).", required: false, category: "persistence" },
+  { key: "TIDB_PASSWORD", label: "TiDB Password", description: "TiDB Cloud password (used only when RECTOR_PERSISTENCE=tidb).", required: false, category: "persistence" },
+  { key: "TIDB_DATABASE", label: "TiDB Database", description: "TiDB Cloud database name (used only when RECTOR_PERSISTENCE=tidb).", required: false, category: "persistence" },
+  { key: "TIDB_TLS", label: "TiDB TLS", description: "Enable TLS for the TiDB Cloud connection (used only when RECTOR_PERSISTENCE=tidb).", required: false, defaultValue: "true", category: "persistence" },
 
   { key: "LLM_BASE_URL", label: "LLM Base URL", description: "OpenAI-compatible base URL for local/provider LLM calls.", required: false, defaultValue: "https://api.openai.com/v1", category: "llm" },
   { key: "LLM_API_KEY", label: "LLM API Key", description: "Generic OpenAI-compatible API key.", required: false, category: "llm" },
@@ -42,11 +53,11 @@ export const SETUP_ITEMS: SetupItem[] = [
 
   { key: "CHROMA_URL", label: "Chroma URL", description: "Vector memory endpoint.", required: false, defaultValue: "http://localhost:8000", category: "memory" },
   { key: "CHROMA_API_KEY", label: "Chroma API Key", description: "Chroma Cloud token if using hosted Chroma.", required: false, category: "memory" },
-  { key: "PERPLEXITY_API_KEY", label: "Perplexity API Key", description: "Docs/research distillation API key.", required: false, category: "memory" },
 
   { key: "LINEAR_API_KEY", label: "Linear API Key", description: "Linear GraphQL token for issue ingest/handoff.", required: false, category: "integrations" },
   { key: "LINEAR_WEBHOOK_SECRET", label: "Linear Webhook Secret", description: "Secret used to verify incoming Linear webhooks.", required: false, category: "integrations" },
   { key: "MAKE_WEBHOOK_URL", label: "Make Webhook URL", description: "Make.com webhook for human approval automations.", required: false, category: "integrations" },
+  { key: "MAKE_WEBHOOK_SECRET", label: "Make Webhook Secret", description: "Secret used to authenticate Make webhook payloads.", required: false, category: "integrations" },
 
   { key: "TELEMETRY_BACKEND", label: "Telemetry Backend", description: "Telemetry provider: local, posthog, datadog, or newrelic.", required: false, defaultValue: "local", category: "telemetry" },
   { key: "POSTHOG_API_KEY", label: "PostHog API Key", description: "PostHog project key for cost/token events.", required: false, category: "telemetry" },
@@ -62,6 +73,7 @@ const SENSITIVE_KEYS = new Set([
   "KAFKA_USERNAME",
   "KAFKA_PASSWORD",
   "MONGO_URI",
+  "TIDB_PASSWORD",
   "LLM_API_KEY",
   "TOGETHER_API_KEY",
   "AZURE_OPENAI_API_KEY",
@@ -72,10 +84,10 @@ const SENSITIVE_KEYS = new Set([
   "CODECOV_TOKEN",
   "CODESCENE_TOKEN",
   "CHROMA_API_KEY",
-  "PERPLEXITY_API_KEY",
   "LINEAR_API_KEY",
   "LINEAR_WEBHOOK_SECRET",
   "MAKE_WEBHOOK_URL",
+  "MAKE_WEBHOOK_SECRET",
   "POSTHOG_API_KEY",
   "DATADOG_API_KEY",
   "NEW_RELIC_LICENSE_KEY",

@@ -1,0 +1,3043 @@
+/* ============================================================
+   Rector — base structure + theme token contract
+   ------------------------------------------------------------
+   This file is the BASE LAYER of the Theme_System (design A1):
+     1. The full token-name CONTRACT every theme must define.
+        (color tiers, borders, foreground, accent, signal, type,
+         geometry, space, elevation, motion)
+     2. Sensible DEFAULT token values so the UI renders before a
+        theme stylesheet loads. These defaults mirror the Halo
+        theme and are superseded by styles/themes/halo.css (task 8.1).
+     3. The --density-scale / --font-scale mechanism applied to the
+        spacing and type tokens (design A5), so interface density
+        and font-size scaling work once theme.js wires them up.
+     4. Structural / non-themeable rules: reset, layout grid, and
+        component geometry that never changes. All themeable values
+        (color, radius, type, spacing) reference tokens — never
+        hardcoded literals.
+
+   No build step, no remote origins: served verbatim by
+   express.static from src/public.
+   ============================================================ */
+
+:root {
+  /* ---------- Customization inputs (override layer, design A5) ----------
+     theme.js sets these as inline custom properties on <html> to apply
+     user density / font-size choices. Defaults keep the UI at 1:1. */
+  --density-scale: 1;
+  --font-scale: 1;
+
+  /* Readable line-length measure for chat content (design B1, Req 6.2).
+     Constrains message width to ~72 characters even in wide windows; the
+     .msg block stays centered in the work area via auto margins. */
+  --measure: 72ch;
+
+  /* ---------- Color: surface tiers ---------- */
+  --bg: #0a0b0f;
+  --surface: #14151c;
+  --elevated: #1e2029;
+  --overlay: rgba(10, 11, 15, 0.72);
+
+  /* Sidebar dim scrim (design B2, Req 9.4): a translucent darkening layer
+     composited over the sidebar surface so the sidebar luminance reads as
+     dimmed/recessed relative to the brighter chat work area. Works for both
+     dark and light themes (lowering luminance); themes may override. */
+  --sidebar-dim: rgba(0, 0, 0, 0.18);
+
+  /* ---------- Color: borders ---------- */
+  --border: #2a2d38;
+  --border-strong: #3a3d4a;
+  --border-soft: rgba(255, 255, 255, 0.04);
+
+  /* ---------- Color: foreground ---------- */
+  --text: #f2f4f8;
+  --text-dim: #9aa0ae;
+  --text-faint: #5c6170;
+  --text-inverse: #0a0b0f;
+
+  /* ---------- Color: accent ---------- */
+  --accent: #5b6bff;
+  --accent-hover: #7886ff;
+  --accent-pressed: #4a59e6;
+  --accent-soft: rgba(91, 107, 255, 0.12);
+  /* Foreground for text/icons placed ON the solid --accent fill (e.g. the
+     primary button). Part of the token contract so every theme picks a value
+     that meets the contrast requirement (Req 8.3, 9.1) — a light accent theme
+     (Penumbra grayscale, Cairn mint) needs dark on-accent text, a saturated
+     accent (Halo indigo, Vellum iris) needs light. Default mirrors Halo. */
+  --accent-contrast: #ffffff;
+
+  /* ---------- Color: signal ---------- */
+  --ok: #2be08c;
+  --warn: #f5d547;
+  --info: #3dd7e5;
+  --err: #ff3a5c;
+  --ok-soft: rgba(43, 224, 140, 0.12);
+  --warn-soft: rgba(245, 213, 71, 0.14);
+  --info-soft: rgba(61, 215, 229, 0.14);
+  --err-soft: rgba(255, 58, 92, 0.14);
+
+  /* ---------- Type ---------- */
+  --font-display: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Base type size, scaled by the user font-scale choice (design A5). */
+  --fs-base: calc(14px * var(--font-scale));
+
+  /* ---------- Geometry (corner radii) ---------- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 999px;
+
+  /* ---------- Space (4px grid, scaled by interface density) ---------- */
+  --space-1: calc(4px * var(--density-scale));
+  --space-2: calc(8px * var(--density-scale));
+  --space-3: calc(12px * var(--density-scale));
+  --space-4: calc(16px * var(--density-scale));
+  --space-5: calc(20px * var(--density-scale));
+  --space-6: calc(24px * var(--density-scale));
+  --space-8: calc(32px * var(--density-scale));
+  --space-10: calc(40px * var(--density-scale));
+  --space-12: calc(48px * var(--density-scale));
+  --space-16: calc(64px * var(--density-scale));
+  --space-20: calc(80px * var(--density-scale));
+
+  /* ---------- Elevation ---------- */
+  --shadow-sm: 0 1px 0 rgba(255, 255, 255, 0.02) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.5);
+  --focus-ring: 0 0 0 3px var(--accent-soft);
+
+  /* ---------- Motion ---------- */
+  --motion-fast: 120ms;
+  --motion-base: 150ms;
+  --motion-slow: 240ms;
+  --easing-standard: cubic-bezier(0.2, 0.6, 0.2, 1);
+
+  /* ---------- Structure: layout geometry + stacking (design B, Req 12.3) ----------
+     Additive Structural_Tokens with non-empty defaults so the region-based shell
+     renders with non-zero geometry and the documented stacking order even when no
+     theme overrides them. Themes MAY override; they are not required to. */
+  --topbar-h: 48px;
+  --rail-w: 248px;
+  --trace-w: 380px;
+  --z-topbar: 30; /* below modals (40) */
+  --z-overlay-panel: 45; /* trace when overlaying on narrow windows */
+  --z-menu: 50; /* settings popover */
+  --z-palette: 60; /* command palette (topmost) */
+
+  /* ---------- Derived / component-local tokens (non-contract) ---------- */
+  --user-bubble: #243049;
+}
+
+/* ============================================================
+   Reset + base
+   ============================================================ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-base);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+.t-mono {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.muted {
+  color: var(--text-faint);
+}
+
+h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
+  font-family: var(--font-display);
+  margin: 0;
+}
+
+.icon {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.topbar__kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 1px 4px;
+  color: var(--text-dim);
+  margin-left: var(--space-2);
+  vertical-align: middle;
+}
+
+/* ============================================================
+   App shell (region-based two-row layout — structural geometry)
+   ------------------------------------------------------------
+   Row 1: slim Top_Bar (full width). Row 2: content row holding
+   the conversation rail, chat canvas, and dockable trace panel.
+   ============================================================ */
+.app {
+  display: grid;
+  grid-template-rows: var(--topbar-h) 1fr;
+  height: 100vh;
+}
+
+/* ============================================================
+   Top bar (slim, full-width region)
+   ============================================================ */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  z-index: var(--z-topbar);
+}
+
+.topbar__lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Command palette search launcher (Req 2.2 / Design premium improvement) */
+.btn.topbar__search-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px var(--space-3);
+  color: var(--text-dim);
+  cursor: pointer;
+  min-width: 220px;
+  max-width: 320px;
+  text-align: left;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: normal;
+  transition: all var(--motion-fast) var(--easing-standard);
+  white-space: nowrap;
+}
+
+.btn.topbar__search-btn:hover {
+  border-color: var(--border-strong);
+  background: var(--elevated);
+  color: var(--text);
+}
+
+.topbar__search-text {
+  flex: 1;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  font-weight: normal;
+}
+
+.btn.topbar__search-btn:hover .topbar__search-text {
+  color: var(--text-dim);
+}
+
+.btn.topbar__search-btn .icon {
+  color: var(--text-faint);
+  width: 14px;
+  height: 14px;
+}
+
+.btn.topbar__search-btn:hover .icon {
+  color: var(--text-dim);
+}
+
+.btn.topbar__search-btn .topbar__kbd {
+  margin-left: auto;
+}
+
+/* ============================================================
+   Content row: rail | canvas | trace
+   ------------------------------------------------------------
+   The trace track is collapsed to 0 until the shell is
+   .trace-open, where it docks to --trace-w on wide windows.
+   ============================================================ */
+.content {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr 0;
+  min-height: 0; /* allow inner scroll regions */
+  transition: grid-template-columns var(--motion-base) var(--easing-standard);
+}
+
+.app.trace-open .content {
+  grid-template-columns: var(--rail-w) 1fr var(--trace-w);
+}
+
+/* ============================================================
+   Conversation rail (slimmed: brand + New + list + foot only)
+   ============================================================ */
+.rail {
+  background: linear-gradient(var(--sidebar-dim), var(--sidebar-dim)), var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.rail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-4) var(--space-3);
+}
+
+.rail__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.brand__mark {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--accent), var(--accent-pressed));
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
+.brand__name {
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  font-size: 13px;
+}
+
+.brand__tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 1px 7px;
+}
+
+.conversation-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-1) var(--space-2);
+}
+
+.conversation-list__empty {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  padding: var(--space-3);
+  margin: 0;
+}
+
+.conversation-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.conversation-item:hover {
+  background: var(--elevated);
+  color: var(--text);
+}
+
+.conversation-item.active {
+  background: var(--elevated);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.conversation-item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
+.rail__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+}
+
+/* ============================================================
+   Chat canvas (focused: messages + composer, no per-column header)
+   ============================================================ */
+.chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg);
+}
+
+.status-pill {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex: none;
+}
+
+/* Status glyph (Req 6.4, 9.4): a per-state icon precedes the text label so
+   run status is never conveyed by color alone. The glyph is decorative
+   (pseudo-element, not surfaced to AT); the visible text label is the
+   accessible signal app.js sets on the pill. */
+.status-pill::before {
+  content: "•";
+  margin-right: 5px;
+  font-weight: 700;
+}
+
+.status-pill--idle {
+  color: var(--text-faint);
+}
+.status-pill--idle::before {
+  content: "○";
+}
+.status-pill--running {
+  color: var(--accent);
+  border-color: var(--accent-pressed);
+  background: var(--accent-soft);
+}
+.status-pill--running::before {
+  content: "◐";
+}
+.status-pill--done {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+.status-pill--done::before {
+  content: "✓";
+}
+.status-pill--decision {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+.status-pill--decision::before {
+  content: "!";
+}
+.status-pill--failed {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+.status-pill--failed::before {
+  content: "✕";
+}
+
+/* --- Live connection badge (SSE stream / polling fallback) --- */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-strong);
+  white-space: nowrap;
+  flex: none;
+}
+
+.live-badge[hidden] {
+  display: none;
+}
+
+.live-badge__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex: none;
+}
+
+/* Streaming: a live, pulsing green dot. */
+.live-badge[data-mode="sse"] {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+.live-badge[data-mode="sse"] .live-badge__dot {
+  background: var(--ok);
+  box-shadow: 0 0 6px var(--ok);
+  animation: live-pulse 1.4s ease-in-out infinite;
+}
+
+/* Polling fallback: a steady amber dot. */
+.live-badge[data-mode="polling"] {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+.live-badge[data-mode="polling"] .live-badge__dot {
+  background: var(--warn);
+  box-shadow: 0 0 6px var(--warn);
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-badge[data-mode="sse"] .live-badge__dot {
+    animation: none;
+  }
+}
+
+/* ============================================================
+   Messages
+   ------------------------------------------------------------
+   Chat content is capped at --measure and centered horizontally
+   within the canvas (Req 4.4): the region centers its children,
+   and each .msg caps its width at --measure.
+   ============================================================ */
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-6) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.empty-state {
+  margin: auto;
+  max-width: 440px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.empty-state__mark {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto var(--space-4);
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, var(--accent), var(--accent-pressed));
+  opacity: 0.9;
+}
+
+.empty-state h2 {
+  color: var(--text);
+  font-size: 18px;
+  margin: 0 0 var(--space-2);
+}
+
+.empty-state p {
+  font-size: 13px;
+  margin: 0 0 var(--space-5);
+}
+
+.suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.suggestion {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+}
+
+.suggestion:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.suggestion:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-width: var(--measure);
+  width: 100%;
+  margin: 0 auto;
+}
+
+.msg__role {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-faint);
+}
+
+.msg__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.msg__badge--proactive {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.msg__bubble {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.msg--user {
+  align-items: flex-end;
+}
+
+.msg--user .msg__bubble {
+  background: var(--user-bubble);
+  border: 1px solid var(--border-strong);
+}
+
+.msg--assistant .msg__bubble {
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.msg--assistant .msg__bubble.is-pending {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.msg__footer {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.msg__trace-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.msg__trace-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+/* ============================================================
+   Composer
+   ============================================================ */
+.composer {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-end;
+  padding: var(--space-3) var(--space-5) var(--space-1);
+  border-top: 1px solid var(--border);
+}
+
+.composer__input {
+  flex: 1;
+  resize: none;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  padding: var(--space-3);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.composer__input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+/* Quick note capture (Chunk 036 Wave 2B) — composer-adjacent episodic write */
+.note-capture {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5) 0;
+  border-top: 1px solid var(--border);
+}
+
+.note-capture__input {
+  flex: 1;
+  min-width: 12rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.4;
+  padding: var(--space-2) var(--space-3);
+}
+
+.note-capture__input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.note-capture__save {
+  flex-shrink: 0;
+}
+
+.note-capture__status {
+  flex: 1 1 100%;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.note-capture__status[hidden] {
+  display: none;
+}
+
+.note-capture__status--ok {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.note-capture__status--err {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+
+.composer__options {
+  padding: var(--space-2) var(--space-5) 0;
+}
+
+.composer__options .appearance-toggle {
+  max-width: fit-content;
+}
+
+.composer__hint {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: var(--space-2) var(--space-5) var(--space-3);
+  margin: 0;
+}
+
+/* ============================================================
+   Buttons
+   ============================================================ */
+.btn {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--elevated);
+  color: var(--text);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  border-color: var(--accent);
+}
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: var(--accent);
+  background: var(--accent-gradient, var(--accent));
+  border-color: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  background: var(--accent-gradient, var(--accent-hover));
+  opacity: 0.92;
+  border-color: var(--accent-hover);
+}
+
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--elevated);
+  border-color: var(--border-strong);
+}
+
+.btn--sm {
+  padding: var(--space-1) var(--space-3);
+  font-size: 12px;
+}
+
+/* ============================================================
+   Trace drawer
+   ============================================================ */
+.trace {
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.app:not(.trace-open) .trace {
+  display: none;
+}
+
+.trace__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+
+.trace__head h2 {
+  font-size: 14px;
+  margin: 0;
+}
+
+.trace__empty {
+  padding: var(--space-5) var(--space-4);
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+.trace-section {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.trace-section__title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  margin: 0 0 var(--space-3);
+}
+
+.trace-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 3px 0;
+}
+
+.trace-kv__k {
+  color: var(--text-dim);
+}
+
+.trace-kv__v {
+  color: var(--text);
+  text-align: right;
+  word-break: break-all;
+}
+
+/* ============================================================
+   Observability grid
+   ============================================================ */
+.obs-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.obs-stat {
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.obs-stat__value {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.obs-stat__label {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ============================================================
+   Live cost / token panel
+   ============================================================ */
+.cost-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+/* The estimated-cost tile spans the full row so it reads as the headline figure. */
+.cost-stat--accent {
+  grid-column: 1 / -1;
+}
+
+.cost-stat {
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cost-stat--accent {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.cost-stat__value {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cost-stat--accent .cost-stat__value {
+  color: var(--accent);
+  font-size: 19px;
+}
+
+.cost-stat__label {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.cost-meta {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.cost-meta__row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: 12px;
+}
+
+.cost-meta__k {
+  color: var(--text-dim);
+  flex: none;
+}
+
+.cost-meta__v {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  text-align: right;
+  word-break: break-word;
+}
+
+/* ============================================================
+   Phase timeline
+   ============================================================ */
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.timeline__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.timeline__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  flex: none;
+}
+
+.timeline__item--done .timeline__dot {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+.timeline__item--done {
+  color: var(--text);
+}
+.timeline__item--active .timeline__dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 7px var(--accent);
+}
+.timeline__item--failed .timeline__dot {
+  background: var(--err);
+  border-color: var(--err);
+}
+.timeline__item--decision .timeline__dot {
+  background: var(--warn);
+  border-color: var(--warn);
+}
+
+.timeline__phase {
+  flex: 1;
+}
+
+.timeline__meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* ============================================================
+   Phase cards (Trace_Drawer supervision surface, Req 7.1–7.6)
+   ============================================================ */
+.phase-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.phase-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  overflow: hidden;
+}
+
+.phase-card__header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.phase-card__header:hover {
+  background: var(--surface);
+}
+
+.phase-card__header:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+.phase-card__icon {
+  flex: none;
+  width: 1.1em;
+  text-align: center;
+  color: var(--text-faint);
+}
+
+.phase-card__name {
+  flex: 1;
+  font-weight: 500;
+}
+
+.phase-card__status {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.phase-card__duration {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  min-width: 0;
+}
+
+/* Status accents — color reinforces the always-present icon + status text,
+   never the sole signal (Req 9.4). */
+.phase-card--done .phase-card__icon {
+  color: var(--ok);
+}
+.phase-card--active {
+  border-color: var(--accent);
+}
+.phase-card--active .phase-card__icon {
+  color: var(--accent);
+}
+.phase-card--active .phase-card__status {
+  color: var(--accent);
+}
+
+/* Non-success terminal phases are visually distinct from a clean completion
+   (Req 7.6): a colored left rail plus a tinted surface. */
+.phase-card--failed {
+  border-color: var(--err);
+  border-left-width: 3px;
+  background: var(--err-soft);
+}
+.phase-card--failed .phase-card__icon,
+.phase-card--failed .phase-card__status {
+  color: var(--err);
+}
+.phase-card--decision {
+  border-color: var(--warn);
+  border-left-width: 3px;
+  background: var(--warn-soft);
+}
+.phase-card--decision .phase-card__icon,
+.phase-card--decision .phase-card__status {
+  color: var(--warn);
+}
+
+.phase-card--pending {
+  opacity: 0.72;
+}
+
+.phase-card__body {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.phase-card__evidence {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.phase-card__events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.phase-card__event {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.phase-card__empty {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.phase-card__details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.phase-card__details-summary {
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+  list-style: none;
+}
+
+.phase-card__details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.phase-card__details-pre {
+  margin: 0;
+  padding: var(--space-2);
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 12rem;
+  overflow: auto;
+}
+
+/* ============================================================
+   Decision card
+   ============================================================ */
+.decision__card {
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+/* ============================================================
+   Events
+   ============================================================ */
+.events {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.event {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: var(--space-1) var(--space-2);
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.event__type {
+  color: var(--accent);
+  flex: none;
+}
+
+.event__phase {
+  color: var(--text-faint);
+}
+
+/* ============================================================
+   Settings menu (anchored popover) — overlay surface
+   ------------------------------------------------------------
+   Anchored to the gear button in the Top_Bar; floats above the
+   shell at the --z-menu stacking level (Req 6, 13.1). Every
+   color / radius / elevation reference is a theme token, never a
+   literal, so all five themes drive the surface (Req 12.1).
+   ============================================================ */
+.menu {
+  position: relative;
+}
+
+.menu__popover {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  min-width: 240px;
+  padding: var(--space-2);
+  background: var(--elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: var(--z-menu);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menu__popover[hidden] {
+  display: none;
+}
+
+.menu__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.menu__item:hover {
+  background: var(--surface);
+}
+
+/* Visible keyboard focus indicator on menu items (Req 13.3). */
+.menu__item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.menu__sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border);
+}
+
+/* Pending-approvals count on the menu item (Req 9.1, 9.5). */
+.menu__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-inverse);
+  background: var(--warn);
+}
+
+.menu__badge[hidden] {
+  display: none;
+}
+
+/* Gear approval dot mirrored on the settings control (Req 9.1, 9.2). */
+.topbar__approval-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: var(--space-1);
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.topbar__approval-dot[hidden] {
+  display: none;
+}
+
+/* ============================================================
+   Command palette — centered overlay surface (topmost)
+   ------------------------------------------------------------
+   Floats above every other surface at the --z-palette stacking
+   level (Req 7, 13.1). Token-driven for full theme support.
+   ============================================================ */
+.palette {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-palette);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+}
+
+.palette[hidden] {
+  display: none;
+}
+
+.palette__backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay);
+}
+
+.palette__panel {
+  position: relative;
+  width: min(560px, 92vw);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.palette__input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  padding: var(--space-3) var(--space-4);
+}
+
+/* Visible keyboard focus indicator on the palette input (Req 13.3). */
+.palette__input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.palette__list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2);
+  max-height: 50vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.palette__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.palette__option:hover {
+  background: var(--elevated);
+  color: var(--text);
+}
+
+.palette__option[aria-selected="true"] {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.palette__empty {
+  padding: var(--space-3);
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+/* ============================================================
+   Overlay motion (settings menu + command palette)
+   ------------------------------------------------------------
+   Compositor-friendly entrance: animate only transform / opacity,
+   completing well under 300ms via motion tokens (Req 13.1). Gated
+   behind prefers-reduced-motion: no-preference and disabled under
+   the explicit reduced-motion user hook (Req 13.2).
+   ============================================================ */
+@media (prefers-reduced-motion: no-preference) {
+  .menu__popover {
+    animation: pop-in var(--motion-fast) var(--easing-standard);
+  }
+  .palette__panel {
+    animation: pop-in var(--motion-base) var(--easing-standard);
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ============================================================
+   Modal (provider test / setup / safety / approval overlays)
+   ============================================================ */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+}
+
+.modal[hidden] {
+  display: none;
+}
+
+.modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay);
+}
+
+.modal__panel {
+  position: relative;
+  width: min(460px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+}
+
+.modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.modal__title {
+  font-size: 15px;
+  margin: 0;
+}
+
+.modal__body {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.modal__desc {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+/* ============================================================
+   Provider list (selectable)
+   ============================================================ */
+.provider-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin: 0;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.provider-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.provider-option:hover {
+  background: var(--elevated);
+  color: var(--text);
+}
+
+/* The selectable provider row wraps a radio input; surface the focus ring on
+   the whole row so keyboard focus is visible in every theme (Req 8.3, 9.3). */
+.provider-option:focus-within {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  background: var(--elevated);
+  color: var(--text);
+}
+
+.provider-option input {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.provider-option__label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.provider-option__name {
+  color: var(--text);
+}
+
+.provider-option__id {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.provider-option input:disabled + .provider-option__label {
+  opacity: 0.5;
+}
+
+/* ============================================================
+   Loading indicator
+   ============================================================ */
+.provider-test__loading {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.provider-test__loading[hidden] {
+  display: none;
+}
+
+.provider-test__spinner {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: provider-spin 0.7s linear infinite;
+  flex: none;
+}
+
+@keyframes provider-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-test__spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+/* ============================================================
+   Result message
+   ============================================================ */
+.provider-result {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.provider-result[hidden] {
+  display: none;
+}
+
+.provider-result--ok {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.provider-result--err {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+
+/* ============================================================
+   Workspace safety panel
+   ============================================================ */
+.safety-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+.safety-loading[hidden] {
+  display: none;
+}
+
+.safety-unavailable {
+  border: 1px solid var(--err);
+  background: var(--err-soft);
+  color: var(--err);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  font-size: 12.5px;
+}
+
+.safety-unavailable[hidden] {
+  display: none;
+}
+
+.safety {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.safety[hidden] {
+  display: none;
+}
+
+.safety-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.safety-row__k {
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+
+.safety-row__v {
+  color: var(--text);
+  text-align: right;
+  word-break: break-all;
+}
+
+.safety-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.safety-badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex: none;
+}
+
+.safety-badge--ok {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.safety-badge--warn {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.safety-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.safety-list__item {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text);
+  padding: var(--space-2);
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.safety-list__empty {
+  font-size: 12px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* ============================================================
+   Memory browser (Chunk 36 stretch)
+   ============================================================ */
+.memory-browser__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.memory-browser__filter--active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.memory-browser__provider {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.memory-browser__loading,
+.memory-browser__error,
+.memory-browser__empty {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.memory-browser__error {
+  color: var(--danger);
+}
+
+.memory-browser__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 420px;
+  overflow: auto;
+}
+
+.memory-browser__item {
+  padding: var(--space-3);
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.memory-browser__item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.memory-browser__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid var(--border);
+}
+
+.memory-browser__badge--episodic {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.memory-browser__badge--core {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+
+.memory-browser__badge--working {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.memory-browser__time {
+  font-size: 11px;
+}
+
+.memory-browser__content {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-browser__meta {
+  margin-top: var(--space-2);
+  font-size: 11px;
+}
+
+/* ============================================================
+   Sidebar badge (pending approvals count)
+   ============================================================ */
+.sidebar__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  margin-left: var(--space-2);
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-inverse);
+  background: var(--warn);
+  vertical-align: middle;
+}
+
+.sidebar__badge[hidden] {
+  display: none;
+}
+
+/* ============================================================
+   Run approval panel (Approval_Flow)
+   ============================================================ */
+.approval-empty {
+  border: 1px solid var(--border);
+  background: var(--elevated);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.approval-empty[hidden] {
+  display: none;
+}
+
+.approval {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.approval[hidden] {
+  display: none;
+}
+
+.approval-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.approval-row__k {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  flex: none;
+}
+
+.approval-row__v {
+  color: var(--text);
+  text-align: right;
+  word-break: break-all;
+}
+
+.approval-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.approval-block[hidden] {
+  display: none;
+}
+
+.approval-code {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.approval-diff {
+  max-height: 320px;
+}
+
+.approval-risky {
+  font-size: 11.5px;
+  color: var(--warn);
+}
+
+.approval-risky[hidden] {
+  display: none;
+}
+
+.approval-identity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.approval-input {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  padding: var(--space-2) var(--space-3);
+  min-width: 180px;
+}
+
+.approval-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.approval-result {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.approval-result[hidden] {
+  display: none;
+}
+
+.approval-result--ok {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.approval-result--err {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+
+/* ============================================================
+   Setup Wizard panel (Setup_Wizard)
+   ============================================================ */
+.wizard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.wizard__mode {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.wizard__mode-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.wizard__mode-value {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wizard__pills {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.wizard-pill {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: var(--elevated);
+}
+
+.wizard-pill__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.wizard-pill__name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wizard-pill__status {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex: none;
+}
+
+.wizard-pill__detail {
+  margin: var(--space-2) 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.wizard-pill--ready {
+  border-color: var(--ok);
+}
+.wizard-pill--ready .wizard-pill__status {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.wizard-pill--incomplete {
+  border-color: var(--warn);
+}
+.wizard-pill--incomplete .wizard-pill__status {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.wizard-pill--error {
+  border-color: var(--err);
+}
+.wizard-pill--error .wizard-pill__status {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+
+.wizard__loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.wizard__loading[hidden] {
+  display: none;
+}
+
+.wizard__error {
+  border: 1px solid var(--err);
+  background: var(--err-soft);
+  color: var(--err);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  font-size: 12.5px;
+}
+
+.wizard__error[hidden] {
+  display: none;
+}
+
+/* ============================================================
+   Scrollbars
+   ============================================================ */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ============================================================
+   Responsive: collapse rail + overlay trace on narrow screens
+   ------------------------------------------------------------
+   On wide windows the trace docks as a column (.app.trace-open
+   .content gains the --trace-w track above). At <=900px the
+   conversation rail collapses and the open trace becomes a fixed
+   overlay anchored below the Top_Bar at the --z-overlay-panel
+   stacking level (Req 5.3). Geometry uses structural tokens.
+   ============================================================ */
+@media (max-width: 900px) {
+  .content,
+  .app.trace-open .content {
+    grid-template-columns: 0 1fr 0;
+  }
+  .rail {
+    display: none;
+  }
+  .app.trace-open .trace {
+    position: fixed;
+    top: var(--topbar-h);
+    right: 0;
+    bottom: 0;
+    width: min(var(--trace-w), 100%);
+    box-shadow: var(--shadow-lg);
+    z-index: var(--z-overlay-panel);
+  }
+}
+
+/* ============================================================
+   Reduced_Motion user toggle (design A5, Req 3.4, 9.2)
+   ------------------------------------------------------------
+   theme.js setReducedMotion(true) sets data-reduced-motion="true" on
+   <html> (and the no-flash boot script applies it before first paint).
+   This mirrors the prefers-reduced-motion media behavior so the user's
+   explicit choice disables non-essential animation/transition while full
+   state feedback (color, text, icon) is preserved.
+   ============================================================ */
+:root[data-reduced-motion="true"] *,
+:root[data-reduced-motion="true"] *::before,
+:root[data-reduced-motion="true"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Explicitly disable the overlay entrance animation (settings menu + command
+   palette) under the user's reduced-motion choice. Declared after the global
+   rule so the global :root[data-reduced-motion="true"] block stays the first
+   match in this file. */
+[data-reduced-motion="true"] .menu__popover,
+[data-reduced-motion="true"] .palette__panel {
+  animation: none;
+}
+
+/* ============================================================
+   Appearance settings panel (Appearance_Settings, task 9.2)
+   ------------------------------------------------------------
+   All values reference theme tokens so the panel adopts the active
+   theme (Req 1.7, 8). The panel is a modal overlay reusing .modal.
+   ============================================================ */
+.modal__panel--wide {
+  width: min(560px, 100%);
+}
+
+.appearance-group {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.appearance-group__legend {
+  padding: 0;
+  margin: 0 0 var(--space-1);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+
+/* Theme picker -------------------------------------------------- */
+.appearance-themes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-2);
+}
+
+.appearance-theme {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--text-dim);
+  background: var(--bg);
+}
+
+.appearance-theme:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.appearance-theme.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* Hide the native radio; the card + ring convey selection. The input stays
+   focusable so the focus ring lands on the card (Req 9.3). */
+.appearance-theme input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.appearance-theme:focus-within {
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
+.appearance-theme__swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  flex: none;
+}
+
+.appearance-theme__swatch--halo {
+  background: linear-gradient(135deg, #0a0b0f 50%, #5b6bff 50%);
+}
+.appearance-theme__swatch--aether {
+  background: linear-gradient(135deg, #06070a 45%, #22d3ee, #e879f9, #f59e0b);
+}
+.appearance-theme__swatch--cairn {
+  background: linear-gradient(135deg, #0c0d0c 50%, #9fe7c7 50%);
+}
+.appearance-theme__swatch--penumbra {
+  background: linear-gradient(135deg, #0b0b0c 50%, #8a8a90 50%);
+}
+.appearance-theme__swatch--vellum {
+  background: linear-gradient(135deg, #f4eedd 45%, #14b8a6, #6366f1, #3b82f6);
+}
+
+.appearance-theme__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.appearance-theme__name {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.appearance-theme__note {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+
+/* Accent palette ------------------------------------------------ */
+.appearance-accents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.appearance-accent {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  color: var(--text-dim);
+  background: var(--bg);
+  font-size: 11.5px;
+}
+
+.appearance-accent:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.appearance-accent.is-active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.appearance-accent input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.appearance-accent:focus-within {
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
+.appearance-accent__swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  flex: none;
+}
+
+/* "Theme default" swatch: a neutral split chip rather than a solid color. */
+.appearance-accent__swatch--default {
+  background: linear-gradient(135deg, var(--surface) 50%, var(--text-faint) 50%);
+}
+
+.appearance-accent__label {
+  white-space: nowrap;
+}
+
+.appearance-warning {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--warn);
+  background: var(--warn-soft);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.appearance-warning[hidden] {
+  display: none;
+}
+
+/* Segmented controls (density / font size) ---------------------- */
+.appearance-segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  align-self: flex-start;
+}
+
+.appearance-segment {
+  position: relative;
+  display: inline-flex;
+}
+
+.appearance-segment input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.appearance-segment span {
+  padding: var(--space-2) var(--space-3);
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  user-select: none;
+}
+
+.appearance-segment:last-child span {
+  border-right: none;
+}
+
+.appearance-segment span:hover {
+  color: var(--text);
+  background: var(--elevated);
+}
+
+.appearance-segment input:checked + span {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.appearance-segment input:focus-visible + span {
+  box-shadow: var(--focus-ring);
+}
+
+/* Reduced-motion toggle ----------------------------------------- */
+.appearance-toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: var(--space-3);
+  align-items: center;
+  cursor: pointer;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.appearance-toggle input {
+  grid-row: 1 / span 2;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+/* Visible focus ring on the motion toggle's checkbox, surfaced on the row so
+   it reads in every theme (Req 8.3, 9.3). */
+.appearance-toggle:focus-within {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
+.appearance-toggle__label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.appearance-toggle__hint {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* ============================================================
+   Provider_Config_UI (Req 10/11/14.5/15). A two-tier BYOK
+   configuration surface rendered in the .modal overlay. All
+   colors/geometry reference theme tokens so it adopts the
+   Active_Theme like every other panel (Req 1.7, 8).
+   ============================================================ */
+.provider-config-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.provider-config-loading[hidden] {
+  display: none;
+}
+
+.provider-config-error {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--err);
+  border-radius: var(--radius-sm);
+  background: var(--err-soft);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.provider-config-error[hidden] {
+  display: none;
+}
+
+.provider-config-tier {
+  margin-top: var(--space-4);
+}
+
+.provider-config-tier__title {
+  margin: 0 0 var(--space-2);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.provider-config-tier__desc {
+  margin: 0 0 var(--space-3);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.provider-config-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.provider-config-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.provider-config-card--active {
+  border-color: var(--accent);
+}
+
+.provider-config-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.provider-config-card__icon {
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.provider-config-card--configured .provider-config-card__icon {
+  color: var(--ok);
+}
+
+.provider-config-card--active .provider-config-card__icon {
+  color: var(--accent);
+}
+
+.provider-config-card__name {
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+}
+
+.provider-config-card__status {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full, 999px);
+  color: var(--text-dim);
+}
+
+.provider-config-card--configured .provider-config-card__status {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.provider-config-card--active .provider-config-card__status {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.provider-config-card__fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.provider-config-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.provider-config-label {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.provider-config-input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  padding: var(--space-2) var(--space-3);
+  box-sizing: border-box;
+}
+
+.provider-config-input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
+.provider-config-key-wrap {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.provider-config-key-wrap .provider-config-key {
+  flex: 1;
+  font-family: var(--font-mono);
+}
+
+.provider-config-key-toggle {
+  flex: none;
+}
+
+.provider-config-key-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.provider-config-card__roles {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.provider-config-roles__label {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.provider-config-role {
+  font-size: 12px;
+  padding: var(--space-1, 4px) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.provider-config-role:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--elevated);
+}
+
+.provider-config-role:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.provider-config-role.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.provider-config-role:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.provider-config-card__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.provider-config-test-loading {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  display: inline-block;
+  animation: provider-spin 0.7s linear infinite;
+}
+
+.provider-config-test-loading[hidden] {
+  display: none;
+}
+
+:root[data-reduced-motion="true"] .provider-config-test-loading {
+  animation: none;
+}
+
+.provider-config-result {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.provider-config-result[hidden] {
+  display: none;
+}
+
+.provider-config-result--ok {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.provider-config-result--err {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+
+/* --- Model_Picker (model discovery + per-role selection, Req 19–24) --- */
+.model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.model-picker__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.model-picker__controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.model-picker-refreshed {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.model-picker-refreshed[hidden] {
+  display: none;
+}
+
+.model-picker-loading {
+  margin-left: var(--space-1, 4px);
+}
+
+.model-picker-error {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--err);
+  border-radius: var(--radius-sm);
+  background: var(--err-soft);
+  color: var(--err);
+  font-size: 12.5px;
+}
+
+.model-picker-error[hidden] {
+  display: none;
+}
+
+.model-picker-azure-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.model-picker-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.model-candidate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1, 4px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+}
+
+.model-candidate__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.model-candidate__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.model-candidate__lifecycle {
+  font-size: 11px;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.model-candidate__lifecycle.is-deprecated {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+
+.model-candidate__caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1, 4px);
+}
+
+.model-candidate__cap {
+  font-size: 11px;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  color: var(--text-dim);
+}
+
+.model-candidate__meta,
+.model-candidate__note {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.model-picker-roles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.model-picker-role-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.model-picker-role-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  min-width: 84px;
+}
+
+.model-picker-role-select,
+.model-picker-role-manual {
+  font-size: 12px;
+  padding: var(--space-1, 4px) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.model-picker-role-verify {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.model-picker-role-verify.is-verified {
+  color: var(--ok);
+}
+
+.model-picker-role-warning {
+  flex-basis: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--warn, var(--err));
+  border-radius: var(--radius-sm);
+  background: var(--err-soft);
+  color: var(--err);
+  font-size: 12px;
+}
+
+.model-picker-role-warning[hidden] {
+  display: none;
+}
+
+.provider-config-adv {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  padding: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.provider-config-adv__foot {
+  display: flex;
+  justify-content: flex-end;
+}

@@ -1,0 +1,419 @@
+[
+  {
+    "chunkNumber": 0,
+    "title": "Chunk 0 — Source-of-Truth Docs and Stale Doc Quarantine",
+    "summary": "Mark the current architecture and roadmap as authoritative, quarantine stale docs, and make the contributor reading path clear.",
+    "labels": ["roadmap", "chunk:000", "docs", "contributor-experience", "good first issue", "difficulty:beginner"],
+    "difficulty": "beginner",
+    "goodFirstIssue": true,
+    "acceptanceCriteria": [
+      "Current source-of-truth docs are listed before stale historical material.",
+      "Stale local-MVP or cloud-heavy docs contain clear warning banners or archive notes.",
+      "Root and docs README files direct new contributors to the authoritative architecture and roadmap."
+    ],
+    "testCommands": ["npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:000", "docs", "contributor-experience", "good first issue", "difficulty:beginner"], "priority": "low" }
+  },
+  {
+    "chunkNumber": 1,
+    "title": "Chunk 1 — Open-Source Foundation and Apache-2.0 Setup",
+    "summary": "Add licensing, governance, issue templates, security policy, and provider-free contributor onboarding for an Apache-2.0 project.",
+    "labels": ["roadmap", "chunk:001", "docs", "governance", "contributor-experience", "good first issue", "difficulty:beginner"],
+    "difficulty": "beginner",
+    "goodFirstIssue": true,
+    "acceptanceCriteria": [
+      "Apache-2.0 license, notice, trademarks, code of conduct, contributing, and security docs are present.",
+      "Issue and pull request templates guide contributors without requiring private tools.",
+      "Provider-free quickstart explains local setup without paid service credentials."
+    ],
+    "testCommands": ["npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:001", "docs", "governance", "contributor-experience", "good first issue", "difficulty:beginner"], "priority": "low" }
+  },
+  {
+    "chunkNumber": 2,
+    "title": "Chunk 2 — Repo Migration Map and Compatibility Strategy",
+    "summary": "Map old task-MVP files to the new chat/run architecture so contributors know what to preserve, wrap, rename, or retire.",
+    "labels": ["roadmap", "chunk:002", "docs", "migration", "contributor-experience", "good first issue", "difficulty:beginner"],
+    "difficulty": "beginner",
+    "goodFirstIssue": true,
+    "acceptanceCriteria": [
+      "Old task-MVP modules are inventoried against the new run/conversation architecture.",
+      "Each legacy area has a preserve, wrap, rename, or retire decision.",
+      "Tests to preserve or replace are documented for follow-up chunks."
+    ],
+    "testCommands": ["npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:002", "docs", "migration", "contributor-experience", "good first issue", "difficulty:beginner"], "priority": "low" }
+  },
+  {
+    "chunkNumber": 3,
+    "title": "Chunk 3 — Protocol Foundation",
+    "summary": "Create canonical protocol contracts for phases, envelopes, events, DAG schemas, retry policies, and validation policies.",
+    "labels": ["roadmap", "chunk:003", "protocol", "schemas", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Protocol types cover run phases, event envelopes, DAG nodes, retry policy, and validation policy.",
+      "Invalid protocol payloads are rejected by schema tests.",
+      "No provider or UI behavior changes are introduced."
+    ],
+    "testCommands": ["npm test -- tests/protocol.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:003", "protocol", "schemas", "difficulty:intermediate"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 4,
+    "title": "Chunk 4 — Core Data Model and Local Store",
+    "summary": "Introduce conversation, message, run, artifact, event, and budget types with an in-memory provider-free store.",
+    "labels": ["roadmap", "chunk:004", "data-model", "local-mode", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Core data model types exist for conversations, messages, runs, artifacts, events, and budgets.",
+      "In-memory local store supports create, read, list, update, and delete behavior needed by later chunks.",
+      "Store tests prove provider-free operation and deterministic behavior."
+    ],
+    "testCommands": ["npm test -- tests/store.test.ts tests/state.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:004", "data-model", "local-mode", "difficulty:intermediate"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 5,
+    "title": "Chunk 5 — Run State Machine and Event Log",
+    "summary": "Implement the hidden run lifecycle with append-only events, validated transitions, and resumable NEEDS_DECISION state.",
+    "labels": ["roadmap", "chunk:005", "state-machine", "events", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Run lifecycle transitions match the architecture phase model.",
+      "Every valid transition emits an append-only event and invalid transitions are rejected.",
+      "NEEDS_DECISION is represented as a first-class resumable state."
+    ],
+    "testCommands": ["npm test -- tests/runStateMachine.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:005", "state-machine", "events", "difficulty:intermediate"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 6,
+    "title": "Chunk 6 — Chat API Vertical Shell",
+    "summary": "Expose chat-first endpoints and a minimal UI shell while keeping orchestration details behind the user-facing conversation.",
+    "labels": ["roadmap", "chunk:006", "api", "chat", "ui", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Users can create and open conversations through chat-first endpoints.",
+      "Sending a message produces an assistant response and visible run status metadata.",
+      "Optional trace/events visibility exists without making agent orchestration the primary UX."
+    ],
+    "testCommands": ["npm test -- tests/chatApi.test.ts tests/api.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:006", "api", "chat", "ui", "difficulty:intermediate"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 7,
+    "title": "Chunk 7 — Budget, Security, and Redaction Baseline",
+    "summary": "Add local budget controls, redaction utilities, setup-checklist secret safety, CORS config, dev auth bypass, and budget denial flow.",
+    "labels": ["roadmap", "chunk:007", "security", "budget", "redaction", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Budget limits can deny work before provider calls are attempted.",
+      "Redaction utilities remove secrets from logs, telemetry, docs examples, and setup output.",
+      "Security tests cover CORS, dev-only auth bypass, rate limiting, and secret safety."
+    ],
+    "testCommands": ["npm test -- tests/security.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:007", "security", "budget", "redaction", "difficulty:intermediate"], "priority": "high" }
+  },
+  {
+    "chunkNumber": 8,
+    "title": "Chunk 8 — Triage and Context Builder",
+    "summary": "Implement deterministic triage routes and context-pack generation with artifact handles for large material.",
+    "labels": ["roadmap", "chunk:008", "triage", "context", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Incoming chat work is routed by deterministic triage rules.",
+      "Context packs include relevant artifacts, assumptions, and limits without dumping oversized content.",
+      "Large docs, logs, or repo data are referenced by artifact handles."
+    ],
+    "testCommands": ["npm test -- tests/triageContext.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:008", "triage", "context", "difficulty:intermediate"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 9,
+    "title": "Chunk 9 — Planner Schema and Fake Planner",
+    "summary": "Define planner input/output contracts and a deterministic fake planner for local tests and provider-free development.",
+    "labels": ["roadmap", "chunk:009", "planner", "schemas", "local-mode", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Planner input and output schemas validate goals, assumptions, tasks, dependencies, validation, and risk.",
+      "Fake planner produces deterministic plans for local provider-free tests.",
+      "Approval gates are represented for unsafe or ambiguous work."
+    ],
+    "testCommands": ["npm test -- tests/planner.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:009", "planner", "schemas", "local-mode", "difficulty:intermediate"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 10,
+    "title": "Chunk 10 — Skeptic Review",
+    "summary": "Add adversarial plan review that flags missing validation, unsafe assumptions, unsupported claims, and nonexistent dependencies.",
+    "labels": ["roadmap", "chunk:010", "review", "planner", "quality", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Skeptic review returns structured findings with severity and actionable messages.",
+      "Review flags missing validation, dangling dependencies, risky assumptions, and unsupported claims.",
+      "Tests cover accepted plans, warnings, blockers, and low-risk underestimation."
+    ],
+    "testCommands": ["npm test -- tests/skeptic.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:010", "review", "planner", "quality", "difficulty:intermediate"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 11,
+    "title": "Chunk 11 — Crucible Arbitration",
+    "summary": "Implement deterministic rules that arbitrate planner and skeptic outputs with revision, escalation, and blocker handling.",
+    "labels": ["roadmap", "chunk:011", "arbitration", "planner", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Accepted plans, requested revisions, blockers, and escalation outcomes are deterministic.",
+      "Planner versus skeptic disagreements are resolved without LLM judgment.",
+      "At most two revision rounds occur before escalation."
+    ],
+    "testCommands": ["npm test -- tests/crucible.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:011", "arbitration", "planner", "difficulty:intermediate"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 12,
+    "title": "Chunk 12 — DAG Compiler",
+    "summary": "Compile accepted plans into validated JSON DAGs with dependencies, validation nodes, budget policy, permissions, retries, and timeouts.",
+    "labels": ["roadmap", "chunk:012", "dag", "compiler", "schemas", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Accepted plans compile to valid DAG JSON with nodes and dependency edges.",
+      "Validation, budget, retry, timeout, and tool permission metadata are included.",
+      "Unsafe shell permissions are denied by default in compiled metadata."
+    ],
+    "testCommands": ["npm test -- tests/dagCompiler.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:012", "dag", "compiler", "schemas", "difficulty:intermediate"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 13,
+    "title": "Chunk 13 — Executor Simulator",
+    "summary": "Run DAGs locally with fake providers and safe node types while enforcing dependencies, retries, timeouts, and shell denial.",
+    "labels": ["roadmap", "chunk:013", "executor", "simulation", "local-mode", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Simulator executes DAG nodes in dependency order with structured results.",
+      "Retry policy, timeout metadata, dependency blocking, and unsafe shell denial are enforced in simulation.",
+      "No real shell, provider, or external network execution occurs."
+    ],
+    "testCommands": ["npm test -- tests/executorSimulator.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:013", "executor", "simulation", "local-mode", "difficulty:intermediate"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 14,
+    "title": "Chunk 14 — Validation and Healing Loop",
+    "summary": "Implement bounded self-healing with validation failure classification, safe repair attempts, reruns, and escalation paths.",
+    "labels": ["roadmap", "chunk:014", "validation", "healing", "difficulty:advanced"],
+    "difficulty": "advanced",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Validation failures are classified into deterministic categories.",
+      "Safe bounded repairs are proposed and applied only when allowed by policy.",
+      "Unresolved or unsafe failures escalate to NEEDS_DECISION or FAILED."
+    ],
+    "testCommands": ["npm test -- tests/validationHealing.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:014", "validation", "healing", "difficulty:advanced"], "priority": "high" }
+  },
+  {
+    "chunkNumber": 15,
+    "title": "Chunk 15 — End-to-End Chat Brainstem Test",
+    "summary": "Create a full local proof from chat message through triage, planning, review, arbitration, DAG execution, validation, healing, and final answer.",
+    "labels": ["roadmap", "chunk:015", "e2e", "chat", "quality", "difficulty:advanced"],
+    "difficulty": "advanced",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "One chat message drives the complete provider-free orchestration path.",
+      "Trace evidence proves triage, context, planning, skeptic, crucible, DAG, execution, validation, and healing steps ran.",
+      "Final assistant output summarizes the local trace without requiring external providers."
+    ],
+    "testCommands": ["npm test -- tests/chatBrainstemE2E.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:015", "e2e", "chat", "quality", "difficulty:advanced"], "priority": "high" }
+  },
+  {
+    "chunkNumber": 16,
+    "title": "Chunk 16 — Observability Baseline",
+    "summary": "Add local trace IDs, latency, model-call counts, cost estimates, provider failure events, and no-op telemetry adapter shapes.",
+    "labels": ["roadmap", "chunk:016", "observability", "telemetry", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Runs expose trace IDs, span-like timing, model-call count, estimated cost, and structured provider failure events.",
+      "Sentry, PostHog, and OpenTelemetry-style adapters are represented as no-op/local shapes.",
+      "Tests verify redaction and no external telemetry calls in local mode."
+    ],
+    "testCommands": ["npm test -- tests/observability.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:016", "observability", "telemetry", "difficulty:intermediate"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 17,
+    "title": "Chunk 17 — Provider Adapter Layer Phase 1",
+    "summary": "Add the LLM provider interface, model router, capability metadata, fake provider contract tests, and opt-in Together AI adapter.",
+    "labels": ["roadmap", "chunk:017", "providers", "llm", "budget", "difficulty:advanced"],
+    "difficulty": "advanced",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Provider interface and capability metadata support fake/local and opt-in provider adapters.",
+      "Router chooses providers by task needs while preserving provider-free defaults.",
+      "Together AI adapter remains disabled unless explicit env and budget gates allow it."
+    ],
+    "testCommands": ["npm test -- tests/llmProviders.test.ts tests/providers.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:017", "providers", "llm", "budget", "difficulty:advanced"], "priority": "high" }
+  },
+  {
+    "chunkNumber": 18,
+    "title": "Chunk 18 — Provider Adapter Layer Phase 2",
+    "summary": "Add Cloudflare Workers AI, Azure OpenAI, and Perplexity research adapters with route-based selection and opt-in network behavior.",
+    "labels": ["roadmap", "chunk:018", "providers", "llm", "research", "difficulty:advanced"],
+    "difficulty": "advanced",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Cloudflare Workers AI, Azure OpenAI, and Perplexity adapters validate config and build provider requests.",
+      "Route-based model assignment covers cheap, fast, flagship, and research calls.",
+      "All live-provider behavior remains disabled by default and protected by env and budget gates."
+    ],
+    "testCommands": ["npm test -- tests/providers.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:018", "providers", "llm", "research", "difficulty:advanced"], "priority": "high" }
+  },
+  {
+    "chunkNumber": 19,
+    "title": "Chunk 19 — Memory, Search, and Truth Library",
+    "summary": "Add local memory/search abstractions and Truth Library statuses with provenance, citations, and rejected-item filtering.",
+    "labels": ["roadmap", "chunk:019", "memory", "search", "truth-library", "difficulty:advanced"],
+    "difficulty": "advanced",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Truth Library supports TRUSTED, UNVERIFIED, and REJECTED statuses with provenance and citations.",
+      "Local search excludes rejected material by default and returns deterministic results.",
+      "Chroma and Algolia are represented as optional future integrations, not required local dependencies."
+    ],
+    "testCommands": ["npm test -- tests/memoryTruthLibrary.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:019", "memory", "search", "truth-library", "difficulty:advanced"], "priority": "high" }
+  },
+  {
+    "chunkNumber": 20,
+    "title": "Chunk 20 — Public Extension Contracts",
+    "summary": "Document and test contributor-facing extension contracts for adapters such as LLM, memory, sandbox, telemetry, search, issue tracker, validator, and UI client.",
+    "labels": ["roadmap", "chunk:020", "extensions", "contracts", "docs", "contributor-experience", "good first issue", "difficulty:beginner"],
+    "difficulty": "beginner",
+    "goodFirstIssue": true,
+    "acceptanceCriteria": [
+      "Public extension manifest and API version compatibility rules are documented.",
+      "Adapter contract types cover LLM, memory, sandbox, telemetry, search, issue tracker, validator, and UI client surfaces.",
+      "Contributor docs include examples that do not require network access or provider credentials."
+    ],
+    "testCommands": ["npm test -- tests/extensions.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:020", "extensions", "contracts", "docs", "contributor-experience", "good first issue", "difficulty:beginner"], "priority": "low" }
+  },
+  {
+    "chunkNumber": 21,
+    "title": "Chunk 21 — Retool Operator Console API",
+    "summary": "Expose local operator endpoints for run inspection, failures, approvals, costs, retries, aborts, artifacts, and stub Linear issue creation.",
+    "labels": ["roadmap", "chunk:021", "operator-api", "retool", "integrations", "difficulty:advanced"],
+    "difficulty": "advanced",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Operator endpoints expose run, event, cost, artifact, retry, abort, and approval metadata for local inspection.",
+      "Endpoints are clearly marked local-only and do not require Retool for tests.",
+      "Linear issue creation remains a non-network stub unless future approval and credentials are added."
+    ],
+    "testCommands": ["npm test -- tests/operatorApi.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:021", "operator-api", "retool", "integrations", "difficulty:advanced"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 22,
+    "title": "Chunk 22 — Safe Code Execution",
+    "summary": "Add sandbox adapter contracts, hardened local allowlist behavior, patch artifacts, approval metadata, and E2B/Depot integration paths.",
+    "labels": ["roadmap", "chunk:022", "sandbox", "security", "execution", "difficulty:advanced"],
+    "difficulty": "advanced",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Sandbox contracts and local safe executor deny arbitrary shell by default.",
+      "Patch artifacts and file-write approval metadata are represented without applying unsafe changes automatically.",
+      "E2B and Depot adapters are documented/stubbed as opt-in future integrations."
+    ],
+    "testCommands": ["npm test -- tests/safeCodeExecution.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:022", "sandbox", "security", "execution", "difficulty:advanced"], "priority": "high" }
+  },
+  {
+    "chunkNumber": 23,
+    "title": "Chunk 23 — External Workflow Integrations",
+    "summary": "Integrate Linear and Make request builders and disabled-by-default invocation gates, with Requestly and BrowserStack plans documented for later.",
+    "labels": ["roadmap", "chunk:023", "integrations", "workflows", "linear", "difficulty:advanced"],
+    "difficulty": "advanced",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Linear and Make payload schemas, config validation, and request builders are tested locally.",
+      "Network invocation is disabled by default and protected by explicit configuration gates.",
+      "Requestly and BrowserStack integration plans are documented without adding required dependencies."
+    ],
+    "testCommands": ["npm test -- tests/workflows.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:023", "integrations", "workflows", "linear", "difficulty:advanced"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 24,
+    "title": "Chunk 24 — Deployment Prototype",
+    "summary": "Add open-source demo deployment configuration, readiness docs, Heroku and Cloudflare shapes, optional service env examples, and graceful shutdown.",
+    "labels": ["roadmap", "chunk:024", "deployment", "docs", "operations", "difficulty:intermediate"],
+    "difficulty": "intermediate",
+    "goodFirstIssue": false,
+    "acceptanceCriteria": [
+      "Deployment configuration parsing validates and redacts Heroku, Cloudflare, MongoDB, Redis, Chroma, Sentry, and PostHog settings.",
+      "Deployment docs explain prototype setup without provisioning infrastructure automatically.",
+      "Runtime shutdown behavior is graceful and covered by local tests."
+    ],
+    "testCommands": ["npm test -- tests/deployment.test.ts", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:024", "deployment", "docs", "operations", "difficulty:intermediate"], "priority": "medium" }
+  },
+  {
+    "chunkNumber": 25,
+    "title": "Chunk 25 — Contributor Issue Breakdown",
+    "summary": "Convert the roadmap into contributor-ready GitHub issue drafts with labels, acceptance criteria, test commands, difficulty, good-first-issue candidates, and sync guidance.",
+    "labels": ["roadmap", "chunk:025", "docs", "contributor-experience", "automation", "good first issue", "difficulty:beginner"],
+    "difficulty": "beginner",
+    "goodFirstIssue": true,
+    "acceptanceCriteria": [
+      "Every roadmap chunk has a GitHub issue draft with labels, acceptance criteria, test commands, and difficulty metadata.",
+      "Good-first-issue candidates are clearly marked for safe contributor entry points.",
+      "Project board and Linear sync guidance is documented as manual and disabled-by-default with no network calls.",
+      "The generator can validate committed issue docs with node scripts/generate-roadmap-issues.js --check."
+    ],
+    "testCommands": ["npm test -- tests/contributorIssues.test.ts", "node scripts/generate-roadmap-issues.js --check", "npm test", "npm run build"],
+    "projectBoard": { "status": "Ready", "milestone": "v0.1.0-alpha" },
+    "linearSync": { "enabled": false, "teamKey": "RECTOR", "labels": ["roadmap", "chunk:025", "docs", "contributor-experience", "automation", "good first issue", "difficulty:beginner"], "priority": "low" }
+  }
+]

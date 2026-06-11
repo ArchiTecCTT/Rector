@@ -1,407 +1,1085 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="halo">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Rector — The Industrialization of Autonomous AI</title>
-    <meta name="description" content="A neuro-symbolic multi-agent orchestration framework that shifts AI automation from artisanal craft to deterministic, economic assembly lines." />
-    <link rel="stylesheet" href="styles.css" />
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <title>Rector — Hassle-Free Coding Agent</title>
+    <meta
+      name="description"
+      content="Rector developer preview: a chat-first coding agent with a local deterministic default and optional cloud providers. Configure LLMs and memory backends in Settings — no file edits required."
+    />
+    <link rel="stylesheet" href="styles/fonts.css" />
+    <link rel="stylesheet" href="styles/base.css" />
+    <!--
+      Lazy per-theme stylesheet (design A4, Req 4.4): exactly ONE theme token
+      set is attached at a time. This single <link> defaults to the Halo theme
+      (Req 1.6) and is re-pointed at the persisted theme by the no-flash boot
+      script below and, at runtime, by theme.js applyTheme(). The other four
+      theme files are NOT statically linked, so only the active theme's tokens
+      — and therefore only its fonts — are fetched.
+    -->
+    <link rel="stylesheet" id="theme-stylesheet" href="styles/themes/halo.css" />
+    <!--
+      No-flash theme boot (design A3, Req 3.2). Inline, no external fetch:
+      reads the persisted appearance from localStorage and applies data-theme +
+      override custom properties on <html> BEFORE first paint. Never throws on
+      unreadable/missing storage (Req 3.5) — it falls back to the Halo default
+      and the theme's own tokens. Kept tiny and self-contained; the constants
+      mirror theme.js (which cannot be imported here without an external fetch).
+    -->
+    <script>
+      (function () {
+        var KEY = "rector.appearance";
+        var DEFAULT_THEME = "halo";
+        var THEMES = ["halo", "aether", "cairn", "penumbra", "vellum"];
+        var DENSITY = { comfortable: "1", compact: "0.85" };
+        var FONT = { small: "0.9", default: "1", large: "1.15" };
+        var el = document.documentElement;
+        var pref = {};
+        try {
+          var raw = window.localStorage.getItem(KEY);
+          if (raw) {
+            var parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === "object") pref = parsed;
+          }
+        } catch (e) {
+          pref = {};
+        }
+        var theme = THEMES.indexOf(pref.theme) !== -1 ? pref.theme : DEFAULT_THEME;
+        el.setAttribute("data-theme", theme);
+        // Lazy single-theme stylesheet: point the one theme <link> at the
+        // active theme before first paint so only its tokens/fonts load.
+        try {
+          var link = document.getElementById("theme-stylesheet");
+          if (link) {
+            var href = "styles/themes/" + theme + ".css";
+            if (link.getAttribute("href") !== href) link.setAttribute("href", href);
+          }
+        } catch (e) {}
+        // Per-theme accent override (Req 3.5).
+        try {
+          var accents = pref.accents && typeof pref.accents === "object" ? pref.accents : {};
+          var accent = accents[theme];
+          if (typeof accent === "string" && accent) el.style.setProperty("--accent", accent);
+        } catch (e) {}
+        // Density / font-scale / reduced-motion overrides (Req 3.4, 3.6, 3.7).
+        if (DENSITY[pref.density]) el.style.setProperty("--density-scale", DENSITY[pref.density]);
+        if (FONT[pref.fontScale]) el.style.setProperty("--font-scale", FONT[pref.fontScale]);
+        if (pref.reducedMotion === true) el.setAttribute("data-reduced-motion", "true");
+      })();
+    </script>
   </head>
   <body>
-    <main class="l-page">
-      <!-- Top bar -->
-      <header class="topbar">
-        <a class="brand" href="#" aria-label="Ornyx home">
-          <span class="brand__slash" aria-hidden="true"></span>
-          ORNYX
-        </a>
-        <nav class="nav" aria-label="Primary">
-          <a href="#thesis">Thesis</a>
-          <a href="#blueprint">Architecture</a>
-          <a href="#console">Control Center</a>
-          <a href="#economics">Economics</a>
-        </nav>
+    <!--
+      Inline SVG icon sprite (design "Iconography", Req 11.2): all glyphs are
+      defined once here and referenced via <use href="#…">. No icon font, no
+      remote fetch. Icons are decorative (aria-hidden); every control keeps a
+      visible text label or accessible name so a missing symbol never makes an
+      action unreachable (Req 11.4).
+    -->
+    <svg width="0" height="0" aria-hidden="true" focusable="false" style="position: absolute">
+      <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </symbol>
+      <symbol id="i-cmd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z" />
+      </symbol>
+      <symbol id="i-trace" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 5v14M5 12h14" />
+      </symbol>
+      <symbol id="i-note" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+      </symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m6 9 6 6 6-6" />
+      </symbol>
+    </svg>
+
+    <div class="app">
+      <!--
+        TOP BAR (Req 2.1, 2.2): the slim full-width region. Hosts the moved
+        conversation title, run-status pill, and live-connection badge in
+        .topbar__lead (relocated from the old .chat__head, ids preserved), and
+        the global action launchers in .topbar__actions: the command palette,
+        the (moved) trace toggle, and the settings gear + anchored menu popover.
+      -->
+      <header class="topbar" aria-label="Application bar">
+        <div class="topbar__lead">
+          <span class="brand__mark" aria-hidden="true"></span>
+          <h1 class="topbar__title" id="chat-title">New conversation</h1>
+          <span class="status-pill status-pill--idle" id="run-status" title="Current run phase">Idle</span>
+          <span class="live-badge" id="live-indicator" data-mode="off" aria-live="polite" hidden>
+            <span class="live-badge__dot" aria-hidden="true"></span>
+            <span class="live-badge__text">LIVE</span>
+          </span>
+        </div>
+        <div class="topbar__actions">
+          <button
+            class="btn topbar__search-btn"
+            id="open-command-palette"
+            type="button"
+            aria-haspopup="dialog"
+            aria-label="Command palette"
+            title="Command palette (Ctrl/Cmd+K)"
+          >
+            <svg class="icon" aria-hidden="true"><use href="#i-cmd" /></svg>
+            <span class="topbar__search-text">Search or type command…</span>
+            <span class="topbar__kbd">⌘K</span>
+          </button>
+          <button class="btn btn--ghost btn--sm" id="toggle-trace" type="button" aria-pressed="false">
+            <svg class="icon" aria-hidden="true"><use href="#i-trace" /></svg> Trace
+          </button>
+          <div class="menu" id="settings-menu-wrap">
+            <button
+              class="btn btn--ghost btn--sm"
+              id="open-settings-menu"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="settings-menu"
+            >
+              <svg class="icon" aria-hidden="true"><use href="#i-gear" /></svg> Settings
+              <span class="topbar__approval-dot" id="settings-approval-dot" aria-hidden="true" hidden></span>
+            </button>
+            <!--
+              Anchored settings popover (Req 6.2, 8.1): one menu item per
+              System_Action, ids preserved from the former sidebar cluster so
+              every existing bind*() handler attaches unchanged. Hidden by
+              default; opened by the settings-menu controller (task 4.1).
+            -->
+            <div class="menu__popover" id="settings-menu" role="menu" aria-label="System actions" hidden>
+              <button class="menu__item" id="open-setup-wizard" role="menuitem" type="button">Setup status</button>
+              <button class="menu__item" id="open-provider-config" role="menuitem" type="button">Provider configuration</button>
+              <button class="menu__item" id="open-memory-provider-config" role="menuitem" type="button">Memory provider configuration</button>
+              <button class="menu__item" id="open-memory-browser" role="menuitem" type="button">Browse memory</button>
+              <button class="menu__item" id="open-provider-test" role="menuitem" type="button">Test provider connection</button>
+              <button class="menu__item" id="open-workspace-safety" role="menuitem" type="button">Workspace safety</button>
+              <button class="menu__item" id="open-appearance" role="menuitem" type="button">Appearance</button>
+              <div class="menu__sep" role="separator"></div>
+              <button class="menu__item menu__item--badged" id="open-approval" role="menuitem" type="button">
+                <span>Pending approvals</span>
+                <span class="menu__badge" id="approval-badge" hidden>1</span>
+              </button>
+            </div>
+          </div>
+        </div>
       </header>
 
-      <hr class="l-rule" />
-
-      <!-- Hero Section -->
-      <section class="hero">
-        <h1 class="hero__display">RECTOR</h1>
-        <div class="hero__content">
-          <h2 class="hero__subtitle">THE INDUSTRIALIZATION OF AUTONOMOUS AI</h2>
-          <p class="hero__lede">
-            Intelligence should be probabilistic. Execution must be deterministic. Rector is a neuro-symbolic orchestration framework that replaces chaotic agent loops with rigid, SLA-backed cognitive assembly lines.
-          </p>
-        </div>
-      </section>
-
-      <hr class="l-rule" />
-
-      <!-- Section: Thesis -->
-      <section class="section section--tight" id="thesis">
-        <div class="section__head">
-          <span class="eyebrow"><i data-lucide="binary"></i> Market Thesis</span>
-          <h2>The Artisanal AI Crisis</h2>
-          <span class="eyebrow" style="justify-self: end;">01 / 04</span>
-        </div>
-
-        <div class="l-grid grid-thesis">
-          <div class="card card-thesis scroll-animate">
-            <h3 class="t-headline-sm uppercase-label">The Status Quo: Unbounded Bleed</h3>
-            <p class="t-body">
-              Current AI agents (built on ReAct loops) act like artisanal craftsmen. They are given total freedom to figure out how to solve a prompt. Because LLMs are probabilistic, this architecture leads to infinite loops, API hallucinations, and silent failures. Enterprises cannot deploy probabilistic execution; they require SLA-backed reliability.
-            </p>
-            <p class="t-body-sm stone-text">
-              Furthermore, using a 120-billion parameter frontier model to parse a JSON file or fix a syntax error is the equivalent of hiring a neurosurgeon to sweep the floor. It destroys the ROI of automation.
-            </p>
-          </div>
-
-          <div class="card card--paper card-thesis scroll-animate">
-            <h3 class="t-headline-sm uppercase-label">The Core Insight: Neuro-Symbolic Assembly</h3>
-            <p class="t-body ink-text">
-              The solution is not a smarter LLM. The solution is a system architecture that removes the LLM's ability to make routing mistakes in the first place.
-            </p>
-            <p class="t-body">
-              Rector shifts AI from artisanal craft to an industrial assembly line. We build programmatically deterministic guardrails, separating planning (probabilistic frontier intelligence) from doing (cheap, high-speed specialized local models running inside isolated sandboxes).
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <hr class="l-rule" />
-
-      <!-- Section: Blueprint -->
-      <section class="section" id="blueprint">
-        <div class="section__head">
-          <span class="eyebrow"><i data-lucide="layers"></i> Architecture Blueprint</span>
-          <h2>Six Structural Pillars</h2>
-          <span class="eyebrow" style="justify-self: end;">02 / 04</span>
-        </div>
-
-        <div class="l-grid grid-pillars">
-          <div class="card pillar-card scroll-animate">
-            <div class="pillar-num">01</div>
-            <h3 class="card__title">The Nervous System</h3>
-            <p class="t-body-sm">
-              Deterministic backend controlling task states without relying on LLMs for control flow. Built on a Confluent Kafka event bus and MongoDB state transition store.
-            </p>
-            <span class="t-mono uppercase-label">Kafka · MongoDB · Doppler</span>
-          </div>
-
-          <div class="card pillar-card scroll-animate">
-            <div class="pillar-num">02</div>
-            <h3 class="card__title">Thalamus Router</h3>
-            <p class="t-body-sm">
-              A pure functional state transition machine. It acts as the factory floor manager, breaking task specifications into micro-events and routing them rigidly.
-            </p>
-            <span class="t-mono uppercase-label">NodeJS · DigitalOcean</span>
-          </div>
-
-          <div class="card pillar-card scroll-animate">
-            <div class="pillar-num">03</div>
-            <h3 class="card__title">Deterministic Sandboxes</h3>
-            <p class="t-body-sm">
-              AI-generated outputs are spun up in isolated, programmatic sandboxes executing Vitest/Pytest runtimes to ensure rigorous code validation.
-            </p>
-            <span class="t-mono uppercase-label">Depot CLI · AST Injection</span>
-          </div>
-
-          <div class="card pillar-card scroll-animate">
-            <div class="pillar-num">04</div>
-            <h3 class="card__title">Self-Healing Loops</h3>
-            <p class="t-body-sm">
-              If a validation run fails, the programmatic router intercepts the stack trace, matches AST snippets, and routes the bug back to SLMs for localized patching.
-            </p>
-            <span class="t-mono uppercase-label">Sentry APM · Healing Loop</span>
-          </div>
-
-          <div class="card pillar-card scroll-animate">
-            <div class="pillar-num">05</div>
-            <h3 class="card__title">The Assembly Line</h3>
-            <p class="t-body-sm">
-              90% of structural tasks are parallelized concurrently across high-speed Small Language Models (SLMs), utilizing Together AI prefix KV-caching.
-            </p>
-            <span class="t-mono uppercase-label">Together AI · Qwen Coder</span>
-          </div>
-
-          <div class="card pillar-card scroll-animate">
-            <div class="pillar-num">06</div>
-            <h3 class="card__title">Prefrontal Cortex</h3>
-            <p class="t-body-sm">
-              Elite frontier models (Claude 3.5, GPT-4o) are strictly quarantined to high-level system architectural planning and final synthesis reviews.
-            </p>
-            <span class="t-mono uppercase-label">AWS Bedrock · Azure OpenAI</span>
-          </div>
-        </div>
-      </section>
-
-      <hr class="l-rule" />
-
-      <!-- Section: Console / Sandbox Simulator -->
-      <section class="section" id="console">
-        <div class="section__head">
-          <span class="eyebrow"><i data-lucide="play-circle"></i> Live Sandbox</span>
-          <h2>The Assembly Line Control Center</h2>
-          <span class="eyebrow" style="justify-self: end;">03 / 04</span>
-        </div>
-
-        <div class="l-grid grid-console">
-          <!-- Left Control Panel -->
-          <div class="card console-control scroll-animate">
-            <span class="card__eyebrow">Task Ingest System</span>
-            <h3 class="t-headline-md font-narrow">Trigger Autonomous Action</h3>
-            <p class="t-body-sm stone-text">
-              Select an industrial scenario below to seed the deterministic assembly line. The pipeline will automatically execute through the sandboxes in real time.
-            </p>
-
-            <div class="scenario-buttons">
-              <button class="btn btn--primary w-100" id="btn-seed-happy" type="button">
-                API Endpoints Synthesis
-                <i data-lucide="arrow-right" class="btn__arrow"></i>
+      <!--
+        CONTENT ROW (Req 1.2): the three shell regions in document order —
+        Conversation_Rail, Chat_Canvas, Trace_Panel. The top bar above is a
+        direct child of .app (row 1); this .content div is row 2.
+      -->
+      <div class="content">
+        <!--
+          CONVERSATION RAIL (Req 3.1–3.6): slimmed to brand + New action +
+          conversation list + footer only. The mode banner and the six-button
+          system cluster have been removed; the system actions now live in the
+          top-bar settings menu (#settings-menu), ids/handlers preserved there.
+        -->
+        <aside class="rail" aria-label="Conversations">
+          <div class="rail__head">
+            <div class="brand">
+              <span class="brand__mark" aria-hidden="true"></span>
+              <span class="brand__name">RECTOR</span>
+              <span class="brand__tag">local</span>
+            </div>
+            <div class="rail__actions">
+              <button
+                class="btn btn--ghost btn--sm"
+                id="open-note-capture"
+                type="button"
+                title="Quick note (Ctrl/Cmd+Shift+N)"
+              >
+                <svg class="icon" aria-hidden="true"><use href="#i-note" /></svg> Note
               </button>
-              <button class="btn btn--ghost w-100" id="btn-seed-healing" type="button">
-                AST Retry Error Correction
-                <i data-lucide="refresh-cw" class="btn__arrow"></i>
-              </button>
-              <button class="btn btn--ghost w-100" id="btn-seed-migration" type="button">
-                NextJS App Router Conversion
-                <i data-lucide="shuffle" class="btn__arrow"></i>
-              </button>
-              <button class="btn btn--ghost w-100" id="btn-seed-stripe" type="button">
-                Stripe Billing Signature Pipeline
-                <i data-lucide="credit-card" class="btn__arrow"></i>
+              <button class="btn btn--ghost btn--sm" id="new-conversation" type="button" title="New conversation">
+                <svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg> New
               </button>
             </div>
           </div>
 
-          <!-- Central Simulator Panel -->
-          <div class="card card--paper console-workspace scroll-animate">
-            <div class="console-workspace-header">
-              <ul class="tabs" role="tablist">
-                <li class="tabs__item tabs__item--active" id="tab-visual" role="tab">Visual Pipeline</li>
-                <li class="tabs__item" id="tab-logs" role="tab">Sandbox Logs</li>
-              </ul>
-              <div class="live-indicator">
-                <span class="dot"></span>
-                <span class="t-mono uppercase-label">Factory Active</span>
-              </div>
-            </div>
+          <nav class="conversation-list" id="conversation-list" aria-live="polite">
+            <p class="conversation-list__empty" id="conversation-empty">No conversations yet. Send a message to start one.</p>
+          </nav>
 
-            <!-- Tab Content: Visual Flow -->
-            <div id="content-visual" class="tab-content">
-              <div class="pipeline-flow">
-                <!-- States -->
-                <div class="pipeline-step" data-state="1_INTAKE">
-                  <div class="step-num">1</div>
-                  <div class="step-label">Intake</div>
-                </div>
-                <div class="pipeline-connector"></div>
-                <div class="pipeline-step" data-state="2_ARCHITECTURAL_PLAN">
-                  <div class="step-num">2</div>
-                  <div class="step-label">Plan</div>
-                </div>
-                <div class="pipeline-connector"></div>
-                <div class="pipeline-step" data-state="3_SLM_EXECUTION_FANOUT">
-                  <div class="step-num">3</div>
-                  <div class="step-label">Execution</div>
-                </div>
-                <div class="pipeline-connector"></div>
-                <div class="pipeline-step" data-state="4_SANDBOX_VALIDATION">
-                  <div class="step-num">4</div>
-                  <div class="step-label">Validate</div>
-                </div>
-                <div class="pipeline-connector"></div>
-                <div class="pipeline-step" data-state="5_HEALING_LOOP">
-                  <div class="step-num">5</div>
-                  <div class="step-label">Healing</div>
-                </div>
-                <div class="pipeline-connector"></div>
-                <div class="pipeline-step" data-state="6_FINAL_SYNTHESIS">
-                  <div class="step-num">6</div>
-                  <div class="step-label">Synthesis</div>
-                </div>
-                <div class="pipeline-connector"></div>
-                <div class="pipeline-step" data-state="7_HUMAN_HANDOFF">
-                  <div class="step-num">7</div>
-                  <div class="step-label">Handoff</div>
-                </div>
-              </div>
+          <div class="rail__foot">
+            <span class="t-mono">v0.1.0-alpha</span>
+            <span class="t-mono muted" id="health-indicator">checking…</span>
+          </div>
+        </aside>
 
-              <!-- Active Task Status Panel -->
-              <div class="active-task-panel card" style="background: transparent; border-style: dashed; margin-top: 24px;">
-                <div class="l-stack">
-                  <div class="l-row justify-between">
-                    <span class="t-mono" id="sim-task-id">TASK: IDLE</span>
-                    <span class="pill" id="sim-task-state-badge">NO EVENT</span>
-                  </div>
-                  <h4 class="t-headline-sm font-narrow" id="sim-task-desc">No active task. Seed a scenario to watch the execution engine spin.</h4>
-                  <div class="subtask-progress-container hidden" id="subtask-progress-box">
-                    <span class="t-label uppercase-label">Assembly Line Progress:</span>
-                    <div id="sim-subtasks-list" class="l-stack" style="margin-top: 8px;"></div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Flow Control Controls -->
-              <div class="controls-panel l-row justify-between" style="margin-top: 18px;">
-                <span></span> <!-- Spacer to push Reset button to the right -->
-                <button class="btn btn--ghost" id="btn-reset-sim" disabled>
-                  Reset Factory
+        <!--
+          CHAT CANVAS (Req 4.1–4.5): messages region (with empty-state +
+          suggestions) and the composer only. The former per-column header
+          (.chat__head) is gone — its title/status/live badge moved to the top
+          bar in task 2.1, so no .chat__head element remains here (Req 4.3).
+        -->
+        <main class="chat" aria-label="Chat">
+          <section class="messages" id="messages" aria-live="polite">
+            <div class="empty-state" id="empty-state">
+              <div class="empty-state__mark" aria-hidden="true"></div>
+              <h2>Chat with Rector</h2>
+              <p>
+                Every message runs the full local pipeline — triage, context, planning, skeptic review,
+                crucible arbitration, DAG compilation, execution, validation/healing, and synthesis —
+                on deterministic fake adapters. No providers are called.
+              </p>
+              <div class="suggestions" id="suggestions">
+                <button class="suggestion" type="button" data-prompt="Add pagination to the users API endpoint">
+                  Add pagination to the users API endpoint
+                </button>
+                <button class="suggestion" type="button" data-prompt="Explain what this run pipeline does">
+                  Explain what this run pipeline does
+                </button>
+                <button class="suggestion" type="button" data-prompt="Refactor the retry logic and add tests">
+                  Refactor the retry logic and add tests
                 </button>
               </div>
             </div>
+          </section>
 
-            <!-- Tab Content: Logs Terminal -->
-            <div id="content-logs" class="tab-content hidden">
-              <div class="terminal-logs" id="terminal-logs-box">
-                <div class="log-line system-line">[SYSTEM] Rector factory engine initialized. Waiting for task ingestion event...</div>
+          <form class="note-capture" id="note-capture-form" aria-label="Quick note capture">
+            <input
+              id="note-capture-input"
+              class="note-capture__input"
+              type="text"
+              placeholder="Quick note to episodic memory…  (Ctrl/Cmd+Shift+N)"
+              autocomplete="off"
+            />
+            <button class="btn btn--sm note-capture__save" id="note-capture-save" type="submit" title="Save note">
+              Save note
+            </button>
+            <div
+              class="note-capture__status"
+              id="note-capture-status"
+              role="status"
+              aria-live="polite"
+              hidden
+            ></div>
+          </form>
+
+          <div class="composer__options" id="deep-planning-wrap" hidden>
+            <label class="composer__option appearance-toggle" for="deep-planning-toggle">
+              <input type="checkbox" id="deep-planning-toggle" />
+              <span class="appearance-toggle__label">Deep planning</span>
+              <span class="appearance-toggle__hint">MCTS-style branching in the planner phase (external mode)</span>
+            </label>
+          </div>
+
+          <form class="composer" id="composer">
+            <textarea
+              id="composer-input"
+              class="composer__input"
+              rows="1"
+              placeholder="Message Rector…  (Enter to send, Shift+Enter for newline)"
+              autocomplete="off"
+              required
+            ></textarea>
+            <button class="btn btn--primary composer__send" id="composer-send" type="submit" title="Send">
+              Send
+            </button>
+          </form>
+          <p class="composer__hint">
+            Local developer preview. Responses are deterministic trace summaries, not model-generated prose.
+          </p>
+        </main>
+
+        <!--
+          TRACE PANEL (Req 5.1): the dockable/overlay trace container. All inner
+          trace content and its ids (close-trace, trace-*, obs-*, cost-*,
+          phase-cards, decision-*, events) are preserved unchanged.
+        -->
+        <aside class="trace" id="trace-drawer" aria-label="Run trace" data-open="false">
+          <div class="trace__head">
+            <h2>Run trace</h2>
+            <button class="btn btn--ghost btn--sm" id="close-trace" type="button" aria-label="Close trace">✕</button>
+          </div>
+
+          <div class="trace__empty" id="trace-empty">
+            <p>Send a message to see its run trace: the phase timeline, planning verdicts, DAG, validation, and observability.</p>
+          </div>
+
+          <div class="trace__body" id="trace-body" hidden>
+            <!-- Run summary -->
+            <section class="trace-section">
+              <div class="trace-kv">
+                <span class="trace-kv__k">Status</span>
+                <span class="trace-kv__v" id="trace-status">—</span>
               </div>
+              <div class="trace-kv">
+                <span class="trace-kv__k">Route</span>
+                <span class="trace-kv__v" id="trace-route">—</span>
+              </div>
+              <div class="trace-kv">
+                <span class="trace-kv__k">Complexity</span>
+                <span class="trace-kv__v" id="trace-complexity">—</span>
+              </div>
+              <div class="trace-kv">
+                <span class="trace-kv__k">Trace ID</span>
+                <span class="trace-kv__v t-mono" id="trace-id">—</span>
+              </div>
+            </section>
+
+            <!-- Observability summary -->
+            <section class="trace-section">
+              <h3 class="trace-section__title">Observability</h3>
+              <div class="obs-grid">
+                <div class="obs-stat">
+                  <span class="obs-stat__value" id="obs-spans">0</span>
+                  <span class="obs-stat__label">spans</span>
+                </div>
+                <div class="obs-stat">
+                  <span class="obs-stat__value" id="obs-duration">0ms</span>
+                  <span class="obs-stat__label">duration</span>
+                </div>
+                <div class="obs-stat">
+                  <span class="obs-stat__value" id="obs-calls">0</span>
+                  <span class="obs-stat__label">provider calls</span>
+                </div>
+                <div class="obs-stat">
+                  <span class="obs-stat__value" id="obs-cost">$0</span>
+                  <span class="obs-stat__label">provider cost</span>
+                </div>
+              </div>
+            </section>
+
+            <!-- Live cost / token panel (ORN-41) -->
+            <section class="trace-section cost-panel" id="cost-section" hidden>
+              <h3 class="trace-section__title">Cost &amp; tokens</h3>
+              <div class="cost-grid">
+                <div class="cost-stat cost-stat--accent">
+                  <span class="cost-stat__value" id="cost-usd">$0.0000</span>
+                  <span class="cost-stat__label">estimated</span>
+                </div>
+                <div class="cost-stat">
+                  <span class="cost-stat__value" id="cost-total-tokens">0</span>
+                  <span class="cost-stat__label">total tokens</span>
+                </div>
+                <div class="cost-stat">
+                  <span class="cost-stat__value" id="cost-input-tokens">0</span>
+                  <span class="cost-stat__label">input tokens</span>
+                </div>
+                <div class="cost-stat">
+                  <span class="cost-stat__value" id="cost-output-tokens">0</span>
+                  <span class="cost-stat__label">output tokens</span>
+                </div>
+                <div class="cost-stat">
+                  <span class="cost-stat__value" id="cost-model-calls">0</span>
+                  <span class="cost-stat__label">model calls</span>
+                </div>
+              </div>
+              <div class="cost-meta">
+                <div class="cost-meta__row">
+                  <span class="cost-meta__k">Providers</span>
+                  <span class="cost-meta__v" id="cost-providers">—</span>
+                </div>
+                <div class="cost-meta__row">
+                  <span class="cost-meta__k">Models</span>
+                  <span class="cost-meta__v" id="cost-models">—</span>
+                </div>
+              </div>
+            </section>
+
+            <!-- Phase cards (Trace_Drawer supervision surface, Req 7.1–7.3, 7.6).
+                 One collapsible card per pipeline phase. Status/duration/evidence are
+                 derived from the actual persisted run events by app.js
+                 (renderPhaseCards) — nothing is fabricated (Req 7.5 / Property 9). -->
+            <section class="trace-section">
+              <h3 class="trace-section__title">Phases</h3>
+              <div class="phase-cards" id="phase-cards" role="list"></div>
+            </section>
+
+            <!-- Decision request (NEEDS_DECISION) -->
+            <section class="trace-section decision" id="decision-section" hidden>
+              <h3 class="trace-section__title">Needs decision</h3>
+              <div class="decision__card" id="decision-card"></div>
+            </section>
+
+            <!-- Raw events -->
+            <section class="trace-section">
+              <h3 class="trace-section__title">Run events</h3>
+              <div class="events" id="events"></div>
+            </section>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- Setup Wizard panel (modal overlay; chat + trace stay mounted) -->
+    <div
+      class="modal"
+      id="setup-wizard-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="setup-wizard-title"
+    >
+      <div class="modal__backdrop" id="setup-wizard-backdrop"></div>
+      <div class="modal__panel" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="setup-wizard-title">Setup status</h2>
+          <button class="btn btn--ghost btn--sm" id="close-setup-wizard" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            A read-only view of Rector's configuration readiness. No configuration is entered,
+            changed, or stored here — credentials live only in the server environment.
+          </p>
+
+          <div class="wizard" id="setup-wizard-body" hidden>
+            <div class="wizard__mode">
+              <span class="wizard__mode-label">Mode</span>
+              <span class="wizard__mode-value" id="setup-wizard-mode">—</span>
+            </div>
+            <div class="wizard__pills" id="setup-wizard-categories" aria-label="Configuration readiness"></div>
+          </div>
+
+          <div class="wizard__loading" id="setup-wizard-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Checking setup status…</span>
+          </div>
+
+          <div class="wizard__error" id="setup-wizard-error" role="alert" hidden></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Provider connection-test panel (modal overlay; chat + trace stay mounted) -->
+    <div
+      class="modal"
+      id="provider-test-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="provider-test-title"
+    >
+      <div class="modal__backdrop" id="provider-test-backdrop"></div>
+      <div class="modal__panel" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="provider-test-title">Test provider connection</h2>
+          <button class="btn btn--ghost btn--sm" id="close-provider-test" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            Select one provider and run a connection test. Credentials are read from the server
+            environment — no API keys are entered, stored, or displayed here.
+          </p>
+
+          <fieldset class="provider-list" id="provider-list" aria-label="Configured providers"></fieldset>
+
+          <div
+            class="provider-result"
+            id="provider-test-result"
+            role="status"
+            aria-live="polite"
+            hidden
+          ></div>
+        </div>
+
+        <div class="modal__foot">
+          <span class="provider-test__loading" id="provider-test-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span class="provider-test__loading-text">Testing connection…</span>
+          </span>
+          <button class="btn btn--primary" id="run-provider-test" type="button" disabled>
+            Test connection
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Workspace safety panel (modal overlay; chat + trace stay mounted) -->
+    <div
+      class="modal"
+      id="workspace-safety-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="workspace-safety-title"
+    >
+      <div class="modal__backdrop" id="workspace-safety-backdrop"></div>
+      <div class="modal__panel" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="workspace-safety-title">Workspace safety</h2>
+          <button class="btn btn--ghost btn--sm" id="close-workspace-safety" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            A read-only view of the workspace Rector can touch and the sandbox safety policy that
+            applies. This panel runs no commands and changes no configuration.
+          </p>
+
+          <div class="safety-loading" id="workspace-safety-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Loading safety configuration…</span>
+          </div>
+
+          <!-- Unavailable state (Req 3.8): an error message and no workspace action controls. -->
+          <div class="safety-unavailable" id="workspace-safety-unavailable" role="alert" hidden>
+            Safety configuration is unavailable. Rector cannot confirm the workspace root or sandbox
+            policy, so no workspace details are shown.
+          </div>
+
+          <div class="safety" id="workspace-safety-detail" hidden>
+            <div class="safety-row">
+              <span class="safety-row__k">Workspace root</span>
+              <span class="safety-row__v t-mono" id="safety-workspace-root">—</span>
+            </div>
+            <div class="safety-row">
+              <span class="safety-row__k">Destructive command protection</span>
+              <span class="safety-badge" id="safety-destructive">—</span>
+            </div>
+
+            <div class="safety-block">
+              <span class="safety-row__k">Allowlisted commands</span>
+              <ul class="safety-list" id="safety-allowlist"></ul>
+            </div>
+
+            <div class="safety-block">
+              <span class="safety-row__k">Approval required before execution</span>
+              <ul class="safety-list" id="safety-approval"></ul>
             </div>
           </div>
         </div>
-      </section>
+      </div>
+    </div>
 
-      <hr class="l-rule" />
-
-      <!-- Section: Economics -->
-      <section class="section" id="economics">
-        <div class="section__head">
-          <span class="eyebrow"><i data-lucide="line-chart"></i> Cognitive Arbitrage</span>
-          <h2>The Economics of Autonomous Labor</h2>
-          <span class="eyebrow" style="justify-self: end;">04 / 04</span>
+    <!-- Run approval panel (Approval_Flow, Requirement 9). Modal overlay; chat + trace stay mounted.
+         Auto-opens when a run pauses for an approval decision (streamed over the existing SSE
+         stream). Displays the redacted diff, command, and target path BEFORE any approve/deny
+         action can be submitted (Req 9.2). All values are redacted by the server (Req 9.6). -->
+    <div
+      class="modal"
+      id="approval-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="approval-title"
+    >
+      <div class="modal__backdrop" id="approval-backdrop"></div>
+      <div class="modal__panel" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="approval-title">Operation needs approval</h2>
+          <button class="btn btn--ghost btn--sm" id="close-approval" type="button" aria-label="Close">✕</button>
         </div>
 
-        <div class="l-grid grid-economics">
-          <!-- Left side: Real-time dynamic stats -->
-          <div class="stats-samplers l-stack">
-            <div class="stat scroll-animate">
-              <p class="stat__value" id="stat-invocations">0</p>
-              <p class="stat__caption">Simulated Model Invocations</p>
-            </div>
-            <div class="stat scroll-animate">
-              <p class="stat__value" id="stat-hits">0%</p>
-              <p class="stat__caption">KV-Cache Prefix Hit Rate</p>
-            </div>
-            <div class="stat scroll-animate">
-              <p class="stat__value" id="stat-cost">$0.0000</p>
-              <p class="stat__caption">Calculated Compute Cost</p>
-            </div>
-            <div class="stat scroll-animate">
-              <p class="stat__value" id="stat-savings">0%</p>
-              <p class="stat__caption">Compute Cost Reduction</p>
-            </div>
+        <div class="modal__body">
+          <p class="modal__desc">
+            A run paused for your decision. Review the operation details below — the target path,
+            command, and diff are shown before any decision can be submitted. Values are redacted by
+            the server; no secret is displayed.
+          </p>
+
+          <!-- Empty state: no operation is awaiting a decision. -->
+          <div class="approval-empty" id="approval-empty">
+            No operation is awaiting a decision. Pending operations appear here automatically while a
+            run is in progress.
           </div>
 
-          <!-- Right side: ROI Calculator & Math -->
-          <div class="card economics-math card--paper scroll-animate">
-            <span class="card__eyebrow">Interactive Profit Model</span>
-            <h3 class="t-headline-md font-narrow">Calculate Your Arbitrage</h3>
-            <p class="t-body-sm stone-text">
-              Traditional agents run every step on frontier models. Rector routes 90% of the cognitive workload to specialized SLMs, saving enterprise teams thousands.
+          <!-- Pending operation details (Req 9.2). The approve/deny actions stay disabled until
+               these redacted fields are rendered. -->
+          <div class="approval" id="approval-detail" hidden>
+            <div class="approval-row">
+              <span class="approval-row__k">Run</span>
+              <span class="approval-row__v t-mono" id="approval-run-id">—</span>
+            </div>
+            <div class="approval-row">
+              <span class="approval-row__k">Operation</span>
+              <span class="approval-row__v t-mono" id="approval-operation-id">—</span>
+            </div>
+            <div class="approval-row">
+              <span class="approval-row__k">Target path</span>
+              <span class="approval-row__v t-mono" id="approval-target-path">—</span>
+            </div>
+
+            <div class="approval-block" id="approval-command-block" hidden>
+              <span class="approval-row__k">Command</span>
+              <pre class="approval-code" id="approval-command"></pre>
+              <span class="approval-risky" id="approval-risky" hidden>
+                Risky shell command — explicit approval is required before it can run.
+              </span>
+            </div>
+
+            <div class="approval-block">
+              <span class="approval-row__k">Diff</span>
+              <pre class="approval-code approval-diff" id="approval-diff"></pre>
+            </div>
+
+            <label class="approval-identity">
+              <span class="approval-row__k">Deciding as</span>
+              <input
+                type="text"
+                id="approval-decided-by"
+                class="approval-input"
+                value="browser-user"
+                autocomplete="off"
+              />
+            </label>
+
+            <div class="approval-result" id="approval-result" role="status" aria-live="polite" hidden></div>
+          </div>
+        </div>
+
+        <div class="modal__foot" id="approval-foot" hidden>
+          <span class="provider-test__loading" id="approval-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Recording decision…</span>
+          </span>
+          <button class="btn" id="approval-deny" type="button" disabled>Deny</button>
+          <button class="btn btn--primary" id="approval-approve" type="button" disabled>Approve</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Provider configuration panel (Provider_Config_UI, Requirements 10, 11, 14.5, 15).
+         Modal overlay; chat + trace stay mounted and accessible (Req 10.7). Two tiers: preset
+         provider cards (Together AI, Cloudflare Workers AI, Azure OpenAI) and an Advanced
+         OpenAI-compatible endpoint form (base URL / API key / model id). Cards are rendered by
+         app.js (renderProviderConfig) from GET /api/providers, which exposes a `secretPresent`
+         presence boolean only — never a secret value (Req 11.2). API keys are masked inputs with a
+         show/hide control and write-once behavior (Req 11.1, 11.3, 11.5); no secret is ever stored
+         in browser storage (Req 11.5). Each card shows a not-configured / configured / active
+         status (Req 10.4), Save (POST /api/providers) and Remove (DELETE), per-role active
+         selection (POST /api/providers/active, Req 14.5), and a Test connection action with a 30s
+         timeout and redacted success/failure/timeout messages (Req 15.2–15.5). -->
+    <div
+      class="modal"
+      id="provider-config-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="provider-config-title"
+    >
+      <div class="modal__backdrop" id="provider-config-backdrop"></div>
+      <div class="modal__panel modal__panel--wide" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="provider-config-title">Provider configuration</h2>
+          <button class="btn btn--ghost btn--sm" id="close-provider-config" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            Configure Bring-Your-Own-Key providers for External mode. API keys are sent to the local
+            server, stored encrypted on disk, and never returned to the browser or kept in browser
+            storage. Leave a key field blank to keep an already-stored key.
+          </p>
+
+          <div class="provider-config-loading" id="provider-config-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Loading provider configuration…</span>
+          </div>
+
+          <div class="provider-config-error" id="provider-config-error" role="alert" hidden></div>
+
+          <!-- Basic tier: preset provider cards (Req 10.1, 10.2). -->
+          <section class="provider-config-tier" aria-labelledby="provider-config-presets-title">
+            <h3 class="provider-config-tier__title" id="provider-config-presets-title">Preset providers</h3>
+            <div class="provider-config-cards" id="provider-config-cards"></div>
+          </section>
+
+          <!-- Advanced tier: OpenAI-compatible endpoints (Req 10.1, 10.3). -->
+          <section class="provider-config-tier" aria-labelledby="provider-config-adv-title">
+            <h3 class="provider-config-tier__title" id="provider-config-adv-title">
+              Advanced — OpenAI-compatible endpoints
+            </h3>
+            <p class="provider-config-tier__desc">
+              Connect any OpenAI-compatible <code>/chat/completions</code> endpoint by giving it a
+              name, base URL, model id, and API key.
             </p>
 
-            <div class="calculator-inputs l-stack" style="margin: 20px 0;">
-              <div class="field">
-                <span class="field__label">Estimated Monthly Tasks</span>
-                <input class="field__input" type="number" id="calc-tasks" value="250" min="10" max="10000" />
+            <div class="provider-config-cards" id="provider-config-adv-cards"></div>
+
+            <form class="provider-config-adv" id="provider-config-adv-form">
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="provider-config-adv-label">Name</label>
+                <input
+                  class="provider-config-input"
+                  id="provider-config-adv-label"
+                  type="text"
+                  placeholder="My proxy"
+                  autocomplete="off"
+                  required
+                />
               </div>
-              <div class="field">
-                <span class="field__label">Average Codebase Size (Files)</span>
-                <select class="field__input" id="calc-size">
-                  <option value="small">Small Codebase (1-100 files)</option>
-                  <option value="medium" selected>Medium Codebase (101-500 files)</option>
-                  <option value="large">Large Codebase (501+ files)</option>
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="provider-config-adv-baseurl">Base URL</label>
+                <input
+                  class="provider-config-input"
+                  id="provider-config-adv-baseurl"
+                  type="text"
+                  placeholder="https://api.example.com/v1"
+                  autocomplete="off"
+                  required
+                />
+              </div>
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="provider-config-adv-model">Model id</label>
+                <input
+                  class="provider-config-input"
+                  id="provider-config-adv-model"
+                  type="text"
+                  placeholder="gpt-4o-mini"
+                  autocomplete="off"
+                  required
+                />
+              </div>
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="provider-config-adv-key">API key</label>
+                <span class="provider-config-key-wrap">
+                  <input
+                    class="provider-config-input provider-config-key"
+                    id="provider-config-adv-key"
+                    type="password"
+                    placeholder="Enter API key"
+                    autocomplete="off"
+                  />
+                  <button
+                    class="btn btn--ghost btn--sm provider-config-key-toggle"
+                    id="provider-config-adv-key-toggle"
+                    type="button"
+                    aria-pressed="false"
+                  >
+                    Show
+                  </button>
+                </span>
+              </div>
+              <div class="provider-config-adv__foot">
+                <button class="btn btn--primary" id="provider-config-adv-add" type="submit">Add endpoint</button>
+              </div>
+              <div class="provider-config-result" id="provider-config-adv-result" role="status" aria-live="polite" hidden></div>
+            </form>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Memory provider configuration panel (Memory_Provider_Config_UI, Chunk 36).
+         Modal overlay; chat + trace stay mounted and accessible. Talks to
+         GET/POST/DELETE /api/memory-providers, POST /api/memory-providers/active,
+         and POST /api/memory-providers/:id/test-connection. Cards are rendered by
+         app.js (renderMemoryProviderConfig) from GET /api/memory-providers, which
+         exposes a `secretPresent` presence boolean only — never a secret value.
+         API keys are masked inputs with show/hide and write-once behavior; no secret
+         is stored in browser storage. Each card shows not-configured / configured /
+         active status, Save, Remove, active-provider selection, and Test connection. -->
+    <div
+      class="modal"
+      id="memory-provider-config-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="memory-provider-config-title"
+    >
+      <div class="modal__backdrop" id="memory-provider-config-backdrop"></div>
+      <div class="modal__panel modal__panel--wide" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="memory-provider-config-title">Memory provider configuration</h2>
+          <button class="btn btn--ghost btn--sm" id="close-memory-provider-config" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            Configure the agent memory backend (local in-memory, SQLite, Mem0, TiDB Cloud, or Chroma).
+            API keys are sent to the local server, stored encrypted on disk, and never returned to the
+            browser or kept in browser storage. Leave a key field blank to keep an already-stored key.
+          </p>
+
+          <div class="provider-config-loading" id="memory-provider-config-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Loading memory provider configuration…</span>
+          </div>
+
+          <div class="provider-config-error" id="memory-provider-config-error" role="alert" hidden></div>
+
+          <section class="provider-config-tier" aria-labelledby="memory-provider-config-cards-title">
+            <h3 class="provider-config-tier__title" id="memory-provider-config-cards-title">Configured providers</h3>
+            <div class="provider-config-cards" id="memory-provider-config-cards"></div>
+          </section>
+
+          <section class="provider-config-tier" aria-labelledby="memory-provider-config-add-title">
+            <h3 class="provider-config-tier__title" id="memory-provider-config-add-title">Add memory provider</h3>
+            <p class="provider-config-tier__desc">
+              Choose a backend kind, give it a stable id and display label, then fill in any required
+              connection coordinates. External backends may require an API key.
+            </p>
+
+            <form class="provider-config-adv" id="memory-provider-config-add-form">
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="memory-provider-config-kind">Kind</label>
+                <select class="provider-config-input" id="memory-provider-config-kind" required>
+                  <option value="local-inmemory">Local (in-memory)</option>
+                  <option value="local-sqlite-mem">Local SQLite</option>
+                  <option value="mem0">Mem0</option>
+                  <option value="tidb-memory">TiDB Cloud memory</option>
+                  <option value="chroma">Chroma</option>
                 </select>
               </div>
-
-              <div class="checks-group l-stack" style="margin-top: 8px;">
-                <label class="check">
-                  <input class="check__input" type="checkbox" id="check-caching" checked />
-                  <span class="check__box">
-                    <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 6 5 9 10 3" /></svg>
-                  </span>
-                  <span class="check__label">Enable Prefix KV-Caching (Save 40%)</span>
-                </label>
-                <label class="check">
-                  <input class="check__input" type="checkbox" id="check-healing" checked />
-                  <span class="check__box">
-                    <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 6 5 9 10 3" /></svg>
-                  </span>
-                  <span class="check__label">Dynamic Sandbox Healing Integration</span>
-                </label>
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="memory-provider-config-id">Id</label>
+                <input
+                  class="provider-config-input"
+                  id="memory-provider-config-id"
+                  type="text"
+                  placeholder="mem0:main"
+                  autocomplete="off"
+                  required
+                />
               </div>
-            </div>
-
-            <hr class="l-rule" />
-
-            <div class="calculator-results l-stack" style="margin-top: 18px;">
-              <div class="l-row justify-between">
-                <span>Traditional Model Cost:</span>
-                <span class="t-mono font-narrow" id="cost-artisanal" style="text-decoration: line-through;">$1,850.00</span>
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="memory-provider-config-add-label">Label</label>
+                <input
+                  class="provider-config-input"
+                  id="memory-provider-config-add-label"
+                  type="text"
+                  placeholder="Mem0 production"
+                  autocomplete="off"
+                  required
+                />
               </div>
-              <div class="l-row justify-between ink-text">
-                <strong>Rector Assembly Cost:</strong>
-                <strong class="t-mono font-narrow text-signal" id="cost-rector">$92.50</strong>
+              <div id="memory-provider-config-add-fields"></div>
+              <div class="provider-config-field-row">
+                <label class="provider-config-label" for="memory-provider-config-add-key">API key</label>
+                <span class="provider-config-key-wrap">
+                  <input
+                    class="provider-config-input provider-config-key"
+                    id="memory-provider-config-add-key"
+                    type="password"
+                    placeholder="Enter API key (external backends)"
+                    autocomplete="off"
+                  />
+                  <button
+                    class="btn btn--ghost btn--sm provider-config-key-toggle"
+                    id="memory-provider-config-add-key-toggle"
+                    type="button"
+                    aria-pressed="false"
+                  >
+                    Show
+                  </button>
+                </span>
               </div>
-              <div class="l-row justify-between text-headline-sm ink-text" style="border-top: var(--rule-hairline); padding-top: 12px; margin-top: 8px;">
-                <strong>Estimated Net Savings:</strong>
-                <strong class="t-mono font-narrow text-signal" id="cost-savings">$1,757.50</strong>
+              <div class="provider-config-adv__foot">
+                <button class="btn btn--primary" id="memory-provider-config-add" type="submit">Add provider</button>
               </div>
-            </div>
-          </div>
+              <div
+                class="provider-config-result"
+                id="memory-provider-config-add-result"
+                role="status"
+                aria-live="polite"
+                hidden
+              ></div>
+            </form>
+          </section>
         </div>
-      </section>
-
-      <!-- Footer -->
-      <footer class="foot">
-        <div class="foot__col foot__brand">
-          <a class="brand" href="#">
-            <span class="brand__slash" aria-hidden="true"></span>
-            ORNYX
-          </a>
-          <p>The industrialization of autonomous labor. High-throughput software development as a utility.</p>
-        </div>
-        <div class="foot__col">
-          <h4>Architecture</h4>
-          <ul>
-            <li><a href="#thesis">Thesis</a></li>
-            <li><a href="#blueprint">Event Router</a></li>
-            <li><a href="#console">Sandboxes</a></li>
-            <li><a href="#economics">Arbitrage</a></li>
-          </ul>
-        </div>
-        <div class="foot__col">
-          <h4>System Spec</h4>
-          <ul>
-            <li><a href="https://lucide.dev/" target="_blank" rel="noopener">Lucide Icons</a></li>
-            <li><a href="https://github.com" target="_blank" rel="noopener">GitHub Ingest</a></li>
-            <li><a href="https://confluent.io" target="_blank" rel="noopener">Confluent Cloud</a></li>
-            <li><a href="https://together.ai" target="_blank" rel="noopener">Together AI</a></li>
-          </ul>
-        </div>
-        <div class="foot__col">
-          <h4>Studio</h4>
-          <ul>
-            <li>Ornyx Software Development Services</li>
-            <li>lanzskyler@ornyx.tech</li>
-            <li>Quezon City, NCR, Philippines</li>
-          </ul>
-        </div>
-      </footer>
-
-      <div class="foot__legal page" style="padding-left: 0; padding-right: 0;">
-        <span>© ORNYX SOFTWARE DEVELOPMENT SERVICES MMXXVI</span>
-        <span>EDITION 0.0.1 · LINEN SYSTEM v1.0</span>
       </div>
-    </main>
+    </div>
 
+    <!-- Memory browser panel (Chunk 36 stretch): read-only episodic/core entry list with layer badges.
+         Fetches GET /api/memory/entries?layer=episodic|core; content is redacted server-side. -->
+    <div
+      class="modal"
+      id="memory-browser-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="memory-browser-title"
+    >
+      <div class="modal__backdrop" id="memory-browser-backdrop"></div>
+      <div class="modal__panel modal__panel--wide" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="memory-browser-title">Memory browser</h2>
+          <button class="btn btn--ghost btn--sm" id="close-memory-browser" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            A read-only view of recent episodic and core memory entries from the active memory provider.
+            Content is redacted by the server; this panel does not edit or delete entries.
+          </p>
+
+          <div class="memory-browser__toolbar" role="toolbar" aria-label="Memory layer filter">
+            <button
+              class="btn btn--sm memory-browser__filter memory-browser__filter--active"
+              id="memory-browser-filter-all"
+              type="button"
+              data-layer=""
+              aria-pressed="true"
+            >
+              All
+            </button>
+            <button
+              class="btn btn--sm memory-browser__filter"
+              id="memory-browser-filter-episodic"
+              type="button"
+              data-layer="episodic"
+              aria-pressed="false"
+            >
+              Episodic
+            </button>
+            <button
+              class="btn btn--sm memory-browser__filter"
+              id="memory-browser-filter-core"
+              type="button"
+              data-layer="core"
+              aria-pressed="false"
+            >
+              Core
+            </button>
+            <span class="memory-browser__provider t-mono muted" id="memory-browser-provider" hidden></span>
+          </div>
+
+          <div class="memory-browser__loading" id="memory-browser-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Loading memory entries…</span>
+          </div>
+
+          <div class="memory-browser__error" id="memory-browser-error" role="alert" hidden></div>
+
+          <div class="memory-browser__empty" id="memory-browser-empty" hidden>
+            No memory entries yet. Save a quick note or run a conversation to populate episodic memory.
+          </div>
+
+          <ul class="memory-browser__list" id="memory-browser-list" aria-label="Memory entries" hidden></ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Appearance settings panel (Appearance_Settings, Requirement 1.2/1.4 + 3.3–3.10).
+         Modal overlay; chat + trace stay mounted and accessible (Req 3.x / 1.7 parity). Every
+         control is wired in app.js to window.RectorTheme so changes apply at runtime and persist
+         to localStorage["rector.appearance"]. No secret is ever read or written here (Req 3.3). The
+         panel reflects the persisted appearance (RectorTheme.getAppearance()) every time it opens. -->
+    <div
+      class="modal"
+      id="appearance-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="appearance-title"
+    >
+      <div class="modal__backdrop" id="appearance-backdrop"></div>
+      <div class="modal__panel modal__panel--wide" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="appearance-title">Appearance</h2>
+          <button class="btn btn--ghost btn--sm" id="close-appearance" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            Personalize Rector's look. Choices apply instantly and are remembered on this device.
+            No API keys or secrets are stored here.
+          </p>
+
+          <!-- Theme picker (Req 1.2, 1.4): the five distinct themes. -->
+          <fieldset class="appearance-group" aria-labelledby="appearance-theme-legend">
+            <legend class="appearance-group__legend" id="appearance-theme-legend">Theme</legend>
+            <div class="appearance-themes" id="appearance-theme-list" role="radiogroup" aria-label="Theme"></div>
+          </fieldset>
+
+          <!-- Accent override from a curated palette (Req 3.5, 3.8); contrast warning (Req 3.9). -->
+          <fieldset class="appearance-group" aria-labelledby="appearance-accent-legend">
+            <legend class="appearance-group__legend" id="appearance-accent-legend">Accent</legend>
+            <div class="appearance-accents" id="appearance-accent-list" role="radiogroup" aria-label="Accent color"></div>
+            <p class="appearance-warning" id="appearance-accent-warning" role="alert" hidden></p>
+          </fieldset>
+
+          <!-- Density (Req 3.6). -->
+          <fieldset class="appearance-group" aria-labelledby="appearance-density-legend">
+            <legend class="appearance-group__legend" id="appearance-density-legend">Density</legend>
+            <div class="appearance-segmented" id="appearance-density" role="radiogroup" aria-label="Interface density">
+              <label class="appearance-segment">
+                <input type="radio" name="appearance-density" value="comfortable" />
+                <span>Comfortable</span>
+              </label>
+              <label class="appearance-segment">
+                <input type="radio" name="appearance-density" value="compact" />
+                <span>Compact</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <!-- Font-size scale (Req 3.7). -->
+          <fieldset class="appearance-group" aria-labelledby="appearance-fontscale-legend">
+            <legend class="appearance-group__legend" id="appearance-fontscale-legend">Font size</legend>
+            <div class="appearance-segmented" id="appearance-fontscale" role="radiogroup" aria-label="Font size scale">
+              <label class="appearance-segment">
+                <input type="radio" name="appearance-fontscale" value="small" />
+                <span>Small</span>
+              </label>
+              <label class="appearance-segment">
+                <input type="radio" name="appearance-fontscale" value="default" />
+                <span>Default</span>
+              </label>
+              <label class="appearance-segment">
+                <input type="radio" name="appearance-fontscale" value="large" />
+                <span>Large</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <!-- Reduced-motion toggle (Req 3.4). -->
+          <fieldset class="appearance-group" aria-labelledby="appearance-motion-legend">
+            <legend class="appearance-group__legend" id="appearance-motion-legend">Motion</legend>
+            <label class="appearance-toggle">
+              <input type="checkbox" id="appearance-reduced-motion" />
+              <span class="appearance-toggle__label">Reduce motion</span>
+              <span class="appearance-toggle__hint">Disable non-essential animation</span>
+            </label>
+          </fieldset>
+        </div>
+
+        <div class="modal__foot">
+          <button class="btn" id="appearance-reset" type="button">Reset to theme defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!--
+      COMMAND PALETTE (Req 7.1, 11.1): centered, keyboard-driven overlay opened
+      with Cmd/Ctrl+K (or the top-bar ⌘K launcher). Hidden by default; the
+      command-palette controller (task 4.3) unhides it, populates
+      #command-palette-list with .palette__option items (role="option" +
+      aria-selected), and wires filter/navigation/invoke behavior. The input is
+      an ARIA combobox owning the listbox via aria-controls; the list is the
+      empty listbox container rendered dynamically by JS. All markup is local —
+      no remote assets.
+    -->
+    <div
+      class="palette"
+      id="command-palette"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
+    >
+      <div class="palette__backdrop" id="command-palette-backdrop"></div>
+      <div class="palette__panel" role="document">
+        <input
+          class="palette__input"
+          id="command-palette-input"
+          type="text"
+          role="combobox"
+          aria-expanded="false"
+          aria-controls="command-palette-list"
+          aria-autocomplete="list"
+          aria-label="Type a command"
+          placeholder="Type a command…"
+          autocomplete="off"
+        />
+        <ul class="palette__list" id="command-palette-list" role="listbox" aria-label="Commands"></ul>
+      </div>
+    </div>
+
+    <script src="theme.js"></script>
+    <script src="markdown.js"></script>
     <script src="app.js"></script>
-    <script>
-      if (window.lucide) {
-        lucide.createIcons();
-      }
-    </script>
   </body>
 </html>
