@@ -49,3 +49,4 @@ npm run build → clean
 - `3ff24ba` feat(chunk-037): multi-user session auth
 - `5d04499` chore(chunk-037): vitest 4.x + persistentStore timeout
 - `60f67c9` docs(chunk-037): chunk plan, concerns, AGENTS, dependency audit
+- `6ac4159` docs(chunk-037): fix self-referential commit hash in plan table
