@@ -166,3 +166,15 @@ introduced no real network access in `npm test`. No revert was required (EH-4 no
 - `tests/dependencySecurity.test.ts`: added regression guard asserting `packageJson.overrides.esbuild === ">=0.25.0"`.
 - `npm audit fix` / `npm audit fix --force` were **not** run at any point.
 
+## Post-resolution update (Chunk 37, 2026-06-11)
+
+The four deferred `vitest@4` major-upgrade findings were resolved by upgrading `vitest` to `^4.1.8` (resolves `4.1.8`) in `package.json` / `package-lock.json` without `npm audit fix --force`. Post-upgrade verification:
+
+| Check | Result |
+|-------|--------|
+| `npm audit` | **0 vulnerabilities** |
+| `npm test` | **PASS** — 213 files / 1369 tests (4 skipped live-memory) |
+| `npm run build` | **PASS** |
+
+Traceability: `docs/plans/chunks/037-vitest-auth-live-memory.md`, commit `5d04499`.
+

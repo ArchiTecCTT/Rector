@@ -19,14 +19,9 @@
 ### Dependency audit: vitest major-upgrade vulnerabilities deferred (require maintainer approval)
 
 - **Source:** `npm audit` during the `dependency-security-triage` spec; see `docs/security/dependency-audit-2026-06-04.md`.
-- **Severity:** 1 critical + 3 moderate, all dev-tooling only (not in the `dist` runtime).
-  - `vitest` — critical, GHSA-5xrq-8626-4rwp (Vitest UI server arbitrary file read/exec; UI server is not used by `npm test`).
-  - `vite` — moderate, GHSA-4w7w-66w2-5vf9 (path traversal in optimized-deps `.map` handling; dev server only).
-  - `@vitest/mocker` — moderate (transitive via vulnerable `vite`).
-  - `vite-node` — moderate (transitive via vulnerable `vite`).
-- **Status:** Open / deferred — awaiting maintainer approval.
-- **Root cause:** Rector pins `vitest@^2.1.0` (resolves `vitest@2.1.9`). npm's only offered remediation for all four findings is `vitest@4.1.8`, flagged `isSemVerMajor: true` and only applicable via `npm audit fix --force`.
-- **Plan:** Per the no-forced-fix policy (Requirement 4 / steering `security.md`), the `vitest@4` major upgrade was **not** applied autonomously because it requires `npm audit fix --force` and is a breaking change to the test toolchain. Deferred for explicit maintainer approval. When approved, upgrade `vitest` to `>=4.1.8`, re-run the full verification baseline (`npm test`/`build`/`check`), and confirm the advisories clear. Runtime exposure is nil today: these are dev/test dependencies, not shipped in `dist`, and `npm test` runs `vitest run` (no UI server). Traceability: `docs/security/dependency-audit-2026-06-04.md`.
+- **Severity:** Was 1 critical + 3 moderate (dev-tooling only).
+- **Status:** **RESOLVED** (Chunk 37). Upgraded to `vitest@4.1.8`; `npm audit` reports **0 vulnerabilities**. Full suite green (1369+ tests). `persistentStore` property test given explicit 120s timeout for Vitest 4 / slow I/O.
+- **Traceability:** `docs/plans/chunks/037-vitest-auth-live-memory.md`, `package.json`.
 
 ### SLM preprocessor (Chunk 26) adds a new cheap-model call surface before flagship planning in external mode
 

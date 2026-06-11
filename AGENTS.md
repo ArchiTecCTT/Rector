@@ -56,7 +56,7 @@ npm run build
 
 ## Current Implemented Chunks
 
-Completed through Chunk 36 (see `docs/plans/chunks/036-hassle-free-ui-neuro-observability.md` for the latest wave summary). Foundation chunks 0–25:
+Completed through Chunk 37 (see `docs/plans/chunks/037-vitest-auth-live-memory.md`). Foundation chunks 0–25:
 
 0. Source-of-truth docs and stale doc quarantine
 1. Open-source foundation and Apache-2.0 setup
@@ -85,12 +85,13 @@ Completed through Chunk 36 (see `docs/plans/chunks/036-hassle-free-ui-neuro-obse
 24. Deployment prototype
 25. Contributor issue breakdown
 
-Neuro-symbolic + cloud transition chunks (26–36) include SLM preprocessor, advanced memory, proactive layer, symbolic engines, MCTS, ponder swarm, task decomposition, stale-doc cleanup, pluggable memory providers (034), durable memory + neuro wiring (035), and hassle-free UI + neuro observability (036).
+Neuro-symbolic + cloud transition chunks (26–37) include SLM preprocessor, advanced memory, proactive layer, symbolic engines, MCTS, ponder swarm, task decomposition, stale-doc cleanup, pluggable memory providers (034), durable memory + neuro wiring (035), hassle-free UI + neuro observability (036), and vitest 4 + live memory tests + opt-in multi-user auth (037).
 
-Current test baseline after Chunk 36:
+Current test baseline after Chunk 37:
 
-- `npm test`: 211 files / 1355 tests passing
+- `npm test`: 213 files / 1369 tests passing (4 skipped live-memory; 1 skipped file)
 - `npm run build`: passing
+- `npm audit`: 0 vulnerabilities
 
 ## Active Development Goal
 
