@@ -18,6 +18,18 @@ import {
   aggregateConversationCost,
 } from "../observability";
 import { redactSecrets, redactString, redactOutbound, REDACTION_FAILED_ERROR } from "../security/redaction";
+import {
+  SESSION_COOKIE_NAME,
+  SESSION_MAX_AGE_MS,
+  authErrorMessage,
+  createSessionToken,
+  parseAuthConfig,
+  verifyPassword,
+  verifySessionToken,
+  type ParsedAuthConfig,
+} from "../security/auth";
+import { createAuthMiddleware } from "../security/authMiddleware";
+import { createUserStoresResolver, type UserStores } from "../security/userStores";
 import { computeSetupStatus } from "../setupStatus";
 import {
   ApprovalProcessingError,
@@ -191,6 +203,19 @@ export interface ApiSecurityOptions {
    * `fetch`) here without touching the routes.
    */
   modelDiscoveryService?: ModelDiscoveryService;
+
+  /**
+   * Opt-in multi-user session auth (chunk-037). When omitted, {@link parseAuthConfig}
+   * reads `RECTOR_AUTH_ENABLED` from the environment. Disabled by default so local
+   * mode requires zero auth (Req 9).
+   */
+  auth?: ParsedAuthConfig;
+
+  /**
+   * 32-byte AES key for per-user Secret_Store envelopes when auth is enabled.
+   * The real app supplies {@link resolveSecretEncryptionKey} from `bin/server.ts`.
+   */
+  secretEncryptionKey?: Buffer;
 }
 
 /**
@@ -1451,6 +1476,113 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const publicDir = resolvePublicDir();
   app.use(express.static(publicDir));
 
+  const authConfig = securityOptions.auth ?? parseAuthConfig(process.env);
+  const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
+  const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
+  const memoryConfigStore = securityOptions.memoryConfigStore ?? createInMemoryMemoryConfigStore();
+  const defaultUserStores: UserStores = {
+    secretStore: setupSecretStore,
+    providerConfigStore,
+    memoryConfigStore,
+  };
+  const resolveUserStores = createUserStoresResolver({
+    authEnabled: authConfig.enabled,
+    encryptionKey: securityOptions.secretEncryptionKey ?? Buffer.alloc(32),
+    defaultStores: defaultUserStores,
+  });
+  const storesFor = (req: express.Request): UserStores => req.rectorStores ?? defaultUserStores;
+
+  const LoginRequestSchema = z.object({
+    username: z.string().min(1),
+    password: z.string().min(1),
+  });
+
+  app.post("/api/auth/login", (req, res) => {
+    if (!authConfig.enabled) {
+      const outcome = redactOutbound({ authenticated: true, username: "default" });
+      return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
+    }
+
+    let body: z.infer<typeof LoginRequestSchema>;
+    try {
+      body = LoginRequestSchema.parse(req.body ?? {});
+    } catch {
+      const outcome = redactOutbound({ error: authErrorMessage("Invalid username or password") });
+      return res.status(400).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
+    }
+
+    const username = body.username.trim().toLowerCase();
+    const storedHash = authConfig.users.get(username);
+    if (!storedHash || !verifyPassword(body.password, storedHash)) {
+      const outcome = redactOutbound({ error: authErrorMessage("Invalid username or password") });
+      return res.status(401).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
+    }
+
+    const token = createSessionToken(username, username, authConfig.sessionSecret);
+    const maxAgeSec = Math.floor(SESSION_MAX_AGE_MS / 1000);
+    res.setHeader(
+      "Set-Cookie",
+      `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`,
+    );
+    const outcome = redactOutbound({ authenticated: true, username });
+    return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
+  });
+
+  app.post("/api/auth/logout", (_req, res) => {
+    res.setHeader("Set-Cookie", `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+    const outcome = redactOutbound({ authenticated: false });
+    return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
+  });
+
+  app.get("/api/auth/session", (req, res) => {
+    if (!authConfig.enabled) {
+      const outcome = redactOutbound({ authenticated: true, username: "default" });
+      return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
+    }
+
+    const cookies = (req.header("cookie") ?? "")
+      .split(";")
+      .map((part) => part.trim())
+      .reduce<Record<string, string>>((acc, part) => {
+        const eq = part.indexOf("=");
+        if (eq > 0) acc[part.slice(0, eq)] = part.slice(eq + 1);
+        return acc;
+      }, {});
+    const session = verifySessionToken(cookies[SESSION_COOKIE_NAME], authConfig.sessionSecret);
+    const outcome = redactOutbound(
+      session ? { authenticated: true, username: session.username } : { authenticated: false },
+    );
+    return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
+  });
+
+  app.use(createAuthMiddleware(authConfig, resolveUserStores));
+
+  const memoryProviderByUser = new Map<string, MemoryProvider>();
+  const getMemoryProviderFor = async (req?: express.Request): Promise<MemoryProvider> => {
+    if (!authConfig.enabled || !req?.rectorAuth) {
+      await resolvePromise;
+      return activeMemoryProvider ?? createPureLocalMemoryProvider();
+    }
+
+    const userId = req.rectorAuth.userId;
+    const cached = memoryProviderByUser.get(userId);
+    if (cached) return cached;
+
+    const stores = storesFor(req);
+    try {
+      const provider = await resolveActiveMemoryProvider(stores.memoryConfigStore, stores.secretStore, {
+        mode: securityOptions.orchestration?.mode,
+        delegateStoreForLocalSqliteMem: isSqlBackedStore(baseStore) ? rectorStore : undefined,
+      });
+      memoryProviderByUser.set(userId, provider);
+      return provider;
+    } catch {
+      const fallback = createPureLocalMemoryProvider();
+      memoryProviderByUser.set(userId, fallback);
+      return fallback;
+    }
+  };
+
   // --- Chat routes ---
 
   app.post("/api/chat/conversations", async (req, res) => {
@@ -1561,7 +1693,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
           // Now sourced from the resolved active MemoryProvider (pluggable: local-inmemory default,
           // local-sqlite-mem, or external like Mem0). For the default provider this is byte-identical
           // to the pre-34 direct store call, preserving all existing memoryAdvanced / context tests.
-          const memoryProviderInstance = await getMemoryProvider();
+          const memoryProviderInstance = await getMemoryProviderFor(req);
           const recentMemory = await memoryProviderInstance.searchMemory(undefined, {
             layer: "episodic",
             limit: EPISODIC_MEMORY_SEARCH_LIMIT,
@@ -1713,7 +1845,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       // resolved pluggable MemoryProvider. For the default local-inmemory provider this is
       // identical to the previous direct rectorStore call (preserves all existing behavior
       // and tests for /api/notes + context injection).
-      const memoryProviderInstance = await getMemoryProvider();
+      const memoryProviderInstance = await getMemoryProviderFor(req);
       const entry = await memoryProviderInstance.createMemoryEntry(entryInput);
 
       // Opportunistic prune on write (keeps memory bounded)
@@ -1742,7 +1874,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         layer = parsed.data;
       }
 
-      const memoryProviderInstance = await getMemoryProvider();
+      const memoryProviderInstance = await getMemoryProviderFor(req);
       const payload = await listMemoryEntriesForApi(memoryProviderInstance, { layer });
       sendRedacted(res, 200, payload);
     } catch (error) {
@@ -2132,16 +2264,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // caught and returned as a structured, redacted error state so the wizard can show an error and
   // keep the chat/trace UI accessible (Requirement 1.8); the redacted message never carries a
   // secret substring.
-  const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
-  // Provider_Config_Store backing the BYOK CRUD/selection routes (design C2/C7). Inert and
-  // additive when no store is injected: a fresh in-memory store is used so the routes work in
-  // tests without forcing a real disk store; the non-test app injects the local
-  // `.rector/providers.json` store via `securityOptions.providerConfigStore` (task 5.1).
-  const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
-  // Memory_Config_Store backing the Memory_Provider_API routes (Chunk 36). Inert when omitted:
-  // a fresh in-memory store is used so tests work without disk; the real app injects the local
-  // `.rector/memory-providers.json` store via `securityOptions.memoryConfigStore`.
-  const memoryConfigStore = securityOptions.memoryConfigStore ?? createInMemoryMemoryConfigStore();
   const resolveMemoryProviderForTest =
     securityOptions.resolveTestMemoryProvider ?? resolveTestMemoryProvider;
   app.get("/api/setup/status", async (_req, res) => {
@@ -2197,6 +2319,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
 
     try {
+      const userStores = storesFor(req);
       // Config_Bridge resolution (design C5/C8): build exactly one provider from the persisted
       // Provider_Config_Record identified by `providerId` plus its Secret_Store secret, with
       // persisted UI configuration taking precedence over `process.env` (Req 13.2/13.4). Selection
@@ -2207,8 +2330,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       // (Req 15.6). The body keeps the safe TestConnectionResponse shape.
       const provider = await resolveTestProvider(
         request.providerId,
-        providerConfigStore,
-        setupSecretStore,
+        userStores.providerConfigStore,
+        userStores.secretStore,
         { enableNetwork: true, fetchImpl: fetch },
         // Per-model Model_Probe targeting (Req 22.1, 22.2): build the provider for the selected
         // candidate's model/deployment when supplied; a plain test passes neither.
@@ -2256,14 +2379,15 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     error instanceof Error ? error.message : String(error);
 
   // GET /api/providers — non-secret records + activeRoutes + per-provider secretPresent (Req 10.4).
-  app.get("/api/providers", async (_req, res) => {
+  app.get("/api/providers", async (req, res) => {
     try {
-      const state = await providerConfigStore.getState();
+      const userStores = storesFor(req);
+      const state = await userStores.providerConfigStore.getState();
       const providers = await Promise.all(
         state.providers.map(async (record) => ({
           ...record,
           // Presence-only boolean from the Secret_Store; the value is never read here (Req 11.2).
-          secretPresent: await setupSecretStore.hasSecret(record.secretRef),
+          secretPresent: await userStores.secretStore.hasSecret(record.secretRef),
         }))
       );
       // The `secretPresent` booleans are clobbered to `[REDACTED]` by the
@@ -2295,7 +2419,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
 
     try {
-      const state = await providerConfigStore.getState();
+      const userStores = storesFor(req);
+      const state = await userStores.providerConfigStore.getState();
       const existing = state.providers.find((record) => record.id === body.id);
       const now = new Date().toISOString();
       // `secretRef` is derived from the record id; the Secret_Store is keyed by it. The apiKey is
@@ -2306,7 +2431,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       // Persist a newly supplied secret BEFORE the config upsert so a secret failure leaves both
       // the prior secret and the prior config untouched (Req 11.7).
       if (apiKey !== undefined) {
-        const secretResult = await setupSecretStore.setSecret(secretRef, apiKey);
+        const secretResult = await userStores.secretStore.setSecret(secretRef, apiKey);
         if (!secretResult.ok) {
           return sendRedacted(res, 500, { error: redactString(secretResult.error) });
         }
@@ -2321,12 +2446,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         updatedAt: now,
       });
 
-      const upsertResult = await providerConfigStore.upsertProvider(record);
+      const upsertResult = await userStores.providerConfigStore.upsertProvider(record);
       if (!upsertResult.ok) {
         return sendRedacted(res, 500, { error: redactString(upsertResult.error) });
       }
 
-      const secretPresent = await setupSecretStore.hasSecret(secretRef);
+      const secretPresent = await userStores.secretStore.hasSecret(secretRef);
       // Re-apply the presence boolean after redaction (the sensitive-key rule
       // would otherwise replace it with `[REDACTED]`), so the response exposes a
       // real boolean (Req 11.2) while the record's other fields stay redacted.
@@ -2350,11 +2475,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
 
     try {
-      const result = await providerConfigStore.setActiveRoute(body.role, body.providerId);
+      const userStores = storesFor(req);
+      const result = await userStores.providerConfigStore.setActiveRoute(body.role, body.providerId);
       if (!result.ok) {
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
-      const state = await providerConfigStore.getState();
+      const state = await userStores.providerConfigStore.getState();
       sendRedacted(res, 200, { activeRoutes: state.activeRoutes });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
@@ -2373,11 +2499,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
 
     try {
-      const state = await providerConfigStore.getState();
+      const userStores = storesFor(req);
+      const state = await userStores.providerConfigStore.getState();
       const existing = state.providers.find((record) => record.id === req.params.id);
       if (!existing) return res.status(404).json({ error: "Provider not found" });
 
-      const result = await setupSecretStore.setSecret(existing.secretRef, body.apiKey);
+      const result = await userStores.secretStore.setSecret(existing.secretRef, body.apiKey);
       if (!result.ok) {
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
@@ -2395,17 +2522,18 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // shipped local backing implements it). A secret-deletion failure surfaces a redacted error.
   app.delete("/api/providers/:id", async (req, res) => {
     try {
-      const state = await providerConfigStore.getState();
+      const userStores = storesFor(req);
+      const state = await userStores.providerConfigStore.getState();
       const existing = state.providers.find((record) => record.id === req.params.id);
       if (!existing) return res.status(404).json({ error: "Provider not found" });
 
-      const removeResult = await providerConfigStore.removeProvider(existing.id);
+      const removeResult = await userStores.providerConfigStore.removeProvider(existing.id);
       if (!removeResult.ok) {
         return sendRedacted(res, 500, { error: redactString(removeResult.error) });
       }
 
-      if (setupSecretStore.deleteSecret) {
-        const secretResult = await setupSecretStore.deleteSecret(existing.secretRef);
+      if (userStores.secretStore.deleteSecret) {
+        const secretResult = await userStores.secretStore.deleteSecret(existing.secretRef);
         if (!secretResult.ok) {
           return sendRedacted(res, 500, { error: redactString(secretResult.error) });
         }
@@ -2425,13 +2553,14 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // echoed back; responses expose a `secretPresent` boolean only.
 
   // GET /api/memory-providers — non-secret records + activeMemoryProviderId + secretPresent booleans.
-  app.get("/api/memory-providers", async (_req, res) => {
+  app.get("/api/memory-providers", async (req, res) => {
     try {
-      const state = await memoryConfigStore.getState();
+      const userStores = storesFor(req);
+      const state = await userStores.memoryConfigStore.getState();
       const providers = await Promise.all(
         state.providers.map(async (record) => ({
           ...record,
-          secretPresent: await setupSecretStore.hasSecret(record.secretRef),
+          secretPresent: await userStores.secretStore.hasSecret(record.secretRef),
         })),
       );
       const presenceById = new Map(providers.map((p) => [p.id, p.secretPresent]));
@@ -2461,14 +2590,15 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
 
     try {
-      const state = await memoryConfigStore.getState();
+      const userStores = storesFor(req);
+      const state = await userStores.memoryConfigStore.getState();
       const existing = state.providers.find((record) => record.id === body.id);
       const now = new Date().toISOString();
       const { apiKey, ...config } = body;
       const secretRef = `memory:${body.id}`;
 
       if (apiKey !== undefined) {
-        const secretResult = await setupSecretStore.setSecret(secretRef, apiKey);
+        const secretResult = await userStores.secretStore.setSecret(secretRef, apiKey);
         if (!secretResult.ok) {
           return sendRedacted(res, 500, { error: redactString(secretResult.error) });
         }
@@ -2481,12 +2611,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         updatedAt: now,
       });
 
-      const upsertResult = await memoryConfigStore.upsertMemoryProvider(record);
+      const upsertResult = await userStores.memoryConfigStore.upsertMemoryProvider(record);
       if (!upsertResult.ok) {
         return sendRedacted(res, 500, { error: redactString(upsertResult.error) });
       }
 
-      const secretPresent = await setupSecretStore.hasSecret(secretRef);
+      const secretPresent = await userStores.secretStore.hasSecret(secretRef);
       sendRedactedPreservingPresence(
         res,
         200,
@@ -2511,11 +2641,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
 
     try {
-      const result = await memoryConfigStore.setActiveMemoryProvider(body.providerId);
+      const userStores = storesFor(req);
+      const result = await userStores.memoryConfigStore.setActiveMemoryProvider(body.providerId);
       if (!result.ok) {
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
-      const state = await memoryConfigStore.getState();
+      const state = await userStores.memoryConfigStore.getState();
       sendRedacted(res, 200, { activeMemoryProviderId: state.activeMemoryProviderId });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
@@ -2532,11 +2663,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
 
     try {
-      const state = await memoryConfigStore.getState();
+      const userStores = storesFor(req);
+      const state = await userStores.memoryConfigStore.getState();
       const existing = state.providers.find((record) => record.id === req.params.id);
       if (!existing) return sendRedacted(res, 404, { error: "Memory provider not found" });
 
-      const result = await setupSecretStore.setSecret(existing.secretRef, body.apiKey);
+      const result = await userStores.secretStore.setSecret(existing.secretRef, body.apiKey);
       if (!result.ok) {
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
@@ -2552,17 +2684,18 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // DELETE /api/memory-providers/:id — remove the record AND its stored secret.
   app.delete("/api/memory-providers/:id", async (req, res) => {
     try {
-      const state = await memoryConfigStore.getState();
+      const userStores = storesFor(req);
+      const state = await userStores.memoryConfigStore.getState();
       const existing = state.providers.find((record) => record.id === req.params.id);
       if (!existing) return sendRedacted(res, 404, { error: "Memory provider not found" });
 
-      const removeResult = await memoryConfigStore.removeMemoryProvider(existing.id);
+      const removeResult = await userStores.memoryConfigStore.removeMemoryProvider(existing.id);
       if (!removeResult.ok) {
         return sendRedacted(res, 500, { error: redactString(removeResult.error) });
       }
 
-      if (setupSecretStore.deleteSecret) {
-        const secretResult = await setupSecretStore.deleteSecret(existing.secretRef);
+      if (userStores.secretStore.deleteSecret) {
+        const secretResult = await userStores.secretStore.deleteSecret(existing.secretRef);
         if (!secretResult.ok) {
           return sendRedacted(res, 500, { error: redactString(secretResult.error) });
         }
@@ -2579,7 +2712,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     const providerId = req.params.id;
 
     try {
-      const state = await memoryConfigStore.getState();
+      const userStores = storesFor(req);
+      const state = await userStores.memoryConfigStore.getState();
       const record = state.providers.find((candidate) => candidate.id === providerId);
       if (!record) {
         return sendRedacted(res, 404, { error: "Memory provider not found" });
@@ -2589,8 +2723,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       try {
         const resolved = await resolveMemoryProviderForTest(
           providerId,
-          memoryConfigStore,
-          setupSecretStore,
+          userStores.memoryConfigStore,
+          userStores.secretStore,
         );
         if (!resolved) {
           return sendRedacted(res, 404, { error: "Memory provider not found" });
@@ -2635,6 +2769,23 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       cache: createDiscoveryCache(),
       adapters: createDefaultDiscoveryAdapterRegistry(),
     });
+  const discoveryServiceByUser = new Map<string, ModelDiscoveryService>();
+  const discoveryServiceFor = (req: express.Request): ModelDiscoveryService => {
+    if (securityOptions.modelDiscoveryService) return securityOptions.modelDiscoveryService;
+    if (!authConfig.enabled) return modelDiscoveryService;
+    const userId = req.rectorAuth?.userId ?? "default";
+    const cached = discoveryServiceByUser.get(userId);
+    if (cached) return cached;
+    const userStores = storesFor(req);
+    const service = createModelDiscoveryService({
+      configStore: userStores.providerConfigStore,
+      secrets: userStores.secretStore,
+      cache: createDiscoveryCache(),
+      adapters: createDefaultDiscoveryAdapterRegistry(),
+    });
+    discoveryServiceByUser.set(userId, service);
+    return service;
+  };
 
   // Map a DiscoveryResult to an HTTP status: a success is 200; an unknown provider id (resolved with
   // NO network call, Req 17.4) is 404; any other classified, redacted failure is 502 (an upstream
@@ -2656,7 +2807,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // call inside the service (Req 17.4). A cache hit within TTL is served without re-discovery.
   app.get("/api/providers/:id/models", async (req, res) => {
     try {
-      const result = await modelDiscoveryService.discover(req.params.id, { fetchImpl: fetch });
+      const result = await discoveryServiceFor(req).discover(req.params.id, { fetchImpl: fetch });
       sendDiscoveryResult(res, result);
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
@@ -2669,7 +2820,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // or `:id` routes above.
   app.post("/api/providers/:id/models/refresh", async (req, res) => {
     try {
-      const result = await modelDiscoveryService.discover(req.params.id, {
+      const result = await discoveryServiceFor(req).discover(req.params.id, {
         refresh: true,
         fetchImpl: fetch,
       });
@@ -2703,7 +2854,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     try {
       const result = await runSettingsDiscovery({
         mode,
-        service: modelDiscoveryService,
+        service: discoveryServiceFor(req),
         providerId: req.params.id,
         refresh,
         fetchImpl: fetch,

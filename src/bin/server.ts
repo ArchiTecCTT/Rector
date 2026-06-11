@@ -22,6 +22,7 @@ import { createLocalSecretStore } from "../security/secretStore";
 import { createLocalProviderConfigStore } from "../providers/configStore";
 import { createLocalMemoryConfigStore } from "../providers/memoryConfigStore";
 import { redactString } from "../security/redaction";
+import { parseAuthConfig } from "../security/auth";
 import {
   PersistenceInitializationError,
   StoreConfigError,
@@ -258,6 +259,9 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
     bootstrappedStore = await runStartupMigration(deploymentConfig.persistence);
   }
 
+  const authConfig = parseAuthConfig(process.env);
+  const secretEncryptionKey = resolveSecretEncryptionKey();
+
   const app = createApp(manager, {
     orchestration: { mode: orchestrationConfig.mode, router: orchestrationRouter, sandbox: orchestrationSandbox },
     persistence: deploymentConfig.persistence,
@@ -265,6 +269,8 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
     secretStore,
     providerConfigStore,
     memoryConfigStore,
+    auth: authConfig,
+    secretEncryptionKey,
   });
   const server = http.createServer(app);
   const gracefulShutdown = createGracefulShutdownHandler({
