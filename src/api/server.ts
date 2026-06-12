@@ -19,6 +19,14 @@ import {
 } from "../observability";
 import { redactSecrets, redactString, redactOutbound, REDACTION_FAILED_ERROR } from "../security/redaction";
 import {
+  InMemoryRateLimiter,
+  createRateLimitPolicy,
+  rateLimitRuleFor,
+  type RateLimitConfig,
+  type RateLimitDecision,
+  type RateLimiter,
+} from "../security/rateLimiter";
+import {
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_MS,
   authErrorMessage,
@@ -107,10 +115,9 @@ import { RunPhaseSchema, isTerminalRunPhase } from "../protocol/phases";
 
 export interface ApiSecurityOptions {
   corsAllowedOrigins?: string[];
-  rateLimit?: {
-    windowMs?: number;
-    maxRequests?: number;
-  };
+  rateLimit?: RateLimitConfig;
+  /** Optional pluggable limiter backend; defaults to process-local in-memory buckets. */
+  rateLimiter?: RateLimiter;
   /**
    * Orchestration wiring for the chat pipeline. `executorOptions`/`maxHealingAttempts` tune the
    * deterministic phases shared by both modes. `mode` and `router` are resolved once at startup
@@ -1491,15 +1498,15 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
+  const authConfig = securityOptions.auth ?? parseAuthConfig(process.env);
+
   app.locals.neuroAliveState = getNeuroAliveState;
   app.use(securityHeadersMiddleware);
   app.use(corsMiddleware(securityOptions));
-  app.use(chatRateLimitMiddleware(securityOptions));
+  app.use(apiRateLimitMiddleware(securityOptions, authConfig));
   app.use(express.json());
   const publicDir = resolvePublicDir();
   app.use(express.static(publicDir));
-
-  const authConfig = securityOptions.auth ?? parseAuthConfig(process.env);
   const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
   const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
   const memoryConfigStore = securityOptions.memoryConfigStore ?? createInMemoryMemoryConfigStore();
@@ -3077,81 +3084,125 @@ function corsMiddleware(options: ApiSecurityOptions): express.RequestHandler {
   };
 }
 
-function chatRateLimitMiddleware(options: ApiSecurityOptions): express.RequestHandler {
-  const windowMs = options.rateLimit?.windowMs ?? numberFromEnv("CHAT_RATE_LIMIT_WINDOW_MS", 60_000);
-  const maxRequests = options.rateLimit?.maxRequests ?? numberFromEnv("CHAT_RATE_LIMIT_MAX", 60);
+function apiRateLimitMiddleware(
+  options: ApiSecurityOptions,
+  authConfig: ParsedAuthConfig,
+): express.RequestHandler {
+  const policy = createRateLimitPolicy(options.rateLimit, process.env);
+  const limiter = options.rateLimiter ?? new InMemoryRateLimiter(policy);
 
-  const chatBuckets = new Map<string, { resetAt: number; count: number }>();
-  const authBuckets = new Map<string, { resetAt: number; count: number }>();
-  const generalBuckets = new Map<string, { resetAt: number; count: number }>();
-
-  const chatMax = maxRequests;
-  const authMax = Math.max(10, chatMax * 5);
-  const generalMax = Math.max(10, chatMax * 5);
-
-  return (req, res, next) => {
+  return async (req, res, next) => {
+    const route = classifyRateLimitRoute(req.method, req.path);
+    if (!route) {
+      next();
+      return;
+    }
+    const key = rateLimitKeyForRequest(req, authConfig);
     const now = Date.now();
-    const key = req.ip || req.socket.remoteAddress || "unknown";
 
-    // Clean up expired buckets opportunistically to prevent memory growth
-    for (const [k, b] of chatBuckets.entries()) {
-      if (b.resetAt <= now) chatBuckets.delete(k);
-    }
-    for (const [k, b] of authBuckets.entries()) {
-      if (b.resetAt <= now) authBuckets.delete(k);
-    }
-    for (const [k, b] of generalBuckets.entries()) {
-      if (b.resetAt <= now) generalBuckets.delete(k);
-    }
+    try {
+      const checked = await limiter.check(key, route, now);
+      if (checked.disabled) {
+        next();
+        return;
+      }
+      if (!checked.allowed) {
+        sendRateLimitDenied(res, checked, rateLimitErrorMessage(route));
+        return;
+      }
 
-    const isChatPost = req.method === "POST" && req.path.startsWith("/api/chat/");
-    const isAuth = req.path.startsWith("/api/auth/");
+      const committed = await limiter.commit(key, route, now);
+      if (committed.disabled) {
+        next();
+        return;
+      }
+      if (!committed.allowed) {
+        sendRateLimitDenied(res, committed, rateLimitErrorMessage(route));
+        return;
+      }
 
-    let buckets: Map<string, { resetAt: number; count: number }>;
-    let limit: number;
-    let errMsg: string;
-
-    if (isChatPost) {
-      buckets = chatBuckets;
-      limit = chatMax;
-      errMsg = "Too many chat requests";
-    } else if (isAuth) {
-      buckets = authBuckets;
-      limit = authMax;
-      errMsg = "Too many authentication requests";
-    } else {
-      buckets = generalBuckets;
-      limit = generalMax;
-      errMsg = "Too many requests";
-    }
-
-    if (limit <= 0) {
+      writeRateLimitHeaders(res, committed);
       next();
-      return;
+    } catch (error) {
+      const rule = rateLimitRuleFor(policy, route);
+      if (!rule.failClosed) {
+        next();
+        return;
+      }
+      sendRedacted(res, 503, {
+        error: "Rate limiter unavailable",
+        message: redactString(error instanceof Error ? error.message : String(error)),
+      });
     }
-
-    const bucket = buckets.get(key);
-    if (!bucket) {
-      buckets.set(key, { resetAt: now + windowMs, count: 1 });
-      res.setHeader("X-RateLimit-Limit", String(limit));
-      res.setHeader("X-RateLimit-Remaining", String(Math.max(0, limit - 1)));
-      next();
-      return;
-    }
-
-    if (bucket.count >= limit) {
-      res.setHeader("Retry-After", String(Math.ceil((bucket.resetAt - now) / 1000)));
-      res.setHeader("X-RateLimit-Limit", String(limit));
-      res.setHeader("X-RateLimit-Remaining", "0");
-      res.status(429).json({ error: errMsg });
-      return;
-    }
-
-    bucket.count += 1;
-    res.setHeader("X-RateLimit-Limit", String(limit));
-    res.setHeader("X-RateLimit-Remaining", String(Math.max(0, limit - bucket.count)));
-    next();
   };
+}
+
+function classifyRateLimitRoute(method: string, requestPath: string): string | undefined {
+  if (method === "POST" && requestPath.startsWith("/api/chat/")) return "chat";
+  if (method === "POST" && requestPath === "/api/auth/login") return "auth-login";
+  if (method === "POST" && requestPath === "/api/setup/test-connection") return "provider-test-connection";
+  if (method === "POST" && /^\/api\/memory-providers\/[^/]+\/test-connection$/.test(requestPath)) {
+    return "memory-provider-test";
+  }
+  return undefined;
+}
+
+function rateLimitKeyForRequest(req: express.Request, authConfig: ParsedAuthConfig): string {
+  if (req.rectorAuth?.userId) return `user:${req.rectorAuth.userId}`;
+
+  if (authConfig.enabled) {
+    const cookies = parseCookieHeader(req.header("cookie"));
+    const session = verifySessionToken(cookies[SESSION_COOKIE_NAME], authConfig.sessionSecret);
+    if (session) return `user:${session.userId}`;
+  }
+
+  return `ip:${req.ip || req.socket.remoteAddress || "unknown"}`;
+}
+
+function parseCookieHeader(header: string | undefined): Record<string, string> {
+  const cookies: Record<string, string> = {};
+  if (!header) return cookies;
+  for (const part of header.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const value = trimmed.slice(eq + 1);
+    try {
+      cookies[key] = decodeURIComponent(value);
+    } catch {
+      cookies[key] = value;
+    }
+  }
+  return cookies;
+}
+
+function sendRateLimitDenied(res: express.Response, decision: RateLimitDecision, message: string): void {
+  writeRateLimitHeaders(res, decision);
+  res.setHeader("Retry-After", String(Math.ceil(decision.retryAfterMs / 1000)));
+  sendRedacted(res, 429, { error: message });
+}
+
+function writeRateLimitHeaders(res: express.Response, decision: RateLimitDecision): void {
+  res.setHeader("X-RateLimit-Limit", String(decision.limit));
+  res.setHeader("X-RateLimit-Remaining", String(Math.max(0, decision.remaining)));
+  res.setHeader("X-RateLimit-Reset", String(Math.ceil(decision.resetAt / 1000)));
+}
+
+function rateLimitErrorMessage(route: string): string {
+  switch (route) {
+    case "chat":
+      return "Too many chat requests";
+    case "auth-login":
+      return "Too many authentication requests";
+    case "provider-test-connection":
+      return "Too many provider test requests";
+    case "memory-provider-test":
+      return "Too many memory provider test requests";
+    default:
+      return "Too many requests";
+  }
 }
 
 function parseCsvEnv(value: string | undefined): string[] {
@@ -3169,11 +3220,6 @@ function isDevLocalhostOrigin(origin: string): boolean {
   } catch {
     return false;
   }
-}
-
-function numberFromEnv(key: string, fallback: number): number {
-  const value = Number(process.env[key]);
-  return Number.isFinite(value) ? value : fallback;
 }
 
 function nonEmptyOrDefault(value: unknown, fallback: string): string {
