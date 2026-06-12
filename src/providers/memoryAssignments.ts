@@ -26,6 +26,10 @@ export type MemoryRetentionPolicy = z.infer<typeof MemoryRetentionPolicySchema>;
 export const MemoryAssignmentProviderRefSchema = z.string().min(1);
 export type MemoryAssignmentProviderRef = z.infer<typeof MemoryAssignmentProviderRefSchema>;
 
+// Chunk 045 templates use provider-selection naming; keep it as an alias of the Chunk 044 provider ref.
+export const MemoryProviderSelectionSchema = MemoryAssignmentProviderRefSchema;
+export type MemoryProviderSelection = MemoryAssignmentProviderRef;
+
 export interface MemoryRoleDefinition {
   role: MemoryRole;
   label: string;

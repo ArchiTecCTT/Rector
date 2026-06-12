@@ -260,6 +260,27 @@ function cacheEls() {
     "module-manager-loading",
     "module-manager-error",
     "module-manager-list",
+    "open-template-manager",
+    "close-template-manager",
+    "template-manager-modal",
+    "template-manager-backdrop",
+    "template-manager-loading",
+    "template-manager-error",
+    "template-manager-gallery",
+    "template-manager-preview",
+    "template-manager-preview-title",
+    "template-manager-preview-summary",
+    "template-manager-requirements",
+    "template-manager-result",
+    "template-manager-apply",
+    "template-manager-apply-mode",
+    "template-manager-confirm-replace",
+    "template-manager-import-json",
+    "template-manager-import-preview",
+    "template-manager-import-apply",
+    "template-manager-export",
+    "template-manager-save-current",
+    "template-manager-reset-local-free",
     "open-memory-browser",
     "close-memory-browser",
     "memory-browser-modal",
@@ -3784,6 +3805,321 @@ function bindModuleManager() {
   els["module-manager-backdrop"]?.addEventListener("click", closeModuleManager);
 }
 
+// --- Template manager (Chunk 045) ---
+//
+// Minimal one-click preset surface. Templates are fetched from the Template_API, previewed before
+// apply, and imported/exported as JSON. No secret is accepted into template state: imported JSON is
+// parsed client-side and the server repeats secret scanning before preview/apply.
+
+const templateManagerState = {
+  templates: [],
+  selectedTemplateId: "local-free",
+  importTemplate: null,
+  lastPreview: null,
+};
+
+function setTemplateManagerLoading(loading) {
+  const indicator = els["template-manager-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+function showTemplateManagerError(message) {
+  const box = els["template-manager-error"];
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+}
+
+function clearTemplateManagerError() {
+  const box = els["template-manager-error"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+}
+
+function showTemplateManagerResult(kind, message) {
+  const box = els["template-manager-result"];
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+  box.className = `provider-config-result provider-config-result--${kind === "ok" ? "ok" : "err"}`;
+}
+
+function clearTemplateManagerResult() {
+  const box = els["template-manager-result"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+  box.className = "provider-config-result";
+}
+
+function templateCardStatus(template) {
+  if (!template) return "Template";
+  const cost = template.budgets?.estimatedCostTier || "unknown";
+  return `${template.riskLevel || "risk"} · ${cost}`;
+}
+
+function renderTemplateGallery() {
+  const gallery = els["template-manager-gallery"];
+  if (!gallery) return;
+  gallery.innerHTML = "";
+  for (const template of templateManagerState.templates) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "provider-config-card template-card" + (template.id === templateManagerState.selectedTemplateId ? " is-active" : "");
+    card.dataset.templateId = template.id;
+    card.setAttribute("aria-pressed", template.id === templateManagerState.selectedTemplateId ? "true" : "false");
+
+    const head = document.createElement("div");
+    head.className = "provider-config-card__head";
+    const name = document.createElement("span");
+    name.className = "provider-config-card__name";
+    name.textContent = template.name;
+    const status = document.createElement("span");
+    status.className = "provider-config-card__status";
+    status.textContent = templateCardStatus(template);
+    head.appendChild(name);
+    head.appendChild(status);
+
+    const desc = document.createElement("p");
+    desc.className = "provider-config-card__desc";
+    desc.textContent = template.description;
+
+    card.appendChild(head);
+    card.appendChild(desc);
+    card.addEventListener("click", () => {
+      templateManagerState.selectedTemplateId = template.id;
+      renderTemplateGallery();
+      void previewTemplateById(template.id);
+    });
+    gallery.appendChild(card);
+  }
+}
+
+function summarizePreview(preview) {
+  if (!preview) return "No preview loaded.";
+  const orch = preview.changes?.orchestrationAssignments?.length || 0;
+  const mem = preview.changes?.memoryAssignments?.length || 0;
+  const modules = preview.changes?.moduleToggles?.length || 0;
+  const providers = preview.missingProviderConfigs?.length || 0;
+  const missingSecrets = preview.missingSecrets?.length || 0;
+  const caps = preview.capabilityMismatches?.length || 0;
+  return `${orch} orchestration changes · ${mem} memory changes · ${modules} module toggles · ${providers} missing providers · ${missingSecrets} missing secrets · ${caps} capability warnings · ${preview.estimatedCostTier || "free"} cost tier`;
+}
+
+function renderTemplateRequirements(preview) {
+  const list = els["template-manager-requirements"];
+  if (!list) return;
+  list.innerHTML = "";
+  const rows = [];
+  for (const item of preview?.missingProviderConfigs || []) {
+    rows.push(`Missing provider: ${item.providerId || item.providerKind || "provider"} — ${item.reason}`);
+  }
+  for (const item of preview?.missingSecrets || []) {
+    rows.push(`Missing credential: ${item.label || item.providerId || item.providerKind || "provider"} — ${item.reason}`);
+  }
+  for (const item of preview?.capabilityMismatches || []) {
+    rows.push(`Capability warning: ${item.capability} — ${item.reason}`);
+  }
+  for (const implication of preview?.externalNetworkImplications || []) {
+    rows.push(`Network/cost implication: ${implication}`);
+  }
+  for (const warning of preview?.warnings || []) {
+    rows.push(`Warning: ${warning}`);
+  }
+  if (!rows.length) rows.push("All requirements satisfied for this preview.");
+
+  for (const row of rows) {
+    const li = document.createElement("li");
+    li.textContent = row;
+    list.appendChild(li);
+  }
+}
+
+function renderTemplatePreview(preview) {
+  templateManagerState.lastPreview = preview;
+  const pane = els["template-manager-preview"];
+  if (pane) pane.hidden = false;
+  if (els["template-manager-preview-title"]) {
+    els["template-manager-preview-title"].textContent = preview?.template?.name || "Template preview";
+  }
+  if (els["template-manager-preview-summary"]) {
+    els["template-manager-preview-summary"].textContent = summarizePreview(preview);
+  }
+  renderTemplateRequirements(preview);
+  const apply = els["template-manager-apply"];
+  if (apply) apply.disabled = !preview || preview.valid === false;
+}
+
+async function loadTemplates() {
+  clearTemplateManagerError();
+  clearTemplateManagerResult();
+  setTemplateManagerLoading(true);
+  try {
+    const data = await api("/templates");
+    templateManagerState.templates = Array.isArray(data.templates) ? data.templates : [];
+    if (!templateManagerState.templates.some((template) => template.id === templateManagerState.selectedTemplateId)) {
+      templateManagerState.selectedTemplateId = templateManagerState.templates[0]?.id || null;
+    }
+    renderTemplateGallery();
+    if (templateManagerState.selectedTemplateId) await previewTemplateById(templateManagerState.selectedTemplateId);
+  } catch (err) {
+    showTemplateManagerError(`Could not load templates: ${err.message}`);
+  } finally {
+    setTemplateManagerLoading(false);
+  }
+}
+
+async function previewTemplateById(templateId) {
+  if (!templateId) return;
+  clearTemplateManagerError();
+  clearTemplateManagerResult();
+  setTemplateManagerLoading(true);
+  try {
+    const data = await api(`/templates/${encodeURIComponent(templateId)}/preview`, { method: "POST", body: JSON.stringify({}) });
+    renderTemplatePreview(data.preview);
+  } catch (err) {
+    showTemplateManagerError(`Could not preview template: ${err.message}`);
+  } finally {
+    setTemplateManagerLoading(false);
+  }
+}
+
+function selectedTemplateApplyOptions() {
+  const mode = els["template-manager-apply-mode"]?.value || "mergeMissing";
+  const confirmReplace = els["template-manager-confirm-replace"]?.checked === true;
+  return { mode, confirmReplace };
+}
+
+async function applySelectedTemplate() {
+  const templateId = templateManagerState.selectedTemplateId;
+  if (!templateId) return;
+  clearTemplateManagerError();
+  clearTemplateManagerResult();
+  const apply = els["template-manager-apply"];
+  if (apply) apply.disabled = true;
+  try {
+    const result = await api(`/templates/${encodeURIComponent(templateId)}/apply`, {
+      method: "POST",
+      body: JSON.stringify(selectedTemplateApplyOptions()),
+    });
+    renderTemplatePreview(result.preview);
+    showTemplateManagerResult("ok", `Applied ${result.template?.name || templateId}: ${result.changed?.orchestrationAssignments || 0} orchestration and ${result.changed?.memoryAssignments || 0} memory assignments changed.`);
+  } catch (err) {
+    showTemplateManagerResult("err", `Could not apply template: ${err.message}`);
+  } finally {
+    if (apply) apply.disabled = false;
+  }
+}
+
+function parseTemplateImportText() {
+  const raw = els["template-manager-import-json"]?.value || "";
+  if (!raw.trim()) throw new Error("Paste a template JSON document first.");
+  return JSON.parse(raw);
+}
+
+async function previewImportedTemplate() {
+  clearTemplateManagerError();
+  clearTemplateManagerResult();
+  try {
+    const template = parseTemplateImportText();
+    const data = await api("/templates/import/preview", {
+      method: "POST",
+      body: JSON.stringify({ template }),
+    });
+    templateManagerState.importTemplate = data.template;
+    renderTemplatePreview(data.preview);
+    showTemplateManagerResult("ok", `Imported preview ready: ${data.template?.name || "template"}.`);
+  } catch (err) {
+    templateManagerState.importTemplate = null;
+    showTemplateManagerResult("err", `Import preview failed: ${err.message}`);
+  }
+}
+
+async function applyImportedTemplate() {
+  clearTemplateManagerError();
+  clearTemplateManagerResult();
+  try {
+    const template = templateManagerState.importTemplate || parseTemplateImportText();
+    const result = await api("/templates/import/apply", {
+      method: "POST",
+      body: JSON.stringify({ template, ...selectedTemplateApplyOptions() }),
+    });
+    renderTemplatePreview(result.preview);
+    showTemplateManagerResult("ok", `Imported template applied: ${result.template?.name || "template"}.`);
+    await loadTemplates();
+  } catch (err) {
+    showTemplateManagerResult("err", `Import apply failed: ${err.message}`);
+  }
+}
+
+async function exportCurrentTemplate() {
+  clearTemplateManagerResult();
+  try {
+    const data = await api("/templates/export/current");
+    if (els["template-manager-import-json"]) {
+      els["template-manager-import-json"].value = JSON.stringify(data.template, null, 2);
+    }
+    showTemplateManagerResult("ok", "Current configuration exported into the import/export JSON box.");
+  } catch (err) {
+    showTemplateManagerResult("err", `Export failed: ${err.message}`);
+  }
+}
+
+async function saveCurrentTemplate() {
+  clearTemplateManagerResult();
+  try {
+    const data = await api("/templates/save-current", {
+      method: "POST",
+      body: JSON.stringify({ name: "Saved personal setup" }),
+    });
+    showTemplateManagerResult("ok", `Saved current setup as ${data.template?.name || "template"}.`);
+    await loadTemplates();
+  } catch (err) {
+    showTemplateManagerResult("err", `Save current failed: ${err.message}`);
+  }
+}
+
+async function resetToLocalFreeTemplate() {
+  clearTemplateManagerResult();
+  try {
+    const result = await api("/templates/local-free/apply", {
+      method: "POST",
+      body: JSON.stringify({ mode: "replaceAssignments", confirmReplace: true }),
+    });
+    templateManagerState.selectedTemplateId = "local-free";
+    renderTemplatePreview(result.preview);
+    renderTemplateGallery();
+    showTemplateManagerResult("ok", "Reset assignments to Local Free deterministic baseline.");
+  } catch (err) {
+    showTemplateManagerResult("err", `Reset failed: ${err.message}`);
+  }
+}
+
+function openTemplateManager() {
+  const modal = els["template-manager-modal"];
+  if (!modal) return;
+  modal.hidden = false;
+  void loadTemplates();
+}
+
+function closeTemplateManager() {
+  const modal = els["template-manager-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindTemplateManager() {
+  els["open-template-manager"]?.addEventListener("click", openTemplateManager);
+  els["close-template-manager"]?.addEventListener("click", closeTemplateManager);
+  els["template-manager-backdrop"]?.addEventListener("click", closeTemplateManager);
+  els["template-manager-apply"]?.addEventListener("click", () => void applySelectedTemplate());
+  els["template-manager-import-preview"]?.addEventListener("click", () => void previewImportedTemplate());
+  els["template-manager-import-apply"]?.addEventListener("click", () => void applyImportedTemplate());
+  els["template-manager-export"]?.addEventListener("click", () => void exportCurrentTemplate());
+  els["template-manager-save-current"]?.addEventListener("click", () => void saveCurrentTemplate());
+  els["template-manager-reset-local-free"]?.addEventListener("click", () => void resetToLocalFreeTemplate());
+}
+
 // --- Memory browser panel (Chunk 36 stretch) ---
 //
 // Read-only list of recent episodic/core entries from GET /api/memory/entries?layer=episodic|core.
@@ -5123,6 +5459,7 @@ function commandRegistry() {
   return [
     { id: "setup", label: "Setup status", run: () => openSetupWizard() },
     { id: "provider-config", label: "Provider configuration", run: () => openProviderConfig() },
+    { id: "templates", label: "Templates", run: () => openTemplateManager() },
     { id: "provider-test", label: "Test provider connection", run: () => openProviderTest() },
     { id: "safety", label: "Workspace safety", run: () => openWorkspaceSafety() },
     { id: "appearance", label: "Appearance", run: () => openAppearance() },
@@ -5438,6 +5775,7 @@ function init() {
   bindOrchestrationModelConfig();
   bindMemoryProviderConfig();
   bindModuleManager();
+  bindTemplateManager();
   bindMemoryBrowser();
   bindSetupWizard();
   bindWorkspaceSafety();

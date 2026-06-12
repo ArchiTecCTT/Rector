@@ -42,6 +42,10 @@ export const AssignmentProviderIdSchema = z.union([
 ]);
 export type AssignmentProviderId = z.infer<typeof AssignmentProviderIdSchema>;
 
+// Chunk 045 templates use provider-selection naming; keep it as an alias of the richer Chunk 043 schema.
+export const OrchestrationProviderSelectionSchema = AssignmentProviderIdSchema;
+export type OrchestrationProviderSelection = AssignmentProviderId;
+
 export const ModelCapabilitiesSchema = z
   .object({
     text: z.boolean(),

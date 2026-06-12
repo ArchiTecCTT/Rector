@@ -30,6 +30,9 @@ export interface MemoryAssignmentStore {
   resetAssignments(filter?: MemoryAssignmentFilter): Promise<MemoryAssignmentResult<void>>;
 }
 
+// Chunk 045's template implementation used this name before Chunk 044's durable store landed.
+export type MemoryRoleAssignmentStore = MemoryAssignmentStore;
+
 export interface MemoryAssignmentFs {
   readFile(path: string): Promise<string | undefined>;
   writeFile(path: string, data: string): Promise<void>;
@@ -199,6 +202,16 @@ export function createInMemoryMemoryAssignmentStore(initial?: MemoryAssignmentSt
       return { ok: true, value: undefined };
     },
   };
+}
+
+// Backward-compatible factory name for Chunk 045 template tests/callers.
+export function createInMemoryMemoryRoleAssignmentStore(
+  initial: readonly MemoryRoleAssignment[] = [],
+): MemoryRoleAssignmentStore {
+  return createInMemoryMemoryAssignmentStore({
+    version: 1,
+    assignments: initial.map((assignment) => MemoryRoleAssignmentSchema.parse(assignment)),
+  });
 }
 
 export function selectMemoryAssignmentForRole(

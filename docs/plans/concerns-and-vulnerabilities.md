@@ -6,6 +6,15 @@
 
 > Updated during full system audit 2026-06-09 (subagents used; see audits/full-system-audit-2026-06-09.md); follow-up register cleanup 2026-06-10 after Gemini-led test fixes + neuro chunk commits (now 1241 tests green). See audit report for original matrix + evidence.
 
+### Chunk 045 template assignments use in-memory stubs until Chunk 043/044 stores are stitched
+
+- **Source:** Chunk 045 implementation wave; durable orchestration/memory assignment stores from Chunks 043/044 were not present in this isolated worktree.
+- **Severity:** Medium for production persistence; low for current wave acceptance.
+- **Status:** Open / stitcher follow-up.
+- **Root cause:** Template preview/apply needs role assignment targets, but the durable stores/routes from sibling chunks are not available during wave 2. Chunk 045 therefore adds secret-free additive interfaces plus in-memory assignment stores so template apply can be tested without touching provider secrets or provider records.
+- **Plan:** Stitcher should connect `OrchestrationAssignmentStore` and `MemoryRoleAssignmentStore` to the durable stores from Chunks 043/044, preserve the current template schema/API contract, and add restart-persistence tests once those stores land.
+- **Traceability:** `src/providers/orchestrationAssignments.ts`, `src/providers/memoryAssignments.ts`, `src/templates/templateService.ts`, `tests/templateService.test.ts`, `tests/templateApi.test.ts`.
+
 ### External mode fail-fast startup check ignores UI-persisted configurations
 
 - **Status:** RESOLVED.
