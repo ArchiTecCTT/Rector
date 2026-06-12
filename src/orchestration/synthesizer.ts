@@ -674,25 +674,46 @@ function liveValidationLines(input: BrainstemSynthesisInput): string[] {
   return ["Validation was not run."];
 }
 
+const STATUS_REVIEW_RISKS: Partial<Record<BrainstemSynthesisStatus, string>> = {
+  FAILED: "Run ended with FAILED; user/operator review may be required.",
+  NEEDS_DECISION: "Run ended with NEEDS_DECISION; user/operator review may be required.",
+  BLOCKED: "Run ended with BLOCKED; user/operator review may be required.",
+};
+
 function liveRiskLines(input: BrainstemSynthesisInput): string[] {
-  const risks: string[] = [];
-  const status = synthesisStatus(input);
-  if (status === "FAILED" || status === "NEEDS_DECISION" || status === "BLOCKED") {
-    risks.push(`Run ended with ${status}; user/operator review may be required.`);
-  }
-  if (input.executionResult?.status === "PARTIAL") {
-    risks.push("Execution was partial; at least one node failed or was skipped.");
-  }
+  return nonEmptyRiskLines([
+    statusRiskLine(synthesisStatus(input)),
+    partialExecutionRiskLine(input),
+    ...validationFailureRiskLines(input),
+    ...skepticFindingRiskLines(input),
+  ]);
+}
 
-  for (const failure of input.validationHealingResult?.failures.slice(0, 3) ?? []) {
-    risks.push(`${failure.classification} failure on ${failure.nodeId ?? "DAG"}: ${failure.message}`);
-  }
-
-  for (const finding of input.skepticReview.findings.slice(0, 2)) {
-    risks.push(`${finding.severity} skeptic finding${finding.taskId ? ` on ${finding.taskId}` : ""}: ${finding.message}`);
-  }
-
+function nonEmptyRiskLines(lines: Array<string | undefined>): string[] {
+  const risks = lines.filter((line): line is string => Boolean(line));
   return risks.length > 0 ? risks : ["No unresolved risks were recorded in the run state."];
+}
+
+function statusRiskLine(status: BrainstemSynthesisStatus): string | undefined {
+  return STATUS_REVIEW_RISKS[status];
+}
+
+function partialExecutionRiskLine(input: BrainstemSynthesisInput): string | undefined {
+  return input.executionResult?.status === "PARTIAL"
+    ? "Execution was partial; at least one node failed or was skipped."
+    : undefined;
+}
+
+function validationFailureRiskLines(input: BrainstemSynthesisInput): string[] {
+  return (input.validationHealingResult?.failures.slice(0, 3) ?? []).map(
+    (failure) => `${failure.classification} failure on ${failure.nodeId ?? "DAG"}: ${failure.message}`,
+  );
+}
+
+function skepticFindingRiskLines(input: BrainstemSynthesisInput): string[] {
+  return input.skepticReview.findings.slice(0, 2).map(
+    (finding) => `${finding.severity} skeptic finding${finding.taskId ? ` on ${finding.taskId}` : ""}: ${finding.message}`,
+  );
 }
 
 function liveNextStepLines(input: BrainstemSynthesisInput): string[] {

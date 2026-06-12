@@ -1738,40 +1738,60 @@ function findProviderRecord(providerId) {
   return providerConfigState.providers.find((p) => p.id === providerId) || null;
 }
 
-function setProviderConfigLoading(loading) {
-  const indicator = els["provider-config-loading"];
+function setPanelLoading(elementId, loading) {
+  const indicator = els[elementId];
   if (indicator) indicator.hidden = !loading;
 }
 
-function showProviderConfigError(message) {
-  const box = els["provider-config-error"];
+function showPanelError(elementId, message) {
+  const box = els[elementId];
   if (!box) return;
   box.hidden = false;
   box.textContent = message;
 }
 
-function hideProviderConfigError() {
-  const box = els["provider-config-error"];
+function hidePanelError(elementId) {
+  const box = els[elementId];
   if (!box) return;
   box.hidden = true;
   box.textContent = "";
 }
 
+function setProviderConfigLoading(loading) {
+  setPanelLoading("provider-config-loading", loading);
+}
+
+function showProviderConfigError(message) {
+  showPanelError("provider-config-error", message);
+}
+
+function hideProviderConfigError() {
+  hidePanelError("provider-config-error");
+}
+
 // Render a redacted result line into a card/form result element. Server responses are already
 // redacted at the boundary; client-built strings carry only static text + the non-secret label and
 // model id, so no key material can appear (Req 15.2–15.5).
-function showProviderConfigResult(box, kind, message) {
+function showConfigResult(box, kind, message) {
   if (!box) return;
   box.hidden = false;
   box.textContent = message;
   box.className = `provider-config-result provider-config-result--${kind === "ok" ? "ok" : "err"}`;
 }
 
-function clearProviderConfigResult(box) {
+function clearConfigResult(box) {
   if (!box) return;
   box.hidden = true;
   box.textContent = "";
   box.className = "provider-config-result";
+}
+
+function showProviderConfigResult(box, kind, message) {
+  showConfigResult(box, kind, message);
+}
+
+function clearProviderConfigResult(box) {
+  clearConfigResult(box);
 }
 
 // Wire a masked key input to its show/hide toggle (Req 11.1). Flipping reveals/masks the value and
@@ -1786,58 +1806,73 @@ function bindKeyToggle(input, toggle) {
   });
 }
 
-// Run a connection test for one configured provider (Req 15). Validates via the server, applies a
-// 30s aborting client timeout (Req 15.5), disables the action while in flight (Req 15.4), and
-// renders a redacted success/failure/timeout message (Req 15.2/15.3) into the card's result box.
-async function runProviderConfigTest(providerId, label, resultBox, testBtn, loadingEl) {
-  if (providerConfigTest.inFlight) return;
-  providerConfigTest.inFlight = true;
-  clearProviderConfigResult(resultBox);
+// Shared connection-test runner for provider and memory-provider cards. It keeps secrets out of
+// responses, applies the same 30s aborting timeout, and centralizes in-flight UI cleanup.
+async function runConfigConnectionTest(options) {
+  const { state, url, body, label, resultBox, testBtn, loadingEl, successMessage, failureFallback } = options;
+  if (state.inFlight) return;
+  state.inFlight = true;
+  clearConfigResult(resultBox);
   if (testBtn) testBtn.disabled = true;
   if (loadingEl) loadingEl.hidden = false;
 
   const controller = new AbortController();
-  providerConfigTest.abort = controller;
+  state.abort = controller;
   let timedOut = false;
-  providerConfigTest.timer = setTimeout(() => {
+  state.timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
   }, PROVIDER_TEST_TIMEOUT_MS);
 
   try {
-    const res = await fetch(`${API}/setup/test-connection`, {
+    const request = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ providerId }),
       signal: controller.signal,
-    });
+    };
+    if (body !== undefined) request.body = JSON.stringify(body);
+    const res = await fetch(url, request);
     const text = await res.text();
-    const body = text ? JSON.parse(text) : {};
-    if (res.ok && body.ok) {
-      const model = typeof body.model === "string" && body.model ? ` (model: ${body.model})` : "";
-      showProviderConfigResult(resultBox, "ok", `${label} is ready. Connection succeeded${model}.`);
+    const parsed = text ? JSON.parse(text) : {};
+    if (res.ok && parsed.ok) {
+      showConfigResult(resultBox, "ok", successMessage(parsed));
     } else {
-      const reason = (body && (body.error || body.code)) || "the provider rejected the request";
-      showProviderConfigResult(resultBox, "err", `${label} connection failed: ${reason}`);
+      const reason = (parsed && (parsed.error || parsed.code)) || failureFallback;
+      showConfigResult(resultBox, "err", `${label} connection failed: ${reason}`);
     }
   } catch (err) {
-    if (timedOut || (err && err.name === "AbortError")) {
-      showProviderConfigResult(
-        resultBox,
-        "err",
-        `${label} connection test timed out after 30 seconds. No result was received.`,
-      );
-    } else {
-      showProviderConfigResult(resultBox, "err", `${label} connection failed: could not reach the server.`);
-    }
+    const message = timedOut || (err && err.name === "AbortError")
+      ? `${label} connection test timed out after 30 seconds. No result was received.`
+      : `${label} connection failed: could not reach the server.`;
+    showConfigResult(resultBox, "err", message);
   } finally {
-    clearTimeout(providerConfigTest.timer);
-    providerConfigTest.timer = null;
-    providerConfigTest.abort = null;
-    providerConfigTest.inFlight = false;
+    clearTimeout(state.timer);
+    state.timer = null;
+    state.abort = null;
+    state.inFlight = false;
     if (testBtn) testBtn.disabled = false;
     if (loadingEl) loadingEl.hidden = true;
   }
+}
+
+// Run a connection test for one configured provider (Req 15). Validates via the server, applies a
+// 30s aborting client timeout (Req 15.5), disables the action while in flight (Req 15.4), and
+// renders a redacted success/failure/timeout message (Req 15.2/15.3) into the card's result box.
+async function runProviderConfigTest(providerId, label, resultBox, testBtn, loadingEl) {
+  return runConfigConnectionTest({
+    state: providerConfigTest,
+    url: `${API}/setup/test-connection`,
+    body: { providerId },
+    label,
+    resultBox,
+    testBtn,
+    loadingEl,
+    failureFallback: "the provider rejected the request",
+    successMessage: (body) => {
+      const model = typeof body.model === "string" && body.model ? ` (model: ${body.model})` : "";
+      return `${label} is ready. Connection succeeded${model}.`;
+    },
+  });
 }
 
 // Persist a record via POST /api/providers, sending the key only when entered (write-once). On
@@ -3122,30 +3157,23 @@ function memoryAssignmentProviderOptions() {
 }
 
 function setMemoryProviderConfigLoading(loading) {
-  const indicator = els["memory-provider-config-loading"];
-  if (indicator) indicator.hidden = !loading;
+  setPanelLoading("memory-provider-config-loading", loading);
 }
 
 function showMemoryProviderConfigError(message) {
-  const box = els["memory-provider-config-error"];
-  if (!box) return;
-  box.hidden = false;
-  box.textContent = message;
+  showPanelError("memory-provider-config-error", message);
 }
 
 function hideMemoryProviderConfigError() {
-  const box = els["memory-provider-config-error"];
-  if (!box) return;
-  box.hidden = true;
-  box.textContent = "";
+  hidePanelError("memory-provider-config-error");
 }
 
 function showMemoryProviderConfigResult(box, kind, message) {
-  showProviderConfigResult(box, kind, message);
+  showConfigResult(box, kind, message);
 }
 
 function clearMemoryProviderConfigResult(box) {
-  clearProviderConfigResult(box);
+  clearConfigResult(box);
 }
 
 async function saveMemoryAssignment(role, providerRecordId, resultBox) {
@@ -3345,52 +3373,16 @@ function renderMemoryProviderAddFields() {
 }
 
 async function runMemoryProviderConfigTest(providerId, label, resultBox, testBtn, loadingEl) {
-  if (memoryProviderConfigTest.inFlight) return;
-  memoryProviderConfigTest.inFlight = true;
-  clearMemoryProviderConfigResult(resultBox);
-  if (testBtn) testBtn.disabled = true;
-  if (loadingEl) loadingEl.hidden = false;
-
-  const controller = new AbortController();
-  memoryProviderConfigTest.abort = controller;
-  let timedOut = false;
-  memoryProviderConfigTest.timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, PROVIDER_TEST_TIMEOUT_MS);
-
-  try {
-    const res = await fetch(`${API}/memory-providers/${encodeURIComponent(providerId)}/test-connection`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    const body = text ? JSON.parse(text) : {};
-    if (res.ok && body.ok) {
-      showMemoryProviderConfigResult(resultBox, "ok", `${label} memory provider is ready. Configuration is valid.`);
-    } else {
-      const reason = (body && (body.error || body.code)) || "configuration validation failed";
-      showMemoryProviderConfigResult(resultBox, "err", `${label} connection failed: ${reason}`);
-    }
-  } catch (err) {
-    if (timedOut || (err && err.name === "AbortError")) {
-      showMemoryProviderConfigResult(
-        resultBox,
-        "err",
-        `${label} connection test timed out after 30 seconds. No result was received.`,
-      );
-    } else {
-      showMemoryProviderConfigResult(resultBox, "err", `${label} connection failed: could not reach the server.`);
-    }
-  } finally {
-    clearTimeout(memoryProviderConfigTest.timer);
-    memoryProviderConfigTest.timer = null;
-    memoryProviderConfigTest.abort = null;
-    memoryProviderConfigTest.inFlight = false;
-    if (testBtn) testBtn.disabled = false;
-    if (loadingEl) loadingEl.hidden = true;
-  }
+  return runConfigConnectionTest({
+    state: memoryProviderConfigTest,
+    url: `${API}/memory-providers/${encodeURIComponent(providerId)}/test-connection`,
+    label,
+    resultBox,
+    testBtn,
+    loadingEl,
+    failureFallback: "configuration validation failed",
+    successMessage: () => `${label} memory provider is ready. Configuration is valid.`,
+  });
 }
 
 async function saveMemoryProviderConfig(spec, providerId, label, inputs, keyInput, resultBox) {
