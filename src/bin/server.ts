@@ -21,6 +21,7 @@ import {
 import { createLocalSecretStore } from "../security/secretStore";
 import { createLocalProviderConfigStore } from "../providers/configStore";
 import { createLocalMemoryConfigStore } from "../providers/memoryConfigStore";
+import { createLocalMemoryAssignmentStore } from "../providers/memoryAssignmentStore";
 import { redactString } from "../security/redaction";
 import { parseAuthConfig } from "../security/auth";
 import {
@@ -108,6 +109,7 @@ const providerConfigStore = createLocalProviderConfigStore({ filePath: PROVIDER_
 // .rector/memory-providers.json exists yet we get the empty state + default
 // local-inmemory provider (zero-config, identical to pre-34 baseline).
 const memoryConfigStore = createLocalMemoryConfigStore({ filePath: ".rector/memory-providers.json" });
+const memoryAssignmentStore = createLocalMemoryAssignmentStore({ filePath: ".rector/memory-assignments.json" });
 
 /**
  * Build the model router for the resolved orchestration mode (design C6, Req 13.3/14.3).
@@ -269,6 +271,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
     secretStore,
     providerConfigStore,
     memoryConfigStore,
+    memoryAssignmentStore,
     auth: authConfig,
     secretEncryptionKey,
   });

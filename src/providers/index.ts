@@ -8,3 +8,6 @@ export * from "./orchestrationConfig";
 export * from "./memoryConfig";
 export * from "./memoryConfigStore";
 export * from "./memoryBridge";
+export * from "./memoryAssignments";
+export * from "./memoryAssignmentStore";
+export * from "./memoryRoleRouter";

@@ -231,6 +231,9 @@ function cacheEls() {
     "memory-provider-config-loading",
     "memory-provider-config-error",
     "memory-provider-config-cards",
+    "memory-assignment-matrix",
+    "memory-assignment-reset",
+    "memory-assignment-result",
     "memory-provider-config-add-form",
     "memory-provider-config-kind",
     "memory-provider-config-id",
@@ -2642,6 +2645,12 @@ const memoryProviderConfigState = {
   activeMemoryProviderId: null,
 };
 
+const memoryAssignmentState = {
+  roles: [],
+  assignments: [],
+  effective: [],
+};
+
 const memoryProviderConfigTest = {
   inFlight: false,
   abort: null,
@@ -2682,6 +2691,32 @@ function findMemoryProviderRecord(providerId) {
   return memoryProviderConfigState.providers.find((p) => p.id === providerId) || null;
 }
 
+function memoryAssignmentEffectiveForRole(role) {
+  return memoryAssignmentState.effective.find((item) => item.role === role) || null;
+}
+
+function memoryAssignmentForRole(role) {
+  return memoryAssignmentState.assignments.find((item) => item.role === role) || null;
+}
+
+function memoryAssignmentProviderLabel(providerId) {
+  if (providerId === "local") return "Local default";
+  if (providerId === "disabled") return "Disabled";
+  const record = findMemoryProviderRecord(providerId);
+  return record ? record.label || record.id : providerId;
+}
+
+function memoryAssignmentProviderOptions() {
+  return [
+    { id: "local", label: "Local default" },
+    { id: "disabled", label: "Disabled" },
+    ...memoryProviderConfigState.providers.map((provider) => ({
+      id: provider.id,
+      label: `${provider.label || provider.id} (${memoryProviderKindSpec(provider.kind).label})`,
+    })),
+  ];
+}
+
 function setMemoryProviderConfigLoading(loading) {
   const indicator = els["memory-provider-config-loading"];
   if (indicator) indicator.hidden = !loading;
@@ -2707,6 +2742,172 @@ function showMemoryProviderConfigResult(box, kind, message) {
 
 function clearMemoryProviderConfigResult(box) {
   clearProviderConfigResult(box);
+}
+
+async function saveMemoryAssignment(role, providerRecordId, resultBox) {
+  try {
+    await api(`/memory-assignments/${encodeURIComponent(role)}`, {
+      method: "PUT",
+      body: JSON.stringify({ providerRecordId }),
+    });
+    showMemoryProviderConfigResult(
+      resultBox,
+      "ok",
+      `${role} now uses ${memoryAssignmentProviderLabel(providerRecordId)}.`,
+    );
+    await loadMemoryAssignments();
+  } catch (err) {
+    showMemoryProviderConfigResult(resultBox, "err", `Could not save memory assignment: ${err.message}`);
+  }
+}
+
+async function testMemoryAssignment(role, resultBox, button) {
+  if (button) button.disabled = true;
+  clearMemoryProviderConfigResult(resultBox);
+  try {
+    const data = await api(`/memory-assignments/${encodeURIComponent(role)}/test`, { method: "POST" });
+    if (data.ok) {
+      showMemoryProviderConfigResult(resultBox, "ok", `${role} memory role is ready.`);
+    } else {
+      showMemoryProviderConfigResult(resultBox, "err", `${role} is not ready: ${data.error || data.code || "unknown"}`);
+    }
+    await loadMemoryAssignments();
+  } catch (err) {
+    showMemoryProviderConfigResult(resultBox, "err", `Could not test memory assignment: ${err.message}`);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function previewMemoryAssignmentMigration(role, resultBox) {
+  try {
+    const data = await api(`/memory-assignments/${encodeURIComponent(role)}/migrate/plan`, { method: "POST" });
+    const steps = Array.isArray(data.steps) ? data.steps.length : 0;
+    showMemoryProviderConfigResult(
+      resultBox,
+      "ok",
+      `Migration preview only: ${steps} planned steps, destructive action: ${data.destructive === true ? "yes" : "no"}.`,
+    );
+  } catch (err) {
+    showMemoryProviderConfigResult(resultBox, "err", `Could not create migration plan: ${err.message}`);
+  }
+}
+
+function createMemoryAssignmentRow(roleDef) {
+  const role = roleDef.role;
+  const assignment = memoryAssignmentForRole(role);
+  const effective = memoryAssignmentEffectiveForRole(role);
+  const selected = assignment?.providerRecordId || effective?.providerRecordId || "local";
+
+  const row = document.createElement("div");
+  row.className = "provider-config-card memory-assignment-row";
+  row.dataset.role = role;
+
+  const head = document.createElement("div");
+  head.className = "provider-config-card__head";
+  const name = document.createElement("span");
+  name.className = "provider-config-card__name";
+  name.textContent = roleDef.label || role;
+  const status = document.createElement("span");
+  status.className = "provider-config-card__status";
+  status.textContent = effective?.readiness?.status || effective?.status || "ready";
+  head.appendChild(name);
+  head.appendChild(status);
+  row.appendChild(head);
+
+  const desc = document.createElement("p");
+  desc.className = "provider-config-tier__desc";
+  desc.textContent = roleDef.purpose || "Memory role";
+  row.appendChild(desc);
+
+  const field = document.createElement("label");
+  field.className = "provider-config-field-row";
+  const label = document.createElement("span");
+  label.className = "provider-config-label";
+  label.textContent = "Provider";
+  const select = document.createElement("select");
+  select.className = "provider-config-input memory-assignment-provider";
+  select.dataset.role = role;
+  for (const optionSpec of memoryAssignmentProviderOptions()) {
+    const option = document.createElement("option");
+    option.value = optionSpec.id;
+    option.textContent = optionSpec.label;
+    if (optionSpec.id === selected) option.selected = true;
+    select.appendChild(option);
+  }
+  select.value = selected;
+  field.appendChild(label);
+  field.appendChild(select);
+  row.appendChild(field);
+
+  const warningBox = document.createElement("div");
+  warningBox.className = "provider-config-key-hint memory-assignment-warnings";
+  const warnings = Array.isArray(effective?.warnings) ? effective.warnings : [];
+  warningBox.textContent = warnings.length > 0 ? warnings.map((warning) => warning.message).join(" ") : "No capability warnings.";
+  row.appendChild(warningBox);
+
+  const resultBox = document.createElement("div");
+  resultBox.className = "provider-config-result";
+  resultBox.setAttribute("role", "status");
+  resultBox.setAttribute("aria-live", "polite");
+  resultBox.hidden = true;
+
+  const actions = document.createElement("div");
+  actions.className = "provider-config-card__actions";
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "btn btn--primary btn--sm memory-assignment-save";
+  saveBtn.textContent = "Save assignment";
+  saveBtn.addEventListener("click", () => void saveMemoryAssignment(role, select.value, resultBox));
+  const testBtn = document.createElement("button");
+  testBtn.type = "button";
+  testBtn.className = "btn btn--sm memory-assignment-test";
+  testBtn.textContent = "Test";
+  testBtn.addEventListener("click", () => void testMemoryAssignment(role, resultBox, testBtn));
+  const migrateBtn = document.createElement("button");
+  migrateBtn.type = "button";
+  migrateBtn.className = "btn btn--ghost btn--sm memory-assignment-migrate";
+  migrateBtn.textContent = "Migration plan";
+  migrateBtn.addEventListener("click", () => void previewMemoryAssignmentMigration(role, resultBox));
+  actions.appendChild(saveBtn);
+  actions.appendChild(testBtn);
+  actions.appendChild(migrateBtn);
+  row.appendChild(actions);
+  row.appendChild(resultBox);
+
+  return row;
+}
+
+function renderMemoryAssignmentMatrix() {
+  const container = els["memory-assignment-matrix"];
+  if (!container) return;
+  container.innerHTML = "";
+  const roles = memoryAssignmentState.roles.length > 0 ? memoryAssignmentState.roles : [];
+  for (const roleDef of roles) {
+    container.appendChild(createMemoryAssignmentRow(roleDef));
+  }
+}
+
+async function loadMemoryAssignments() {
+  const [assignmentsData, effectiveData] = await Promise.all([
+    api("/memory-assignments"),
+    api("/memory-assignments/effective"),
+  ]);
+  memoryAssignmentState.roles = Array.isArray(assignmentsData.roles) ? assignmentsData.roles : [];
+  memoryAssignmentState.assignments = Array.isArray(assignmentsData.assignments) ? assignmentsData.assignments : [];
+  memoryAssignmentState.effective = Array.isArray(effectiveData.effective) ? effectiveData.effective : [];
+  renderMemoryAssignmentMatrix();
+}
+
+async function resetMemoryAssignments() {
+  const resultBox = els["memory-assignment-result"];
+  try {
+    await api("/memory-assignments/reset", { method: "POST", body: JSON.stringify({}) });
+    showMemoryProviderConfigResult(resultBox, "ok", "Memory assignments reset to local defaults.");
+    await loadMemoryAssignments();
+  } catch (err) {
+    showMemoryProviderConfigResult(resultBox, "err", `Could not reset memory assignments: ${err.message}`);
+  }
 }
 
 function renderMemoryProviderAddFields() {
@@ -3030,11 +3231,16 @@ async function loadMemoryProviderConfig() {
       typeof data.activeMemoryProviderId === "string" ? data.activeMemoryProviderId : null;
     renderMemoryProviderConfig();
     renderMemoryProviderAddFields();
+    await loadMemoryAssignments();
   } catch {
     memoryProviderConfigState.providers = [];
     memoryProviderConfigState.activeMemoryProviderId = null;
     renderMemoryProviderConfig();
     renderMemoryProviderAddFields();
+    memoryAssignmentState.roles = [];
+    memoryAssignmentState.assignments = [];
+    memoryAssignmentState.effective = [];
+    renderMemoryAssignmentMatrix();
     showMemoryProviderConfigError(
       "Memory provider configuration could not be loaded. Chat and trace remain available.",
     );
@@ -3112,6 +3318,7 @@ function bindMemoryProviderConfig() {
   els["memory-provider-config-backdrop"]?.addEventListener("click", closeMemoryProviderConfig);
   bindKeyToggle(els["memory-provider-config-add-key"], els["memory-provider-config-add-key-toggle"]);
   els["memory-provider-config-kind"]?.addEventListener("change", renderMemoryProviderAddFields);
+  els["memory-assignment-reset"]?.addEventListener("click", () => void resetMemoryAssignments());
   els["memory-provider-config-add-form"]?.addEventListener("submit", (event) => {
     event.preventDefault();
     void addMemoryProviderFromForm();

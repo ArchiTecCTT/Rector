@@ -64,6 +64,18 @@ import {
   type MemoryProviderRecord,
   createInMemoryMemoryConfigStore,
   type MemoryConfigStore,
+  MEMORY_ROLES,
+  MEMORY_ROLE_DEFINITIONS,
+  MemoryRoleSchema,
+  createMemoryRoleAssignment,
+  createInMemoryMemoryAssignmentStore,
+  MemoryRoleRouter,
+  memoryRoleResolutionToJson,
+  memoryProviderCapabilitiesForKind,
+  memoryCapabilityWarningsForRole,
+  type MemoryRole,
+  type MemoryRoleAssignment,
+  type MemoryAssignmentStore,
 } from "../providers";
 import type { MemoryProvider } from "../memory/provider";
 import { redactMemoryContent } from "../memory/adapterBase";
@@ -175,6 +187,12 @@ export interface ApiSecurityOptions {
    * the resolved provider; RectorStore.memory* surface remains for main persistence tests.
    */
   memoryConfigStore?: MemoryConfigStore;
+
+  /**
+   * Optional Memory_Assignment_Store (Chunk 044). Persists non-secret role -> provider links only;
+   * provider secrets remain exclusively in Secret_Store through MemoryProviderRecord.secretRef.
+   */
+  memoryAssignmentStore?: MemoryAssignmentStore;
 
   /** Optional persisted module enable/disable state (Chunk 041). */
   moduleConfigStore?: ModuleConfigStore;
@@ -1155,6 +1173,38 @@ export const TestMemoryProviderConnectionResponseSchema = z.object({
 });
 export type TestMemoryProviderConnectionResponse = z.infer<typeof TestMemoryProviderConnectionResponseSchema>;
 
+export const UpsertMemoryAssignmentRequestSchema = z
+  .object({
+    providerRecordId: z.string().min(1),
+    enabled: z.boolean().optional(),
+    workspaceId: z.string().min(1).optional(),
+    readPriority: z.number().int().optional(),
+    writePriority: z.number().int().optional(),
+    fallbackProviderRecordId: z.string().min(1).optional(),
+    retentionPolicy: z.enum(["ephemeral", "session", "durable", "longTerm"]).optional(),
+    maxEntries: z.number().int().positive().optional(),
+    maxUsdPerDay: z.number().nonnegative().optional(),
+  })
+  .strict();
+export type UpsertMemoryAssignmentRequest = z.infer<typeof UpsertMemoryAssignmentRequestSchema>;
+
+export const MemoryAssignmentResetRequestSchema = z
+  .object({
+    workspaceId: z.string().min(1).optional(),
+  })
+  .strict()
+  .optional();
+export type MemoryAssignmentResetRequest = z.infer<typeof MemoryAssignmentResetRequestSchema>;
+
+export const MemoryAssignmentMigrationPlanRequestSchema = z
+  .object({
+    targetProviderRecordId: z.string().min(1).optional(),
+    workspaceId: z.string().min(1).optional(),
+  })
+  .strict()
+  .optional();
+export type MemoryAssignmentMigrationPlanRequest = z.infer<typeof MemoryAssignmentMigrationPlanRequestSchema>;
+
 /**
  * Validates a built memory provider's configuration. Local kinds always succeed
  * without reading secrets or performing network I/O. External kinds run
@@ -1414,6 +1464,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const runEventBroker = createRunEventBroker();
   const baseStore = securityOptions.store ?? createRectorStore(securityOptions.persistence);
   const rectorStore = withEventBroadcast(baseStore, runEventBroker);
+  const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
+  const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
+  const memoryConfigStore = securityOptions.memoryConfigStore ?? createInMemoryMemoryConfigStore();
+  const memoryAssignmentStore = securityOptions.memoryAssignmentStore ?? createInMemoryMemoryAssignmentStore();
 
   // Chunk 34 (pluggable memory providers): resolve the active MemoryProvider for neuro/agent
   // memory (notes, episodic context for contextBuilder/preprocessor/planner, prune, etc.).
@@ -1428,12 +1482,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   let activeMemoryProvider: MemoryProvider | undefined;
   const resolvePromise = (async () => {
     try {
-      activeMemoryProvider = securityOptions.memoryConfigStore
-        ? await resolveActiveMemoryProvider(securityOptions.memoryConfigStore, securityOptions.secretStore!, {
-            mode: securityOptions.orchestration?.mode,
-            delegateStoreForLocalSqliteMem: isSqlBackedStore(baseStore) ? rectorStore : undefined,
-          })
-        : createPureLocalMemoryProvider();
+      activeMemoryProvider = await resolveActiveMemoryProvider(memoryConfigStore, setupSecretStore, {
+        mode: securityOptions.orchestration?.mode,
+        delegateStoreForLocalSqliteMem: isSqlBackedStore(baseStore) ? rectorStore : undefined,
+      });
     } catch {
       activeMemoryProvider = createPureLocalMemoryProvider();
     }
@@ -1500,13 +1552,11 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.use(express.static(publicDir));
 
   const authConfig = securityOptions.auth ?? parseAuthConfig(process.env);
-  const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
-  const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
-  const memoryConfigStore = securityOptions.memoryConfigStore ?? createInMemoryMemoryConfigStore();
   const defaultUserStores: UserStores = {
     secretStore: setupSecretStore,
     providerConfigStore,
     memoryConfigStore,
+    memoryAssignmentStore,
   };
   const resolveUserStores = createUserStoresResolver({
     authEnabled: authConfig.enabled,
@@ -1580,46 +1630,74 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   app.use(createAuthMiddleware(authConfig, resolveUserStores));
 
-  const memoryProviderByUser = new Map<string, MemoryProvider>();
-  const getMemoryProviderForUserStores = async (
-    userId: string,
-    stores: UserStores,
-  ): Promise<MemoryProvider> => {
-    const cached = memoryProviderByUser.get(userId);
-    if (cached) return cached;
+  const memoryRoleRouterByUser = new Map<string, MemoryRoleRouter>();
+  const makeMemoryRoleRouter = (stores: UserStores): MemoryRoleRouter =>
+    new MemoryRoleRouter({
+      assignmentStore: stores.memoryAssignmentStore,
+      configStore: stores.memoryConfigStore,
+      secrets: stores.secretStore,
+      mode: securityOptions.orchestration?.mode,
+      delegateStoreForLocalSqliteMem: isSqlBackedStore(baseStore) ? rectorStore : undefined,
+    });
+  const defaultMemoryRoleRouter = makeMemoryRoleRouter(defaultUserStores);
 
-    try {
-      const provider = await resolveActiveMemoryProvider(stores.memoryConfigStore, stores.secretStore, {
-        mode: securityOptions.orchestration?.mode,
-        delegateStoreForLocalSqliteMem: isSqlBackedStore(baseStore) ? rectorStore : undefined,
-      });
-      memoryProviderByUser.set(userId, provider);
-      return provider;
-    } catch {
-      const fallback = createPureLocalMemoryProvider();
-      memoryProviderByUser.set(userId, fallback);
-      return fallback;
-    }
+  const getMemoryRoleRouterForUserStores = (userId: string, stores: UserStores): MemoryRoleRouter => {
+    if (!authConfig.enabled || userId === "default") return defaultMemoryRoleRouter;
+    const cached = memoryRoleRouterByUser.get(userId);
+    if (cached) return cached;
+    const router = makeMemoryRoleRouter(stores);
+    memoryRoleRouterByUser.set(userId, router);
+    return router;
   };
 
-  const getMemoryProviderFor = async (req?: express.Request): Promise<MemoryProvider> => {
-    if (!authConfig.enabled || !req?.rectorAuth) {
-      await resolvePromise;
-      return activeMemoryProvider ?? createPureLocalMemoryProvider();
-    }
+  const clearMemoryRoutingCaches = (): void => {
+    defaultMemoryRoleRouter.clearCache();
+    for (const router of memoryRoleRouterByUser.values()) router.clearCache();
+  };
 
-    return getMemoryProviderForUserStores(req.rectorAuth.userId, storesFor(req));
+  const memoryRoleContextFor = (req?: express.Request, workspaceId?: string): { userId?: string; workspaceId?: string } => ({
+    userId: authConfig.enabled ? req?.rectorAuth?.userId : undefined,
+    workspaceId,
+  });
+
+  const getMemoryRoleRouterFor = (req?: express.Request): MemoryRoleRouter => {
+    if (!authConfig.enabled || !req?.rectorAuth) return defaultMemoryRoleRouter;
+    return getMemoryRoleRouterForUserStores(req.rectorAuth.userId, storesFor(req));
+  };
+
+  const resolveEffectiveMemoryProviderFor = async (
+    req: express.Request | undefined,
+    role: MemoryRole,
+    workspaceId?: string,
+  ) => {
+    const router = getMemoryRoleRouterFor(req);
+    return router.resolveMemoryProvider(role, {
+      ...memoryRoleContextFor(req, workspaceId),
+      mode: securityOptions.orchestration?.mode,
+    });
+  };
+
+  const getMemoryProviderFor = async (
+    req?: express.Request,
+    role: MemoryRole = "episodicMemory",
+    workspaceId?: string,
+  ): Promise<MemoryProvider> => {
+    const effective = await resolveEffectiveMemoryProviderFor(req, role, workspaceId);
+    if (effective.provider) return effective.provider;
+    await resolvePromise;
+    return activeMemoryProvider ?? createPureLocalMemoryProvider();
   };
 
   const createMemoryProviderResolver = (
     req: express.Request,
+    role: MemoryRole = "reflectionLessons",
   ): (() => Promise<MemoryProvider>) => {
-    if (!authConfig.enabled || !req.rectorAuth) {
-      return () => getMemoryProvider();
-    }
-    const userId = req.rectorAuth.userId;
+    const userId = authConfig.enabled ? req.rectorAuth?.userId : undefined;
     const stores = storesFor(req);
-    return () => getMemoryProviderForUserStores(userId, stores);
+    return () =>
+      getMemoryRoleRouterForUserStores(userId ?? "default", stores)
+        .resolveMemoryProvider(role, { userId, mode: securityOptions.orchestration?.mode })
+        .then((effective) => effective.provider ?? createPureLocalMemoryProvider());
   };
 
   // --- Chat routes ---
@@ -1732,7 +1810,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
           // Now sourced from the resolved active MemoryProvider (pluggable: local-inmemory default,
           // local-sqlite-mem, or external like Mem0). For the default provider this is byte-identical
           // to the pre-34 direct store call, preserving all existing memoryAdvanced / context tests.
-          const memoryProviderInstance = await getMemoryProviderFor(req);
+          const memoryProviderInstance = await getMemoryProviderFor(req, "episodicMemory", conversation.workspaceId);
           const recentMemory = await memoryProviderInstance.searchMemory(undefined, {
             layer: "episodic",
             limit: EPISODIC_MEMORY_SEARCH_LIMIT,
@@ -1898,7 +1976,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       // resolved pluggable MemoryProvider. For the default local-inmemory provider this is
       // identical to the previous direct rectorStore call (preserves all existing behavior
       // and tests for /api/notes + context injection).
-      const memoryProviderInstance = await getMemoryProviderFor(req);
+      const memoryProviderInstance = await getMemoryProviderFor(req, "episodicMemory");
       const entry = await memoryProviderInstance.createMemoryEntry(entryInput);
 
       // Opportunistic prune on write (keeps memory bounded)
@@ -1927,7 +2005,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         layer = parsed.data;
       }
 
-      const memoryProviderInstance = await getMemoryProviderFor(req);
+      const browserRole: MemoryRole = layer === "core" ? "semanticMemory" : "episodicMemory";
+      const memoryProviderInstance = await getMemoryProviderFor(req, browserRole);
       const payload = await listMemoryEntriesForApi(memoryProviderInstance, { layer });
       sendRedacted(res, 200, payload);
     } catch (error) {
@@ -2431,6 +2510,258 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const errorMessageOf = (error: unknown): string =>
     error instanceof Error ? error.message : String(error);
 
+  const parseMemoryRoleParam = (raw: string): MemoryRole | undefined => {
+    const parsed = MemoryRoleSchema.safeParse(raw);
+    return parsed.success ? parsed.data : undefined;
+  };
+
+  const requestUserId = (req: express.Request): string | undefined =>
+    authConfig.enabled ? req.rectorAuth?.userId : undefined;
+
+  const exactAssignmentFor = (
+    assignments: MemoryRoleAssignment[],
+    input: { role: MemoryRole; userId?: string; workspaceId?: string },
+  ): MemoryRoleAssignment | undefined =>
+    assignments.find(
+      (assignment) =>
+        assignment.role === input.role &&
+        assignment.userId === input.userId &&
+        assignment.workspaceId === input.workspaceId,
+    );
+
+  const ensureMemoryProviderRefExists = async (
+    stores: UserStores,
+    providerRecordId: string | undefined,
+  ): Promise<string | undefined> => {
+    if (providerRecordId === undefined || providerRecordId === "local" || providerRecordId === "disabled") {
+      return undefined;
+    }
+    const state = await stores.memoryConfigStore.getState();
+    return state.providers.some((provider) => provider.id === providerRecordId)
+      ? undefined
+      : `Memory provider "${providerRecordId}" is not configured.`;
+  };
+
+  const providerOptionsForAssignments = async (stores: UserStores): Promise<Array<Record<string, unknown>>> => {
+    const state = await stores.memoryConfigStore.getState();
+    return [
+      {
+        id: "local",
+        kind: "local-inmemory",
+        label: "Local default",
+        capabilities: memoryProviderCapabilitiesForKind("local-inmemory"),
+        builtIn: true,
+      },
+      {
+        id: "disabled",
+        kind: "disabled",
+        label: "Disabled",
+        capabilities: memoryProviderCapabilitiesForKind("disabled"),
+        builtIn: true,
+      },
+      ...state.providers.map((provider) => ({
+        id: provider.id,
+        kind: provider.kind,
+        label: provider.label,
+        config: provider.config,
+        capabilities: memoryProviderCapabilitiesForKind(provider.kind),
+        builtIn: false,
+      })),
+    ];
+  };
+
+  const memoryAssignmentsPayload = async (req: express.Request) => {
+    const userStores = storesFor(req);
+    const assignments = await userStores.memoryAssignmentStore.listAssignments();
+    return {
+      roles: Object.values(MEMORY_ROLE_DEFINITIONS),
+      assignments,
+      providers: await providerOptionsForAssignments(userStores),
+    };
+  };
+
+  const effectiveMemoryAssignmentsPayload = async (req: express.Request, workspaceId?: string) => ({
+    roles: Object.values(MEMORY_ROLE_DEFINITIONS),
+    effective: await Promise.all(
+      MEMORY_ROLES.map(async (role) =>
+        memoryRoleResolutionToJson(await resolveEffectiveMemoryProviderFor(req, role, workspaceId)),
+      ),
+    ),
+  });
+
+  // --- Memory_Assignment_API (Chunk 044): role -> provider wiring, no secrets. ---
+
+  app.get("/api/memory-roles", (_req, res) => {
+    sendRedacted(res, 200, { roles: Object.values(MEMORY_ROLE_DEFINITIONS) });
+  });
+
+  app.get("/api/memory-assignments", async (req, res) => {
+    try {
+      sendRedacted(res, 200, await memoryAssignmentsPayload(req));
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.get("/api/memory-assignments/effective", async (req, res) => {
+    try {
+      const workspaceId = typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined;
+      sendRedacted(res, 200, await effectiveMemoryAssignmentsPayload(req, workspaceId));
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.put("/api/memory-assignments/:role", async (req, res) => {
+    const role = parseMemoryRoleParam(req.params.role);
+    if (!role) return sendRedacted(res, 404, { error: "Unknown memory role" });
+
+    let body: UpsertMemoryAssignmentRequest;
+    try {
+      body = UpsertMemoryAssignmentRequestSchema.parse(req.body ?? {});
+    } catch (err: unknown) {
+      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
+    }
+
+    try {
+      const userStores = storesFor(req);
+      const providerError = await ensureMemoryProviderRefExists(userStores, body.providerRecordId);
+      if (providerError) return sendRedacted(res, 400, { error: providerError });
+      const fallbackError = await ensureMemoryProviderRefExists(userStores, body.fallbackProviderRecordId);
+      if (fallbackError) return sendRedacted(res, 400, { error: fallbackError });
+
+      const userId = requestUserId(req);
+      const assignments = await userStores.memoryAssignmentStore.listAssignments();
+      const existing = exactAssignmentFor(assignments, { role, userId, workspaceId: body.workspaceId });
+      const now = new Date().toISOString();
+      const assignment = createMemoryRoleAssignment({
+        role,
+        providerRecordId: body.providerRecordId,
+        userId,
+        workspaceId: body.workspaceId,
+        enabled: body.enabled,
+        readPriority: body.readPriority,
+        writePriority: body.writePriority,
+        fallbackProviderRecordId: body.fallbackProviderRecordId,
+        retentionPolicy: body.retentionPolicy,
+        maxEntries: body.maxEntries,
+        maxUsdPerDay: body.maxUsdPerDay,
+        existing,
+        now,
+      });
+
+      const result = await userStores.memoryAssignmentStore.upsertAssignment(assignment);
+      if (!result.ok) return sendRedacted(res, 500, { error: redactString(result.error) });
+      clearMemoryRoutingCaches();
+
+      sendRedacted(res, 200, {
+        assignment: result.value,
+        effective: memoryRoleResolutionToJson(await resolveEffectiveMemoryProviderFor(req, role, body.workspaceId)),
+      });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/memory-assignments/:role/test", async (req, res) => {
+    const role = parseMemoryRoleParam(req.params.role);
+    if (!role) return sendRedacted(res, 404, { error: "Unknown memory role" });
+
+    try {
+      const workspaceId = typeof req.body?.workspaceId === "string" ? req.body.workspaceId : undefined;
+      const effective = await resolveEffectiveMemoryProviderFor(req, role, workspaceId);
+      if (effective.status === "disabled" || !effective.provider) {
+        return sendRedacted(res, 200, {
+          ok: effective.status === "disabled",
+          role,
+          providerId: effective.providerRecordId,
+          code: effective.status === "disabled" ? undefined : "CONFIG_INVALID",
+          error: effective.error,
+          networkAttempted: false,
+          effective: memoryRoleResolutionToJson(effective),
+        });
+      }
+
+      const result = runMemoryProviderConnectionTest({
+        providerId: effective.provider.id,
+        provider: effective.provider,
+        kind: effective.provider.kind,
+      });
+      sendRedacted(res, 200, { role, ...result, effective: memoryRoleResolutionToJson(effective) });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/memory-assignments/reset", async (req, res) => {
+    let body: MemoryAssignmentResetRequest;
+    try {
+      body = MemoryAssignmentResetRequestSchema.parse(req.body ?? {});
+    } catch (err: unknown) {
+      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
+    }
+
+    try {
+      const userStores = storesFor(req);
+      const result = await userStores.memoryAssignmentStore.resetAssignments(
+        body?.workspaceId ? { workspaceId: body.workspaceId } : undefined,
+      );
+      if (!result.ok) return sendRedacted(res, 500, { error: redactString(result.error) });
+      clearMemoryRoutingCaches();
+      sendRedacted(res, 200, await memoryAssignmentsPayload(req));
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/memory-assignments/:role/migrate/plan", async (req, res) => {
+    const role = parseMemoryRoleParam(req.params.role);
+    if (!role) return sendRedacted(res, 404, { error: "Unknown memory role" });
+
+    let body: MemoryAssignmentMigrationPlanRequest;
+    try {
+      body = MemoryAssignmentMigrationPlanRequestSchema.parse(req.body ?? {});
+    } catch (err: unknown) {
+      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
+    }
+
+    try {
+      const userStores = storesFor(req);
+      const targetProviderRecordId = body?.targetProviderRecordId;
+      const providerError = await ensureMemoryProviderRefExists(userStores, targetProviderRecordId);
+      if (providerError) return sendRedacted(res, 400, { error: providerError });
+
+      const workspaceId = body?.workspaceId;
+      const effective = await resolveEffectiveMemoryProviderFor(req, role, workspaceId);
+      const target = targetProviderRecordId ?? effective.providerRecordId;
+      const targetCapabilities = target === "local" || target === "disabled"
+        ? memoryProviderCapabilitiesForKind(target)
+        : memoryProviderCapabilitiesForKind(
+            (await userStores.memoryConfigStore.getState()).providers.find((provider) => provider.id === target)?.kind,
+          );
+      sendRedacted(res, 200, {
+        role,
+        destructive: false,
+        sourceProviderRecordId: effective.providerRecordId,
+        targetProviderRecordId: target,
+        estimatedEntries: "unknown",
+        steps: [
+          "Read current role assignment and provider readiness.",
+          "Estimate entries for this role when a store exposes counts.",
+          "Copy to the target provider in a later migration chunk.",
+          "Verify copied entries before any future cutover.",
+        ],
+        warnings: [
+          ...effective.warnings,
+          ...memoryCapabilityWarningsForRole({ role, capabilities: targetCapabilities, providerRecordId: target }),
+        ],
+        automaticExecution: false,
+      });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
   // GET /api/providers — non-secret records + activeRoutes + per-provider secretPresent (Req 10.4).
   app.get("/api/providers", async (req, res) => {
     try {
@@ -2728,6 +3059,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return sendRedacted(res, 500, { error: redactString(upsertResult.error) });
       }
 
+      clearMemoryRoutingCaches();
       const secretPresent = await userStores.secretStore.hasSecret(secretRef);
       sendRedactedPreservingPresence(
         res,
@@ -2758,6 +3090,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       if (!result.ok) {
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
+      clearMemoryRoutingCaches();
       const state = await userStores.memoryConfigStore.getState();
       sendRedacted(res, 200, { activeMemoryProviderId: state.activeMemoryProviderId });
     } catch (error) {
@@ -2784,6 +3117,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       if (!result.ok) {
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
+      clearMemoryRoutingCaches();
       sendRedactedPreservingPresence(res, 200, { id: existing.id, secretPresent: true }, (redacted) => {
         redacted.secretPresent = true;
         return redacted;
@@ -2813,6 +3147,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         }
       }
 
+      clearMemoryRoutingCaches();
       sendRedacted(res, 200, { removed: true, id: existing.id });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
