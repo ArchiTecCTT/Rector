@@ -560,49 +560,91 @@ function activeMemoryAssignments(template: RectorTemplate): TemplateMemoryAssign
   return template.memoryAssignments.filter((assignment) => assignment.enabled);
 }
 
-function requiredProviderKindImplications(template: RectorTemplate): string[] {
+interface ExternalNetworkImplicationContext {
+  template: RectorTemplate;
+  current: CurrentTemplateConfig;
+}
+
+type ExternalNetworkImplicationCollector = (context: ExternalNetworkImplicationContext) => string[];
+
+const EXTERNAL_NETWORK_IMPLICATION_COLLECTORS: readonly ExternalNetworkImplicationCollector[] = [
+  collectRequiredProviderKindImplications,
+  collectOrchestrationNetworkImplications,
+  collectMemoryNetworkImplications,
+  collectSandboxNetworkImplications,
+];
+
+function buildExternalNetworkImplications(template: RectorTemplate, current: CurrentTemplateConfig): string[] {
+  const context: ExternalNetworkImplicationContext = { template, current };
+  return uniqueStrings(EXTERNAL_NETWORK_IMPLICATION_COLLECTORS.flatMap((collect) => collect(context)));
+}
+
+function collectRequiredProviderKindImplications({ template }: ExternalNetworkImplicationContext): string[] {
   return (template.requiredProviderKinds ?? [])
     .filter(isExternalProviderKind)
     .map((kind) => `requires external provider kind ${kind}`);
 }
 
-function orchestrationNetworkImplications(
-  template: RectorTemplate,
-  providers: readonly ProviderConfigRecord[],
-): string[] {
+function collectOrchestrationNetworkImplications({ template, current }: ExternalNetworkImplicationContext): string[] {
   return activeOrchestrationAssignments(template)
-    .filter((assignment) => isExternalProviderId(assignment.providerId))
-    .map((assignment) => {
-      const kind = providerKindForId(assignment.providerId, providers);
-      return `orchestration role ${assignment.role} may call provider ${assignment.providerId}${kind ? ` (${kind})` : ""}`;
-    });
+    .filter(orchestrationAssignmentUsesExternalProvider)
+    .map((assignment) => formatOrchestrationNetworkImplication(assignment, current.providerRecords));
 }
 
-function memoryNetworkImplications(
-  template: RectorTemplate,
-  providers: readonly MemoryProviderRecord[],
-): string[] {
+function orchestrationAssignmentUsesExternalProvider(assignment: TemplateOrchestrationAssignment): boolean {
+  return isExternalProviderId(assignment.providerId);
+}
+
+function formatOrchestrationNetworkImplication(
+  assignment: TemplateOrchestrationAssignment,
+  providers: readonly ProviderConfigRecord[],
+): string {
+  const kind = providerKindForId(assignment.providerId, providers);
+  return `orchestration role ${assignment.role} may call provider ${assignment.providerId}${providerKindSuffix(kind)}`;
+}
+
+interface MemoryNetworkImplicationCandidate {
+  assignment: TemplateMemoryAssignment;
+  kind: string | undefined;
+}
+
+function collectMemoryNetworkImplications({ template, current }: ExternalNetworkImplicationContext): string[] {
   return activeMemoryAssignments(template)
-    .map((assignment) => ({
-      assignment,
-      kind: assignment.providerKind ?? memoryKindForId(assignment.providerRecordId, providers),
-    }))
-    .filter(({ assignment, kind }) => isExternalProviderId(assignment.providerRecordId) || isExternalProviderKind(kind))
-    .map(({ assignment, kind }) =>
-      `memory role ${assignment.role} may use external provider ${assignment.providerRecordId}${kind ? ` (${kind})` : ""}`,
-    );
+    .map((assignment) => memoryNetworkImplicationCandidate(assignment, current.memoryProviderRecords))
+    .filter(memoryAssignmentUsesExternalProvider)
+    .map(formatMemoryNetworkImplication);
 }
 
-function sandboxNetworkImplications(template: RectorTemplate): string[] {
+function memoryNetworkImplicationCandidate(
+  assignment: TemplateMemoryAssignment,
+  providers: readonly MemoryProviderRecord[],
+): MemoryNetworkImplicationCandidate {
+  return {
+    assignment,
+    kind: assignment.providerKind ?? memoryKindForId(assignment.providerRecordId, providers),
+  };
+}
+
+function memoryAssignmentUsesExternalProvider(candidate: MemoryNetworkImplicationCandidate): boolean {
+  return isExternalProviderId(candidate.assignment.providerRecordId) || isExternalProviderKind(candidate.kind);
+}
+
+function formatMemoryNetworkImplication({ assignment, kind }: MemoryNetworkImplicationCandidate): string {
+  return `memory role ${assignment.role} may use external provider ${assignment.providerRecordId}${providerKindSuffix(kind)}`;
+}
+
+function providerKindSuffix(kind: string | undefined): string {
+  return kind ? ` (${kind})` : "";
+}
+
+function collectSandboxNetworkImplications({ template }: ExternalNetworkImplicationContext): string[] {
   const policy = template.sandboxPolicy;
   if (!policy) return [];
 
-  const implications: string[] = [];
-  if (policy.mode === "e2b") implications.push("sandbox policy may use E2B if configured");
-  if (policy.network !== undefined && policy.network !== "disabled") {
-    implications.push(`sandbox network policy is ${policy.network}`);
-  }
-  return implications;
+  return [
+    ...(policy.mode === "e2b" ? ["sandbox policy may use E2B if configured"] : []),
+    ...(policy.network !== undefined && policy.network !== "disabled" ? [`sandbox network policy is ${policy.network}`] : []),
+  ];
 }
 
 function uniqueStrings(values: readonly string[]): string[] {
@@ -1009,7 +1051,7 @@ export class TemplateService {
     const missingProviderConfigs = this.missingProviderConfigs(template, current);
     const missingSecrets = await this.missingSecretRequirements(template, current);
     const capabilityMismatches = this.capabilityMismatches(template, current);
-    const externalNetworkImplications = this.externalNetworkImplications(template, current);
+    const externalNetworkImplications = buildExternalNetworkImplications(template, current);
     return { missingProviderConfigs, missingSecrets, capabilityMismatches, externalNetworkImplications };
   }
 
@@ -1140,15 +1182,6 @@ export class TemplateService {
     return (template.requiredCapabilities ?? [])
       .filter((capability) => !available.has(capability))
       .map((capability) => ({ capability, reason: "no configured provider advertises this capability" }));
-  }
-
-  private externalNetworkImplications(template: RectorTemplate, current: CurrentTemplateConfig): string[] {
-    return uniqueStrings([
-      ...requiredProviderKindImplications(template),
-      ...orchestrationNetworkImplications(template, current.providerRecords),
-      ...memoryNetworkImplications(template, current.memoryProviderRecords),
-      ...sandboxNetworkImplications(template),
-    ]);
   }
 
   private async safeHasSecret(ref: string): Promise<boolean> {
