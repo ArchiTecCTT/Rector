@@ -51,6 +51,23 @@ import {
   type ProviderConfigRecord,
 } from "../providers/config";
 import { resolveTestProvider } from "../providers/configBridge";
+import {
+  createInMemoryOrchestrationAssignmentStore,
+  type OrchestrationAssignmentStore,
+} from "../providers/orchestrationAssignments";
+import {
+  createInMemoryMemoryRoleAssignmentStore,
+  type MemoryRoleAssignmentStore,
+} from "../providers/memoryAssignments";
+import {
+  TemplateApplyRequestSchema,
+  TemplateImportSecretError,
+  TemplateSaveCurrentRequestSchema,
+  TemplateService,
+  createInMemoryUserTemplateStore,
+  type TemplatePreview,
+  type UserTemplateStore,
+} from "../templates";
 
 // Chunk 34 memory providers (config + resolution). The runtime MemoryProvider + Local impl
 // live in src/memory/provider.ts. We resolve once per app and use for neuro memory paths.
@@ -178,6 +195,15 @@ export interface ApiSecurityOptions {
 
   /** Optional persisted module enable/disable state (Chunk 041). */
   moduleConfigStore?: ModuleConfigStore;
+
+  /**
+   * Optional Chunk 045 template assignment stores. These are additive stubs until the durable
+   * Chunk 043/044 assignment stores are stitched in; they store assignment records only and never
+   * provider secrets.
+   */
+  orchestrationAssignmentStore?: OrchestrationAssignmentStore;
+  memoryRoleAssignmentStore?: MemoryRoleAssignmentStore;
+  userTemplateStore?: UserTemplateStore;
 
   /**
    * Optional override for {@link resolveTestMemoryProvider} used by
@@ -1451,6 +1477,11 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const moduleConfigStore =
     securityOptions.moduleConfigStore ??
     createLocalModuleConfigStore({ filePath: ".rector/modules.json" });
+  const orchestrationAssignmentStore =
+    securityOptions.orchestrationAssignmentStore ?? createInMemoryOrchestrationAssignmentStore();
+  const memoryRoleAssignmentStore =
+    securityOptions.memoryRoleAssignmentStore ?? createInMemoryMemoryRoleAssignmentStore();
+  const userTemplateStore = securityOptions.userTemplateStore ?? createInMemoryUserTemplateStore();
   const moduleRegistry: ModuleRegistry = createBuiltinModuleRegistry();
   let moduleBootReady = false;
   let moduleBootPromise: Promise<void> | undefined;
@@ -2431,6 +2462,50 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const errorMessageOf = (error: unknown): string =>
     error instanceof Error ? error.message : String(error);
 
+  const restoreTemplateSafeFields = (redacted: unknown, original: unknown): unknown => {
+    if (Array.isArray(redacted) && Array.isArray(original)) {
+      return redacted.map((item, index) => restoreTemplateSafeFields(item, original[index]));
+    }
+    if (
+      redacted &&
+      original &&
+      typeof redacted === "object" &&
+      typeof original === "object" &&
+      !Array.isArray(redacted) &&
+      !Array.isArray(original)
+    ) {
+      const out: Record<string, unknown> = { ...(redacted as Record<string, unknown>) };
+      for (const [key, originalValue] of Object.entries(original as Record<string, unknown>)) {
+        if (key === "missingSecrets") {
+          out[key] = originalValue;
+        } else if (key in out) {
+          out[key] = restoreTemplateSafeFields(out[key], originalValue);
+        }
+      }
+      return out;
+    }
+    return redacted;
+  };
+
+  const sendTemplateResponse = (res: express.Response, status: number, payload: unknown): void => {
+    sendRedactedPreservingPresence(res, status, payload, (redacted) => restoreTemplateSafeFields(redacted, payload));
+  };
+
+  const templateServiceFor = (req: express.Request): TemplateService => {
+    const userStores = storesFor(req);
+    return new TemplateService({
+      orchestrationAssignmentStore,
+      memoryAssignmentStore: memoryRoleAssignmentStore,
+      providerConfigStore: userStores.providerConfigStore,
+      memoryConfigStore: userStores.memoryConfigStore,
+      secretStore: userStores.secretStore,
+      moduleConfigStore,
+      userTemplateStore,
+    });
+  };
+
+  const scopeIdFor = (req: express.Request): string => req.rectorAuth?.userId ?? "default";
+
   // GET /api/providers — non-secret records + activeRoutes + per-provider secretPresent (Req 10.4).
   app.get("/api/providers", async (req, res) => {
     try {
@@ -2654,6 +2729,97 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       });
     } catch (error) {
       sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  // --- Template_API (Chunk 045): built-in presets, import/export, preview/apply ---
+  app.get("/api/templates", async (req, res) => {
+    try {
+      const templates = await templateServiceFor(req).listTemplates(scopeIdFor(req));
+      sendTemplateResponse(res, 200, { templates });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.get("/api/templates/export/current", async (req, res) => {
+    try {
+      const template = await templateServiceFor(req).exportCurrentConfig({ scopeId: scopeIdFor(req) });
+      sendTemplateResponse(res, 200, { template });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/templates/save-current", async (req, res) => {
+    try {
+      const body = TemplateSaveCurrentRequestSchema.parse(req.body ?? {});
+      const template = await templateServiceFor(req).saveCurrentConfig({ ...body, scopeId: scopeIdFor(req) });
+      sendTemplateResponse(res, 200, { template });
+    } catch (error) {
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/templates/import/preview", async (req, res) => {
+    try {
+      const service = templateServiceFor(req);
+      const template = service.importTemplate(req.body ?? {});
+      const preview: TemplatePreview = await service.preview(template, undefined, scopeIdFor(req));
+      sendTemplateResponse(res, 200, { template, preview });
+    } catch (error) {
+      if (error instanceof TemplateImportSecretError) {
+        return sendTemplateResponse(res, 400, { error: error.message, findings: error.findings });
+      }
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/templates/import/apply", async (req, res) => {
+    try {
+      const service = templateServiceFor(req);
+      const template = service.importTemplate(req.body ?? {});
+      const rawBody = req.body && typeof req.body === "object" ? { ...(req.body as Record<string, unknown>) } : {};
+      delete rawBody.template;
+      const body = TemplateApplyRequestSchema.parse(rawBody);
+      const result = await service.apply(template, { ...body, scopeId: scopeIdFor(req) });
+      sendTemplateResponse(res, 200, result);
+    } catch (error) {
+      if (error instanceof TemplateImportSecretError) {
+        return sendTemplateResponse(res, 400, { error: error.message, findings: error.findings });
+      }
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.get("/api/templates/:id", async (req, res) => {
+    try {
+      const template = await templateServiceFor(req).getTemplate(req.params.id, scopeIdFor(req));
+      if (!template) return sendRedacted(res, 404, { error: "Template not found" });
+      sendTemplateResponse(res, 200, { template });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/templates/:id/preview", async (req, res) => {
+    try {
+      const preview = await templateServiceFor(req).preview(req.params.id, undefined, scopeIdFor(req));
+      sendTemplateResponse(res, 200, { preview });
+    } catch (error) {
+      const status = errorMessageOf(error).startsWith("Template not found") ? 404 : 400;
+      sendRedacted(res, status, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/templates/:id/apply", async (req, res) => {
+    try {
+      const body = TemplateApplyRequestSchema.parse(req.body ?? {});
+      const result = await templateServiceFor(req).apply(req.params.id, { ...body, scopeId: scopeIdFor(req) });
+      sendTemplateResponse(res, 200, result);
+    } catch (error) {
+      const status = errorMessageOf(error).startsWith("Template not found") ? 404 : 400;
+      sendRedacted(res, status, { error: redactString(errorMessageOf(error)) });
     }
   });
 

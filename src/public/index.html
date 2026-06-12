@@ -157,6 +157,7 @@
               <button class="menu__item" id="open-provider-config" role="menuitem" type="button">Provider configuration</button>
               <button class="menu__item" id="open-memory-provider-config" role="menuitem" type="button">Memory provider configuration</button>
               <button class="menu__item" id="open-module-manager" role="menuitem" type="button">Module manager</button>
+              <button class="menu__item" id="open-template-manager" role="menuitem" type="button">Templates</button>
               <button class="menu__item" id="open-memory-browser" role="menuitem" type="button">Browse memory</button>
               <button class="menu__item" id="open-provider-test" role="menuitem" type="button">Test provider connection</button>
               <button class="menu__item" id="open-workspace-safety" role="menuitem" type="button">Workspace safety</button>
@@ -909,6 +910,88 @@
           </div>
           <div class="provider-config-error" id="module-manager-error" role="alert" hidden></div>
           <div class="provider-config-cards" id="module-manager-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Template manager (Chunk 045): preview/apply built-in and imported preset templates. -->
+    <div
+      class="modal"
+      id="template-manager-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="template-manager-title"
+    >
+      <div class="modal__backdrop" id="template-manager-backdrop"></div>
+      <div class="modal__panel modal__panel--wide" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="template-manager-title">Templates</h2>
+          <button class="btn btn--ghost btn--sm" id="close-template-manager" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            Choose a reusable Rector setup, preview provider/memory changes, and apply assignments
+            without writing secrets. Imported templates are scanned server-side before preview or apply.
+          </p>
+
+          <div class="provider-config-loading" id="template-manager-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Loading templates…</span>
+          </div>
+
+          <div class="provider-config-error" id="template-manager-error" role="alert" hidden></div>
+
+          <section class="provider-config-tier" aria-labelledby="template-gallery-title">
+            <h3 class="provider-config-tier__title" id="template-gallery-title">Choose a Rector setup</h3>
+            <div class="provider-config-cards" id="template-manager-gallery"></div>
+          </section>
+
+          <section class="provider-config-tier" id="template-manager-preview" aria-labelledby="template-preview-title" hidden>
+            <h3 class="provider-config-tier__title" id="template-manager-preview-title">Template preview</h3>
+            <p class="provider-config-tier__desc" id="template-manager-preview-summary">No preview loaded.</p>
+            <ul class="safety-list" id="template-manager-requirements"></ul>
+            <div class="provider-config-field-row">
+              <label class="provider-config-label" for="template-manager-apply-mode">Apply mode</label>
+              <select class="provider-config-input" id="template-manager-apply-mode">
+                <option value="mergeMissing">Merge missing assignments</option>
+                <option value="replaceAssignments">Replace assignments</option>
+                <option value="previewOnly">Preview only</option>
+              </select>
+            </div>
+            <label class="appearance-toggle">
+              <input type="checkbox" id="template-manager-confirm-replace" />
+              <span class="appearance-toggle__label">Confirm full replacement</span>
+              <span class="appearance-toggle__hint">Required only for replace mode.</span>
+            </label>
+            <div class="provider-config-adv__foot">
+              <button class="btn btn--primary" id="template-manager-apply" type="button" disabled>Apply template</button>
+              <button class="btn" id="template-manager-reset-local-free" type="button">Reset to Local Free</button>
+            </div>
+          </section>
+
+          <section class="provider-config-tier" aria-labelledby="template-import-title">
+            <h3 class="provider-config-tier__title" id="template-import-title">Import / export JSON</h3>
+            <p class="provider-config-tier__desc">
+              Paste a template JSON document to preview/apply it, or export the current assignment state
+              into this box. Do not paste API keys or passwords; imports containing secret-like fields are rejected.
+            </p>
+            <textarea
+              class="composer__input"
+              id="template-manager-import-json"
+              rows="8"
+              placeholder="Paste template JSON here…"
+              autocomplete="off"
+            ></textarea>
+            <div class="provider-config-adv__foot">
+              <button class="btn" id="template-manager-import-preview" type="button">Preview import</button>
+              <button class="btn btn--primary" id="template-manager-import-apply" type="button">Apply import</button>
+              <button class="btn" id="template-manager-export" type="button">Export current</button>
+              <button class="btn" id="template-manager-save-current" type="button">Save current as template</button>
+            </div>
+            <div class="provider-config-result" id="template-manager-result" role="status" aria-live="polite" hidden></div>
+          </section>
         </div>
       </div>
     </div>

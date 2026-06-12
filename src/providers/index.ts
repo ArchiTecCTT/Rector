@@ -3,6 +3,8 @@ export * from "./config";
 export * from "./configStore";
 export * from "./configBridge";
 export * from "./orchestrationConfig";
+export * from "./orchestrationAssignments";
+export * from "./memoryAssignments";
 
 // Chunk 34 — pluggable memory providers (config layer + bridge)
 export * from "./memoryConfig";

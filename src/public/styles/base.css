@@ -2661,6 +2661,34 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
   border-color: var(--accent);
 }
 
+.template-card {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.template-card.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.template-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#template-manager-import-json {
+  min-height: 180px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+#template-manager-requirements li {
+  margin-bottom: 6px;
+}
+
 .provider-config-card__head {
   display: flex;
   align-items: center;
