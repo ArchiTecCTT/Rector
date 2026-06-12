@@ -1,12 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ORCHESTRATION_ROLES,
   createInMemoryOrchestrationAssignmentStore,
+  createLocalOrchestrationAssignmentStore,
+  createOrchestrationModelRouter,
   providerOptionsFromConfigState,
   resolveEffectiveAssignment,
+  type OrchestrationAssignmentFs,
   type OrchestrationAssignmentState,
 } from "../src/providers/orchestrationAssignments";
+import { createInMemoryProviderConfigStore } from "../src/providers/configStore";
 import type { ProviderConfigState } from "../src/providers/config";
 
 const NOW = "2026-06-12T00:00:00.000Z";
@@ -103,6 +107,77 @@ describe("orchestration model assignment schema and store", () => {
     expect((await store.getAssignment("planner", { userId: "alice", workspaceId: "a" }))?.providerId).toBe("deterministic");
     expect((await store.getAssignment("planner", { userId: "bob", workspaceId: "a" }))?.providerId).toBe("disabled");
     expect((await store.getAssignment("planner", { userId: "alice", workspaceId: "b" }))?.providerId).toBe("openai-compatible:main");
+  });
+
+  it("does not collapse read failures into an empty persisted assignment state", async () => {
+    const writeFile = vi.fn<OrchestrationAssignmentFs["writeFile"]>();
+    const fsImpl: OrchestrationAssignmentFs = {
+      readFile: vi.fn(async () => {
+        throw new Error("disk read failed");
+      }),
+      writeFile,
+      rename: vi.fn(async () => {}),
+      mkdir: vi.fn(async () => {}),
+    };
+    const store = createLocalOrchestrationAssignmentStore({ filePath: "/tmp/orchestration-assignments.json", fsImpl });
+
+    await expect(store.getState()).rejects.toThrow("disk read failed");
+    const result = await store.upsertAssignment("planner", { providerId: "deterministic" });
+
+    expect(result.ok).toBe(false);
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it("falls back from workspace scope to the user's default workspace assignment", async () => {
+    const store = createInMemoryOrchestrationAssignmentStore();
+    await store.upsertAssignment(
+      "planner",
+      { providerId: "openai-compatible:main", modelId: "gpt-json" },
+      { userId: "alice" },
+    );
+    const router = createOrchestrationModelRouter({
+      store,
+      providerConfigStore: createInMemoryProviderConfigStore(providerState()),
+    });
+
+    const effective = await router.resolve("planner", { userId: "alice", workspaceId: "repo" });
+
+    expect(effective.providerId).toBe("openai-compatible:main");
+    expect(effective.source).toBe("workspace-default");
+    expect(effective.assignment?.workspaceId).toBeUndefined();
+  });
+
+  it("uses the deterministic fallback source when built-in templates are excluded", () => {
+    const effective = resolveEffectiveAssignment({ role: "planner", includeBuiltInDefault: false });
+
+    expect(effective.providerId).toBe("deterministic");
+    expect(effective.source).toBe("deterministic-fallback");
+  });
+
+  it("does not select an unconfigured fallback provider", () => {
+    const effective = resolveEffectiveAssignment({
+      role: "planner",
+      assignments: [
+        {
+          id: "default:default:planner",
+          role: "planner",
+          providerId: "missing-primary",
+          fallbackProviderId: "missing-fallback",
+          fallbackModelId: "fallback-model",
+          enabled: true,
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+      ],
+      providerState: providerState(),
+    });
+
+    expect(effective.providerId).toBe("deterministic");
+    expect(effective.deterministicFallbackReason).toContain("missing-fallback");
+    expect(effective.warnings.filter((warning) => warning.code === "provider_missing").map((warning) => warning.providerId)).toEqual([
+      "missing-primary",
+      "missing-fallback",
+    ]);
   });
 
   it("resolves deterministic local fallback with zero providers", () => {

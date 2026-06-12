@@ -1700,17 +1700,20 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   }> => {
     const userStores = storesFor(req);
     const scope = assignmentScopeFor(req, workspaceId);
-    const [assignments, providerState] = await Promise.all([
-      userStores.orchestrationAssignmentStore.listAssignments(scope),
+    const [assignmentState, providerState] = await Promise.all([
+      userStores.orchestrationAssignmentStore.getState(),
       userStores.providerConfigStore.getState(),
     ]);
+    const assignments = assignmentState.assignments.filter(
+      (assignment) => assignment.userId === scope.userId && assignment.workspaceId === scope.workspaceId,
+    );
     return {
       roles: ORCHESTRATION_ROLE_DESCRIPTORS,
       assignments,
       effective: ORCHESTRATION_ROLE_DESCRIPTORS.map((role) =>
         resolveEffectiveAssignment({
           role: role.id,
-          assignments,
+          assignments: assignmentState.assignments,
           providerState,
           scope,
         }),

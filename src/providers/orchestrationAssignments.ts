@@ -249,11 +249,7 @@ function createStoreFromAccessors(accessors: {
 }): OrchestrationAssignmentStore {
   return {
     async getState(): Promise<OrchestrationAssignmentState> {
-      try {
-        return await accessors.readState();
-      } catch {
-        return emptyOrchestrationAssignmentState();
-      }
+      return accessors.readState();
     },
 
     async listAssignments(scope: OrchestrationAssignmentScope = {}): Promise<OrchestrationModelAssignment[]> {
@@ -346,8 +342,7 @@ export function createLocalOrchestrationAssignmentStore(
   async function readState(): Promise<OrchestrationAssignmentState> {
     const raw = await fsImpl.readFile(filePath);
     if (raw === undefined || raw.trim() === "") return emptyOrchestrationAssignmentState();
-    const parsed = OrchestrationAssignmentStateSchema.safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data : emptyOrchestrationAssignmentState();
+    return OrchestrationAssignmentStateSchema.parse(JSON.parse(raw));
   }
 
   async function writeState(state: OrchestrationAssignmentState): Promise<void> {
@@ -669,12 +664,44 @@ export interface ResolveEffectiveAssignmentInput {
 export function resolveEffectiveAssignment(input: ResolveEffectiveAssignmentInput): EffectiveModelRoute {
   const role = OrchestrationRoleSchema.parse(input.role);
   const assignments = input.assignments ?? [];
-  const providerState = input.providerState;
-  const assignment = findAssignment(assignments, role, input.scope);
-  const source: EffectiveModelRoute["source"] = assignment ? "assignment" : "builtin-template";
-  const chosen = assignment ?? builtinAssignment(role, input.scope);
+  const selected = selectAssignmentForResolution(assignments, role, input.scope);
 
-  return resolveAssignmentRecord(chosen, source, providerState);
+  if (selected) {
+    return resolveAssignmentRecord(selected.assignment, selected.source, input.providerState);
+  }
+
+  const fallbackSource: EffectiveModelRoute["source"] = input.includeBuiltInDefault === false
+    ? "deterministic-fallback"
+    : "builtin-template";
+  return resolveAssignmentRecord(builtinAssignment(role, input.scope), fallbackSource, input.providerState);
+}
+
+interface SelectedAssignmentForResolution {
+  assignment: OrchestrationModelAssignment;
+  source: "assignment" | "workspace-default";
+}
+
+function selectAssignmentForResolution(
+  assignments: OrchestrationModelAssignment[],
+  role: OrchestrationRole,
+  scope: OrchestrationAssignmentScope = {},
+): SelectedAssignmentForResolution | undefined {
+  const exact = assignments.find(
+    (assignment) => assignment.role === role && scopeMatches(assignment, scope),
+  );
+  if (exact) return { assignment: exact, source: "assignment" };
+
+  if (scope.workspaceId !== undefined) {
+    const workspaceDefault = assignments.find(
+      (assignment) =>
+        assignment.role === role &&
+        assignment.userId === scope.userId &&
+        assignment.workspaceId === undefined,
+    );
+    if (workspaceDefault) return { assignment: workspaceDefault, source: "workspace-default" };
+  }
+
+  return undefined;
 }
 
 function builtinAssignment(role: OrchestrationRole, scope: OrchestrationAssignmentScope = {}): OrchestrationModelAssignment {
@@ -693,68 +720,182 @@ function builtinAssignment(role: OrchestrationRole, scope: OrchestrationAssignme
   });
 }
 
+type RouteResolutionStatus = "ready" | "disabled" | "notReady";
+
+interface RouteResolution {
+  status: RouteResolutionStatus;
+  providerId: AssignmentProviderId;
+  modelId?: string;
+  providerRecord?: ProviderConfigRecord;
+  capabilities: ModelCapabilities;
+  warnings: CapabilityMismatchWarning[];
+  deterministicFallbackReason?: string;
+}
+
 function resolveAssignmentRecord(
   assignment: OrchestrationModelAssignment,
   source: EffectiveModelRoute["source"],
   providerState?: ProviderConfigState,
 ): EffectiveModelRoute {
+  const normalized = normalizeAssignmentRecord(assignment);
   const providerRecords = providerState?.providers ?? [];
-  const modelRoute = ROLE_MODEL_ROUTES[assignment.role];
-  const primaryProvider = providerRecords.find((record) => record.id === assignment.providerId);
-  const fallbackProvider = providerRecords.find((record) => record.id === assignment.fallbackProviderId);
-  const warnings: CapabilityMismatchWarning[] = [];
-  let providerId: AssignmentProviderId = assignment.providerId;
-  let modelId = assignment.modelId;
-  let capabilities = capabilitiesForSelection(assignment.providerId, primaryProvider, modelId);
-  let deterministicFallbackReason: string | undefined;
+  const primary = resolvePrimaryRoute(normalized, providerRecords);
+  const selected = primary.status === "notReady"
+    ? resolveFallbackRoute(normalized, primary, providerRecords)
+    : primary;
+  const warnings = [
+    ...selected.warnings,
+    ...validateRoleCapabilities(normalized, selected),
+  ];
 
-  if (!assignment.enabled || assignment.providerId === "disabled") {
-    warnings.push(warning(assignment.role, assignment.providerId, modelId, "provider_disabled", "warning", "Role is disabled; no provider will be called."));
-    providerId = "disabled";
-  } else if (assignment.providerId !== "deterministic" && !primaryProvider) {
-    warnings.push(warning(assignment.role, assignment.providerId, modelId, "provider_missing", "warning", `Provider ${assignment.providerId} is not configured.`));
-    if (assignment.fallbackProviderId && assignment.fallbackProviderId !== "disabled") {
-      providerId = assignment.fallbackProviderId;
-      modelId = assignment.fallbackModelId;
-      capabilities = capabilitiesForSelection(assignment.fallbackProviderId, fallbackProvider, modelId);
-      warnings.push(warning(assignment.role, providerId, modelId, "fallback_used", "warning", "Primary provider is unavailable; fallback route is selected."));
-      if (providerId === "deterministic") {
-        deterministicFallbackReason = `Provider ${assignment.providerId} is not configured; deterministic fallback selected.`;
-        warnings.push(warning(assignment.role, "deterministic", undefined, "deterministic_fallback", "warning", deterministicFallbackReason));
-      }
-    } else {
-      providerId = "deterministic";
-      modelId = undefined;
-      capabilities = deterministicCapabilities();
-      deterministicFallbackReason = `Provider ${assignment.providerId} is not configured; deterministic fallback selected.`;
-      warnings.push(warning(assignment.role, "deterministic", undefined, "deterministic_fallback", "warning", deterministicFallbackReason));
-    }
-  }
-
-  warnings.push(...capabilityWarnings(assignment, providerId, modelId, capabilities));
-
-  const estimatedUsdPerCall = estimateUsdPerCall(providerId, providerState, modelId);
+  const estimatedUsdPerCall = estimateUsdPerCall(selected.providerId, providerState, selected.modelId);
   return EffectiveModelRouteSchema.parse({
-    role: assignment.role,
-    providerId,
-    ...(modelId ? { modelId } : {}),
-    modelRoute,
-    ...(assignment.fallbackProviderId ? { fallbackProviderId: assignment.fallbackProviderId } : {}),
-    ...(assignment.fallbackModelId ? { fallbackModelId: assignment.fallbackModelId } : {}),
-    enabled: assignment.enabled && providerId !== "disabled",
+    role: normalized.role,
+    providerId: selected.providerId,
+    ...(selected.modelId ? { modelId: selected.modelId } : {}),
+    modelRoute: ROLE_MODEL_ROUTES[normalized.role],
+    ...(normalized.fallbackProviderId ? { fallbackProviderId: normalized.fallbackProviderId } : {}),
+    ...(normalized.fallbackModelId ? { fallbackModelId: normalized.fallbackModelId } : {}),
+    enabled: normalized.enabled && selected.providerId !== "disabled",
     source,
-    ...(source === "assignment" ? { assignment } : {}),
-    capabilities,
+    ...(source === "assignment" || source === "workspace-default" ? { assignment: normalized } : {}),
+    capabilities: selected.capabilities,
     warnings,
     budgetProjection: {
-      ...(assignment.maxUsdPerCall !== undefined ? { maxUsdPerCall: assignment.maxUsdPerCall } : {}),
-      ...(assignment.maxTokens !== undefined ? { maxTokens: assignment.maxTokens } : {}),
-      ...(assignment.timeoutMs !== undefined ? { timeoutMs: assignment.timeoutMs } : {}),
-      ...(assignment.temperature !== undefined ? { temperature: assignment.temperature } : {}),
+      ...(normalized.maxUsdPerCall !== undefined ? { maxUsdPerCall: normalized.maxUsdPerCall } : {}),
+      ...(normalized.maxTokens !== undefined ? { maxTokens: normalized.maxTokens } : {}),
+      ...(normalized.timeoutMs !== undefined ? { timeoutMs: normalized.timeoutMs } : {}),
+      ...(normalized.temperature !== undefined ? { temperature: normalized.temperature } : {}),
       ...(estimatedUsdPerCall !== undefined ? { estimatedUsdPerCall } : {}),
     },
-    ...(deterministicFallbackReason ? { deterministicFallbackReason } : {}),
+    ...(selected.deterministicFallbackReason ? { deterministicFallbackReason: selected.deterministicFallbackReason } : {}),
   });
+}
+
+function normalizeAssignmentRecord(assignment: OrchestrationModelAssignment): OrchestrationModelAssignment {
+  return OrchestrationModelAssignmentSchema.parse(assignment);
+}
+
+function resolvePrimaryRoute(
+  assignment: OrchestrationModelAssignment,
+  providerRecords: ProviderConfigRecord[],
+): RouteResolution {
+  const providerRecord = findProviderRecord(providerRecords, assignment.providerId);
+  const capabilities = capabilitiesForSelection(assignment.providerId, providerRecord, assignment.modelId);
+
+  if (!assignment.enabled || assignment.providerId === "disabled") {
+    return {
+      status: "disabled",
+      providerId: "disabled",
+      modelId: assignment.modelId,
+      capabilities: capabilitiesForSelection("disabled", undefined, undefined),
+      warnings: [warning(assignment.role, assignment.providerId, assignment.modelId, "provider_disabled", "warning", "Role is disabled; no provider will be called.")],
+    };
+  }
+
+  if (assignment.providerId === "deterministic" || providerRecord) {
+    return {
+      status: "ready",
+      providerId: assignment.providerId,
+      modelId: assignment.modelId,
+      ...(providerRecord ? { providerRecord } : {}),
+      capabilities,
+      warnings: [],
+    };
+  }
+
+  return {
+    status: "notReady",
+    providerId: assignment.providerId,
+    modelId: assignment.modelId,
+    capabilities,
+    warnings: [warning(assignment.role, assignment.providerId, assignment.modelId, "provider_missing", "warning", `Provider ${assignment.providerId} is not configured.`)],
+  };
+}
+
+function resolveFallbackRoute(
+  assignment: OrchestrationModelAssignment,
+  primary: RouteResolution,
+  providerRecords: ProviderConfigRecord[],
+): RouteResolution {
+  const fallbackProviderId = assignment.fallbackProviderId;
+
+  if (fallbackProviderId && fallbackProviderId !== "disabled" && fallbackProviderId !== assignment.providerId) {
+    return validateFallbackRoute(assignment, primary, providerRecords, fallbackProviderId);
+  }
+
+  return deterministicFallbackRoute(
+    assignment,
+    primary.warnings,
+    `Provider ${assignment.providerId} is not configured; deterministic fallback selected.`,
+  );
+}
+
+function validateFallbackRoute(
+  assignment: OrchestrationModelAssignment,
+  primary: RouteResolution,
+  providerRecords: ProviderConfigRecord[],
+  fallbackProviderId: AssignmentProviderId,
+): RouteResolution {
+  if (fallbackProviderId === "deterministic") {
+    return deterministicFallbackRoute(
+      assignment,
+      [
+        ...primary.warnings,
+        warning(assignment.role, "deterministic", undefined, "fallback_used", "warning", "Primary provider is unavailable; fallback route is selected."),
+      ],
+      `Provider ${assignment.providerId} is not configured; deterministic fallback selected.`,
+    );
+  }
+
+  const fallbackRecord = findProviderRecord(providerRecords, fallbackProviderId);
+  if (!fallbackRecord) {
+    return deterministicFallbackRoute(
+      assignment,
+      [
+        ...primary.warnings,
+        warning(assignment.role, fallbackProviderId, assignment.fallbackModelId, "provider_missing", "warning", `Fallback provider ${fallbackProviderId} is not configured.`),
+      ],
+      `Provider ${assignment.providerId} and fallback provider ${fallbackProviderId} are not configured; deterministic fallback selected.`,
+    );
+  }
+
+  return {
+    status: "ready",
+    providerId: fallbackProviderId,
+    modelId: assignment.fallbackModelId,
+    providerRecord: fallbackRecord,
+    capabilities: capabilitiesForSelection(fallbackProviderId, fallbackRecord, assignment.fallbackModelId),
+    warnings: [
+      ...primary.warnings,
+      warning(assignment.role, fallbackProviderId, assignment.fallbackModelId, "fallback_used", "warning", "Primary provider is unavailable; fallback route is selected."),
+    ],
+  };
+}
+
+function deterministicFallbackRoute(
+  assignment: OrchestrationModelAssignment,
+  priorWarnings: CapabilityMismatchWarning[],
+  reason: string,
+): RouteResolution {
+  return {
+    status: "ready",
+    providerId: "deterministic",
+    capabilities: deterministicCapabilities(),
+    warnings: [
+      ...priorWarnings,
+      warning(assignment.role, "deterministic", undefined, "deterministic_fallback", "warning", reason),
+    ],
+    deterministicFallbackReason: reason,
+  };
+}
+
+function findProviderRecord(
+  providerRecords: ProviderConfigRecord[],
+  providerId: AssignmentProviderId | undefined,
+): ProviderConfigRecord | undefined {
+  if (!providerId || providerId === "deterministic" || providerId === "disabled") return undefined;
+  return providerRecords.find((record) => record.id === providerId);
 }
 
 function capabilitiesForSelection(
@@ -789,7 +930,14 @@ function warning(
   });
 }
 
-function capabilityWarnings(
+function validateRoleCapabilities(
+  assignment: OrchestrationModelAssignment,
+  selected: RouteResolution,
+): CapabilityMismatchWarning[] {
+  return buildCapabilityWarnings(assignment, selected.providerId, selected.modelId, selected.capabilities);
+}
+
+function buildCapabilityWarnings(
   assignment: OrchestrationModelAssignment,
   providerId: AssignmentProviderId,
   modelId: string | undefined,
@@ -873,6 +1021,7 @@ export interface BuildAssignmentAwareRouterInput {
   baseRouter: ModelRouter;
   assignments: OrchestrationModelAssignment[];
   providerState: ProviderConfigState;
+  scope?: OrchestrationAssignmentScope;
   providersByRole?: Partial<Record<OrchestrationRole, LLMProvider>>;
   fallbackProvidersByRole?: Partial<Record<OrchestrationRole, LLMProvider>>;
   fakeProvider?: LLMProvider;
@@ -885,9 +1034,10 @@ export function buildAssignmentAwareModelRouter(input: BuildAssignmentAwareRoute
     select(routerInput: ModelRouterInput = {}): ModelSelection {
       const role = inferOrchestrationRole(routerInput);
       if (!role) return input.baseRouter.select(routerInput);
-      const assignment = input.assignments.find((candidate) => candidate.role === role);
-      if (!assignment) return input.baseRouter.select(routerInput);
-      const effective = resolveAssignmentRecord(assignment, "assignment", input.providerState);
+      const selected = selectAssignmentForResolution(input.assignments, role, input.scope);
+      if (!selected) return input.baseRouter.select(routerInput);
+      const assignment = selected.assignment;
+      const effective = resolveAssignmentRecord(assignment, selected.source, input.providerState);
       const modelRoute = effective.modelRoute;
       if (!effective.enabled || effective.providerId === "disabled" || effective.providerId === "deterministic") {
         return {
@@ -933,12 +1083,17 @@ export interface BuildConfiguredAssignmentAwareRouterOptions {
 export async function buildConfiguredAssignmentAwareRouter(
   options: BuildConfiguredAssignmentAwareRouterOptions,
 ): Promise<ModelRouter> {
-  const assignments = await options.assignmentStore.listAssignments(options.scope);
-  const providerState = await options.providerConfigStore.getState();
+  const [assignmentState, providerState] = await Promise.all([
+    options.assignmentStore.getState(),
+    options.providerConfigStore.getState(),
+  ]);
+  const selectedAssignments = ORCHESTRATION_ROLES
+    .map((role) => selectAssignmentForResolution(assignmentState.assignments, role, options.scope)?.assignment)
+    .filter((assignment): assignment is OrchestrationModelAssignment => assignment !== undefined);
   const providersByRole: Partial<Record<OrchestrationRole, LLMProvider>> = {};
   const fallbackProvidersByRole: Partial<Record<OrchestrationRole, LLMProvider>> = {};
 
-  await Promise.all(assignments.map(async (assignment) => {
+  await Promise.all(selectedAssignments.map(async (assignment) => {
     if (assignment.providerId !== "deterministic" && assignment.providerId !== "disabled") {
       const provider = await resolveTestProvider(
         assignment.providerId,
@@ -963,8 +1118,9 @@ export async function buildConfiguredAssignmentAwareRouter(
 
   return buildAssignmentAwareModelRouter({
     baseRouter: options.baseRouter,
-    assignments,
+    assignments: assignmentState.assignments,
     providerState,
+    scope: options.scope,
     providersByRole,
     fallbackProvidersByRole,
   });
@@ -980,11 +1136,11 @@ export function createOrchestrationModelRouter(input: {
 }): OrchestrationModelRouter {
   return {
     async resolve(role: OrchestrationRole, context: OrchestrationAssignmentScope = {}): Promise<EffectiveModelRoute> {
-      const [assignments, providerState] = await Promise.all([
-        input.store.listAssignments(context),
+      const [assignmentState, providerState] = await Promise.all([
+        input.store.getState(),
         input.providerConfigStore.getState(),
       ]);
-      return resolveEffectiveAssignment({ role, assignments, providerState, scope: context });
+      return resolveEffectiveAssignment({ role, assignments: assignmentState.assignments, providerState, scope: context });
     },
   };
 }
