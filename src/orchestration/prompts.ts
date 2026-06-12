@@ -361,7 +361,8 @@ export const SYNTHESIZER_SYSTEM_RULES = [
   "Cite your evidence: each citation must reference a concrete execution artifact or validation result from the run state (a file path, command, test/node id, failure, risk, or artifact id).",
   "When the run carried any execution or validation evidence, you MUST include at least one citation.",
   "Never hide or omit failed validation output; report failures honestly and surface unresolved risks.",
-  "State what was attempted, what was fixed, and which files changed, and point the reader to the trace drawer for the raw run data.",
+  "Use these section headings in the response text: Summary, Actions, Validation, Risks, Next steps.",
+  "State what was attempted, what was fixed, which files changed, validation status, unresolved risks, and point the reader to the trace drawer for the raw run data.",
   "Keep the answer concise: at most 2000 characters.",
   "Return ONLY a single JSON object that conforms exactly to the contract below.",
   "Do not wrap the JSON in markdown code fences, prose, comments, or trailing text.",
@@ -376,7 +377,7 @@ export const SYNTHESIZER_SYSTEM_RULES = [
 export const SYNTHESIZER_JSON_CONTRACT = `Output a JSON object with this exact shape:
 
 {
-  "response": string,                                  // non-empty; the final answer to the user request (<= 2000 characters); reference the trace drawer for raw run data
+  "response": string,                                  // non-empty; the final answer to the user request (<= 2000 characters); use Summary/Actions/Validation/Risks/Next steps sections and reference the trace drawer for raw run data
   "citations": [
     {
       "kind": "file" | "command" | "test" | "failure" | "risk" | "artifact",
@@ -494,6 +495,7 @@ export function buildSynthesizerRepairPrompt(
         `Validation error: ${errorSummary}`,
         "",
         "Fix every issue above and reply again with ONLY the corrected JSON object.",
+        "Use these response sections: Summary, Actions, Validation, Risks, Next steps.",
         "Cite only evidence that appears in the run state, and include at least one citation when execution or validation evidence exists.",
         "Do not include markdown fences, explanations, or any text outside the JSON object.",
       ].join("\n"),

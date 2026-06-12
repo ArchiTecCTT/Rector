@@ -268,6 +268,7 @@ export interface LiveSynthesisResult {
   provider: string;
   model: string;
   attempts: number;
+  fallbackReason?: string;
 }
 
 /** Dependencies for {@link runLiveSynthesizer}. The provider is mocked in tests. */
@@ -366,7 +367,7 @@ export async function synthesizeHeavyDeveloperRoute(
 
   // Req 7.5: gate closed -> deterministic Legacy_Status_Response, zero provider calls, no network I/O.
   if (!shouldRunLiveSynthesizer(input, deps.gate)) {
-    return synthesisFallbackResult(input, ZERO_SYNTHESIS_USAGE, provider, model, 0);
+    return synthesisFallbackResult(input, ZERO_SYNTHESIS_USAGE, provider, model, 0, "live synthesizer gate closed");
   }
 
   const deadlineMs = deps.deadlineMs ?? SYNTHESIS_LIVE_DEADLINE_MS;
@@ -375,7 +376,10 @@ export async function synthesizeHeavyDeveloperRoute(
   // timeout, resolve with the deterministic fallback so a stalled provider never hangs the run.
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<LiveSynthesisResult>((resolve) => {
-    timer = setTimeout(() => resolve(synthesisFallbackResult(input, ZERO_SYNTHESIS_USAGE, provider, model, 0)), deadlineMs);
+    timer = setTimeout(
+      () => resolve(synthesisFallbackResult(input, ZERO_SYNTHESIS_USAGE, provider, model, 0, "live synthesizer deadline exceeded")),
+      deadlineMs,
+    );
     (timer as { unref?: () => void }).unref?.();
   });
 
@@ -419,7 +423,7 @@ export async function runLiveSynthesizer(
   try {
     messages = buildPrompt(input);
   } catch {
-    return synthesisFallbackResult(input, totalUsage, provider, model, attempts);
+    return synthesisFallbackResult(input, totalUsage, provider, model, attempts, "synthesizer prompt assembly failed");
   }
 
   const evidenceExists = hasExecutionOrValidationEvidence(input);
@@ -442,7 +446,7 @@ export async function runLiveSynthesizer(
     const ceiling = enforceMaxPerRunBudget(run, accumulatedSynthesisRunUsage(run, totalUsage), estimate);
     if (decision.status !== "allowed" || ceiling.status !== "allowed") {
       // Req 6.4: zero provider calls, fallback, 0 USD cost for this step.
-      return synthesisFallbackResult(input, totalUsage, provider, model, attempts);
+      return synthesisFallbackResult(input, totalUsage, provider, model, attempts, "synthesis budget preflight denied the provider call");
     }
 
     let response: LLMResponse;
@@ -451,7 +455,7 @@ export async function runLiveSynthesizer(
     } catch {
       // Req 2.5 / 6.4: any provider error -> deterministic fallback; the raw provider body never
       // reaches the result. Usage stays at whatever was accumulated before the failing call.
-      return synthesisFallbackResult(input, totalUsage, provider, model, attempts);
+      return synthesisFallbackResult(input, totalUsage, provider, model, attempts, "synthesis provider invocation failed");
     }
 
     attempts += 1;
@@ -471,7 +475,7 @@ export async function runLiveSynthesizer(
   }
 
   // Req 2.4/2.5: still invalid after one repair -> deterministic fallback (at most two calls made).
-  return synthesisFallbackResult(input, totalUsage, provider, model, attempts);
+  return synthesisFallbackResult(input, totalUsage, provider, model, attempts, "synthesis draft validation failed after repair");
 }
 
 type SynthesisDraftValidation =
@@ -548,7 +552,7 @@ function synthesisOkResult(
     evidence,
     providerCalls: attempts,
     observability: base.observability,
-    response: redactedResponse.length > 0 ? redactedResponse : base.response,
+    response: formatLiveNarrativeResponse(input, redactedResponse.length > 0 ? redactedResponse : base.response),
   };
 
   return {
@@ -573,7 +577,8 @@ function synthesisFallbackResult(
   usage: LLMUsage,
   provider: LLMProvider,
   model: string,
-  attempts: number
+  attempts: number,
+  fallbackReason = "deterministic fallback selected",
 ): LiveSynthesisResult {
   return {
     status: "fallback",
@@ -583,6 +588,7 @@ function synthesisFallbackResult(
     provider: provider.metadata.id,
     model,
     attempts,
+    fallbackReason: redactString(fallbackReason),
   };
 }
 
@@ -606,6 +612,95 @@ function failedValidationEvidence(input: BrainstemSynthesisInput): string[] {
     const code = failure.errorCode ? ` ${failure.errorCode}` : "";
     return redactString(`validation failure ${node} [${failure.classification}]${code}: ${failure.message}`);
   });
+}
+
+function formatLiveNarrativeResponse(input: BrainstemSynthesisInput, draftResponse: string): string {
+  const summary = redactString(draftResponse).trim() || "Rector completed synthesis from the recorded run state.";
+  const response = [
+    section("Summary", [summary]),
+    section("Actions", liveActionLines(input)),
+    section("Validation", liveValidationLines(input)),
+    section("Risks", liveRiskLines(input)),
+    section("Next steps", liveNextStepLines(input)),
+  ].join("\n\n");
+
+  const redacted = redactString(response);
+  return redacted.length <= MAX_NARRATIVE_ANSWER_CHARS
+    ? redacted
+    : `${redacted.slice(0, Math.max(0, MAX_NARRATIVE_ANSWER_CHARS - 1))}…`;
+}
+
+function section(title: string, lines: string[]): string {
+  const safeLines = lines.length > 0 ? lines : ["No additional details recorded."];
+  return [`${title}:`, ...safeLines.map((line) => `- ${redactString(line)}`)].join("\n");
+}
+
+function liveActionLines(input: BrainstemSynthesisInput): string[] {
+  const lines: string[] = [];
+  const execution = input.executionResult;
+  if (execution) {
+    const completed = execution.nodeResults.filter((result) => result.status === "SUCCESS" || result.status === "RETRIED").length;
+    lines.push(`Executed ${completed}/${execution.nodeResults.length} DAG nodes with status ${execution.status}.`);
+  } else if (input.compiledDag) {
+    lines.push(`Compiled ${input.compiledDag.nodes.length} DAG nodes; execution did not run.`);
+  } else {
+    lines.push("No DAG execution was performed for this route.");
+  }
+
+  const healingActions = input.validationHealingResult?.actions ?? [];
+  if (healingActions.length > 0) {
+    lines.push(`Healing actions recorded: ${healingActions.map((action) => action.type).join(", ")}.`);
+  }
+
+  return lines;
+}
+
+function liveValidationLines(input: BrainstemSynthesisInput): string[] {
+  const validation = input.validationHealingResult;
+  if (validation) {
+    return [
+      `Validation/healing status: ${validation.status} after ${validation.attempts} ${validation.attempts === 1 ? "attempt" : "attempts"}.`,
+      `Failures recorded: ${validation.failures.length}.`,
+    ];
+  }
+
+  if (input.executionResult) {
+    return [`Execution status: ${input.executionResult.status}; no separate healing result was recorded.`];
+  }
+
+  return ["Validation was not run."];
+}
+
+function liveRiskLines(input: BrainstemSynthesisInput): string[] {
+  const risks: string[] = [];
+  const status = synthesisStatus(input);
+  if (status === "FAILED" || status === "NEEDS_DECISION" || status === "BLOCKED") {
+    risks.push(`Run ended with ${status}; user/operator review may be required.`);
+  }
+  if (input.executionResult?.status === "PARTIAL") {
+    risks.push("Execution was partial; at least one node failed or was skipped.");
+  }
+
+  for (const failure of input.validationHealingResult?.failures.slice(0, 3) ?? []) {
+    risks.push(`${failure.classification} failure on ${failure.nodeId ?? "DAG"}: ${failure.message}`);
+  }
+
+  for (const finding of input.skepticReview.findings.slice(0, 2)) {
+    risks.push(`${finding.severity} skeptic finding${finding.taskId ? ` on ${finding.taskId}` : ""}: ${finding.message}`);
+  }
+
+  return risks.length > 0 ? risks : ["No unresolved risks were recorded in the run state."];
+}
+
+function liveNextStepLines(input: BrainstemSynthesisInput): string[] {
+  const status = synthesisStatus(input);
+  if (status === "NEEDS_DECISION" || status === "BLOCKED") {
+    return ["Review the cited blocker, approve or revise the blocked operation, then rerun the workflow."];
+  }
+  if (status === "FAILED") {
+    return ["Inspect the cited failure output, adjust the plan or patch, and rerun validation."];
+  }
+  return ["Review the trace drawer for raw evidence and continue with the next requested change if needed."];
 }
 
 function synthesisModel(provider: LLMProvider): string {

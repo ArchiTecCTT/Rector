@@ -43,10 +43,12 @@ export const EXECUTION_ARTIFACT_PREVIEW_MAX_LENGTH = 512;
 export const ExecutionArtifactSchema = z.object({
   source: z.enum(["sandbox-operation", "command-stdout", "command-stderr", "patch"]),
   nodeId: z.string().min(1).optional(),
+  operationId: z.string().min(1),
   operationKind: SandboxOperationKindSchema.optional(),
   status: SandboxExecutionStatusSchema,
   artifactId: z.string().min(1).optional(), // PatchArtifact.id when source === "patch"
   preview: z.string(), // redacted, truncated stdout/stderr/file preview
+  truncated: z.boolean().default(false),
 });
 export type ExecutionArtifact = z.infer<typeof ExecutionArtifactSchema>;
 
@@ -227,7 +229,7 @@ export async function executeDagThroughSandbox(
     }
 
     appendEvent("NODE_STARTED", { nodeId: node.id });
-    const result = await executeNodeThroughSandbox(node, dependencies, deps.sandbox, mapNode, now, artifacts);
+    const result = await executeNodeThroughSandbox(node, dependencies, deps.sandbox, mapNode, now, artifacts, resultsByNode);
     nodeResults.push(result);
     resultsByNode.set(node.id, result);
     if (result.status === "FAILED") {
@@ -250,6 +252,7 @@ async function executeNodeThroughSandbox(
   mapNode: (node: DagNode) => SandboxOperationInput | undefined,
   now: () => string,
   artifacts: ExecutionArtifact[],
+  resultsByNode: Map<string, NodeExecutionResult>,
 ): Promise<NodeExecutionResult> {
   const operation = mapNode(node);
 
@@ -257,6 +260,26 @@ async function executeNodeThroughSandbox(
   // the mapping declined) are recorded as no-op successes — no sandbox call.
   if (!operation) {
     const at = safeNow(now);
+    const validationResult = !hasExplicitSandboxOperationHint(node)
+      ? validationNodeResultWithoutSandbox(node, dependencies, resultsByNode, at)
+      : undefined;
+    if (validationResult) return validationResult;
+
+    const mappingError = mapNode === mapDagNodeToOperation ? operationMappingErrorFor(node) : undefined;
+    if (mappingError) {
+      return {
+        nodeId: node.id,
+        status: "FAILED",
+        attempts: 1,
+        startedAt: at,
+        completedAt: at,
+        durationMs: 0,
+        output: { sandbox: false, noop: false, nodeType: node.type, preview: previewFrom(mappingError.message) },
+        error: mappingError,
+        dependencies,
+      };
+    }
+
     return {
       nodeId: node.id,
       status: "SUCCESS",
@@ -264,7 +287,7 @@ async function executeNodeThroughSandbox(
       startedAt: at,
       completedAt: at,
       durationMs: 0,
-      output: { sandbox: false, noop: true, nodeType: node.type },
+      output: { sandbox: false, noop: true, nodeType: node.type, expectedOutputs: node.expectedOutputs },
       dependencies,
     };
   }
@@ -277,6 +300,7 @@ async function executeNodeThroughSandbox(
     // error here is unexpected, so surface it as a structured node failure
     // rather than letting it escape the bridge.
     const at = safeNow(now);
+    const message = redactString(stringifyError(error));
     return {
       nodeId: node.id,
       status: "FAILED",
@@ -284,7 +308,13 @@ async function executeNodeThroughSandbox(
       startedAt: at,
       completedAt: at,
       durationMs: 0,
-      output: { sandbox: true, nodeType: node.type, preview: previewFrom(redactString(stringifyError(error))) },
+      output: { sandbox: true, nodeType: node.type, preview: previewFrom(message) },
+      error: {
+        code: "SANDBOX_OPERATION_FAILED",
+        message: `Sandbox operation for node ${node.id} failed unexpectedly`,
+        nodeId: node.id,
+        details: { message: previewFrom(message) },
+      },
       dependencies,
     };
   }
@@ -295,47 +325,60 @@ async function executeNodeThroughSandbox(
 
 /** Records the redacted, length-bounded artifacts for one sandbox operation. */
 function recordArtifacts(nodeId: string, result: SandboxOperationResult, artifacts: ExecutionArtifact[]): void {
+  const operationId = operationIdFor(nodeId, result.kind);
+  const operationPreviewRecord = normalizePreview(operationPreview(result));
   artifacts.push(
     ExecutionArtifactSchema.parse({
       source: "sandbox-operation",
       nodeId,
+      operationId,
       operationKind: result.kind,
       status: result.status,
-      preview: previewFrom(operationPreview(result)),
+      preview: operationPreviewRecord.preview,
+      truncated: operationPreviewRecord.truncated,
     }),
   );
 
   if (result.kind === "RUN_COMMAND") {
+    const stdout = normalizePreview(result.stdout);
+    const stderr = normalizePreview(result.stderr);
     artifacts.push(
       ExecutionArtifactSchema.parse({
         source: "command-stdout",
         nodeId,
+        operationId,
         operationKind: result.kind,
         status: result.status,
-        preview: previewFrom(result.stdout),
+        preview: stdout.preview,
+        truncated: stdout.truncated,
       }),
     );
     artifacts.push(
       ExecutionArtifactSchema.parse({
         source: "command-stderr",
         nodeId,
+        operationId,
         operationKind: result.kind,
         status: result.status,
-        preview: previewFrom(result.stderr),
+        preview: stderr.preview,
+        truncated: stderr.truncated,
       }),
     );
   }
 
   if (result.kind === "PROPOSE_PATCH") {
     const patch = result.artifacts[0];
+    const preview = normalizePreview(patch?.unifiedDiff ?? operationPreview(result));
     artifacts.push(
       ExecutionArtifactSchema.parse({
         source: "patch",
         nodeId,
+        operationId,
         operationKind: result.kind,
         status: result.status,
         artifactId: patch?.id,
-        preview: previewFrom(patch?.unifiedDiff ?? operationPreview(result)),
+        preview: preview.preview,
+        truncated: preview.truncated,
       }),
     );
   }
@@ -350,12 +393,15 @@ function nodeResultFromOperation(
   const startedAt = result.startedAt;
   const completedAt = result.completedAt;
   const durationMs = durationMsBetween(startedAt, completedAt);
+  const preview = normalizePreview(operationPreview(result));
   const baseOutput: Record<string, unknown> = {
     sandbox: true,
     nodeType: node.type,
+    operationId: operationIdFor(node.id, result.kind),
     operationKind: result.kind,
     sandboxStatus: result.status,
-    preview: previewFrom(operationPreview(result)),
+    preview: preview.preview,
+    previewTruncated: preview.truncated,
   };
 
   if (result.status === "SUCCEEDED") {
@@ -419,6 +465,109 @@ function executionErrorFromResult(nodeId: string, result: SandboxOperationResult
   return undefined;
 }
 
+function validationNodeResultWithoutSandbox(
+  node: DagNode,
+  dependencies: string[],
+  resultsByNode: Map<string, NodeExecutionResult>,
+  at: string,
+): NodeExecutionResult | undefined {
+  if (node.type !== "VALIDATION") return undefined;
+
+  const input = recordFrom(node.input);
+  const targetNodeIds = validationTargetNodeIds(input, dependencies);
+  const error = validateUpstreamOutputsForNode(node, targetNodeIds, resultsByNode);
+  if (error) {
+    return {
+      nodeId: node.id,
+      status: "FAILED",
+      attempts: 1,
+      startedAt: at,
+      completedAt: at,
+      durationMs: 0,
+      output: { sandbox: false, noop: false, nodeType: node.type, validation: { passed: false, inspectedDependencies: targetNodeIds } },
+      error,
+      dependencies,
+    };
+  }
+
+  return {
+    nodeId: node.id,
+    status: "SUCCESS",
+    attempts: 1,
+    startedAt: at,
+    completedAt: at,
+    durationMs: 0,
+    output: { sandbox: false, noop: true, nodeType: node.type, validation: { passed: true, inspectedDependencies: targetNodeIds } },
+    dependencies,
+  };
+}
+
+function validateUpstreamOutputsForNode(
+  node: DagNode,
+  targetNodeIds: string[],
+  resultsByNode: Map<string, NodeExecutionResult>,
+): ExecutionError | undefined {
+  if (targetNodeIds.length === 0) {
+    return {
+      code: "VALIDATION_FAILED",
+      message: `Validation node ${node.id} has no upstream node to inspect`,
+      nodeId: node.id,
+      details: { targetNodeIds },
+    };
+  }
+
+  const input = recordFrom(node.input);
+  const expectedArtifacts = stringArrayFrom(input?.expectedArtifacts);
+  for (const targetNodeId of targetNodeIds) {
+    const upstream = resultsByNode.get(targetNodeId);
+    if (!upstream || (upstream.status !== "SUCCESS" && upstream.status !== "RETRIED")) {
+      return {
+        code: "VALIDATION_FAILED",
+        message: `Validation node ${node.id} could not inspect successful output from ${targetNodeId}`,
+        nodeId: node.id,
+        details: { targetNodeId, upstreamStatus: upstream?.status ?? "MISSING" },
+      };
+    }
+
+    if (expectedArtifacts.length === 0) continue;
+    const output = recordFrom(upstream.output);
+    const upstreamArtifacts = new Set([
+      ...stringArrayFrom(output?.expectedOutputs),
+      ...stringArrayFrom(output?.artifacts),
+    ]);
+    const missing = expectedArtifacts.filter((artifact) => !upstreamArtifacts.has(artifact));
+    if (missing.length > 0) {
+      return {
+        code: "VALIDATION_FAILED",
+        message: `Validation node ${node.id} missing expected artifact(s) from ${targetNodeId}: ${missing.join(", ")}`,
+        nodeId: node.id,
+        details: { targetNodeId, missing, expectedArtifacts },
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function operationMappingErrorFor(node: DagNode): ExecutionError | undefined {
+  const hasHint = hasExplicitSandboxOperationHint(node);
+  const defaultKind = defaultOperationKind(node);
+
+  if (!hasHint && defaultKind === undefined) return undefined;
+
+  return {
+    code: "OPERATION_MAPPING_FAILED",
+    message: `Node ${node.id} could not be mapped to an unambiguous sandbox operation`,
+    nodeId: node.id,
+    details: {
+      nodeType: node.type,
+      hasSandboxHint: hasHint,
+      defaultOperationKind: defaultKind,
+      expectedOutputs: node.expectedOutputs,
+    },
+  };
+}
+
 function operationPreview(result: SandboxOperationResult): string {
   if (result.status === "DENIED") {
     return `denied: ${result.denialReason ?? "DENIED"}`;
@@ -439,11 +588,19 @@ function operationPreview(result: SandboxOperationResult): string {
   return result.stderr && result.status === "FAILED" ? result.stderr : result.stdout;
 }
 
+function operationIdFor(nodeId: string, kind: z.infer<typeof SandboxOperationKindSchema>): string {
+  return `${nodeId}:${kind}`;
+}
+
 /** Redacts and truncates a preview string to the artifact preview bound. */
-function previewFrom(value: string): string {
+function normalizePreview(value: string): { preview: string; truncated: boolean } {
   const redacted = redactString(value ?? "");
-  if (redacted.length <= EXECUTION_ARTIFACT_PREVIEW_MAX_LENGTH) return redacted;
-  return redacted.slice(0, EXECUTION_ARTIFACT_PREVIEW_MAX_LENGTH);
+  if (redacted.length <= EXECUTION_ARTIFACT_PREVIEW_MAX_LENGTH) return { preview: redacted, truncated: false };
+  return { preview: redacted.slice(0, EXECUTION_ARTIFACT_PREVIEW_MAX_LENGTH), truncated: true };
+}
+
+function previewFrom(value: string): string {
+  return normalizePreview(value).preview;
 }
 
 function buildResult(
@@ -545,6 +702,32 @@ function stringOrUndefined(value: unknown): string | undefined {
 
 function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function hasExplicitSandboxOperationHint(node: DagNode): boolean {
+  const input = recordFrom(node.input);
+  const metadata = recordFrom(node.metadata);
+  return hasSandboxOperationFields(input) || hasSandboxOperationFields(metadata);
+}
+
+function hasSandboxOperationFields(value: Record<string, unknown> | undefined): boolean {
+  if (!value) return false;
+  if (recordFrom(value.sandboxOperation)) return true;
+  if (SandboxOperationKindSchema.safeParse(value.operationKind).success) return true;
+  if (SandboxOperationKindSchema.safeParse(value.kind).success) return true;
+  return ["path", "command", "content", "operation"].some((field) => value[field] !== undefined);
+}
+
+function validationTargetNodeIds(input: Record<string, unknown> | undefined, dependencies: string[]): string[] {
+  const targetNodeId = input?.targetNodeId;
+  if (typeof targetNodeId === "string" && targetNodeId.length > 0) return [targetNodeId];
+  const targetNodeIds = stringArrayFrom(input?.targetNodeIds);
+  return targetNodeIds.length > 0 ? targetNodeIds : dependencies;
+}
+
+function stringArrayFrom(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item)).filter((item) => item.length > 0);
 }
 
 function parsePatchOperation(value: unknown): "add" | "update" | "delete" {

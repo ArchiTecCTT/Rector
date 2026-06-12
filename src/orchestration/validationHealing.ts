@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Dag, DagNode } from "../protocol/dag";
 import type { PatchOperation, WorkspaceSandboxAdapter } from "../sandbox";
-import { redactString } from "../security/redaction";
+import { redactSecrets, redactString } from "../security/redaction";
 import type { Run } from "../store";
 import type { ContextPack } from "./contextBuilder";
 import { DEFAULT_PREPROCESSOR_RULES } from "../symbolic/defaultRules";
@@ -306,6 +306,8 @@ async function healWithLiveRepair(
     let repairApplied = false;
     let patchArtifactId: string | undefined;
     let roundExplanation: string;
+    let unappliedPatchStatus: string | undefined;
+    let unappliedPatchReason: string | undefined;
 
     if (proposal) {
       const patchResult = await sandbox.operate({
@@ -318,6 +320,10 @@ async function healWithLiveRepair(
       });
       patchArtifactId = patchResult.artifacts[0]?.id;
       repairApplied = patchResult.status === "SUCCEEDED";
+      if (!repairApplied) {
+        unappliedPatchStatus = patchResult.status;
+        unappliedPatchReason = patchResult.denialReason;
+      }
 
       actions.push({
         type: "APPLY_PATCH",
@@ -337,7 +343,7 @@ async function healWithLiveRepair(
       roundExplanation = redactString(
         repairApplied
           ? `Round ${attempts}: applied patch to ${proposal.path}; re-validation status ${current.status}. ${proposal.rationale}`
-          : `Round ${attempts}: patch proposal for ${proposal.path} was not applied (${patchResult.status}).`,
+          : `Round ${attempts}: patch proposal for ${proposal.path} was not applied (${patchResult.status}${patchResult.denialReason ? `/${patchResult.denialReason}` : ""}).`,
       );
     } else {
       actions.push({
@@ -365,6 +371,30 @@ async function healWithLiveRepair(
 
     // No proposal means no progress is possible; terminate as FAILED (req 5.9).
     if (!proposal) {
+      return parseResult({ status: "FAILED", attempts, failures: observedFailures, actions, finalExecutionResult: current, rounds });
+    }
+
+    // A patch that reaches an approval gate is safe but cannot be applied without
+    // a human decision; do not loop by repeatedly proposing the same gated patch.
+    if (!repairApplied) {
+      if (unappliedPatchStatus === "NEEDS_APPROVAL" || unappliedPatchReason === "NEEDS_APPROVAL") {
+        actions.push({
+          type: "REQUEST_DECISION",
+          nodeId: target.nodeId,
+          attempt: attempts,
+          classification: target.classification,
+          reason: `Repair patch for ${target.nodeId ?? "DAG"} requires approval before it can be applied`,
+        });
+        return parseResult({ status: "NEEDS_DECISION", attempts, failures: observedFailures, actions, finalExecutionResult: current, rounds });
+      }
+
+      actions.push({
+        type: "FAIL_RUN",
+        nodeId: target.nodeId,
+        attempt: attempts,
+        classification: target.classification,
+        reason: `Repair patch for ${target.nodeId ?? "DAG"} was not safely applied (${unappliedPatchStatus ?? "UNKNOWN"})`,
+      });
       return parseResult({ status: "FAILED", attempts, failures: observedFailures, actions, finalExecutionResult: current, rounds });
     }
   }
@@ -471,8 +501,8 @@ function failureFromError(error: ExecutionError): ValidationFailure {
     nodeId: error.nodeId,
     classification: classifyError(error),
     errorCode: error.code,
-    message: error.message,
-    details: error.details,
+    message: redactString(error.message),
+    details: error.details ? redactSecrets(error.details) as Record<string, unknown> : undefined,
   };
 }
 
@@ -484,25 +514,24 @@ function failureFromNodeResult(nodeResult: NodeExecutionResult): ValidationFailu
   return {
     nodeId: nodeResult.nodeId,
     classification: nodeResult.status === "SKIPPED" ? "DEPENDENCY" : "UNKNOWN",
-    message: `Node ${nodeResult.nodeId} ended with ${nodeResult.status} without an execution error`,
+    message: redactString(`Node ${nodeResult.nodeId} ended with ${nodeResult.status} without an execution error`),
   };
 }
 
+const FAILURE_CLASSIFICATION_BY_ERROR_CODE: Partial<Record<ExecutionError["code"], ValidationFailureClassification>> = {
+  INJECTED_FAILURE: "TRANSIENT",
+  PERMISSION_DENIED: "PERMISSION",
+  TIMEOUT: "TIMEOUT",
+  DEPENDENCY_FAILED: "DEPENDENCY",
+  DAG_VALIDATION_FAILED: "VALIDATION",
+  VALIDATION_FAILED: "VALIDATION",
+  OPERATION_MAPPING_FAILED: "VALIDATION",
+  SANDBOX_OPERATION_FAILED: "UNKNOWN",
+};
+
 function classifyError(error: ExecutionError | undefined): ValidationFailureClassification {
-  switch (error?.code) {
-    case "INJECTED_FAILURE":
-      return "TRANSIENT";
-    case "PERMISSION_DENIED":
-      return "PERMISSION";
-    case "TIMEOUT":
-      return "TIMEOUT";
-    case "DEPENDENCY_FAILED":
-      return "DEPENDENCY";
-    case "DAG_VALIDATION_FAILED":
-      return "VALIDATION";
-    default:
-      return "UNKNOWN";
-  }
+  if (!error) return "UNKNOWN";
+  return FAILURE_CLASSIFICATION_BY_ERROR_CODE[error.code] ?? "UNKNOWN";
 }
 
 function resolveRootCause(
@@ -575,7 +604,7 @@ function rootActionableFailures(failures: ValidationFailure[]): ValidationFailur
 }
 
 function isRetryableFailure(failure: ValidationFailure): boolean {
-  return failure.classification === "TRANSIENT" || failure.classification === "TIMEOUT";
+  return failure.classification === "TRANSIENT" || failure.classification === "TIMEOUT" || failure.classification === "UNKNOWN";
 }
 
 function isUnsafeToAutoHeal(compiledDag: Dag, nodeId: string | undefined): boolean {
