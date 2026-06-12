@@ -9,7 +9,7 @@ import { buildContextPack, createContextMaterial } from "../orchestration/contex
 import type { ExecutorSimulatorOptions } from "../orchestration/executorSimulator";
 import { runChat } from "../orchestration/chatRunner";
 import { triageUserMessage } from "../orchestration/triage";
-import type { SandboxAdapter } from "../sandbox";
+import type { CommandRunner, SandboxAdapter, SandboxApproval, WorkspaceFs } from "../sandbox";
 import {
   createInMemoryObservabilityTrace,
   aggregateRunCost,
@@ -55,6 +55,11 @@ import {
   type QuotaService,
 } from "../security/quotas";
 import { computeSetupStatus } from "../setupStatus";
+import {
+  computeActivationReadiness,
+  computeOnboardingState,
+  computeProductReadiness,
+} from "../setup/readiness";
 import type { SecretStore } from "../security/secretStore";
 import {
   createInMemoryProviderConfigStore,
@@ -117,6 +122,12 @@ import {
 import { createDiscoveryCache } from "../providers/discovery/cache";
 import { createDefaultDiscoveryAdapterRegistry } from "../providers/discovery/adapters/registry";
 import type { DiscoveryResult } from "../providers/discovery/types";
+import {
+  RuntimeSettingsPatchSchema,
+  createInMemoryRuntimeSettingsStore,
+  redactRuntimeSettingsForEgress,
+  type RuntimeSettingsStore,
+} from "../config/runtimeSettings";
 import { createBuiltinModuleRegistry, type ModuleRegistry } from "../modules";
 import { getNeuroAliveState } from "../modules/builtin/neuro-alive";
 import {
@@ -177,6 +188,16 @@ export interface ApiSecurityOptions {
     mode?: OrchestratorMode;
     router?: ModelRouter;
     sandbox?: SandboxAdapter;
+    /** When true, chat uses the injected router instead of rebuilding from assignments (tests). */
+    preferInjectedRouter?: boolean;
+    /** Test/product override for CODE_EDIT sandbox honesty (defaults to E2B adapter detection). */
+    sandboxConfigured?: boolean;
+    /** Optional safe-executor wiring forwarded to the orchestrated chat runner (tests). */
+    workspaceRoot?: string;
+    fsImpl?: WorkspaceFs;
+    commandRunner?: CommandRunner;
+    allowlistedCommands?: string[];
+    approvals?: SandboxApproval[];
   };
   /**
    * Persistence selection for the Rector store (ORN-39). Forwarded verbatim to
@@ -300,6 +321,13 @@ export interface ApiSecurityOptions {
 
   /** Optional workspace quota service. Defaults to an allow-all in-memory service. */
   quotaService?: QuotaService;
+
+  /**
+   * Optional persisted runtime settings store (orchestration profile, template
+   * selection, chat gating flags). When omitted, tests get an in-memory store
+   * with the unconfigured product default.
+   */
+  runtimeSettingsStore?: RuntimeSettingsStore;
 
   /** Env map consumed by deployment-readiness checks. Defaults to process.env. */
   deploymentEnv?: Record<string, string | undefined>;
@@ -1555,6 +1583,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     securityOptions.orchestrationAssignmentStore ?? createInMemoryOrchestrationAssignmentStore();
   const memoryAssignmentStore =
     securityOptions.memoryAssignmentStore ?? securityOptions.memoryRoleAssignmentStore ?? createInMemoryMemoryAssignmentStore();
+  const runtimeSettingsStore =
+    securityOptions.runtimeSettingsStore ?? createInMemoryRuntimeSettingsStore();
 
   // Chunk 34 (pluggable memory providers): resolve the active MemoryProvider for neuro/agent
   // memory (notes, episodic context for contextBuilder/preprocessor/planner, prune, etc.).
@@ -1586,6 +1616,33 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   };
 
   const orchestration = securityOptions.orchestration;
+  const orchestrationRuntime: {
+    mode: OrchestratorMode;
+    router?: ModelRouter;
+    sandbox?: SandboxAdapter;
+    executorOptions?: ExecutorSimulatorOptions;
+    maxHealingAttempts?: number;
+    preferInjectedRouter?: boolean;
+    sandboxConfigured?: boolean;
+    workspaceRoot?: string;
+    fsImpl?: WorkspaceFs;
+    commandRunner?: CommandRunner;
+    allowlistedCommands?: string[];
+    approvals?: SandboxApproval[];
+  } = {
+    mode: orchestration?.mode ?? "local",
+    router: orchestration?.router,
+    sandbox: orchestration?.sandbox,
+    executorOptions: orchestration?.executorOptions,
+    maxHealingAttempts: orchestration?.maxHealingAttempts,
+    preferInjectedRouter: orchestration?.preferInjectedRouter,
+    sandboxConfigured: orchestration?.sandboxConfigured,
+    workspaceRoot: orchestration?.workspaceRoot,
+    fsImpl: orchestration?.fsImpl,
+    commandRunner: orchestration?.commandRunner,
+    allowlistedCommands: orchestration?.allowlistedCommands,
+    approvals: orchestration?.approvals,
+  };
 
   const moduleConfigStore =
     securityOptions.moduleConfigStore ??
@@ -1618,6 +1675,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   };
   app.locals.moduleRegistry = moduleRegistry;
   app.locals.moduleConfigStore = moduleConfigStore;
+  app.locals.runtimeSettingsStore = runtimeSettingsStore;
+  app.locals.orchestrationRuntime = orchestrationRuntime;
   app.locals.ensureModuleBoot = ensureModuleBoot;
 
   app.use(async (_req, res, next) => {
@@ -1665,6 +1724,58 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     typeof req.query.workspaceId === "string" && req.query.workspaceId.trim().length > 0
       ? req.query.workspaceId.trim()
       : undefined;
+  const deploymentEnv = securityOptions.deploymentEnv ?? process.env;
+
+  const buildProductModelRouter = async (
+    userStores: UserStores,
+    scope: OrchestrationAssignmentScope = {},
+  ): Promise<ModelRouter> => {
+    const baseRouter = await buildConfiguredRouter({
+      store: userStores.providerConfigStore,
+      secrets: userStores.secretStore,
+      mode: "external",
+      enableNetwork: true,
+      fetchImpl: fetch,
+    });
+    return buildConfiguredAssignmentAwareRouter({
+      baseRouter,
+      assignmentStore: userStores.orchestrationAssignmentStore,
+      providerConfigStore: userStores.providerConfigStore,
+      secrets: userStores.secretStore,
+      scope,
+      enableNetwork: true,
+      fetchImpl: fetch,
+    });
+  };
+
+  const reloadOrchestrationRuntime = async (
+    req: express.Request,
+    workspaceId?: string,
+  ): Promise<void> => {
+    const userStores = storesFor(req);
+    orchestrationRuntime.mode = "external";
+    orchestrationRuntime.router = await buildProductModelRouter(
+      userStores,
+      assignmentScopeFor(req, workspaceId),
+    );
+  };
+
+  const readinessDepsFor = (
+    req: express.Request,
+    workspaceId?: string,
+  ) => {
+    const userStores = storesFor(req);
+    return {
+      env: deploymentEnv,
+      secretStore: userStores.secretStore,
+      providerConfigStore: userStores.providerConfigStore,
+      orchestrationAssignmentStore: userStores.orchestrationAssignmentStore,
+      memoryAssignmentStore: userStores.memoryAssignmentStore,
+      memoryConfigStore: userStores.memoryConfigStore,
+      runtimeSettingsStore,
+      scope: assignmentScopeFor(req, workspaceId),
+    };
+  };
 
   const buildOrchestrationModelsPayload = async (
     req: express.Request,
@@ -1703,7 +1814,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const workspaceDirectory = securityOptions.workspaceDirectory ?? createInMemoryWorkspaceDirectory();
   const auditLog = securityOptions.auditLog ?? createInMemoryAuditLogService();
   const quotaService = securityOptions.quotaService ?? createInMemoryQuotaService();
-  const deploymentEnv = securityOptions.deploymentEnv ?? process.env;
   app.locals.authMode = authMode;
   app.locals.auditLog = auditLog;
   app.locals.quotaService = quotaService;
@@ -1919,39 +2029,23 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         .then((effective) => effective.provider ?? createPureLocalMemoryProvider());
   };
 
+  const isRealSandboxConfigured = (): boolean =>
+    orchestrationRuntime.sandboxConfigured === true ||
+    orchestrationRuntime.sandbox?.metadata?.id === "e2b";
+
   const resolveRuntimeModelRouterFor = async (req: express.Request, workspaceId?: string): Promise<ModelRouter | undefined> => {
-    const mode = securityOptions.orchestration?.mode ?? "local";
-    if (mode !== "external") return securityOptions.orchestration?.router;
+    if (orchestrationRuntime.preferInjectedRouter && orchestrationRuntime.router) {
+      return orchestrationRuntime.router;
+    }
+    if (orchestrationRuntime.router) {
+      return orchestrationRuntime.router;
+    }
     const userStores = storesFor(req);
     const scope = assignmentScopeFor(req, workspaceId);
     try {
-      const assignments = await userStores.orchestrationAssignmentStore.listAssignments(scope);
-      if (assignments.length === 0 && securityOptions.orchestration?.router) {
-        // Compatibility path: when no Chunk 043 assignment exists, preserve the injected/startup
-        // ModelRouter exactly. Existing external-mode tests and deployments depend on this router
-        // for BYOK provider selection and provider spies.
-        return securityOptions.orchestration.router;
-      }
-      const baseRouter = await buildConfiguredRouter({
-        store: userStores.providerConfigStore,
-        secrets: userStores.secretStore,
-        mode: "external",
-        enableNetwork: true,
-        fetchImpl: fetch,
-      });
-      return buildConfiguredAssignmentAwareRouter({
-        baseRouter,
-        assignmentStore: userStores.orchestrationAssignmentStore,
-        providerConfigStore: userStores.providerConfigStore,
-        secrets: userStores.secretStore,
-        scope,
-        enableNetwork: true,
-        fetchImpl: fetch,
-      });
+      return await buildProductModelRouter(userStores, scope);
     } catch {
-      // Compatibility fallback: preserve the startup router if dynamic per-user assignment routing
-      // cannot be built. Local mode never reaches this branch.
-      return securityOptions.orchestration?.router;
+      return orchestrationRuntime.router;
     }
   };
 
@@ -2053,6 +2147,16 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       if (!access) return;
       if (!(await enforceRunQuota(req, res, access.workspaceId))) return;
 
+      const readiness = await computeProductReadiness(readinessDepsFor(req, conversation.workspaceId));
+      if (!readiness.ready) {
+        return sendRedacted(res, 409, {
+          code: "SETUP_REQUIRED",
+          blockers: readiness.blockers,
+          setupUrl: "/setup",
+          onboardingStep: readiness.onboardingStep,
+        });
+      }
+
       const { content, deepPlanning } = req.body ?? {};
       if (!content || typeof content !== "string") {
         return res.status(400).json({ error: "content (string) is required" });
@@ -2068,8 +2172,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         status: "created",
         redactionState,
       });
-      const observability = createInMemoryObservabilityTrace({ provider: "local" });
-      const orchestration = securityOptions.orchestration;
+      const observability = createInMemoryObservabilityTrace({ provider: orchestrationRuntime.mode ?? "local" });
 
       // Shared chat pipeline: triage → context pack → runChat → assistant message + user-message
       // completion. `pipelineStore` is the store the run executes against: the broker-wrapped
@@ -2107,6 +2210,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
           });
         });
         const runtimeRouter = await resolveRuntimeModelRouterFor(req, conversation.workspaceId);
+        if (!runtimeRouter) {
+          throw new Error("Orchestration requires configured router");
+        }
         const result = await runChat(
           pipelineStore,
           {
@@ -2117,16 +2223,21 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             contextPack,
             observability,
             options: {
-              ...orchestration,
-              ...(orchestration?.mode === "external" && requestDeepPlanning ? { deepPlanning: true } : {}),
+              executorOptions: orchestrationRuntime.executorOptions,
+              maxHealingAttempts: orchestrationRuntime.maxHealingAttempts,
+              ...(requestDeepPlanning ? { deepPlanning: true } : {}),
             },
           },
           {
-            // Default to local (provider-free) when no orchestration option is configured so existing
-            // behavior and tests are unchanged. enableNetwork is only meaningful in external mode.
-            mode: orchestration?.mode ?? "local",
+            mode: orchestrationRuntime.mode,
             router: runtimeRouter,
-            enableNetwork: orchestration?.mode === "external",
+            enableNetwork: orchestrationRuntime.mode === "external",
+            sandboxConfigured: isRealSandboxConfigured(),
+            workspaceRoot: orchestrationRuntime.workspaceRoot,
+            fsImpl: orchestrationRuntime.fsImpl,
+            commandRunner: orchestrationRuntime.commandRunner,
+            allowlistedCommands: orchestrationRuntime.allowlistedCommands,
+            approvals: orchestrationRuntime.approvals,
             moduleRegistry,
           }
         );
@@ -2184,8 +2295,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             await moduleRegistry.invokeOnRunCompleted({
               store: rectorStore,
               run: result.run,
-              mode: orchestration?.mode ?? "local",
-              router: orchestration?.router,
+              mode: orchestrationRuntime.mode ?? "local",
+              router: orchestrationRuntime.router,
               getMemoryProvider: resolveMemoryProvider,
             });
           })
@@ -2210,8 +2321,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       await moduleRegistry.invokeOnRunCompleted({
         store: rectorStore,
         run,
-        mode: orchestration?.mode ?? "local",
-        router: orchestration?.router,
+        mode: orchestrationRuntime.mode ?? "local",
+        router: orchestrationRuntime.router,
         getMemoryProvider: createMemoryProviderResolver(req),
       });
       const events = await rectorStore.listEvents(run.id);
@@ -2374,6 +2485,41 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     res.json(getSetupChecklist());
   });
 
+  app.get("/api/runtime-settings", async (req, res) => {
+    const access = await authorize(req, res, "workspace.read", { targetType: "runtime-settings" });
+    if (!access) return;
+    try {
+      const settings = await runtimeSettingsStore.get();
+      sendRedacted(res, 200, { settings: redactRuntimeSettingsForEgress(settings) });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.patch("/api/runtime-settings", async (req, res) => {
+    const access = await authorize(req, res, "providers.configure", { targetType: "runtime-settings" });
+    if (!access) return;
+    try {
+      const patch = RuntimeSettingsPatchSchema.parse(req.body ?? {});
+      if (patch.orchestrationProfile === undefined) {
+        return sendRedacted(res, 400, { error: "orchestrationProfile is required" });
+      }
+      const current = await runtimeSettingsStore.get();
+      const next = {
+        ...current,
+        orchestrationProfile: patch.orchestrationProfile,
+        updatedAt: new Date().toISOString(),
+      };
+      const persisted = await runtimeSettingsStore.upsert(next);
+      if (!persisted.ok) {
+        return sendRedacted(res, 500, { error: redactString(persisted.error) });
+      }
+      sendRedacted(res, 200, { settings: redactRuntimeSettingsForEgress(persisted.value) });
+    } catch (error) {
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
   // Setup status (Requirement 1): the redacted, presence-only readiness summary the Setup_Wizard
   // renders. The handler is fast and non-blocking — it composes the ambient `process.env` and the
   // (default empty) SecretStore via `computeSetupStatus`, which performs no network I/O — so the
@@ -2384,22 +2530,86 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // secret substring.
   const resolveMemoryProviderForTest =
     securityOptions.resolveTestMemoryProvider ?? resolveTestMemoryProvider;
-  app.get("/api/setup/status", async (_req, res) => {
+  app.get("/api/setup/status", async (req, res) => {
     try {
-      const status = await computeSetupStatus(process.env, setupSecretStore, memoryConfigStore);
+      const [status, readiness] = await Promise.all([
+        computeSetupStatus(deploymentEnv, setupSecretStore, memoryConfigStore),
+        computeProductReadiness(readinessDepsFor(req)),
+      ]);
       // `computeSetupStatus` is itself the redaction boundary for this payload: it routes every
       // field through the Redaction_Layer per-field (and omits any value whose redaction fails,
       // Req 1.10) precisely because a blanket `redactSecrets` pass would treat the legitimately
       // named `secretPresence` field as sensitive and drop it. Emitting the already-redacted result
       // directly preserves that contract; an upstream redaction failure throws and is suppressed by
       // the catch below (Req 1.3, 11.1, 11.5).
-      res.json(status);
+      sendRedactedPreservingPresence(
+        res,
+        200,
+        {
+          ...status,
+          ready: readiness.ready,
+          blockers: readiness.blockers,
+          orchestrationProfile: readiness.orchestrationProfile,
+          onboardingStep: readiness.onboardingStep,
+          onboardingComplete: readiness.onboardingComplete,
+        },
+        (redacted) => ({
+          ...redacted,
+          secretPresence: status.secretPresence,
+        }),
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // Suppress the error body too: redact it, and if even that fails, emit only the fixed
       // redaction-failed placeholder rather than any raw message (Req 1.8, 1.10, 11.3, 11.5).
       const outcome = redactOutbound({ error: redactString(message) });
       res.status(500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
+    }
+  });
+
+  app.get("/api/setup/onboarding", async (req, res) => {
+    try {
+      const access = await authorize(req, res, "workspace.read", { targetType: "setup" });
+      if (!access) return;
+      const onboarding = await computeOnboardingState(readinessDepsFor(req, access.workspaceId));
+      sendRedacted(res, 200, onboarding);
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/setup/activate", async (req, res) => {
+    try {
+      const access = await authorize(req, res, "providers.configure", { targetType: "setup" });
+      if (!access) return;
+      const activation = await computeActivationReadiness(readinessDepsFor(req, access.workspaceId));
+      if (!activation.ready) {
+        return sendRedacted(res, 409, {
+          code: "SETUP_INCOMPLETE",
+          blockers: activation.blockers,
+          setupUrl: "/setup",
+        });
+      }
+
+      const current = await runtimeSettingsStore.get();
+      const next = {
+        ...current,
+        orchestrationProfile: "configured" as const,
+        updatedAt: new Date().toISOString(),
+      };
+      const persisted = await runtimeSettingsStore.upsert(next);
+      if (!persisted.ok) {
+        return sendRedacted(res, 500, { error: redactString(persisted.error) });
+      }
+
+      await reloadOrchestrationRuntime(req, access.workspaceId);
+      const readiness = await computeProductReadiness(readinessDepsFor(req, access.workspaceId));
+      sendRedacted(res, 200, {
+        settings: redactRuntimeSettingsForEgress(persisted.value),
+        readiness,
+      });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }
   });
 

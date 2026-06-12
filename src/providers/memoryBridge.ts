@@ -97,9 +97,9 @@ export async function resolveTestMemoryProvider(
 /**
  * Resolve the active MemoryProvider from the persisted config + secrets.
  *
- * - If mode === 'local' or there is no active record or the active kind is a
- *   local-* kind: return a LocalMemoryProvider (pure inmem by default, or
- *   delegating if delegateStoreForLocalSqliteMem is supplied).
+ * - If there is no active record or the active kind is a local-* kind: return a
+ *   LocalMemoryProvider (pure inmem by default, or delegating if
+ *   delegateStoreForLocalSqliteMem is supplied).
  * - For external kinds: read the secret (transiently), construct the appropriate
  *   provider via {@link buildMemoryProviderFromRecord}. Any construction or
  *   secret read error falls back to local-inmemory (redacted).
@@ -109,18 +109,7 @@ export async function resolveActiveMemoryProvider(
   secrets: SecretStore,
   options: ResolveMemoryProviderOptions = {},
 ): Promise<MemoryProvider> {
-  const mode = options.mode ?? "external";
   const now = options.now;
-
-  // Local mode or no config store: always safe local default.
-  if (mode === "local") {
-    return new LocalMemoryProvider({
-      id: "local-inmemory:default",
-      kind: "local-inmemory",
-      label: "Local (in-memory)",
-      now,
-    });
-  }
 
   try {
     const state = await configStore.getState();

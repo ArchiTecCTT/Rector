@@ -29,6 +29,7 @@ import http from "node:http";
 
 import { createApp } from "../src/api/server";
 import { TaskManager } from "../src/thalamus/router";
+import { configuredAppOptions } from "./support/configuredApp";
 import { triageUserMessage } from "../src/orchestration/triage";
 import { createFakePlan, PlannerOutputSchema } from "../src/orchestration/planner";
 import { ProviderError, type ModelRouter, type ModelSelection } from "../src/providers/llm";
@@ -143,9 +144,10 @@ describe("BYOK external-mode end-to-end", () => {
       ],
     });
 
-    const app = createApp(new TaskManager(), {
-      orchestration: { mode: "external", router: spyRouter(provider) },
-    });
+    const app = createApp(
+      new TaskManager(),
+      await configuredAppOptions({ orchestration: { router: spyRouter(provider) } }),
+    );
 
     await withServer(app, async (base) => {
       const created = await api(base, "/api/chat/conversations", {
@@ -243,9 +245,10 @@ describe("BYOK external-mode end-to-end", () => {
       ],
     });
 
-    const app = createApp(new TaskManager(), {
-      orchestration: { mode: "external", router: spyRouter(provider) },
-    });
+    const app = createApp(
+      new TaskManager(),
+      await configuredAppOptions({ orchestration: { router: spyRouter(provider) } }),
+    );
 
     await withServer(app, async (base) => {
       const created = await api(base, "/api/chat/conversations", {
@@ -401,9 +404,10 @@ describe("BYOK external-mode end-to-end — citations, safe executor, and healin
       ],
     });
 
-    const app = createApp(new TaskManager(), {
-      orchestration: { mode: "external", router: spyRouter(provider) },
-    });
+    const app = createApp(
+      new TaskManager(),
+      await configuredAppOptions({ orchestration: { router: spyRouter(provider) } }),
+    );
 
     await withServer(app, async (base) => {
       const created = await api(base, "/api/chat/conversations", {
@@ -480,9 +484,10 @@ describe("BYOK external-mode end-to-end — citations, safe executor, and healin
       onOverflow: "repeat-last",
     });
 
-    const app = createApp(new TaskManager(), {
-      orchestration: { mode: "external", router: spyRouter(provider) },
-    });
+    const app = createApp(
+      new TaskManager(),
+      await configuredAppOptions({ orchestration: { router: spyRouter(provider) } }),
+    );
 
     await withServer(app, async (base) => {
       const created = await api(base, "/api/chat/conversations", {

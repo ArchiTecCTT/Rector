@@ -10,8 +10,14 @@ import {
   parseDeploymentEnvironment,
   type OrchestrationConfig,
 } from "../deployment";
-import { buildModelRouter, FakeLLMProvider, type ModelRouter } from "../providers/llm";
+import {
+  createLocalRuntimeSettingsStore,
+  migrateRuntimeSettingsFromEnv,
+  type RuntimeSettings,
+} from "../config/runtimeSettings";
+import type { ModelRouter } from "../providers/llm";
 import { buildConfiguredRouter } from "../providers/configBridge";
+import { buildConfiguredAssignmentAwareRouter } from "../providers/orchestrationAssignments";
 import { WorkspaceSandboxAdapter, type SandboxAdapter } from "../sandbox";
 import { checkE2BSandboxReadiness, createE2BSandboxAdapter } from "../sandbox/e2bSandboxAdapter";
 import {
@@ -61,6 +67,7 @@ const SECRETS_FILE = `${RECTOR_DATA_DIR}/secrets.enc`;
 const PROVIDER_CONFIG_FILE = `${RECTOR_DATA_DIR}/providers.json`;
 const ORCHESTRATION_ASSIGNMENTS_FILE = `${RECTOR_DATA_DIR}/orchestration-assignments.json`;
 const MEMORY_ASSIGNMENTS_FILE = `${RECTOR_DATA_DIR}/memory-assignments.json`;
+const RUNTIME_SETTINGS_FILE = `${RECTOR_DATA_DIR}/runtime-settings.json`;
 const SECRET_KEY_FILE = `${RECTOR_DATA_DIR}/secret.key`;
 const AUDIT_LOG_FILE = `${RECTOR_DATA_DIR}/audit-events.jsonl`;
 
@@ -118,38 +125,61 @@ const orchestrationAssignmentStore = createLocalOrchestrationAssignmentStore({
   filePath: ORCHESTRATION_ASSIGNMENTS_FILE,
 });
 const memoryAssignmentStore = createLocalMemoryAssignmentStore({ filePath: MEMORY_ASSIGNMENTS_FILE });
+const runtimeSettingsStore = createLocalRuntimeSettingsStore({ filePath: RUNTIME_SETTINGS_FILE });
 
 /**
- * Build the model router for the resolved orchestration mode (design C6, Req 13.3/14.3).
- *
- * External_Mode builds the router via the {@link buildConfiguredRouter} Config_Bridge so persisted
- * Provider_Config_Records (including every `openai-compatible` deployment) and their Secret_Store
- * secrets participate in selection, honoring the persisted Active_Route_Map with fallback to the
- * capability-priority selection. The live server explicitly opts the constructed providers into the
- * network (`enableNetwork: true`); `process.env` remains the documented fallback when the user has
- * not set a field in-app (precedence: persisted UI config over env).
- *
- * Local_Mode is the provider-free regression baseline (Req 17.1, Correctness Property 7): it uses
- * the fake router and NEVER consults the Config_Bridge, so no persisted configuration or secret can
- * ever cause a provider/network call. The bridge is deliberately not invoked on this path, and the
- * router is constructed with ONLY the {@link FakeLLMProvider} so no network-capable provider is even
- * instantiated in local mode (cloud-capable-transition Req 9.1/9.3) — the mode gate is therefore
- * provably inert rather than merely never-selected.
- *
- * No network call is made at startup — the router only selects providers lazily per request.
+ * Ensure persisted runtime settings exist, migrating once from the legacy
+ * `ORCHESTRATOR_MODE` env knob when the backing file is absent.
  */
-async function buildStartupRouter(config: OrchestrationConfig): Promise<ModelRouter> {
-  if (config.mode === "external") {
-    return buildConfiguredRouter({
-      store: providerConfigStore,
-      secrets: secretStore,
-      mode: "external",
-      baseEnv: process.env,
-      enableNetwork: true,
-      fetchImpl: fetch,
+async function ensureRuntimeSettings(): Promise<RuntimeSettings> {
+  if (!existsSync(RUNTIME_SETTINGS_FILE)) {
+    const orchestration = await resolveOrchestrationConfig({
+      env: process.env,
+      providerConfigStore,
+      secretStore,
     });
+    const migrated = migrateRuntimeSettingsFromEnv(
+      process.env,
+      orchestration.configuredProviders.length,
+      { warn: (message) => console.warn(redactString(message)) },
+    );
+    const persisted = await runtimeSettingsStore.upsert(migrated);
+    if (!persisted.ok) {
+      console.warn(`Runtime settings migration failed: ${redactString(persisted.error)}`);
+      return migrated;
+    }
+    return persisted.value;
   }
-  return buildModelRouter({ mode: "local", providers: [new FakeLLMProvider()] });
+  return runtimeSettingsStore.get();
+}
+
+/**
+ * Build the product model router from the persisted orchestration profile.
+ *
+ * Configured profiles use the assignment-aware Config_Bridge path. Unconfigured
+ * profiles intentionally omit a product router (chat is gated in a later phase);
+ * no {@link FakeLLMProvider} is injected as the default product router.
+ */
+async function buildStartupRouter(profile: RuntimeSettings["orchestrationProfile"]): Promise<ModelRouter | undefined> {
+  if (profile !== "configured") {
+    return undefined;
+  }
+  const baseRouter = await buildConfiguredRouter({
+    store: providerConfigStore,
+    secrets: secretStore,
+    mode: "external",
+    baseEnv: process.env,
+    enableNetwork: true,
+    fetchImpl: fetch,
+  });
+  return buildConfiguredAssignmentAwareRouter({
+    baseRouter,
+    assignmentStore: orchestrationAssignmentStore,
+    providerConfigStore,
+    secrets: secretStore,
+    enableNetwork: true,
+    fetchImpl: fetch,
+  });
 }
 
 // Workspace containment boundary for every sandbox operation. Mirrors the chat-runner / workspace
@@ -258,23 +288,28 @@ async function resolveStartupOrchestrationConfig(): Promise<OrchestrationConfig>
  * binds + listens so credentials can be entered through the UI.
  */
 async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>; server: http.Server; gracefulShutdown: ReturnType<typeof createGracefulShutdownHandler> }> {
+  const runtimeSettings = await ensureRuntimeSettings();
   orchestrationConfig = await resolveStartupOrchestrationConfig();
 
-  // Req 1.4 / 1.5 / 1.7: external mode with no configured provider warns and serves (rather than
-  // crashing) so the operator can open the configuration panel. The warning names every supported
-  // provider's required environment-variable keys and contains no secret value; it is additionally
-  // routed through the Redaction_Layer as a defense-in-depth guarantee before reaching the sink.
-  if (orchestrationConfig.mode === "external" && orchestrationConfig.configuredProviders.length === 0) {
+  // Req 1.4 / 1.5 / 1.7: configured profile with no configured provider warns and serves (rather
+  // than crashing) so the operator can open the configuration panel. The warning names every
+  // supported provider's required environment-variable keys and contains no secret value.
+  if (
+    runtimeSettings.orchestrationProfile === "configured" &&
+    orchestrationConfig.configuredProviders.length === 0
+  ) {
     console.warn(
       redactString(
-        "Rector is starting in external mode with no configured providers. " +
+        "Rector is starting with a configured orchestration profile but no configured providers. " +
           "Enter provider credentials in the configuration UI before issuing requests. " +
           `Supported providers and required environment variables: ${describeRequiredProviderEnvKeys()}.`,
       ),
     );
   }
 
-  const orchestrationRouter = await buildStartupRouter(orchestrationConfig);
+  const orchestrationRouter = await buildStartupRouter(runtimeSettings.orchestrationProfile);
+  const orchestrationMode =
+    runtimeSettings.orchestrationProfile === "configured" ? "external" : "local";
   const orchestrationSandbox = await buildStartupSandboxAdapter(orchestrationConfig);
 
   const persistenceDriver = deploymentConfig.persistence?.driver;
@@ -289,7 +324,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   const auditLog = createLocalAuditLogService({ filePath: AUDIT_LOG_FILE });
 
   const app = createApp(manager, {
-    orchestration: { mode: orchestrationConfig.mode, router: orchestrationRouter, sandbox: orchestrationSandbox },
+    orchestration: { mode: orchestrationMode, router: orchestrationRouter, sandbox: orchestrationSandbox },
     persistence: deploymentConfig.persistence,
     ...(bootstrappedStore !== undefined ? { store: bootstrappedStore } : {}),
     secretStore,
@@ -297,6 +332,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
     memoryConfigStore,
     orchestrationAssignmentStore,
     memoryAssignmentStore,
+    runtimeSettingsStore,
     auditLog,
     auth: authConfig,
     secretEncryptionKey,
@@ -310,7 +346,10 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   });
 
   server.listen({ port, host }, () => {
-    console.log(`Rector MVP running on http://${host}:${port} (orchestration mode: ${orchestrationConfig.mode})`);
+    console.log(
+      `Rector MVP running on http://${host}:${port} ` +
+        `(orchestration profile: ${runtimeSettings.orchestrationProfile})`,
+    );
   });
 
   gracefulShutdown.install();
@@ -329,4 +368,11 @@ const bootstrapPromise = bootstrap().catch((error) => {
   process.exit(1);
 });
 
-export { bootstrapPromise, deploymentConfig, manager, orchestrationConfig, telemetry };
+export {
+  bootstrapPromise,
+  deploymentConfig,
+  manager,
+  orchestrationConfig,
+  runtimeSettingsStore,
+  telemetry,
+};

@@ -114,26 +114,25 @@ describe("MemoryRoleRouter", () => {
     expect(effective.provider?.kind).toBe("local-sqlite-mem");
   });
 
-  it("does not read secrets or build external providers in local mode", async () => {
+  it("reads secrets when resolving an external memory assignment", async () => {
     const configStore = createInMemoryMemoryConfigStore();
     await configStore.upsertMemoryProvider(record({ id: "mem0:main", kind: "mem0", label: "Mem0", secretRef: "memory:mem0:main" }));
     const assignmentStore = createInMemoryMemoryAssignmentStore();
     await assignmentStore.upsertAssignment(
       createMemoryRoleAssignment({ role: "episodicMemory", providerRecordId: "mem0:main", now: NOW }),
     );
-    const getSecret = vi.fn(async () => ({ ok: true, value: "sk-local-mode-should-not-read" }) as const);
+    const getSecret = vi.fn(async () => ({ ok: true, value: "mem0-api-key" }) as const);
     const secrets: SecretStore = {
       setSecret: async () => ({ ok: true, value: undefined }),
       getSecret,
       hasSecret: async () => true,
     };
-    const router = new MemoryRoleRouter({ assignmentStore, configStore, secrets, mode: "local" });
+    const router = new MemoryRoleRouter({ assignmentStore, configStore, secrets });
 
-    const effective = await router.resolveMemoryProvider("episodicMemory", { mode: "local" });
+    const effective = await router.resolveMemoryProvider("episodicMemory");
 
-    expect(effective.provider?.kind).toBe("local-inmemory");
-    expect(getSecret).not.toHaveBeenCalled();
-    expect(effective.warnings.map((warning) => warning.code)).toContain("EXTERNAL_MEMORY");
+    expect(effective.provider?.kind).toBe("mem0");
+    expect(getSecret).toHaveBeenCalled();
   });
 
   it("applies resolve-time context when falling back to local memory", async () => {

@@ -14,7 +14,7 @@ describe("template schema and built-ins", () => {
   });
 
   it("Local Free is zero-provider, zero-network, zero-cost baseline", () => {
-    const local = BUILT_IN_TEMPLATES.find((template) => template.id === "local-free");
+    const local = BUILT_IN_TEMPLATES.find((template) => template.id === "__test_profile__");
     expect(local).toBeDefined();
     expect(local?.requiredProviderKinds).toEqual([]);
     expect(local?.sandboxPolicy?.network).toBe("disabled");
@@ -32,7 +32,7 @@ describe("template schema and built-ins", () => {
   });
 
   it("rejects duplicate role assignments", () => {
-    const local = BUILT_IN_TEMPLATES.find((template) => template.id === "local-free");
+    const local = BUILT_IN_TEMPLATES.find((template) => template.id === "__test_profile__");
     expect(local).toBeDefined();
     const invalid = {
       ...local!,
@@ -48,7 +48,7 @@ describe("template schema and built-ins", () => {
   });
 
   it("rejects local templates that carry external provider assignments", () => {
-    const local = BUILT_IN_TEMPLATES.find((template) => template.id === "local-free")!;
+    const local = BUILT_IN_TEMPLATES.find((template) => template.id === "__test_profile__")!;
     const invalid = {
       ...local,
       id: "bad-local-external-provider",

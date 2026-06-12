@@ -6,7 +6,7 @@
 
 **Goal:** Build Rector as an open-source, chat-first, self-healing neuro-symbolic orchestration system.
 
-**Architecture:** Users interact with a normal chat UI. Hidden beneath it, Rector runs a deterministic orchestration pipeline: triage, context building, planning, skeptic review, crucible arbitration, DAG compilation, execution, validation, healing, and synthesis. Providers are adapter-based so the project runs locally without paid services but can use premium provider credits when configured.
+**Architecture:** Users interact with a normal chat UI. Hidden beneath it, Rector runs a deterministic orchestration pipeline: triage, context building, planning, skeptic review, crucible arbitration, DAG compilation, execution, validation, healing, and synthesis. The product is **configured orchestration** — fresh installs require guided setup (mandatory onboarding) before chat unlocks. Providers are adapter-based BYOK; CI uses `SpyLLMProvider` test doubles only.
 
 **Tech Stack:** TypeScript/Node, Express initially, custom chat UI, Retool operator console later, local executor first, then BullMQ/Redis, MongoDB, Chroma, Algolia, Together AI, Cloudflare Workers AI, Azure OpenAI, Perplexity, E2B/Depot, PostHog, Sentry, Middleware/DataDog/New Relic, Linear, Make, Doppler.
 
@@ -14,7 +14,8 @@
 
 ## Source-of-Truth Docs
 
-- Architecture: `docs/architecture/rector-0.1.0-architecture.md`
+- Architecture: `docs/architecture/configured-product-architecture.md` (canonical v0.3.0+)
+- Implementation spec: `.kiro/specs/cloud-capable-transition/`
 - Master roadmap: `docs/plans/rector-master-roadmap.md`
 - Per-chunk plans: `docs/plans/chunks/*.md`
 - Reviews: `reviews/*.md`
@@ -26,11 +27,11 @@ Rector must be usable by contributors without maintainer-only credits.
 Required baseline:
 
 - Apache-2.0 license.
-- Provider-free local demo mode.
-- Fake/local deterministic LLM provider.
-- In-memory/local store.
+- Configured-product onboarding (unconfigured → configured via UI).
+- `SpyLLMProvider` test doubles for CI (`npm test`); no fake chat as product.
+- SQLite/local persistence for real installs; in-memory for tests.
 - No required cloud services for tests.
-- Optional adapters for premium services.
+- Optional adapters for premium services (BYOK).
 - Contributor docs and contract tests for extension points.
 
 ## Current Repo Reality
@@ -53,11 +54,11 @@ Do not build all at once. For every chunk:
 
 Every implementation chunk must preserve:
 
-- `npm test` passes.
+- `npm test` passes (spy doubles; zero real network).
 - `npm run build` passes.
-- Open-source local mode still works without external provider keys.
+- Configured-product architecture invariants (see `configured-product-architecture.md`).
 - No secret values in docs, logs, traces, test snapshots, or UI.
-- New run phases match `rector-0.1.0-architecture.md`.
+- New run phases match the symbolic brainstem in `configured-product-architecture.md`.
 - Any old docs touched must be marked current/stale/archive explicitly.
 
 ---
@@ -235,8 +236,19 @@ Use credits to maximize prototype power without making them required for contrib
 - DeepGram/AssemblyAI: defer until voice/audio is in scope.
 - BrowserStack: use once UI stabilizes.
 
+## v0.3.0 Milestone — Configured Product
+
+Kill local mode as default product. Deliverables:
+
+- `docs/architecture/configured-product-architecture.md` as canonical architecture
+- UI-persisted `.rector/runtime-settings.json` as source of truth
+- Mandatory uncloseable first-run onboarding overlay until readiness passes
+- Single orchestration path: `runOrchestratedChatRun` (no fake chat as product)
+- `SpyLLMProvider` for CI only; deprecate `ORCHESTRATOR_MODE` env knob
+- User docs: `docs/getting-started/first-run-setup.md`
+
+Branch: `rector-0.3.0-configured-product`
+
 ## First Chunk to Plan Next
 
-Start with **Chunk 0 — Source-of-Truth Docs and Stale Doc Quarantine**.
-
-Reason: current docs conflict. Before implementation, agents and contributors need one unambiguous source of truth.
+Configured-product transition phases follow `.kiro/specs/cloud-capable-transition/tasks.md` and new chunk plans under `docs/plans/chunks/`.

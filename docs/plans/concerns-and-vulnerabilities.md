@@ -174,7 +174,7 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 - **Status:** Open until MongoDB/local durable store adapter chunk.
 - **Plan:** Keep documented. Replace/augment with durable store in later persistence/provider chunks.
 
-**Local baseline (intentionally preserved per Req 9 / cloud design):** Chat store (and many other "prototype" behaviors) remain in-memory/deterministic for the mandatory provider-free regression baseline (see `.kiro/specs/cloud-capable-transition/requirements.md` Req 9 + src/api/server.ts + createRectorStore "memory" path). 
+**CI spy baseline (v0.3.0 Req 9):** `npm test` uses in-memory stores and `SpyLLMProvider` doubles — not a user-facing provider-free product path. Real installs use SQLite persistence and configured orchestration per `configured-product-architecture.md`. 
 
 **External / Cloud paths (partially advanced by transition: E2B gated, live gated synth, SSE, boot-tolerant, discovery full, etc.):** See updates below for sandbox/synthesizer/streaming/startup (and cross-refs in new gaps + roadmap section). Startup item resolved (see top of Open). 
 

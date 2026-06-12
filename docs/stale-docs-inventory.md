@@ -1,7 +1,12 @@
-# Stale Docs Inventory & Proposed Edits (for Cloud-Capable Transition)
+# Stale Docs Inventory & Proposed Edits
 
-**Date of inspection:** During Chunk 33 work.
-**Context:** Shifting primary vision from "v0.1.0-alpha lightweight local developer preview / local-only MVP" to a hassle-free, web-UI-configurable, commercial cloud-capable system runnable on VPS for real coding work. Local mode remains a perfect, identical regression baseline. Architecture should be non-rigid/pluggable, with providers (LLM, memory DBs like local/Mem0/TiDB Cloud, sandbox, etc.) configurable via the web UI without file/env edits.
+> **v0.3.0 transition in progress (branch `rector-0.3.0-configured-product`).**  
+> Canonical architecture is now [`docs/architecture/configured-product-architecture.md`](architecture/configured-product-architecture.md).  
+> The local/external dual-mode and provider-free-as-product framing is **deprecated**.  
+> Product = configured orchestration with mandatory onboarding. CI = `SpyLLMProvider` only.
+
+**Date of inspection:** During Chunk 33 work; updated for v0.3.0 configured-product transition.
+**Context:** Shifting from local/external dual-mode to **unconfigured vs configured** product model. UI-persisted `runtime-settings.json` is source of truth. Mandatory first-run onboarding gates chat. Single orchestration path (`runOrchestratedChatRun`). Deterministic doubles are test-only.
 
 This inventory was produced as the first structural step. Proposed edits were applied starting with highest-impact files (AGENTS.md, root README, docs/README, etc.). Old alpha language is either updated, given prominent banners, or noted as historical.
 

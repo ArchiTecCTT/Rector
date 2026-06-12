@@ -5,12 +5,13 @@
 > **It is no longer the active architecture.**
 > 
 > See instead:
-> - `.kiro/specs/cloud-capable-transition/` (active spec for cloud-capable, VPS, hassle-free UI-configurable product)
-> - `docs/architecture/current-rector-byok-architecture.md` (current architecture)
+> - **`docs/architecture/configured-product-architecture.md`** (canonical v0.3.0+ product architecture)
+> - `.kiro/specs/cloud-capable-transition/` (active implementation spec)
+> - `docs/architecture/current-rector-byok-architecture.md` (stale pre-v0.3.0 BYOK reference)
 > - `docs/plans/chunks/033-...` and later for transition work
 > - AGENTS.md and docs/README.md (updated vision: non-rigid, pluggable, web-UI configuration for providers including memory DBs like local/Mem0/TiDB Cloud)
 >
-> Local/provider-free mode remains the perfect regression baseline.
+> **Superseded:** v0.3.0 uses the configured-product model. See `configured-product-architecture.md`.
 >
 > Original status (kept for reference):
 > Status: Reviewed draft v2 for branch `rector-0.1.0`.

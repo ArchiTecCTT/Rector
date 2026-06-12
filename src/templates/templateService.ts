@@ -17,7 +17,7 @@ import type { MemoryConfigStore } from "../providers/memoryConfigStore";
 import type { SecretStore } from "../security/secretStore";
 import type { ModuleConfigStore } from "../modules/moduleConfigStore";
 import { ModuleConfigStateSchema } from "../modules/moduleConfig";
-import { BUILT_IN_TEMPLATES, getBuiltInTemplate, listBuiltInTemplates } from "./builtInTemplates";
+import { BUILT_IN_TEMPLATES, getBuiltInTemplate, INTERNAL_TEMPLATE_IDS, listBuiltInTemplates } from "./builtInTemplates";
 import {
   RectorTemplateSchema,
   TEMPLATE_SCHEMA_VERSION,
@@ -800,7 +800,7 @@ export class TemplateService {
   }
 
   listBuiltIns(): RectorTemplate[] {
-    return listBuiltInTemplates();
+    return listBuiltInTemplates().filter((template) => !INTERNAL_TEMPLATE_IDS.has(template.id));
   }
 
   async listTemplates(scopeId?: string): Promise<RectorTemplate[]> {

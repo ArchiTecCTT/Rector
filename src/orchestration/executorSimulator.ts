@@ -87,6 +87,11 @@ export interface ExecutorSimulatorOptions {
   simulatedOutputByNodeId?: Record<string, Record<string, unknown>>;
   validationFailuresByNodeId?: Record<string, string>;
   allowUnsafeShell?: boolean;
+  /**
+   * When true, FILE_OPERATION and SHELL_COMMAND nodes fail instead of simulating SUCCESS.
+   * Used for CODE_EDIT honesty when no real sandbox is configured.
+   */
+  blockSimulatedWorkspaceOps?: boolean;
 }
 
 const DEFAULT_NODE_DURATION_MS = 1;
@@ -232,6 +237,11 @@ function executeNode(
   const permissionError = unsafeShellError(node, options);
   if (permissionError) {
     return failedNodeResult(node, dependencies, startedAtMs, perAttemptDurationMs, permissionError, policy, appendEvent);
+  }
+
+  const unsandboxedWorkspaceError = unsandboxedWorkspaceOpError(node, options);
+  if (unsandboxedWorkspaceError) {
+    return failedNodeResult(node, dependencies, startedAtMs, perAttemptDurationMs, unsandboxedWorkspaceError, policy, appendEvent);
   }
 
   const timeoutError = timeoutErrorFor(node, perAttemptDurationMs, policy);
@@ -534,6 +544,18 @@ function unsafeShellError(node: DagNode, options: ExecutorSimulatorOptions): Exe
     message: `Node ${node.id} denied unsafe shell execution by default`,
     nodeId: node.id,
     details: { nodeType: node.type, toolPermissions: node.toolPermissions, allowUnsafeShell },
+  };
+}
+
+function unsandboxedWorkspaceOpError(node: DagNode, options: ExecutorSimulatorOptions): ExecutionError | undefined {
+  if (options.blockSimulatedWorkspaceOps !== true) return undefined;
+  if (node.type !== "FILE_OPERATION" && node.type !== "SHELL_COMMAND") return undefined;
+  return {
+    code: "PERMISSION_DENIED",
+    message:
+      "CODE_EDIT requires a configured sandbox; simulated file/command execution is not performed when no real sandbox is configured.",
+    nodeId: node.id,
+    details: { nodeType: node.type, sandboxConfigured: false },
   };
 }
 

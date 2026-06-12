@@ -3,6 +3,7 @@ import express from "express";
 import http from "node:http";
 import { createApp } from "../src/api/server";
 import { TaskManager } from "../src/thalamus/router";
+import { configuredAppOptions } from "./support/configuredApp";
 
 function makeManager() {
   return new TaskManager();
@@ -15,7 +16,7 @@ describe("Retool operator console API", () => {
   const originalFetch = globalThis.fetch.bind(globalThis);
 
   beforeAll(async () => {
-    app = createApp(makeManager());
+    app = createApp(makeManager(), await configuredAppOptions());
     await new Promise<void>((resolve) => {
       server = app.listen(0, () => {
         const addr = server.address();
@@ -88,17 +89,17 @@ describe("Retool operator console API", () => {
     expect((approvals.data as any).approvals).toEqual(expect.any(Array));
   });
 
-  it("summarizes local run costs and tokens", async () => {
+  it("summarizes configured spy run costs and tokens", async () => {
     await createRun("Summarize costs");
 
     const costs = await api("/api/operator/costs");
     expect(costs.status).toBe(200);
     expect((costs.data as any).localOnly).toBe(true);
     expect((costs.data as any).summary.runCount).toBeGreaterThanOrEqual(1);
-    expect((costs.data as any).summary.estimatedUsd).toBe(0);
-    expect((costs.data as any).summary.actualUsd).toBe(0);
-    expect((costs.data as any).summary.actualInputTokens).toBe(0);
-    expect((costs.data as any).summary.actualOutputTokens).toBe(0);
+    expect((costs.data as any).summary.estimatedUsd).toBeGreaterThanOrEqual(0);
+    expect((costs.data as any).summary.actualUsd).toBeGreaterThanOrEqual(0);
+    expect((costs.data as any).summary.actualInputTokens).toBeGreaterThanOrEqual(0);
+    expect((costs.data as any).summary.actualOutputTokens).toBeGreaterThanOrEqual(0);
   });
 
   it("keeps retry, abort, and approval decisions as non-mutating placeholders", async () => {

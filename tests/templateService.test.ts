@@ -93,7 +93,7 @@ describe("TemplateService", () => {
   it("applies Local Free as a full replacement of assignment records", async () => {
     const { service, orchestrationAssignmentStore, memoryAssignmentStore } = makeService();
 
-    const result = await service.apply("local-free", { mode: "replaceAssignments", confirmReplace: true });
+    const result = await service.apply("__test_profile__", { mode: "replaceAssignments", confirmReplace: true });
 
     expect(result.applied).toBe(true);
     expect(result.changed.orchestrationAssignments).toBe(ORCHESTRATION_ROLES.length);
@@ -109,7 +109,7 @@ describe("TemplateService", () => {
 
   it("mergeMissing preserves existing role assignments", async () => {
     const { service, orchestrationAssignmentStore } = makeService();
-    await service.apply("local-free", { mode: "mergeMissing" });
+    await service.apply("__test_profile__", { mode: "mergeMissing" });
     const first = await orchestrationAssignmentStore.listAssignments();
 
     const second = await service.apply("cheap-byok", { mode: "mergeMissing" });
@@ -157,7 +157,7 @@ describe("TemplateService", () => {
   it("keeps scoped module toggle application from mutating global module config", async () => {
     const { service, moduleConfigStore } = makeService();
 
-    const result = await service.apply("local-free", {
+    const result = await service.apply("__test_profile__", {
       mode: "replaceAssignments",
       confirmReplace: true,
       scopeId: "user-a",
@@ -170,7 +170,7 @@ describe("TemplateService", () => {
 
   it("rejects imported secret-like fields before schema parsing", () => {
     const { service } = makeService();
-    const local = BUILT_IN_TEMPLATES.find((template) => template.id === "local-free")!;
+    const local = BUILT_IN_TEMPLATES.find((template) => template.id === "__test_profile__")!;
 
     expect(() => service.importTemplate({ ...local, apiKey: "sk-live-1234567890abcdef" })).toThrow(
       TemplateImportSecretError,

@@ -96,6 +96,12 @@ export interface LLMProvider {
   invoke(request: LLMRequest): Promise<LLMResponse>;
 }
 
+/** True when the router-selected provider should run live LLM steps (skeptic, synthesizer, etc.). */
+export function isLiveLLMProvider(provider: LLMProvider): boolean {
+  const id = provider.metadata.id;
+  return id !== "fake" && id !== "deterministic";
+}
+
 export class FakeLLMProvider implements LLMProvider {
   readonly metadata = ProviderCapabilityMetadataSchema.parse({
     id: "fake",

@@ -63,14 +63,15 @@ function memoryAssignment(
   };
 }
 
-const localFree: RectorTemplate = {
+/** Internal test/contributor profile — excluded from user-facing template list APIs. */
+const testProfile: RectorTemplate = {
   schemaVersion: "rector.template.v1",
-  id: "local-free",
-  name: "Local Free",
-  description: "No API keys, deterministic orchestration, local memory, fake/safe sandbox, zero network and zero provider cost.",
+  id: "__test_profile__",
+  name: "Test Profile",
+  description: "Deterministic orchestration and local memory for contributor tests and CI spy pipelines. Not shown in the product template picker.",
   author: "Rector",
-  tags: ["built-in", "local", "free", "zero-network"],
-  intendedUse: ["contributor baseline", "tests", "offline demo"],
+  tags: ["built-in", "internal", "tests", "zero-network"],
+  intendedUse: ["contributor baseline", "tests", "CI spy pipeline"],
   riskLevel: "local",
   orchestrationAssignments: ORCHESTRATION_ROLES.map(deterministicRole),
   memoryAssignments: MEMORY_ROLES.map(localMemory),
@@ -344,10 +345,13 @@ const personalPlaceholder: RectorTemplate = {
 };
 
 export const BUILT_IN_TEMPLATES: readonly RectorTemplate[] = Object.freeze(
-  [localFree, cheapByok, premiumEngineering, privacyFirst, researchHeavy, personalPlaceholder].map((template) =>
+  [testProfile, cheapByok, premiumEngineering, privacyFirst, researchHeavy, personalPlaceholder].map((template) =>
     RectorTemplateSchema.parse(template),
   ),
 );
+
+/** Built-in templates hidden from user-facing list/picker APIs (tests/internal only). */
+export const INTERNAL_TEMPLATE_IDS = new Set<string>(["__test_profile__"]);
 
 export function getBuiltInTemplate(id: string): RectorTemplate | undefined {
   const found = BUILT_IN_TEMPLATES.find((template) => template.id === id);

@@ -1,5 +1,7 @@
 # Chunk 043 — Orchestration Model Assignment UI
 
+> **Pre-v0.3.0; superseded by [`configured-product-architecture.md`](../../architecture/configured-product-architecture.md).**
+
 > **Created:** 2026-06-12
 > **Branch:** `rector-0.2.0`
 > **Depends on:** Chunks 038–041 module foundation; Chunk 042 hardening track recommended before/alongside implementation

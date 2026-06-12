@@ -141,14 +141,6 @@ export class MemoryRoleRouter {
         return this.disabled(role, assignment);
       }
 
-      if (mode === "local" && assignment.providerRecordId !== "local") {
-        return this.localFallback(role, assignment, {
-          code: "EXTERNAL_MEMORY",
-          severity: "info",
-          message: `${MEMORY_ROLE_DEFINITIONS[role].label} is assigned to ${assignment.providerRecordId}, but Local Mode forces the built-in local memory provider without reading secrets.`,
-        }, merged);
-      }
-
       const primary = await this.buildProvider(role, assignment.providerRecordId, "assignment", configState.providers, merged);
       if (primary.status === "ready") return { ...primary, assignment };
 
@@ -176,10 +168,6 @@ export class MemoryRoleRouter {
         ...this.localFallback(role, assignment, undefined, merged),
         error: primary.error,
       };
-    }
-
-    if (mode === "local") {
-      return this.localFallback(role, undefined, undefined, merged);
     }
 
     if (configState.activeMemoryProviderId) {

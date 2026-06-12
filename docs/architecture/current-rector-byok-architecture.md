@@ -1,6 +1,10 @@
 # Current Rector BYOK Architecture
 
-> Status: current architecture guide after BYOK Alpha Phase 3 and the budget/sandbox hardening pass.  
+> **STALE — pre-v0.3.0.** This document describes the local/external dual-mode product model.  
+> **Canonical architecture:** [`configured-product-architecture.md`](./configured-product-architecture.md)  
+> Retained for historical reference during the v0.3.0 transition.
+
+> Status: ~~current~~ **superseded** architecture guide after BYOK Alpha Phase 3 and the budget/sandbox hardening pass.  
 > Audience: humans and implementing agents who need to understand what Rector is now.  
 > Runtime baseline: Node.js `>=22.5.0`.
 

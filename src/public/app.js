@@ -130,9 +130,16 @@ const state = {
   lastResultByMessage: new Map(), // assistantMessageId -> result payload (for trace)
 };
 
-// Orchestration mode derived from GET /api/setup/status (local until a valid status loads).
+// Product readiness derived from GET /api/setup/status (configured unlocks chat).
 const orchestration = {
-  mode: "local",
+  configured: false,
+};
+
+const productReadiness = {
+  ready: false,
+  orchestrationProfile: "unconfigured",
+  onboardingStep: 1,
+  blockers: [],
 };
 
 // --- Live run state (SSE stream with polling fallback, ORN-40) ---
@@ -352,7 +359,7 @@ function cacheTemplateAndSetupEls() {
     "template-manager-import-apply",
     "template-manager-export",
     "template-manager-save-current",
-    "template-manager-reset-local-free",
+    "template-manager-suggest-cheap-byok",
     "open-setup-wizard",
     "close-setup-wizard",
     "setup-wizard-modal",
@@ -362,6 +369,17 @@ function cacheTemplateAndSetupEls() {
     "setup-wizard-categories",
     "setup-wizard-loading",
     "setup-wizard-error",
+    "app-shell",
+    "onboarding-overlay",
+    "onboarding-stepper",
+    "onboarding-step-body",
+    "onboarding-blockers",
+    "onboarding-actions",
+    "onboarding-action-primary",
+    "onboarding-action-secondary",
+    "onboarding-activate",
+    "onboarding-loading",
+    "onboarding-error",
     "open-workspace-safety",
     "close-workspace-safety",
     "workspace-safety-modal",
@@ -562,8 +580,8 @@ function clearMessages(showEmpty) {
     empty.className = "empty-state";
     empty.innerHTML = `
       <div class="empty-state__mark" aria-hidden="true"></div>
-      <h2>Chat with Rector</h2>
-      <p>Every message runs the full local pipeline on deterministic fake adapters. No providers are called.</p>`;
+      <h2>Configure Rector before your first chat</h2>
+      <p>Complete setup and activate Rector to unlock chat with your configured providers.</p>`;
     els["messages"].appendChild(empty);
   }
 }
@@ -3865,7 +3883,7 @@ function bindModuleManager() {
 
 const templateManagerState = {
   templates: [],
-  selectedTemplateId: "local-free",
+  selectedTemplateId: "cheap-byok",
   importTemplate: null,
   lastPreview: null,
 };
@@ -4057,6 +4075,18 @@ async function applySelectedTemplate() {
     });
     renderTemplatePreview(result.preview);
     showTemplateManagerResult("ok", `Applied ${result.template?.name || templateId}: ${result.changed?.orchestrationAssignments || 0} orchestration and ${result.changed?.memoryAssignments || 0} memory assignments changed.`);
+    await loadProductReadiness();
+    if (productReadiness.ready && productReadiness.orchestrationProfile !== "configured") {
+      showTemplateManagerResult(
+        "ok",
+        "Template applied and readiness checks pass. Activate Rector from the onboarding overlay to unlock chat.",
+      );
+    } else if (!productReadiness.ready && Array.isArray(productReadiness.blockers) && productReadiness.blockers.length > 0) {
+      showTemplateManagerResult(
+        "err",
+        `Template applied, but setup is not ready yet: ${productReadiness.blockers.join("; ")}`,
+      );
+    }
   } catch (err) {
     showTemplateManagerResult("err", `Could not apply template: ${err.message}`);
   } finally {
@@ -4133,19 +4163,18 @@ async function saveCurrentTemplate() {
   }
 }
 
-async function resetToLocalFreeTemplate() {
+async function suggestCheapByokTemplate() {
   clearTemplateManagerResult();
+  templateManagerState.selectedTemplateId = "cheap-byok";
+  renderTemplateGallery();
   try {
-    const result = await api("/templates/local-free/apply", {
-      method: "POST",
-      body: JSON.stringify({ mode: "replaceAssignments", confirmReplace: true }),
-    });
-    templateManagerState.selectedTemplateId = "local-free";
-    renderTemplatePreview(result.preview);
-    renderTemplateGallery();
-    showTemplateManagerResult("ok", "Reset assignments to Local Free deterministic baseline.");
+    await previewTemplateById("cheap-byok");
+    showTemplateManagerResult(
+      "ok",
+      "Cheap BYOK is selected. Review the preview, then apply when your provider credentials are configured.",
+    );
   } catch (err) {
-    showTemplateManagerResult("err", `Reset failed: ${err.message}`);
+    showTemplateManagerResult("err", `Could not load Cheap BYOK template: ${err.message}`);
   }
 }
 
@@ -4170,7 +4199,7 @@ function bindTemplateManager() {
   els["template-manager-import-apply"]?.addEventListener("click", () => void applyImportedTemplate());
   els["template-manager-export"]?.addEventListener("click", () => void exportCurrentTemplate());
   els["template-manager-save-current"]?.addEventListener("click", () => void saveCurrentTemplate());
-  els["template-manager-reset-local-free"]?.addEventListener("click", () => void resetToLocalFreeTemplate());
+  els["template-manager-suggest-cheap-byok"]?.addEventListener("click", () => void suggestCheapByokTemplate());
 }
 
 // --- Memory browser panel (Chunk 36 stretch) ---
@@ -4352,6 +4381,255 @@ function bindMemoryBrowser() {
   }
 }
 
+// --- Mandatory first-run onboarding overlay ---
+const ONBOARDING_STEP_COPY = {
+  1: {
+    title: "Add a provider",
+    body: "Connect at least one LLM provider and store its API key on the server. Secrets never appear in the browser.",
+    primary: "Add provider",
+    action: () => openProviderConfig(),
+  },
+  2: {
+    title: "Pick a starter template",
+    body: "Apply a preset to seed orchestration and memory assignments, or continue without a template and configure roles manually.",
+    primary: "Browse templates",
+    secondary: "Continue without template",
+    action: () => openTemplateManager(),
+    secondaryAction: () => advanceOnboardingPastTemplate(),
+  },
+  3: {
+    title: "Review assignments",
+    body: "Confirm triage, planner, and synthesizer routes point at configured providers with no blocker capability mismatches.",
+    primary: "Review orchestration models",
+    action: () => openOrchestrationModelConfig(),
+  },
+  4: {
+    title: "Activate Rector",
+    body: "When the checklist passes, activate to persist the configured profile and unlock chat.",
+    primary: "Activate Rector",
+    action: () => void activateProduct(),
+  },
+};
+
+const onboardingUi = {
+  inFlight: false,
+  templateSkipped: false,
+  escapeHandler: null,
+};
+
+function setOnboardingShellLocked(locked) {
+  const shell = els["app-shell"];
+  if (!shell) return;
+  shell.classList.toggle("shell--onboarding-locked", locked);
+  if (els["composer-input"]) els["composer-input"].disabled = locked;
+  if (els["composer-send"]) els["composer-send"].disabled = locked;
+  if (els["new-conversation"]) els["new-conversation"].disabled = locked;
+  if (els["open-note-capture"]) els["open-note-capture"].disabled = locked;
+}
+
+function setOnboardingLoading(loading) {
+  if (els["onboarding-loading"]) els["onboarding-loading"].hidden = !loading;
+}
+
+function showOnboardingError(message) {
+  const error = els["onboarding-error"];
+  if (!error) return;
+  error.hidden = false;
+  error.textContent = message;
+}
+
+function clearOnboardingError() {
+  const error = els["onboarding-error"];
+  if (!error) return;
+  error.hidden = true;
+  error.textContent = "";
+}
+
+function renderOnboardingBlockers(blockers) {
+  const list = els["onboarding-blockers"];
+  if (!list) return;
+  const items = Array.isArray(blockers) ? blockers : [];
+  if (items.length === 0) {
+    list.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  list.hidden = false;
+  list.innerHTML = "";
+  for (const blocker of items) {
+    const li = document.createElement("li");
+    li.textContent = blocker;
+    list.appendChild(li);
+  }
+}
+
+function renderOnboardingStepper(step) {
+  const stepper = els["onboarding-stepper"];
+  if (!stepper) return;
+  for (const node of stepper.querySelectorAll(".onboarding-step")) {
+    const nodeStep = Number(node.dataset.step || "0");
+    node.classList.toggle("onboarding-step--active", nodeStep === step);
+    node.classList.toggle("onboarding-step--complete", nodeStep < step);
+  }
+}
+
+function renderOnboardingOverlay() {
+  const overlay = els["onboarding-overlay"];
+  if (!overlay) return;
+
+  if (productReadiness.ready) {
+    overlay.hidden = true;
+    setOnboardingShellLocked(false);
+    detachOnboardingEscapeTrap();
+    return;
+  }
+
+  overlay.hidden = false;
+  setOnboardingShellLocked(true);
+  attachOnboardingEscapeTrap();
+
+  const step = productReadiness.onboardingStep || 1;
+  const copy = ONBOARDING_STEP_COPY[step] || ONBOARDING_STEP_COPY[1];
+  renderOnboardingStepper(step);
+
+  const body = els["onboarding-step-body"];
+  if (body) {
+    body.innerHTML = `<h3 class="onboarding-step-body__title">${copy.title}</h3><p>${copy.body}</p>`;
+  }
+
+  renderOnboardingBlockers(productReadiness.blockers);
+
+  const primary = els["onboarding-action-primary"];
+  const secondary = els["onboarding-action-secondary"];
+  const activate = els["onboarding-activate"];
+  if (primary) {
+    primary.hidden = step === 4;
+    primary.textContent = copy.primary;
+  }
+  if (secondary) {
+    const showSecondary = step === 2 && !onboardingUi.templateSkipped;
+    secondary.hidden = !showSecondary;
+    secondary.textContent = copy.secondary || "Continue";
+  }
+  if (activate) {
+    activate.hidden = step !== 4;
+    activate.disabled = onboardingUi.inFlight;
+  }
+}
+
+function attachOnboardingEscapeTrap() {
+  if (onboardingUi.escapeHandler) return;
+  onboardingUi.escapeHandler = (event) => {
+    if (!productReadiness.ready && event.key === "Escape") {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+    }
+  };
+  document.addEventListener("keydown", onboardingUi.escapeHandler, true);
+}
+
+function detachOnboardingEscapeTrap() {
+  if (!onboardingUi.escapeHandler) return;
+  document.removeEventListener("keydown", onboardingUi.escapeHandler, true);
+  onboardingUi.escapeHandler = null;
+}
+
+function applySetupStatusPayload(body) {
+  if (!body || typeof body !== "object") return;
+  productReadiness.ready = body.ready === true;
+  productReadiness.orchestrationProfile = body.orchestrationProfile === "configured" ? "configured" : "unconfigured";
+  productReadiness.onboardingStep = Number(body.onboardingStep) || 1;
+  productReadiness.blockers = Array.isArray(body.blockers) ? body.blockers : [];
+  orchestration.configured = productReadiness.orchestrationProfile === "configured";
+  updateDeepPlanningVisibility();
+  renderOnboardingOverlay();
+}
+
+async function loadProductReadiness() {
+  if (onboardingUi.inFlight) return;
+  onboardingUi.inFlight = true;
+  clearOnboardingError();
+  setOnboardingLoading(true);
+  try {
+    const res = await fetch(`${API}/setup/status`, {
+      headers: { "Content-Type": "application/json" },
+    });
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+    if (!res.ok) {
+      showOnboardingError("Setup readiness is unavailable right now.");
+      return;
+    }
+    applySetupStatusPayload(body);
+  } catch {
+    showOnboardingError("Setup readiness could not be loaded.");
+  } finally {
+    onboardingUi.inFlight = false;
+    setOnboardingLoading(false);
+  }
+}
+
+function advanceOnboardingPastTemplate() {
+  onboardingUi.templateSkipped = true;
+  if (productReadiness.onboardingStep < 3) {
+    productReadiness.onboardingStep = 3;
+  }
+  renderOnboardingOverlay();
+}
+
+async function activateProduct() {
+  if (onboardingUi.inFlight) return;
+  onboardingUi.inFlight = true;
+  clearOnboardingError();
+  setOnboardingLoading(true);
+  try {
+    const res = await fetch(`${API}/setup/activate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+    if (!res.ok) {
+      productReadiness.blockers = Array.isArray(body.blockers) ? body.blockers : ["Activation failed."];
+      renderOnboardingBlockers(productReadiness.blockers);
+      showOnboardingError(body.error || "Activation could not complete yet.");
+      renderOnboardingOverlay();
+      return;
+    }
+    const readiness = body.readiness || body;
+    applySetupStatusPayload({
+      ready: readiness.ready,
+      orchestrationProfile: readiness.orchestrationProfile,
+      onboardingStep: readiness.onboardingStep,
+      blockers: readiness.blockers,
+      mode: readiness.orchestrationProfile === "configured" ? "external" : "local",
+    });
+  } catch {
+    showOnboardingError("Activation request failed.");
+  } finally {
+    onboardingUi.inFlight = false;
+    setOnboardingLoading(false);
+  }
+}
+
+function handleOnboardingPrimaryAction() {
+  const step = productReadiness.onboardingStep || 1;
+  const copy = ONBOARDING_STEP_COPY[step];
+  if (copy?.action) copy.action();
+}
+
+function handleOnboardingSecondaryAction() {
+  const step = productReadiness.onboardingStep || 1;
+  const copy = ONBOARDING_STEP_COPY[step];
+  if (copy?.secondaryAction) copy.secondaryAction();
+}
+
+function bindOnboardingOverlay() {
+  els["onboarding-action-primary"]?.addEventListener("click", handleOnboardingPrimaryAction);
+  els["onboarding-action-secondary"]?.addEventListener("click", handleOnboardingSecondaryAction);
+  els["onboarding-activate"]?.addEventListener("click", () => void activateProduct());
+}
+
 // --- Setup Wizard panel (Setup_Wizard, Requirement 1) ---
 //
 // A read-only status surface rendered as a modal overlay so the chat + trace UI stay mounted and
@@ -4366,9 +4644,10 @@ const setupWizard = {
   timer: null,
 };
 
-// Human-language mode label (Requirement 1.1). Local_Mode unless the server reports "external".
-function setupModeLabel(mode) {
-  return mode === "external" ? "External mode" : "Local mode";
+// Human-language product profile label for the setup wizard.
+function setupModeLabel(mode, orchestrationProfile) {
+  if (orchestrationProfile === "configured" || mode === "external") return "Configured";
+  return "Unconfigured";
 }
 
 // Map a closed-set readiness status to its pill style. Unknown values fall back to the error style.
@@ -4397,11 +4676,15 @@ function showSetupWizardError(message) {
 function renderSetupStatus(status) {
   if (els["setup-wizard-error"]) els["setup-wizard-error"].hidden = true;
 
-  orchestration.mode = status.mode === "external" ? "external" : "local";
-  updateDeepPlanningVisibility();
+  if (typeof status.ready === "boolean") {
+    applySetupStatusPayload(status);
+  } else {
+    orchestration.configured = status.orchestrationProfile === "configured" || status.mode === "external";
+    updateDeepPlanningVisibility();
+  }
 
   const modeEl = els["setup-wizard-mode"];
-  if (modeEl) modeEl.textContent = setupModeLabel(status.mode);
+  if (modeEl) modeEl.textContent = setupModeLabel(status.mode, status.orchestrationProfile);
 
   const container = els["setup-wizard-categories"];
   if (container) {
@@ -4550,17 +4833,16 @@ function syncDeepPlanningToggle() {
 function updateDeepPlanningVisibility() {
   const wrap = els["deep-planning-wrap"];
   if (!wrap) return;
-  wrap.hidden = orchestration.mode !== "external";
+  wrap.hidden = !orchestration.configured;
 }
 
 function isDeepPlanningEnabled() {
-  if (orchestration.mode !== "external") return false;
+  if (!orchestration.configured) return false;
   const toggle = els["deep-planning-toggle"];
   return !!(toggle && toggle.checked);
 }
 
-// Fetch orchestration mode from the setup status API so the deep-planning toggle can reflect
-// External vs Local mode without opening the wizard.
+// Fetch setup status so the deep-planning toggle reflects configured readiness.
 async function refreshOrchestrationMode() {
   try {
     const res = await fetch(`${API}/setup/status`, {
@@ -4569,7 +4851,7 @@ async function refreshOrchestrationMode() {
     const text = await res.text();
     const body = text ? JSON.parse(text) : {};
     if (res.ok && body && Array.isArray(body.categories)) {
-      orchestration.mode = body.mode === "external" ? "external" : "local";
+      applySetupStatusPayload(body);
     }
   } catch {
     /* keep prior mode on failure */
@@ -5831,6 +6113,7 @@ function init() {
   bindTemplateManager();
   bindMemoryBrowser();
   bindSetupWizard();
+  bindOnboardingOverlay();
   bindWorkspaceSafety();
   bindApproval();
   bindAppearance();
@@ -5857,7 +6140,7 @@ function init() {
 
   checkHealth();
   loadConversations();
-  void refreshOrchestrationMode();
+  void loadProductReadiness();
   els["composer-input"]?.focus();
 }
 

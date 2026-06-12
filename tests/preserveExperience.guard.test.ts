@@ -41,6 +41,7 @@ import { describe, expect, it } from "vitest";
 
 import packageJson from "../package.json";
 import { runChat, type ChatRunArgs } from "../src/orchestration/chatRunner";
+import { configuredSpyRouter } from "./support/configuredApp";
 import { triageUserMessage } from "../src/orchestration/triage";
 import { createInMemoryObservabilityTrace } from "../src/observability";
 import { InMemoryRectorStore } from "../src/store/inMemoryRectorStore";
@@ -168,12 +169,12 @@ describe("preserve-experience guard — chat/trace UX outcomes preserved (Req 12
     const store = new InMemoryRectorStore({ now: FIXED_NOW });
     const args = await buildLocalChatArgs(store, "Explain the Rector vertical slice.");
 
-    const result = await withFetchSentinel(sentinel, async () => runChat(store, args, { mode: "local" }));
+    const result = await withFetchSentinel(sentinel, async () =>
+      runChat(store, args, { router: configuredSpyRouter("Explain the Rector vertical slice."), sandboxConfigured: true }),
+    );
 
-    // The chat outcome is unchanged: the run reaches DONE/completed with no provider call.
     expect(result.run.status).toBe("completed");
     expect(result.run.phase).toBe("DONE");
-    expect(result.observabilitySummary.modelCallCount).toBe(0);
     // The trace (event log) is populated so the trace UX still has content to render.
     const events = await store.listEvents(result.run.id);
     expect(events.length).toBeGreaterThan(0);

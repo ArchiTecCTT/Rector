@@ -116,11 +116,12 @@ describe("Template_API", () => {
   it("lists and previews built-in templates without secret fields", async () => {
     const listed = await api(harness!.base, "/api/templates");
     expect(listed.status).toBe(200);
-    expect(listed.data.templates.map((template: any) => template.id)).toContain("local-free");
+    expect(listed.data.templates.map((template: any) => template.id)).not.toContain("__test_profile__");
+    expect(listed.data.templates.map((template: any) => template.id)).toContain("cheap-byok");
     expect(listed.text).not.toContain("apiKey");
     expect(listed.text).not.toContain("secretRef");
 
-    const preview = await api(harness!.base, "/api/templates/local-free/preview", { method: "POST", body: {} });
+    const preview = await api(harness!.base, "/api/templates/__test_profile__/preview", { method: "POST", body: {} });
     expect(preview.status).toBe(200);
     expect(preview.data.preview.valid).toBe(true);
     expect(preview.data.preview.missingSecrets).toEqual([]);
@@ -128,7 +129,7 @@ describe("Template_API", () => {
   });
 
   it("applies Local Free and exports the current assignment template", async () => {
-    const applied = await api(harness!.base, "/api/templates/local-free/apply", {
+    const applied = await api(harness!.base, "/api/templates/__test_profile__/apply", {
       method: "POST",
       body: { mode: "replaceAssignments", confirmReplace: true },
     });
@@ -147,7 +148,7 @@ describe("Template_API", () => {
   });
 
   it("rejects imported templates that contain secret-like material", async () => {
-    const local = BUILT_IN_TEMPLATES.find((template) => template.id === "local-free")!;
+    const local = BUILT_IN_TEMPLATES.find((template) => template.id === "__test_profile__")!;
     const res = await api(harness!.base, "/api/templates/import/preview", {
       method: "POST",
       body: { template: { ...local, password: "sk-live-1234567890abcdef" } },
@@ -170,7 +171,7 @@ describe("Template_API", () => {
   });
 
   it("saves current config as a user template and returns it in the template list", async () => {
-    await api(harness!.base, "/api/templates/local-free/apply", {
+    await api(harness!.base, "/api/templates/__test_profile__/apply", {
       method: "POST",
       body: { mode: "replaceAssignments", confirmReplace: true },
     });

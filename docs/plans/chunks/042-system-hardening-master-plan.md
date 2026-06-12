@@ -1,5 +1,7 @@
 # Chunk 042 — System Hardening Master Plan
 
+> **Pre-v0.3.0; superseded by [`configured-product-architecture.md`](../../architecture/configured-product-architecture.md).**
+
 > **Branch:** `rector-0.2.0`
 > **Created:** 2026-06-12
 > **Goal:** Harden all orchestration, memory, and security subsystems from

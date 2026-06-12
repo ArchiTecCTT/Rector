@@ -1,5 +1,8 @@
 # BYOK Alpha Implementor Handoff (ORN-42)
 
+> **Note (v0.3.0 transition):** Local/external dual-mode framing in this handoff is **historical**.
+> Canonical product architecture: [`docs/architecture/configured-product-architecture.md`](../architecture/configured-product-architecture.md).
+
 This is the single source-of-truth handoff for an implementing agent picking up the Rector
 BYOK alpha work. Read this document first, then the specs it points to. It tells you where the
 authoritative docs live, the full ORN-30 → ORN-42 implementation program (Phases 1–3), how the two
@@ -30,10 +33,11 @@ The approved specs are the controlling requirements for each phase. Each folder 
 
 ### Architecture document
 
-- `docs/architecture/rector-0.1.0-architecture.md` — the system architecture for the `0.1.0`
-  alpha (product vision, unified run phases, the cognitive pipeline, data model, stack strategy,
-  security baseline, and the scaling path). This is the framing document the three phase specs
-  build on.
+- **`docs/architecture/configured-product-architecture.md`** — canonical v0.3.0+ product architecture
+  (unconfigured vs configured, `runtime-settings.json`, mandatory onboarding, single orchestration
+  path, spy-only CI).
+- `docs/architecture/rector-0.1.0-architecture.md` — **historical** alpha architecture (superseded).
+- `docs/architecture/current-rector-byok-architecture.md` — **stale** pre-v0.3.0 local/external model.
 
 ### Generated Linear issue chunks
 

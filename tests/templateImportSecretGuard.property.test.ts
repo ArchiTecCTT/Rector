@@ -37,7 +37,7 @@ function service() {
 
 describe("template import secret guard", () => {
   it("rejects arbitrary secret-like field names", () => {
-    const base = BUILT_IN_TEMPLATES.find((template) => template.id === "local-free")!;
+    const base = BUILT_IN_TEMPLATES.find((template) => template.id === "__test_profile__")!;
     fc.assert(
       fc.property(
         fc.constantFrom("apiKey", "token", "password", "secretRef", "authorization", "connectionString"),
@@ -52,7 +52,7 @@ describe("template import secret guard", () => {
   });
 
   it("rejects arbitrary OpenAI-style secret values anywhere in the template tree", () => {
-    const base = BUILT_IN_TEMPLATES.find((template) => template.id === "local-free")!;
+    const base = BUILT_IN_TEMPLATES.find((template) => template.id === "__test_profile__")!;
     fc.assert(
       fc.property(fc.stringMatching(/^[A-Za-z0-9_-]{16,32}$/), (suffix) => {
         const input = {
@@ -66,7 +66,7 @@ describe("template import secret guard", () => {
   });
 
   it("never includes the rejected secret value in the thrown error message", () => {
-    const base = BUILT_IN_TEMPLATES.find((template) => template.id === "local-free")!;
+    const base = BUILT_IN_TEMPLATES.find((template) => template.id === "__test_profile__")!;
     const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
     try {
       service().importTemplate({ ...base, description: secret });

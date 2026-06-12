@@ -19,6 +19,7 @@ import type { ChatRunArgs, ChatRunOptions, ChatRunnerDeps, ChatRunResult } from 
 import { enforceMaxPerRunBudget, evaluateBudget, type BudgetUsage } from "../security/budget";
 import {
   invokeWithBudget,
+  isLiveLLMProvider,
   LLMUsageSchema,
   type LLMProvider,
   type LLMRequest,
@@ -31,6 +32,7 @@ import { PatchOperationSchema, WorkspaceSandboxAdapter, type SandboxApproval } f
 import type { RectorStore } from "../store";
 import type { Run } from "../store/schemas";
 import type { PreprocessorOutput } from "./preprocessor";
+import { TRIAGE_ROUTES } from "./triage";
 import {
   addProviderUsageToRun,
   buildProviderCallMetadata,
@@ -48,7 +50,7 @@ export interface ExternalPostPlanningParams {
   crucibleDecision: CrucibleDecision;
   planningProviderCall: ProviderCallMetadata;
   skepticProviderCall: ProviderCallMetadata;
-  deps: ChatRunnerDeps & { router: ModelRouter };
+  deps: ChatRunnerDeps;
   /** Preprocessor result from the neuro-symbolic Step 1 layer (already redacted). */
   preprocessorOutput?: PreprocessorOutput;
   /** Sub-goals from task decomposition (external high-complexity only). */
@@ -111,6 +113,17 @@ export async function runExternalPostPlanningPhases(params: ExternalPostPlanning
   const dagCompilationPayload = compiledDag
     ? { compiledDag }
     : { skippedReason: `Crucible verdict ${crucibleDecision.verdict} is not ACCEPTED` };
+
+  if (shouldBlockCodeEditWithoutSandbox(args, deps, compiledDag)) {
+    return resolveCodeEditWithoutSandbox(store, args, run, deps, {
+      plannerOutput,
+      skepticReview,
+      crucibleDecision,
+      planningProviderCall: params.planningProviderCall,
+      skepticProviderCall: params.skepticProviderCall,
+      dagCompilationPayload,
+    });
+  }
 
   // The safe workspace executor is the ONLY bridge to real file/command I/O. A shared mutable
   // approvals array lets the live repair agent auto-register a FILE_WRITE approval for its proposed
@@ -198,6 +211,97 @@ const EXTERNAL_PREFIX_PHASES = [
 type ExternalPrefixPhase = typeof EXTERNAL_PREFIX_PHASES[number];
 type ExternalCompletionPhase = "SYNTHESIZING" | "DONE";
 
+function dagRequiresRealSandbox(compiledDag: CompiledDag): boolean {
+  return compiledDag.nodes.some((node) => node.type === "FILE_OPERATION" || node.type === "SHELL_COMMAND");
+}
+
+function hasExplicitSandboxWiring(deps: ChatRunnerDeps): boolean {
+  return deps.fsImpl !== undefined || deps.commandRunner !== undefined || (deps.approvals?.length ?? 0) > 0;
+}
+
+function shouldBlockCodeEditWithoutSandbox(
+  args: ChatRunArgs,
+  deps: ChatRunnerDeps,
+  compiledDag?: CompiledDag,
+): boolean {
+  return (
+    args.triage.route === TRIAGE_ROUTES.CODE_EDIT &&
+    deps.sandboxConfigured !== true &&
+    !hasExplicitSandboxWiring(deps) &&
+    compiledDag !== undefined &&
+    dagRequiresRealSandbox(compiledDag)
+  );
+}
+
+async function resolveCodeEditWithoutSandbox(
+  store: RectorStore,
+  args: ChatRunArgs,
+  run: Run,
+  deps: ChatRunnerDeps,
+  extras: {
+    plannerOutput: PlannerOutput;
+    skepticReview: SkepticReview;
+    crucibleDecision: CrucibleDecision;
+    planningProviderCall: ProviderCallMetadata;
+    skepticProviderCall: ProviderCallMetadata;
+    dagCompilationPayload: Record<string, unknown>;
+  },
+): Promise<ChatRunResult> {
+  const { observability } = args;
+  const traceId = observability.traceId;
+  const message =
+    "CODE_EDIT requires a configured sandbox (E2B). No real sandbox is configured; file execution is not simulated as success.";
+
+  let current = run;
+  for (const phase of ["TRIAGE", "CONTEXT_BUILDING", "PLANNING", "SKEPTIC_REVIEW", "CRUCIBLE", "DAG_COMPILATION"] as const) {
+    const result = await transitionRun(store, current.id, phase, {
+      traceId,
+      now: deps.now,
+      payload: {
+        source: "external-orchestrator",
+        note: "External brainstem run advanced",
+        ...(phase === "TRIAGE" ? { triage: args.triage } : {}),
+        ...(phase === "CONTEXT_BUILDING" ? { contextPack: args.contextPack } : {}),
+        ...(phase === "PLANNING" ? { plannerOutput: extras.plannerOutput, providerCall: extras.planningProviderCall } : {}),
+        ...(phase === "SKEPTIC_REVIEW" ? { skepticReview: extras.skepticReview, providerCall: extras.skepticProviderCall } : {}),
+        ...(phase === "CRUCIBLE" ? { crucibleDecision: extras.crucibleDecision } : {}),
+        ...(phase === "DAG_COMPILATION" ? extras.dagCompilationPayload : {}),
+        observability: phaseObservabilityPayload(observability, phase),
+      },
+    });
+    current = result.run;
+  }
+
+  const synthesis = synthesizeChatBrainstemResponse({
+    traceId,
+    triage: args.triage,
+    contextPack: args.contextPack,
+    plannerOutput: extras.plannerOutput,
+    skepticReview: extras.skepticReview,
+    crucibleDecision: extras.crucibleDecision,
+    observabilitySummary: observability.getSummary(),
+  });
+
+  const decision = await createDecisionRequest(
+    store,
+    current.id,
+    { reason: "SANDBOX_NOT_CONFIGURED", message, route: args.triage.route },
+    {
+      traceId,
+      now: deps.now,
+      payload: {
+        source: "external-orchestrator",
+        note: "CODE_EDIT blocked: sandbox not configured",
+        blocker: { code: "SANDBOX_NOT_CONFIGURED", message },
+        synthesis,
+        observability: phaseObservabilityPayload(observability, "NEEDS_DECISION"),
+      },
+    },
+  );
+
+  return { run: decision.run, synthesis, observabilitySummary: observability.getSummary() };
+}
+
 function createExternalSandbox(deps: ChatRunnerDeps, approvals: SandboxApproval[]): WorkspaceSandboxAdapter {
   return new WorkspaceSandboxAdapter({
     workspaceRoot: deps.workspaceRoot ?? process.cwd(),
@@ -211,7 +315,7 @@ function createExternalSandbox(deps: ChatRunnerDeps, approvals: SandboxApproval[
 
 function createExternalRepairAgent(input: {
   store: RectorStore;
-  deps: ChatRunnerDeps & { router: ModelRouter };
+  deps: ChatRunnerDeps;
   approvals: SandboxApproval[];
   getRun(): Run;
   setRun(run: Run): void;
@@ -316,7 +420,7 @@ function shouldProceedToSynthesis(healingStatus: HealingLoopResult["status"] | u
 async function runExternalSynthesisPhase(input: {
   store: RectorStore;
   args: ChatRunArgs;
-  deps: ChatRunnerDeps & { router: ModelRouter };
+  deps: ChatRunnerDeps;
   budgetRun: Run;
   plannerOutput: PlannerOutput;
   skepticReview: SkepticReview;
@@ -365,7 +469,7 @@ function buildExternalSynthesisInput(input: {
 async function runExternalDirectAnswerSynthesis(input: {
   store: RectorStore;
   args: ChatRunArgs;
-  deps: ChatRunnerDeps & { router: ModelRouter };
+  deps: ChatRunnerDeps;
   budgetRun: Run;
   synthInput: BrainstemSynthesisInput;
 }): Promise<ExternalSynthesisPhaseResult> {
@@ -401,13 +505,19 @@ async function runExternalDirectAnswerSynthesis(input: {
 async function runExternalFlagshipSynthesis(input: {
   store: RectorStore;
   args: ChatRunArgs;
-  deps: ChatRunnerDeps & { router: ModelRouter };
+  deps: ChatRunnerDeps;
   budgetRun: Run;
   synthInput: BrainstemSynthesisInput;
 }): Promise<ExternalSynthesisPhaseResult> {
   const { store, args, deps, synthInput } = input;
   let { budgetRun } = input;
   const synthSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "synthesizer", run: budgetRun });
+
+  if (!isLiveLLMProvider(synthSelection.provider)) {
+    await args.observability.recordSpan("DONE", () => undefined);
+    return { synthesis: synthesizeChatBrainstemResponse(synthInput), budgetRun };
+  }
+
   const synthResult = await args.observability.recordSpan("SYNTHESIZING", () =>
     runLiveSynthesizer(synthInput, { provider: synthSelection.provider, run: budgetRun, model: synthSelection.model })
   );

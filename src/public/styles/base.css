@@ -2249,6 +2249,165 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
 }
 
 /* ============================================================
+   First-run onboarding overlay (mandatory until ready)
+   ============================================================ */
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--overlay);
+  backdrop-filter: blur(6px);
+}
+
+.onboarding-overlay[hidden] {
+  display: none;
+}
+
+.onboarding-overlay__panel {
+  width: min(720px, 100%);
+  max-height: min(90vh, 860px);
+  overflow: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--elevated);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-5);
+  display: grid;
+  gap: var(--space-4);
+}
+
+.onboarding-overlay__head {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.onboarding-overlay__title {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.onboarding-overlay__desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.onboarding-stepper {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.onboarding-step {
+  display: grid;
+  gap: var(--space-1);
+  justify-items: center;
+  text-align: center;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.onboarding-step__index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-strong);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.onboarding-step--active {
+  border-color: var(--accent);
+  color: var(--fg);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.onboarding-step--complete .onboarding-step__index {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.onboarding-step-body {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  background: var(--surface);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.onboarding-blockers {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: var(--fg);
+  font-size: 0.9rem;
+}
+
+.onboarding-blockers[hidden] {
+  display: none;
+}
+
+.onboarding-blockers li + li {
+  margin-top: var(--space-1);
+}
+
+.onboarding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.onboarding-overlay__loading,
+.onboarding-overlay__error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.9rem;
+}
+
+.onboarding-overlay__loading[hidden],
+.onboarding-overlay__error[hidden] {
+  display: none;
+}
+
+.onboarding-overlay__error {
+  color: var(--err);
+}
+
+.shell--onboarding-locked .composer,
+.shell--onboarding-locked .suggestions,
+.shell--onboarding-locked #new-conversation,
+.shell--onboarding-locked #open-note-capture,
+.shell--onboarding-locked #composer-input,
+.shell--onboarding-locked #composer-send {
+  pointer-events: none;
+  opacity: 0.45;
+}
+
+.shell--onboarding-locked #composer-input,
+.shell--onboarding-locked #composer-send,
+.shell--onboarding-locked #new-conversation,
+.shell--onboarding-locked #open-note-capture {
+  cursor: not-allowed;
+}
+
+/* ============================================================
    Scrollbars
    ============================================================ */
 ::-webkit-scrollbar {

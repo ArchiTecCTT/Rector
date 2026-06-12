@@ -1,5 +1,7 @@
 # Chunk 042c — Neuro-Symbolic Hardening
 
+> **Pre-v0.3.0; superseded by [`configured-product-architecture.md`](../../architecture/configured-product-architecture.md).**
+
 > Created: 2026-06-12
 > Phase: 3 of 6
 > Components: Deep Planner, Ponder Swarm, Task Decomposer

@@ -2,15 +2,18 @@
 
 ## Introduction
 
-Rector currently runs as a provider-free, local-only simulation baseline: the orchestrator
-defaults to `local` mode, the sandbox echoes commands through a deterministic stub, heavy
-developer routes return formatted status strings instead of natural-language answers, model
-discovery and the BYOK config bridge are scaffolded, and persistence defaults to an in-memory
-store. This feature transitions Rector to a cloud-ready commercial codebase that can use the
-configured credit stack — TiDB Cloud (relational persistence), multiple inference providers
-(Together AI, Cloudflare Workers AI, and Azure OpenAI), and E2B (real sandbox execution) — while
-preserving the local-mode regression baseline exactly and never leaking secrets into logs or
-telemetry.
+Rector is transitioning to a **configured-only product** (v0.3.0). Fresh installs start
+**unconfigured** with mandatory first-run onboarding until readiness passes. The authoritative
+product state lives in UI-persisted `runtime-settings.json` (`.rector/runtime-settings.json`),
+not in `ORCHESTRATOR_MODE` env vars. Chat uses a single orchestration path
+(`runOrchestratedChatRun`) with configured provider adapters — there is no fake-chat product
+path.
+
+This feature completes the cloud-ready commercial codebase: TiDB Cloud persistence, multi-provider
+BYOK (Together AI, Cloudflare Workers AI, Azure OpenAI, OpenAI-compatible), E2B sandbox execution,
+streaming synthesizer answers, and boot-tolerant startup. **CI uses `SpyLLMProvider` test doubles
+only** — deterministic pipelines are not exposed as the user-facing default. Secrets are never
+leaked into logs or telemetry.
 
 Model discovery is multi-provider: the Model_Discovery_Service dispatches a dedicated
 Discovery_Adapter per provider kind so that Together AI, Cloudflare Workers AI, and Azure OpenAI
@@ -25,8 +28,9 @@ even when credentials live only in the UI configuration stores; (2) completing B
 (BYOK) multi-provider model discovery and provider-agnostic routing; (3) replacing the mock sandbox
 command runner with a real E2B container client; (4) streaming semantic prose answers from the
 synthesizer for heavy developer routes; and (5) connecting TiDB Cloud relational persistence. Two
-invariants hold across every area: local mode performs zero network and zero external sandbox calls,
-and every secret-bearing value is redacted before it is written to any log or telemetry sink.
+invariants hold across every area: the **product** requires configured providers before chat
+(unconfigured profile gates chat), and every secret-bearing value is redacted before it is written
+to any log or telemetry sink. **CI/test** runs use `SpyLLMProvider` with zero real network calls.
 
 ## Glossary
 
@@ -34,11 +38,22 @@ and every secret-bearing value is redacted before it is written to any log or te
   the settings/configuration API, and the orchestration runtime.
 - **Orchestration_Config**: The resolved configuration object produced by `parseOrchestrationConfig`,
   carrying the orchestration mode and the list of configured provider ids (never a secret value).
-- **Orchestrator_Mode**: The `ORCHESTRATOR_MODE` selection, exactly one of `local` or `external`.
-- **Local_Mode**: Orchestrator_Mode `local` — the provider-free regression baseline that performs no
-  network calls and no external sandbox execution.
-- **External_Mode**: Orchestrator_Mode `external` — the BYOK live mode that may call configured
-  providers and external sandboxes.
+- **Runtime_Settings**: The persisted product state at `.rector/runtime-settings.json`, written by the
+  Settings API / setup UI. Source of truth for orchestration profile and chat gating.
+- **Orchestration_Profile**: The `orchestrationProfile` field in Runtime_Settings, exactly one of
+  `unconfigured` or `configured`. Replaces the user-facing local/external framing.
+- **Unconfigured_Profile**: Orchestration_Profile `unconfigured` — fresh install; mandatory onboarding
+  overlay; chat gated until readiness passes.
+- **Configured_Profile**: Orchestration_Profile `configured` — setup complete; live orchestration via
+  `runOrchestratedChatRun` and configured provider adapters.
+- **Orchestrator_Mode**: **Deprecated** legacy `ORCHESTRATOR_MODE` env selection (`local` or
+  `external`). Used only for migration (`migrateRuntimeSettingsFromEnv`) and advanced overrides.
+- **Local_Mode**: Legacy Orchestrator_Mode `local` — internal/test mapping from unconfigured profile.
+  Not a product mode.
+- **External_Mode**: Legacy Orchestrator_Mode `external` — internal mapping from configured profile
+  when providers are wired. Not a separate product path.
+- **Spy_LLM_Provider**: The `SpyLLMProvider` test double used in `npm test` / CI for deterministic,
+  zero-network orchestration verification. Not exposed to end users.
 - **Provider_Kind**: One of the supported provider kinds `together`, `cloudflare`, `azure-openai`, or
   `openai-compatible`.
 - **Provider_Config_Store**: The non-secret persisted store of `Provider_Config_Record`s
@@ -371,26 +386,33 @@ TiDB Cloud, so that data survives restarts and scales beyond a single machine.
    provision a missing table, THEN THE Rector_Server SHALL halt startup with a redacted error
    indicating that persistence initialization failed and SHALL serve no request.
 
-### Requirement 9: Local-Mode Regression Baseline Preservation
+### Requirement 9: Configured Product, Onboarding Gate, and CI Spy Baseline
 
-**User Story:** As a Rector maintainer, I want local mode to behave exactly as the provider-free
-baseline, so that the existing regression suite keeps passing after the cloud transition.
+**User Story:** As a Rector user, I want a guided first-run setup that blocks chat until I configure
+providers, so that the product always runs real orchestration rather than a fake demo. As a maintainer,
+I want CI to use spy doubles only, so tests stay hermetic without presenting provider-free mode as the
+product.
 
 #### Acceptance Criteria
 
-1. WHILE Orchestrator_Mode is `local`, THE Rector_Server SHALL make zero outbound provider network
-   calls across orchestration, discovery, and synthesis.
-2. WHILE Orchestrator_Mode is `local`, THE Rector_Server SHALL execute no external sandbox container.
-3. WHILE Orchestrator_Mode is `local`, THE Config_Bridge SHALL NOT be consulted for router
-   construction.
-4. WHEN a run completes in Local_Mode, THE Synthesizer SHALL report `providerCalls` equal to 0.
-5. WHEN `ORCHESTRATOR_MODE` is unset, empty, or whitespace-only, THE Rector_Server SHALL resolve the
-   Orchestrator_Mode to `local`.
-6. IF a code path attempts an outbound provider network call or an external sandbox execution while
-   Orchestrator_Mode is `local`, THEN THE Rector_Server SHALL block the attempt and SHALL leave
-   persisted state unchanged.
-7. WHEN the same Local_Mode run is executed twice with identical inputs, THE Rector_Server SHALL
-   produce user-facing output deep-equal across the two executions (determinism property).
+1. WHEN the Rector_Server boots with no `runtime-settings.json`, THE Rector_Server SHALL initialize
+   Runtime_Settings with `orchestrationProfile: "unconfigured"` and `requireProvidersForChat: true`.
+2. WHILE Orchestration_Profile is `unconfigured`, THE web UI SHALL display a mandatory, uncloseable
+   first-run onboarding overlay until readiness checks pass for required categories.
+3. WHILE Orchestration_Profile is `unconfigured` AND `requireProvidersForChat` is true, THE chat API
+   SHALL reject chat requests with a redacted error indicating setup is incomplete.
+4. WHEN readiness checks pass and the operator completes setup, THE Settings_API SHALL persist
+   `orchestrationProfile: "configured"` to Runtime_Settings.
+5. WHEN Orchestration_Profile is `configured`, THE chat pipeline SHALL dispatch through
+   `runOrchestratedChatRun` with a Model_Router built from UI configuration — not through a
+   provider-free fake chat path presented as the product.
+6. WHEN `ORCHESTRATOR_MODE` is set in `process.env`, THE Rector_Server SHALL emit a deprecation
+   warning and SHALL migrate to Runtime_Settings via `migrateRuntimeSettingsFromEnv` on first boot.
+7. WHEN `npm test` executes, THE test suite SHALL use Spy_LLM_Provider (or equivalent injectable
+   doubles) and SHALL make zero real outbound provider network calls unless explicitly opted into a
+   separate live test suite.
+8. WHEN the same spy-injected orchestration run is executed twice with identical inputs in tests, THE
+   Rector_Server SHALL produce deep-equal user-facing output (determinism property for CI only).
 
 ### Requirement 10: Secret Redaction Across Logs and Telemetry
 
@@ -428,8 +450,9 @@ that the cloud-ready codebase remains releasable.
    zero status and report zero failing and zero errored tests.
 3. WHEN `npm run build` is executed with the optional cloud client dependencies (the TiDB MySQL driver
    and the E2B client) absent, THE build SHALL exit with a zero status.
-4. WHEN the transitioned codebase is run in `local` mode with the `memory` Persistence_Driver and the
-   optional cloud client dependencies absent, THE Rector_Server SHALL start and serve requests.
+4. WHEN the transitioned codebase is run in test/CI configuration with the `memory` Persistence_Driver,
+   Spy_LLM_Provider, and the optional cloud client dependencies absent, THE Rector_Server SHALL start
+   and serve requests (onboarding overlay shown for unconfigured profile).
 5. IF an operator selects the `tidb` Persistence_Driver while the TiDB MySQL driver is absent, or
    selects an E2B-backed sandbox while the E2B client is absent, THEN THE Rector_Server SHALL emit an
    error that indicates the missing dependency.

@@ -4,18 +4,21 @@ Use these prompts with Kiro / Opus 4.8 after the BYOK Alpha implementation. Thes
 
 ## Global Context for Every Prompt
 
-Rector is a local-first BYOK neuro-symbolic AI coding/orchestration agent.
+Rector is a configured-product BYOK neuro-symbolic AI coding/orchestration agent (v0.3.0+).
 
 Current state:
 
-- Provider-free local deterministic mode exists and must remain the regression baseline.
-- External BYOK mode exists with live planner, skeptic, synthesizer, safe workspace executor, validation/healing, persistence, SSE streaming, cost dashboard, and cumulative budget enforcement.
+- Product model: **unconfigured** (mandatory onboarding) → **configured** (live orchestration).
+- Source of truth: `.rector/runtime-settings.json` written by the UI.
+- Single orchestration path: `runOrchestratedChatRun` — no fake chat as product.
+- Live BYOK orchestration: planner, skeptic, synthesizer, safe workspace executor, validation/healing, persistence, SSE streaming, cost dashboard, cumulative budget enforcement.
+- CI uses `SpyLLMProvider` test doubles only — not a user-facing provider-free path.
+- `ORCHESTRATOR_MODE` env is deprecated (migration/advanced override only).
 - Runtime requirement: Node.js `>=22.5.0`.
-- Current architecture guide: `docs/architecture/current-rector-byok-architecture.md`.
+- Canonical architecture: `docs/architecture/configured-product-architecture.md`.
 - BYOK handoff: `docs/implementation/byok-alpha-handoff.md`.
 - Do not restore deleted stale local-MVP/cloud-heavy docs.
-- Do not remove local mode unless a separate approved migration says to.
-- No real provider/network calls in tests; use mocks/test doubles.
+- No real provider/network calls in tests; use `SpyLLMProvider` and injectable doubles.
 
 Verification gates after each issue:
 
@@ -37,7 +40,8 @@ You are implementing Rector Productization Alpha 01: Setup Wizard UI.
 Goal: make first-run Rector setup understandable from the browser UI instead of requiring users to read docs and edit `.env` manually.
 
 Read first:
-- docs/architecture/current-rector-byok-architecture.md
+- docs/architecture/configured-product-architecture.md
+- docs/getting-started/first-run-setup.md
 - docs/implementation/byok-alpha-handoff.md
 - src/public/index.html
 - src/public/app.js

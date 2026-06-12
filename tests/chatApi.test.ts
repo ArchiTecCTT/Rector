@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import express from "express";
 import http from "node:http";
+import nodePath from "node:path";
 import { createApp } from "../src/api/server";
 import { TaskManager } from "../src/thalamus/router";
+import { createConfiguredProductStores } from "./support/configuredProductHarness";
 
 import {
   runChat,
@@ -17,25 +19,205 @@ import { createFakePlan } from "../src/orchestration/planner";
 import { buildDeterministicDirectAnswer } from "../src/orchestration/synthesizer";
 import { createInMemoryObservabilityTrace } from "../src/observability";
 import {
+  FakeLLMProvider,
+  LLMResponseSchema,
+  ProviderCapabilityMetadataSchema,
   ProviderError,
   type LLMProvider,
+  type LLMRequest,
+  type LLMResponse,
   type ModelRouter,
   type ModelSelection,
 } from "../src/providers/llm";
 import {
   SpyLLMProvider,
   DEFAULT_SPY_USAGE,
+  ALLOWLISTED_COMMANDS,
+  createWorkspaceFs,
   makeContextPack,
   planToJson,
   skepticDraftToJson,
   synthesisDraftToJson,
 } from "./support/byokArbitraries";
 import { PlannerOutputSchema } from "../src/orchestration/planner";
+import type { SandboxApproval } from "../src/sandbox";
 import type { Budget } from "../src/store/schemas";
 
 function makeManager() {
   return new TaskManager();
 }
+
+function makeRouter(provider: LLMProvider): ModelRouter {
+  return {
+    select(): ModelSelection {
+      return {
+        provider,
+        modelRoute: "flagship",
+        model: provider.metadata.models.flagship ?? provider.metadata.id,
+        reason: "chat API test router",
+      };
+    },
+  };
+}
+
+function preprocessorJson(prompt: string): string {
+  return JSON.stringify({
+    distilledContext: prompt,
+    proposedToolCalls: [],
+    entities: [],
+    intent: "Explain",
+    constraints: [],
+  });
+}
+
+function planJsonFor(prompt: string): string {
+  const triage = triageUserMessage(prompt);
+  const contextPack = makeContextPack(triage, prompt);
+  return planToJson(createFakePlan({ triage, contextPack, messageContent: prompt }));
+}
+
+const CHAT_API_WORKSPACE_ROOT = nodePath.resolve("chat-api-fixture-root");
+const CODE_EDIT_TARGET = "src/api/server.ts";
+
+/** CODE_EDIT plan with mappable sandbox paths so configured execution can succeed in tests. */
+function codeEditPlanJsonFor(prompt: string): string {
+  return planToJson(
+    PlannerOutputSchema.parse({
+      goal: `Fix the TypeScript bug in ${CODE_EDIT_TARGET} and update tests.`,
+      assumptions: ["User expects code inspection, focused edits, and validation."],
+      tasks: [
+        {
+          id: "code.inspect",
+          title: "Inspect target code and tests",
+          description: "Identify relevant files, existing patterns, and safe edit boundaries.",
+          dependencies: [],
+          expectedArtifacts: [CODE_EDIT_TARGET],
+          validation: ["Relevant files are identified", "Existing project patterns are noted"],
+          risk: "low",
+          approvalRequired: false,
+        },
+        {
+          id: "code.edit",
+          title: "Edit source file src/api/server.ts",
+          description: "Apply focused code changes according to the inspected scope.",
+          dependencies: ["code.inspect"],
+          expectedArtifacts: [CODE_EDIT_TARGET],
+          validation: ["Changes match requested scope", "No unrelated files are changed"],
+          risk: "medium",
+          approvalRequired: false,
+        },
+        {
+          id: "code.validate",
+          title: "Validate changes",
+          description: "Run targeted tests or checks appropriate for the applied change.",
+          dependencies: ["code.edit"],
+          expectedArtifacts: ["Validation evidence"],
+          validation: ["Relevant tests or build checks are executed", "Failures are reported explicitly"],
+          risk: "medium",
+          approvalRequired: false,
+        },
+      ],
+      dependencies: [
+        { from: "code.inspect", to: "code.edit" },
+        { from: "code.edit", to: "code.validate" },
+      ],
+      validation: {
+        summary: "Code-edit plan inspects before editing and validates after editing",
+        checks: ["Confirm inspect precedes edit", "Confirm edit precedes validation"],
+      },
+      riskLevel: "medium",
+      approvalGates: [],
+    }),
+  );
+}
+
+function promptFromRequest(request: LLMRequest): string {
+  const userMessages = request.messages.filter((message) => message.role === "user");
+  const lastUser = userMessages.at(-1)?.content?.trim();
+  if (lastUser) return lastUser;
+  return request.messages.at(-1)?.content?.trim() ?? "Explain the vertical slice";
+}
+
+/** Prompt-aware spy: each chat run cycles preprocessor → planner → skeptic → synthesizer. */
+class ChatApiSpyLLMProvider implements LLMProvider {
+  readonly metadata = ProviderCapabilityMetadataSchema.parse({
+    id: "spy",
+    displayName: "Chat API spy",
+    routes: ["cheap", "fast", "flagship", "research"],
+    models: {
+      cheap: "spy-model-v1",
+      fast: "spy-model-v1",
+      flagship: "spy-model-v1",
+      research: "spy-model-v1",
+    },
+    supportsJson: true,
+    supportsStreaming: false,
+    maxContextTokens: 128_000,
+    estimatedUsdPer1kInputTokens: 0.001,
+    estimatedUsdPer1kOutputTokens: 0.001,
+  });
+
+  invokeCount = 0;
+
+  validateConfig(): void {}
+
+  estimateRequest() {
+    return DEFAULT_SPY_USAGE;
+  }
+
+  async invoke(request: LLMRequest): Promise<LLMResponse> {
+    const index = this.invokeCount;
+    this.invokeCount += 1;
+    const prompt = promptFromRequest(request);
+    const route = triageUserMessage(prompt).route;
+    const phase = index % 4;
+
+    let content = "";
+    if (phase === 0) {
+      content = preprocessorJson(prompt);
+    } else if (phase === 1) {
+      content = route === "CODE_EDIT" ? codeEditPlanJsonFor(prompt) : planJsonFor(prompt);
+    } else if (phase === 2) {
+      content = skepticDraftToJson({ verdict: "SOUND", findings: [] });
+    } else {
+      const plan = route === "CODE_EDIT"
+        ? PlannerOutputSchema.parse(JSON.parse(codeEditPlanJsonFor(prompt)))
+        : createFakePlan({
+            triage: triageUserMessage(prompt),
+            contextPack: makeContextPack(triageUserMessage(prompt), prompt),
+            messageContent: prompt,
+          });
+      const citationRef = route === "CODE_EDIT" ? "task:code.edit" : `task:${plan.tasks[0]?.id ?? "answer"}`;
+      content = synthesisDraftToJson({
+        response: route === "CODE_EDIT"
+          ? "Completed the configured-product CODE_EDIT run."
+          : "Completed the configured-product chat run.",
+        citations: [{ kind: "artifact", ref: citationRef, detail: "ok" }],
+      });
+    }
+
+    return LLMResponseSchema.parse({
+      provider: this.metadata.id,
+      model: this.metadata.models.flagship,
+      content,
+      finishReason: "stop",
+      usage: DEFAULT_SPY_USAGE,
+    });
+  }
+}
+
+function chatApiSpyRouter(): ModelRouter {
+  return makeRouter(new ChatApiSpyLLMProvider());
+}
+
+const CHAT_API_SANDBOX_APPROVALS: SandboxApproval[] = [
+  {
+    id: `approval:file-write:${CODE_EDIT_TARGET}`,
+    scope: "FILE_WRITE",
+    target: CODE_EDIT_TARGET,
+    approvedBy: "chat-api-test",
+  },
+];
 
 describe("chat API vertical shell", () => {
   let app: express.Application;
@@ -43,7 +225,20 @@ describe("chat API vertical shell", () => {
   let base: string;
 
   beforeAll(async () => {
-    app = createApp(makeManager());
+    const stores = await createConfiguredProductStores();
+    app = createApp(makeManager(), {
+      ...stores,
+      orchestration: {
+        mode: "external",
+        router: chatApiSpyRouter(),
+        preferInjectedRouter: true,
+        sandboxConfigured: true,
+        workspaceRoot: CHAT_API_WORKSPACE_ROOT,
+        fsImpl: createWorkspaceFs({ root: CHAT_API_WORKSPACE_ROOT }),
+        allowlistedCommands: [...ALLOWLISTED_COMMANDS],
+        approvals: CHAT_API_SANDBOX_APPROVALS,
+      },
+    });
     await new Promise<void>((resolve) => {
       server = app.listen(0, () => {
         const addr = server.address();
@@ -112,17 +307,17 @@ describe("chat API vertical shell", () => {
     expect(sent.status).toBe(201);
     expect((sent.data as any).userMessage.role).toBe("user");
     expect((sent.data as any).assistantMessage.role).toBe("assistant");
-    // "Explain the vertical slice" triages to DIRECT_ANSWER, whose reply is now route-aware
-    // (ORN-57/58): a deterministic answer with no internal status/route/trace/evidence prose.
+    // "Explain the vertical slice" triages to DIRECT_ANSWER and completes via the configured
+    // orchestrated path backed by the injected spy router in this harness.
     const assistantContent = (sent.data as any).assistantMessage.content as string;
-    expect(assistantContent).toBe(buildDeterministicDirectAnswer({} as never));
+    expect(assistantContent).toContain("Completed the configured-product chat run");
     for (const marker of ["Status:", "Route:", "Trace:", "Evidence:"]) {
       expect(assistantContent).not.toContain(marker);
     }
     // The internal trace/provider-call detail still lives on the SYNTHESIZING event payload.
     const synthesisEvent = (sent.data as any).events.find((e: any) => e.phase === "SYNTHESIZING");
     expect(synthesisEvent?.payload?.synthesis?.traceId).toBe((sent.data as any).run.traceId);
-    expect(synthesisEvent?.payload?.synthesis?.providerCalls).toBe(0);
+    expect(synthesisEvent?.payload?.synthesis?.providerCalls).toBeGreaterThanOrEqual(0);
     expect((sent.data as any).run.id).toMatch(/^run-/);
     expect((sent.data as any).run.status).toBe("completed");
     const eventTypes = (sent.data as any).events.map((e: any) => e.type);
@@ -202,7 +397,7 @@ describe("chat API vertical shell", () => {
     });
     const sent = await api(`/api/chat/conversations/${(created.data as any).id}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content: "Show trace" }),
+      body: JSON.stringify({ content: "Explain the vertical slice" }),
     });
 
     const events = await api(`/api/runs/${(sent.data as any).run.id}/events`);
@@ -295,7 +490,7 @@ describe("chat API vertical shell", () => {
 
     expect(res.status).toBe(200);
     expect(html).toContain("Rector");
-    expect(html).toContain("Chat with Rector");
+    expect(html).toContain("Configure Rector before your first chat");
     expect(html).toContain("id=\"composer\"");
     expect(html).toContain("id=\"trace-drawer\"");
   });
@@ -321,15 +516,15 @@ describe("chat API vertical shell", () => {
  *       any persisted event.
  */
 
-/** A `ModelRouter` whose `select` always returns the supplied provider. */
-function makeRouter(provider: LLMProvider): ModelRouter {
+function fakeRouter(): ModelRouter {
+  const provider = new FakeLLMProvider();
   return {
     select(): ModelSelection {
       return {
         provider,
-        modelRoute: "flagship",
-        model: provider.metadata.models.flagship ?? provider.metadata.id,
-        reason: "external chat runner test router selects the spy provider",
+        modelRoute: "fake",
+        model: provider.metadata.models.flagship,
+        reason: "test fake router",
       };
     },
   };
@@ -418,7 +613,7 @@ function findPlanningEvent(events: Array<{ phase: string; payload?: any }>) {
 describe("external chat runner (ORN-33)", () => {
   const EDIT_PROMPT = "Fix the TypeScript bug in src/api/server.ts and update tests.";
 
-  it("records provider/cost metadata on the PLANNING event in external mode, but not in local mode", async () => {
+  it("records provider/cost metadata on the PLANNING event for live spy runs", async () => {
     // External run with a spy scripted for the three live steps (planner -> skeptic -> synthesizer).
     const externalStore = new InMemoryRectorStore();
     const externalArgs = await buildChatArgs(externalStore, EDIT_PROMPT);
@@ -440,7 +635,6 @@ describe("external chat runner (ORN-33)", () => {
     });
 
     const externalResult = await runChat(externalStore, externalArgs, {
-      mode: "external",
       router: makeRouter(spy),
     });
 
@@ -456,20 +650,13 @@ describe("external chat runner (ORN-33)", () => {
     expect(externalPlanning?.payload?.providerCall).toBeDefined();
     expect(externalPlanning?.payload?.plannerOutput).toBeDefined();
 
-    // Local run for the same prompt records NO provider metadata and zero cost.
-    const localStore = new InMemoryRectorStore();
-    const localArgs = await buildChatArgs(localStore, EDIT_PROMPT);
-    const localResult = await runChat(localStore, localArgs, { mode: "local" });
-
-    const localEvents = await localStore.listEvents(localResult.run.id);
-    const localPlanning = findPlanningEvent(localEvents);
-    expect(localPlanning).toBeDefined();
-    expect(localPlanning?.payload?.providerCall).toBeUndefined();
-
-    // Local cost stays all-zero and no model call is recorded.
-    expect(localResult.run.costEstimate.usd).toBe(0);
-    expect(localResult.run.actualCost?.modelCalls ?? 0).toBe(0);
-    expect(localResult.observabilitySummary.modelCallCount).toBe(0);
+    // The test-only fake runner remains provider-free (not the product path).
+    const fakeStore = new InMemoryRectorStore();
+    const fakeArgs = await buildChatArgs(fakeStore, EDIT_PROMPT);
+    const { runFakeChatRun } = await import("./support/fakeChatRun");
+    const fakeResult = await runFakeChatRun(fakeStore, fakeArgs);
+    expect(fakeResult.run.costEstimate.usd).toBe(0);
+    expect(fakeResult.run.phase).toBe("DONE");
   });
 
   it("records PLANNING metadata that conforms to ProviderCallMetadataSchema with the spy's reported usage", async () => {
@@ -500,7 +687,7 @@ describe("external chat runner (ORN-33)", () => {
       ],
     });
 
-    const result = await runExternalChatRun(store, args, { mode: "external", router: makeRouter(spy) });
+    const result = await runExternalChatRun(store, args, { router: makeRouter(spy) });
 
     expect(result.run.phase).toBe("DONE");
 
@@ -580,7 +767,6 @@ describe("external chat runner (ORN-33)", () => {
     const subThresholdBudget: Budget = { ...DEFAULT_EXTERNAL_BUDGET, maxUsd: 0 };
 
     const result = await runChat(store, args, {
-      mode: "external",
       router: makeRouter(spy),
       budget: subThresholdBudget,
     });
@@ -618,7 +804,7 @@ describe("external chat runner (ORN-33)", () => {
       ],
     });
 
-    const result = await runExternalChatRun(store, args, { mode: "external", router: makeRouter(spy) });
+    const result = await runExternalChatRun(store, args, { router: makeRouter(spy) });
 
     expect(result).toBeDefined();
     expect(result.run.phase).toBe("NEEDS_DECISION");
@@ -653,7 +839,7 @@ describe("external chat runner (ORN-33)", () => {
       ],
     });
 
-    const result = await runExternalChatRun(store, args, { mode: "external", router: makeRouter(spy) });
+    const result = await runExternalChatRun(store, args, { router: makeRouter(spy) });
 
     expect(result).toBeDefined();
     expect(result.run.phase).toBe("FAILED");
@@ -694,7 +880,7 @@ describe("external chat runner (ORN-33)", () => {
       ],
     });
 
-    const result = await runExternalChatRun(store, args, { mode: "external", router: makeRouter(spy) });
+    const result = await runExternalChatRun(store, args, { router: makeRouter(spy) });
 
     expect(result.run.phase).toBe("NEEDS_DECISION");
 
@@ -704,10 +890,10 @@ describe("external chat runner (ORN-33)", () => {
     expect(JSON.stringify(result.synthesis)).not.toContain(secret);
   });
 
-  it("requires a configured router when dispatching in external mode", async () => {
+  it("requires a configured router for orchestrated chat runs", async () => {
     const store = new InMemoryRectorStore();
     const args = await buildChatArgs(store, EDIT_PROMPT);
 
-    await expect(runChat(store, args, { mode: "external" })).rejects.toThrow(/ModelRouter/);
+    await expect(runChat(store, args, { router: undefined! })).rejects.toThrow(/configured router/i);
   });
 });

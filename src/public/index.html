@@ -6,7 +6,7 @@
     <title>Rector — Hassle-Free Coding Agent</title>
     <meta
       name="description"
-      content="Rector developer preview: a chat-first coding agent with a local deterministic default and optional cloud providers. Configure LLMs and memory backends in Settings — no file edits required."
+      content="Rector: a chat-first coding agent with configured orchestration. Complete first-run setup to connect providers, assign models, and unlock chat — no file edits required."
     />
     <link rel="stylesheet" href="styles/fonts.css" />
     <link rel="stylesheet" href="styles/base.css" />
@@ -100,7 +100,7 @@
       </symbol>
     </svg>
 
-    <div class="app">
+    <div class="app" id="app-shell">
       <!--
         TOP BAR (Req 2.1, 2.2): the slim full-width region. Hosts the moved
         conversation title, run-status pill, and live-connection badge in
@@ -190,7 +190,6 @@
             <div class="brand">
               <span class="brand__mark" aria-hidden="true"></span>
               <span class="brand__name">RECTOR</span>
-              <span class="brand__tag">local</span>
             </div>
             <div class="rail__actions">
               <button
@@ -227,11 +226,11 @@
           <section class="messages" id="messages" aria-live="polite">
             <div class="empty-state" id="empty-state">
               <div class="empty-state__mark" aria-hidden="true"></div>
-              <h2>Chat with Rector</h2>
+              <h2>Configure Rector before your first chat</h2>
               <p>
-                Every message runs the full local pipeline — triage, context, planning, skeptic review,
-                crucible arbitration, DAG compilation, execution, validation/healing, and synthesis —
-                on deterministic fake adapters. No providers are called.
+                Complete the setup steps to add a provider, assign orchestration models, and activate
+                Rector. After activation, every message runs the full orchestration pipeline with your
+                configured providers.
               </p>
               <div class="suggestions" id="suggestions">
                 <button class="suggestion" type="button" data-prompt="Add pagination to the users API endpoint">
@@ -411,6 +410,61 @@
             </section>
           </div>
         </aside>
+      </div>
+    </div>
+
+    <!-- Mandatory first-run onboarding overlay (uncloseable until ready=true) -->
+    <div
+      class="onboarding-overlay"
+      id="onboarding-overlay"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="onboarding-title"
+    >
+      <div class="onboarding-overlay__panel" role="document">
+        <div class="onboarding-overlay__head">
+          <h2 class="onboarding-overlay__title" id="onboarding-title">Configure Rector</h2>
+          <p class="onboarding-overlay__desc">
+            Complete these steps to unlock chat. This overlay stays open until setup is activated.
+          </p>
+        </div>
+
+        <ol class="onboarding-stepper" id="onboarding-stepper" aria-label="Setup steps">
+          <li class="onboarding-step" data-step="1">
+            <span class="onboarding-step__index">1</span>
+            <span class="onboarding-step__label">Add provider</span>
+          </li>
+          <li class="onboarding-step" data-step="2">
+            <span class="onboarding-step__index">2</span>
+            <span class="onboarding-step__label">Pick template</span>
+          </li>
+          <li class="onboarding-step" data-step="3">
+            <span class="onboarding-step__index">3</span>
+            <span class="onboarding-step__label">Review assignments</span>
+          </li>
+          <li class="onboarding-step" data-step="4">
+            <span class="onboarding-step__index">4</span>
+            <span class="onboarding-step__label">Activate</span>
+          </li>
+        </ol>
+
+        <div class="onboarding-step-body" id="onboarding-step-body" aria-live="polite"></div>
+        <ul class="onboarding-blockers" id="onboarding-blockers" hidden></ul>
+
+        <div class="onboarding-actions" id="onboarding-actions">
+          <button class="btn" id="onboarding-action-primary" type="button">Add provider</button>
+          <button class="btn btn--ghost" id="onboarding-action-secondary" type="button" hidden>
+            Continue without template
+          </button>
+          <button class="btn btn--accent" id="onboarding-activate" type="button" hidden>Activate Rector</button>
+        </div>
+
+        <div class="onboarding-overlay__loading" id="onboarding-loading" aria-live="polite" hidden>
+          <span class="provider-test__spinner" aria-hidden="true"></span>
+          <span>Checking setup readiness…</span>
+        </div>
+        <div class="onboarding-overlay__error" id="onboarding-error" role="alert" hidden></div>
       </div>
     </div>
 
@@ -1048,7 +1102,7 @@
             </label>
             <div class="provider-config-adv__foot">
               <button class="btn btn--primary" id="template-manager-apply" type="button" disabled>Apply template</button>
-              <button class="btn" id="template-manager-reset-local-free" type="button">Reset to Local Free</button>
+              <button class="btn" id="template-manager-suggest-cheap-byok" type="button">Suggest Cheap BYOK</button>
             </div>
           </section>
 

@@ -287,16 +287,6 @@ export async function buildConfiguredRouter(options: BuildConfiguredRouterOption
     fetchImpl: options.fetchImpl,
   };
 
-  // Local_Mode refusal (Requirement 5.6): in `local` mode the Config_Bridge
-  // constructs NO external provider and reads NO secret. It returns a
-  // provider-free router backed solely by the FakeLLMProvider so the
-  // Model_Router always selects the provider-free fallback. This is also the
-  // last-line guard for the live path; the boot path normally builds the fake
-  // router directly without consulting the bridge at all (Requirement 9.3).
-  if (mode === "local") {
-    return buildModelRouter({ mode: "local", providers: [new FakeLLMProvider()] });
-  }
-
   const effectiveEnv = await resolveProviderEnv(store, secrets, baseEnv);
   const state = await store.getState();
 

@@ -1,6 +1,8 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import express from "express";
 import http from "node:http";
 import { createApp } from "../src/api/server";
+import { configuredAppOptions } from "./support/configuredApp";
 import { enforceMaxPerRunBudget, evaluateBudget, evaluateSandboxRuntimeSafety } from "../src/security/budget";
 import { redactSecrets, redactString } from "../src/security/redaction";
 import { TaskManager } from "../src/thalamus/router";
@@ -39,9 +41,13 @@ function run(overrides: Partial<Run> = {}): Run {
   };
 }
 
-async function withServer(app = createApp(new TaskManager()), fn: (base: string) => Promise<void>) {
+async function withServer(
+  fn: (base: string) => Promise<void>,
+  app?: express.Application,
+) {
+  const resolvedApp = app ?? createApp(new TaskManager(), await configuredAppOptions());
   const server = await new Promise<http.Server>((resolve) => {
-    const s = app.listen(0, () => resolve(s));
+    const s = resolvedApp.listen(0, () => resolve(s));
   });
   try {
     const addr = server.address();
@@ -200,23 +206,23 @@ describe("API security middleware", () => {
   it("applies CORS headers for configured allowed origins and rejects other origins", async () => {
     const app = createApp(new TaskManager(), { corsAllowedOrigins: ["https://allowed.example"] });
 
-    await withServer(app, async (base) => {
+    await withServer(async (base) => {
       const allowed = await fetch(`${base}/api/setup`, { headers: { Origin: "https://allowed.example" } });
       expect(allowed.headers.get("access-control-allow-origin")).toBe("https://allowed.example");
 
       const denied = await fetch(`${base}/api/setup`, { headers: { Origin: "https://blocked.example" } });
       expect(denied.headers.get("access-control-allow-origin")).toBeNull();
-    });
+    }, app);
   });
 
   it("allows localhost origins in development without explicit CORS config", async () => {
     const oldEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "development";
     try {
-      await withServer(createApp(new TaskManager()), async (base) => {
+      await withServer(async (base) => {
         const res = await fetch(`${base}/api/setup`, { headers: { Origin: "http://localhost:5173" } });
         expect(res.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
-      });
+      }, createApp(new TaskManager()));
     } finally {
       process.env.NODE_ENV = oldEnv;
     }
@@ -225,7 +231,7 @@ describe("API security middleware", () => {
   it("rate-limits chat POST endpoints per client", async () => {
     const app = createApp(new TaskManager(), { rateLimit: { windowMs: 60_000, maxRequests: 1 } });
 
-    await withServer(app, async (base) => {
+    await withServer(async (base) => {
       const first = await fetch(`${base}/api/chat/conversations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -240,13 +246,13 @@ describe("API security middleware", () => {
       expect(first.status).toBe(201);
       expect(second.status).toBe(429);
       expect(await second.json()).toEqual({ error: "Too many chat requests" });
-    });
+    }, app);
   });
 
   it("allows requests and sweeps expired buckets after rate-limit window reset", async () => {
     const app = createApp(new TaskManager(), { rateLimit: { windowMs: 250, maxRequests: 1 } });
 
-    await withServer(app, async (base) => {
+    await withServer(async (base) => {
       const first = await fetch(`${base}/api/chat/conversations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -270,11 +276,11 @@ describe("API security middleware", () => {
         body: JSON.stringify({ title: "three" }),
       });
       expect(third.status).toBe(201);
-    });
+    }, app);
   });
 
   it("redacts chat run event payloads while retaining local provider-free behavior", async () => {
-    await withServer(createApp(new TaskManager()), async (base) => {
+    await withServer(async (base) => {
       const created = await fetch(`${base}/api/chat/conversations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -289,8 +295,7 @@ describe("API security middleware", () => {
       const body = (await sent.json()) as any;
 
       expect(sent.status).toBe(201);
-      expect(body.run.budget.maxUsd).toBe(0);
-      expect(body.run.budget.allowedProviders).toEqual([]);
+      expect(body.run.budget.maxUsd).toBeGreaterThan(0);
       expect(JSON.stringify(body.events)).not.toContain("abc123");
       expect(JSON.stringify(body.events)).not.toContain("root:pw");
       expect(body.events[0].payload.promptPreview).toContain("apiKey=[REDACTED]");

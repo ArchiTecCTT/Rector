@@ -34,7 +34,7 @@ export const PERFORMANCE_BASELINE_SECTIONS = [
   "startup_cold_subprocess",
   "startup_cold_compiled_subprocess",
   "local_direct_answer",
-  "local_fake_pipeline",
+  "configured_spy_pipeline",
   "pipeline_triage",
   "pipeline_context_building",
   "pipeline_planning",
@@ -71,7 +71,7 @@ const THRESHOLDS: Record<SectionId, Threshold> = {
   startup_cold_subprocess: { preferredMs: 1_000, acceptableMs: 2_000 },
   startup_cold_compiled_subprocess: { preferredMs: 1_000, acceptableMs: 2_000 },
   local_direct_answer: { preferredMs: 100, acceptableMs: 250 },
-  local_fake_pipeline: { preferredMs: 500, acceptableMs: 1_000 },
+  configured_spy_pipeline: { preferredMs: 500, acceptableMs: 1_000 },
   pipeline_triage: { preferredMs: 10, acceptableMs: 25 },
   pipeline_context_building: { preferredMs: 50, acceptableMs: 100 },
   pipeline_planning: { preferredMs: 50, acceptableMs: 150 },
@@ -92,7 +92,7 @@ const LABELS: Record<SectionId, string> = {
   startup_cold_subprocess: "Server startup / import (cold subprocess, tsx)",
   startup_cold_compiled_subprocess: "Server startup / import (cold subprocess, compiled)",
   local_direct_answer: "Local direct answer",
-  local_fake_pipeline: "Local full fake pipeline (total)",
+  configured_spy_pipeline: "Configured spy pipeline (total)",
   pipeline_triage: "Pipeline phase: TRIAGE",
   pipeline_context_building: "Pipeline phase: CONTEXT_BUILDING",
   pipeline_planning: "Pipeline phase: PLANNING",
@@ -100,7 +100,7 @@ const LABELS: Record<SectionId, string> = {
   pipeline_synthesizing: "Pipeline phase: SYNTHESIZING",
   orchestration_assignment_resolution: "Orchestration assignment resolution",
   memory_role_resolution: "Memory role resolution",
-  template_preview: "Template preview (local-free)",
+  template_preview: "Template preview (__test_profile__)",
   context_builder_1k: "Context builder (1K memories)",
   api_setup_status: "API GET /api/setup/status",
   api_orchestration_models_effective: "API GET /api/orchestration-models/effective",
@@ -317,7 +317,7 @@ function spanDurationMs(spans: Array<{ phase: string; durationMs: number }>, pha
 async function measurePipelinePhaseBreakdown(): Promise<
   Array<{ id: SectionId; ms: number }>
 > {
-  const { runFakeChatRun } = await import("../src/orchestration/chatRunner");
+  const { runFakeChatRun } = await import("../tests/support/fakeChatRun");
   const phaseIds = [
     "pipeline_triage",
     "pipeline_context_building",
@@ -387,8 +387,8 @@ async function measureLocalDirectAnswer(): Promise<number> {
   });
 }
 
-async function measureLocalFakePipeline(): Promise<number> {
-  const { runFakeChatRun } = await import("../src/orchestration/chatRunner");
+async function measureConfiguredSpyPipeline(): Promise<number> {
+  const { runFakeChatRun } = await import("../tests/support/fakeChatRun");
   return measureMedian(3, async () => {
     const { store, args } = await buildFakePipelineRun();
     await runFakeChatRun(store, args);
@@ -415,12 +415,11 @@ async function measureMemoryRoleResolution(): Promise<number> {
     assignmentStore: createInMemoryMemoryRoleAssignmentStore(),
     configStore: createInMemoryMemoryConfigStore(),
     secrets: emptySecretStore(),
-    mode: "local",
     now: () => FIXED_NOW,
   });
   const start = performance.now();
   for (const role of MEMORY_ROLES) {
-    await router.resolveMemoryProvider(role, { mode: "local" });
+    await router.resolveMemoryProvider(role);
   }
   return performance.now() - start;
 }
@@ -446,7 +445,7 @@ async function measureTemplatePreview(): Promise<number> {
   });
 
   return measureMedian(3, async () => {
-    await service.preview("local-free");
+    await service.preview("__test_profile__");
   });
 }
 
@@ -567,7 +566,7 @@ async function runBenchmarks(): Promise<BenchmarkResult[]> {
     { id: "startup_cold_subprocess", ms: await measureStartupColdSubprocess() },
     compiledColdStart,
     { id: "local_direct_answer", ms: await measureLocalDirectAnswer() },
-    { id: "local_fake_pipeline", ms: await measureLocalFakePipeline() },
+    { id: "configured_spy_pipeline", ms: await measureConfiguredSpyPipeline() },
     ...pipelinePhases,
     { id: "orchestration_assignment_resolution", ms: await measureOrchestrationAssignmentResolution() },
     { id: "memory_role_resolution", ms: await measureMemoryRoleResolution() },

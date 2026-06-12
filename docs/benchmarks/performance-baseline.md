@@ -2,10 +2,11 @@
 
 ## Goals
 
-Measure **real local/provider-free performance** so we can tell whether the growing codebase is actually slow. This benchmark is about **measurement and repeatable evidence**, not optimization.
+Measure **spy-injected orchestration performance** so we can tell whether the growing codebase is actually slow. This benchmark is about **measurement and repeatable evidence**, not optimization.
 
 - Run without provider keys, network, live memory providers, or sandbox credentials
-- Stay deterministic and zero-config (same regression baseline as `npm test`)
+- Use `SpyLLMProvider` / deterministic doubles (same CI contract as `npm test`)
+- **Configured spy pipeline:** `configured_spy_pipeline` is the orchestration timing baseline (replaces legacy `local_fake_pipeline`)
 - Produce a concise table suitable for CI logs or local before/after comparisons
 - Keep thresholds **advisory** until enough baseline history exists across machines
 
@@ -19,13 +20,13 @@ npm run benchmark:performance -- --enforce
 | Command | Purpose |
 |---|---|
 | `npm run benchmark` | Regression/task benchmark harness (`src/bin/benchmark.ts`) — correctness and failure modes |
-| `npm run benchmark:performance` | Latency baseline (`scripts/performance-baseline.ts`) — local-mode speed evidence |
+| `npm run benchmark:performance` | Latency baseline (`scripts/performance-baseline.ts`) — spy-pipeline speed evidence (`configured_spy_pipeline` naming planned) |
 
 ### Flags
 
 - **`--enforce`**: exit non-zero when any measured value exceeds the **acceptable** threshold. Default behavior exits zero even when thresholds are exceeded (advisory mode).
 
-## Local-mode constraints
+## Spy-pipeline constraints (CI measurement only)
 
 The script must never:
 
@@ -34,7 +35,7 @@ The script must never:
 - Initialize Mem0, Chroma, TiDB, or E2B
 - Require `.env` or UI configuration
 
-It uses in-memory stores, deterministic orchestration (`runFakeChatRun`), and the same `createApp` wiring as integration tests.
+It uses in-memory stores, spy-injected orchestration (`runFakeChatRun` today; `configured_spy_pipeline` / `runOrchestratedChatRun` with `SpyLLMProvider` planned), and the same `createApp` wiring as integration tests. This is **not** the user-facing product path.
 
 ## Benchmark catalog
 
@@ -49,10 +50,10 @@ It uses in-memory stores, deterministic orchestration (`runFakeChatRun`), and th
 | `pipeline_executing` | `EXECUTING` observability span inside `runFakeChatRun` |
 | `pipeline_synthesizing` | `SYNTHESIZING` observability span inside `runFakeChatRun` |
 | `local_direct_answer` | `triageUserMessage` + `synthesizeChatBrainstemResponse` on `DIRECT_ANSWER` |
-| `local_fake_pipeline` | Full local brainstem via `runFakeChatRun` |
+| `configured_spy_pipeline` | Full orchestration baseline via `runFakeChatRun` (test-only spy path) |
 | `orchestration_assignment_resolution` | `resolveEffectiveAssignment` for all orchestration roles |
 | `memory_role_resolution` | `MemoryRoleRouter.resolveMemoryProvider` for all memory roles |
-| `template_preview` | Built-in `local-free` template preview (no secret reads) |
+| `template_preview` | Built-in `__test_profile__` template preview (no secret reads) |
 | `context_builder_1k` | `buildContextPack` with ~1,000 episodic memory entries (setup excluded from timing) |
 | `api_setup_status` | `GET /api/setup/status` via supertest |
 | `api_orchestration_models_effective` | `GET /api/orchestration-models/effective` |
@@ -64,7 +65,7 @@ It uses in-memory stores, deterministic orchestration (`runFakeChatRun`), and th
 - **`startup_import`** measures in-process module import + app factory time after the benchmark script is already running (warm).
 - **`startup_cold_subprocess`** spawns a fresh Node+tsx process via `performance-baseline-cold-start.ts` and records parent wall-clock time (median of 3).
 - **`startup_cold_compiled_subprocess`** spawns plain `node` against compiled `dist/api/server.js` (median of 3). Skipped with reason when `dist/` is absent.
-- **Pipeline phase rows** break down `local_fake_pipeline` into TRIAGE, CONTEXT_BUILDING, PLANNING, EXECUTING, and SYNTHESIZING (median of 3 runs). Phase spans come from the in-memory observability trace.
+- **Pipeline phase rows** break down `configured_spy_pipeline` into TRIAGE, CONTEXT_BUILDING, PLANNING, EXECUTING, and SYNTHESIZING (median of 3 runs). Phase spans come from the in-memory observability trace.
 - **Context builder** pre-builds 1,000 synthetic `MemoryEntry` values; only `buildContextPack` is timed.
 - Noisy paths use the **median of 3 iterations**; pure CPU resolution loops use a single iteration.
 - Threshold exceedances are warnings unless `--enforce` is passed.
@@ -77,7 +78,7 @@ It uses in-memory stores, deterministic orchestration (`runFakeChatRun`), and th
 | Server startup / import cold subprocess tsx (`startup_cold_subprocess`) | < 1s | < 2s |
 | Server startup / import cold subprocess compiled (`startup_cold_compiled_subprocess`) | < 1s | < 2s |
 | Local direct answer (`local_direct_answer`) | < 100ms | < 250ms |
-| Local full fake pipeline total (`local_fake_pipeline`) | < 500ms | < 1s |
+| Configured spy pipeline total (`configured_spy_pipeline`) | < 500ms | < 1s |
 | Pipeline TRIAGE (`pipeline_triage`) | < 10ms | < 25ms |
 | Pipeline CONTEXT_BUILDING (`pipeline_context_building`) | < 50ms | < 100ms |
 | Pipeline PLANNING (`pipeline_planning`) | < 50ms | < 150ms |
@@ -103,4 +104,4 @@ It does **not** assert millisecond timings.
 ## Related docs
 
 - [`docs/plans/concerns-and-vulnerabilities.md`](../plans/concerns-and-vulnerabilities.md) — performance measurement concern register entry
-- [`docs/architecture/current-rector-byok-architecture.md`](../architecture/current-rector-byok-architecture.md) — local/provider-free baseline architecture
+- [`docs/architecture/configured-product-architecture.md`](../architecture/configured-product-architecture.md) — canonical v0.3.0+ architecture

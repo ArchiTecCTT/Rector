@@ -11,7 +11,7 @@ async function flush(rounds = 8): Promise<void> {
 }
 
 function localTemplate() {
-  return BUILT_IN_TEMPLATES.find((template) => template.id === "local-free")!;
+  return BUILT_IN_TEMPLATES.find((template) => template.id === "cheap-byok")!;
 }
 
 function previewPayload() {
@@ -35,7 +35,7 @@ function previewPayload() {
     externalNetworkImplications: [],
     estimatedCostTier: "free",
     warnings: [],
-    rollbackSnapshotId: "template-preview:default:local-free",
+    rollbackSnapshotId: "template-preview:default:cheap-byok",
   };
 }
 
@@ -44,7 +44,7 @@ describe("Template_Manager_UI", () => {
     const harness: ProviderPanelHarness = createProviderPanelHarness();
     harness.setFetchHandler(async (url, opts) => {
       if (url === "/api/templates") return jsonResponse({ templates: [localTemplate()] });
-      if (url === "/api/templates/local-free/preview" && opts.method === "POST") {
+      if (url === "/api/templates/cheap-byok/preview" && opts.method === "POST") {
         return jsonResponse({ preview: previewPayload() });
       }
       return jsonResponse({});
@@ -56,8 +56,8 @@ describe("Template_Manager_UI", () => {
     expect(harness.getEl("template-manager-modal").hidden).toBe(false);
     const cards = harness.getEl("template-manager-gallery").querySelectorAll(".template-card");
     expect(cards).toHaveLength(1);
-    expect(cards[0].querySelector(".provider-config-card__name").textContent).toContain("Local Free");
-    expect(harness.getEl("template-manager-preview-title").textContent).toBe("Local Free");
+    expect(cards[0].querySelector(".provider-config-card__name").textContent).toContain("Cheap BYOK");
+    expect(harness.getEl("template-manager-preview-title").textContent).toBe("Cheap BYOK");
     expect(harness.getEl("template-manager-preview-summary").textContent).toContain("2 orchestration changes");
     expect(harness.getEl("template-manager-preview-summary").textContent).toContain("0 missing secrets");
   });
@@ -67,8 +67,8 @@ describe("Template_Manager_UI", () => {
     let capturedApply: any;
     harness.setFetchHandler(async (url, opts) => {
       if (url === "/api/templates") return jsonResponse({ templates: [localTemplate()] });
-      if (url === "/api/templates/local-free/preview") return jsonResponse({ preview: previewPayload() });
-      if (url === "/api/templates/local-free/apply") {
+      if (url === "/api/templates/cheap-byok/preview") return jsonResponse({ preview: previewPayload() });
+      if (url === "/api/templates/cheap-byok/apply") {
         capturedApply = JSON.parse(opts.body);
         return jsonResponse({
           applied: true,
@@ -86,7 +86,7 @@ describe("Template_Manager_UI", () => {
     await flush();
 
     expect(capturedApply).toEqual({ mode: "mergeMissing", confirmReplace: false });
-    expect(harness.getEl("template-manager-result").textContent).toContain("Applied Local Free");
+    expect(harness.getEl("template-manager-result").textContent).toContain("Applied Cheap BYOK");
   });
 
   it("applies the current import text instead of a stale preview cache", async () => {
@@ -109,7 +109,7 @@ describe("Template_Manager_UI", () => {
         });
       }
       if (url === "/api/templates") return jsonResponse({ templates: [localTemplate()] });
-      if (url === "/api/templates/local-free/preview") return jsonResponse({ preview: previewPayload() });
+      if (url === "/api/templates/cheap-byok/preview") return jsonResponse({ preview: previewPayload() });
       return jsonResponse({});
     });
 

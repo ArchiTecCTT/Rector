@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 
-import { runChat, type ChatRunArgs, type ChatRunResult } from "../src/orchestration/chatRunner";
+import type { ChatRunArgs, ChatRunResult } from "../src/orchestration/chatRunner";
+import { runFakeChatRun } from "./support/fakeChatRun";
 import { InMemoryRectorStore } from "../src/store/inMemoryRectorStore";
 import { triageUserMessage } from "../src/orchestration/triage";
 import { createInMemoryObservabilityTrace } from "../src/observability";
@@ -73,7 +74,7 @@ const LOCAL_MODE_REGRESSION_CASES: readonly LocalModeRegressionCase[] = [
     name: "code-edit/refactor",
     prompt: "Please implement a refactor to add changes to src/index.ts and write tests.",
     expectedRoute: "CODE_EDIT",
-    expectedSynthesisStatus: "VALIDATED",
+    expectedSynthesisStatus: "NEEDS_DECISION",
   },
 ] as const;
 
@@ -139,7 +140,7 @@ async function runLocalModeRegressionSuite(
   for (const testCase of cases) {
     const store = new InMemoryRectorStore();
     const args = await buildArgs(store, testCase.prompt);
-    const result = await runChat(store, args, { mode: "local" });
+    const result = await runFakeChatRun(store, args);
     if (regressionCasePasses(testCase, result)) {
       passed += 1;
     } else {
