@@ -249,6 +249,24 @@ Kill local mode as default product. Deliverables:
 
 Branch: `rector-0.3.0-configured-product`
 
-## First Chunk to Plan Next
+## Chunk 047 — Runtime Maturity (post-042a/042b)
 
-Configured-product transition phases follow `.kiro/specs/cloud-capable-transition/tasks.md` and new chunk plans under `docs/plans/chunks/`.
+Operational seams around the symbolic brainstem. Implement after Chunk 042a and 042b hardening complete.
+
+| Sub-chunk | Focus | Plan |
+|-----------|-------|------|
+| 047 (master) | Dependency graph, acceptance gates, target architecture | `docs/plans/chunks/047-runtime-maturity-master-plan.md` |
+| 047a | Tiered prompt assembly + compression lineage | `docs/plans/chunks/047a-tiered-prompt-assembly.md` |
+| 047b | Tool registry + executor middleware + sandbox environments | `docs/plans/chunks/047b-tool-registry-executor.md` |
+| 047c | Interrupt, steer, iteration budget | `docs/plans/chunks/047c-run-control-budget.md` |
+| 047d | Procedural memory / skills catalog | `docs/plans/chunks/047d-procedural-memory-skills.md` |
+| 047e | Session FTS search + conversation lineage UI | `docs/plans/chunks/047e-session-search-lineage.md` |
+| 047f | Credential pools + provider failover | `docs/plans/chunks/047f-provider-resilience.md` |
+
+Recommended implementation order: 047a ∥ 047d → 047b → 047c → 047e → 047f.
+
+## First Chunk to Implement Next
+
+1. Complete Chunk 042a + 042b (system hardening)
+2. Begin Chunk 047a (tiered prompts) and 047d (skills catalog) in parallel
+3. Configured-product transition tasks continue per `.kiro/specs/cloud-capable-transition/tasks.md`
