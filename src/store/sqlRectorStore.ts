@@ -89,6 +89,14 @@ import {
   type UpdateMemoryEntryInput,
 } from "./schemas";
 import type { RectorStore } from "./index";
+import {
+  compareMemoryPruneCandidates,
+  compareMemorySearchResults,
+  memoryPruneScore,
+  normalizeMemorySearchLimit,
+  sanitizeCreateMemoryEntryInput,
+  sanitizeUpdateMemoryEntryInput,
+} from "../memory/entryUtils";
 
 export interface SqlRectorStoreOptions {
   driver: SqlDriver;
@@ -511,14 +519,15 @@ export class SqlRectorStore implements RectorStore {
   // === Advanced Memory (Chunk 27 / neuro-symbolic Step 2) ===
   async createMemoryEntry(input: CreateMemoryEntryInput): Promise<MemoryEntry> {
     const now = this.nowFn();
+    const sanitized = sanitizeCreateMemoryEntryInput(input);
     const entry = MemoryEntrySchema.parse({
-      ...structuredClone(input),
+      ...structuredClone(sanitized),
       id: this.nextId("mem", "memories"),
-      accessCount: input.accessCount ?? 0,
-      lastMentioned: input.lastMentioned ?? now,
-      timestamp: input.timestamp ?? now,
-      tags: input.tags ?? [],
-      metadata: input.metadata ?? {},
+      accessCount: sanitized.accessCount ?? 0,
+      lastMentioned: sanitized.lastMentioned ?? now,
+      timestamp: sanitized.timestamp ?? now,
+      tags: sanitized.tags ?? [],
+      metadata: sanitized.metadata ?? {},
     });
     this.insertRow("memories", entry.id, entry.layer, entry);
     return entry;
@@ -541,7 +550,7 @@ export class SqlRectorStore implements RectorStore {
 
     const updated = MemoryEntrySchema.parse({
       ...current,
-      ...structuredClone(patch),
+      ...structuredClone(sanitizeUpdateMemoryEntryInput(patch)),
       id: current.id,
     });
     this.updateRow("memories", updated.id, updated.layer, updated);
@@ -553,7 +562,8 @@ export class SqlRectorStore implements RectorStore {
   }
 
   async searchMemory(query?: string, options: { layer?: MemoryLayer; limit?: number } = {}): Promise<MemoryEntry[]> {
-    const { layer, limit = 20 } = options;
+    const { layer } = options;
+    const limit = normalizeMemorySearchLimit(options.limit);
     let results = await this.listMemoryEntries(layer);
 
     if (query && query.trim()) {
@@ -565,12 +575,7 @@ export class SqlRectorStore implements RectorStore {
       );
     }
 
-    // Simple recency + access sort for relevance
-    results.sort((a, b) => {
-      const scoreA = a.accessCount * 2 + (Date.parse(a.lastMentioned) || 0);
-      const scoreB = b.accessCount * 2 + (Date.parse(b.lastMentioned) || 0);
-      return scoreB - scoreA;
-    });
+    results.sort(compareMemorySearchResults);
 
     return results.slice(0, limit);
   }
@@ -583,17 +588,10 @@ export class SqlRectorStore implements RectorStore {
       return { pruned: 0, summarized: 0 };
     }
 
-    // Score: recency (inverse age) + accessCount + bonus for user notes
-    const scored = layerEntries.map((entry) => {
-      const ageMs = Date.now() - (Date.parse(entry.timestamp) || Date.now());
-      const recency = Math.max(0, 100 - Math.floor(ageMs / (1000 * 60 * 60 * 24))); // decay per day rough
-      const accessBonus = Math.min(entry.accessCount * 3, 50);
-      const noteBonus = entry.source === "user-note" || entry.tags.includes("note") ? 30 : 0;
-      const score = recency + accessBonus + noteBonus;
-      return { entry, score };
-    });
+    const pruneNow = this.nowFn();
+    const scored = layerEntries.map((entry) => ({ entry, score: memoryPruneScore(entry, pruneNow) }));
 
-    scored.sort((a, b) => a.score - b.score); // lowest first
+    scored.sort(compareMemoryPruneCandidates); // lowest first
 
     let pruned = 0;
     let summarized = 0;

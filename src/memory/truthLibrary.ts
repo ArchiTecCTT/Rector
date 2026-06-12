@@ -71,8 +71,50 @@ export const TruthSearchResultSchema = z.object({
 });
 export type TruthSearchResult = z.infer<typeof TruthSearchResultSchema>;
 
+export interface TruthRetriever {
+  search(input: TruthSearchInput): TruthSearchResult[] | Promise<TruthSearchResult[]>;
+}
+
 export interface TruthLibraryReader {
   search(input: TruthSearchInput): TruthSearchResult[];
+}
+
+export interface CitationValidationResult {
+  valid: boolean;
+  reasons: string[];
+}
+
+export function validateCitation(input: unknown): CitationValidationResult {
+  const parsed = CitationSchema.safeParse(input);
+  if (!parsed.success) {
+    return { valid: false, reasons: parsed.error.issues.map((issue) => issue.message) };
+  }
+
+  const reasons: string[] = [];
+  if (parsed.data.uri !== undefined) {
+    try {
+      // Accept absolute URLs and file/truth URIs; reject malformed URI-like values.
+      new URL(parsed.data.uri);
+    } catch {
+      reasons.push("citation uri must be a valid URI");
+    }
+  }
+  return { valid: reasons.length === 0, reasons };
+}
+
+export function validateProvenance(input: unknown): CitationValidationResult {
+  const parsed = ProvenanceSchema.safeParse(input);
+  if (!parsed.success) {
+    return { valid: false, reasons: parsed.error.issues.map((issue) => issue.message) };
+  }
+  const citationReasons = parsed.data.citations.flatMap((citation) => validateCitation(citation).reasons);
+  return { valid: citationReasons.length === 0, reasons: citationReasons };
+}
+
+export function truthItemHasValidCitation(item: TruthItem): boolean {
+  return [...item.citations, ...item.provenance.citations].some(
+    (citation) => validateCitation(citation).valid,
+  );
 }
 
 export class InMemoryTruthLibrary implements TruthLibraryReader {
@@ -184,15 +226,24 @@ function scoreItem(item: TruthItem, queryTerms: string[]): TruthSearchResult {
   const titleSet = new Set(titleTerms);
   const contentSet = new Set(contentTerms);
   const citationSet = new Set(citationTerms);
+  const normalizedQuery = queryTerms.join(" ");
+  const normalizedTitle = titleTerms.join(" ");
 
   let score = 0;
   const matchedTerms: string[] = [];
+  if (normalizedQuery.length > 0 && normalizedQuery === normalizedTitle) {
+    score += 20;
+  }
+  if (item.tags.some((tag) => tokenize(tag).join(" ") === normalizedQuery)) {
+    score += 14;
+  }
+
   for (const term of queryTerms) {
     let termScore = 0;
-    if (titleSet.has(term)) termScore += 6;
-    if (tagTerms.has(term)) termScore += 4;
+    if (titleSet.has(term)) termScore += 8;
+    if (tagTerms.has(term)) termScore += 5;
     if (contentSet.has(term)) termScore += contentTerms.filter((contentTerm) => contentTerm === term).length;
-    if (citationSet.has(term)) termScore += 1;
+    if (citationSet.has(term)) termScore += 2;
 
     if (termScore > 0) {
       score += termScore;
@@ -202,9 +253,12 @@ function scoreItem(item: TruthItem, queryTerms: string[]): TruthSearchResult {
 
   if (matchedTerms.length === 0) return { item, score: 0, matchedTerms: [] };
   if (matchedTerms.length === queryTerms.length) score += 3;
-  if (item.status === "TRUSTED") score += 1;
+  score += provenanceBoost(item);
+  score += recencyBoost(item);
+  score -= stalePenalty(item);
+  if (item.status === "REJECTED") score -= 1;
 
-  return { item, score, matchedTerms: matchedTerms.sort() };
+  return { item, score: Math.max(0, score), matchedTerms: matchedTerms.sort() };
 }
 
 function compareSearchResults(left: TruthSearchResult, right: TruthSearchResult): number {
@@ -218,6 +272,32 @@ function compareTruthItems(left: TruthItem, right: TruthItem): number {
   const updatedDelta = right.updatedAt.localeCompare(left.updatedAt);
   if (updatedDelta !== 0) return updatedDelta;
   return left.id.localeCompare(right.id);
+}
+
+function provenanceBoost(item: TruthItem): number {
+  let boost = 0;
+  if (item.status === "TRUSTED") boost += 3;
+  if (["file", "manual", "system"].includes(item.provenance.sourceType)) boost += 1;
+  if (truthItemHasValidCitation(item)) boost += item.status === "TRUSTED" ? 3 : 1;
+  return boost;
+}
+
+function recencyBoost(item: TruthItem): number {
+  const updatedMs = Date.parse(item.updatedAt);
+  if (!Number.isFinite(updatedMs)) return 0;
+  const year = new Date(updatedMs).getUTCFullYear();
+  if (year >= 2026) return 2;
+  if (year >= 2024) return 1;
+  return 0;
+}
+
+function stalePenalty(item: TruthItem): number {
+  let penalty = 0;
+  if (item.tags.includes("stale") || item.tags.includes("deprecated")) penalty += 3;
+  if (/stale|deprecated|obsolete/i.test(item.title)) penalty += 2;
+  if (/stale|deprecated|obsolete/i.test(item.provenance.source)) penalty += 1;
+  if (!validateProvenance(item.provenance).valid) penalty += 2;
+  return penalty;
 }
 
 function statusRank(status: TruthStatus): number {
