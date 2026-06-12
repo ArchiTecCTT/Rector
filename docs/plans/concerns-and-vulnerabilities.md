@@ -6,14 +6,23 @@
 
 > Updated during full system audit 2026-06-09 (subagents used; see audits/full-system-audit-2026-06-09.md); follow-up register cleanup 2026-06-10 after Gemini-led test fixes + neuro chunk commits (now 1241 tests green). See audit report for original matrix + evidence.
 
-### Chunk 045 template assignments use in-memory stubs until Chunk 043/044 stores are stitched
+### Chunk 045 template assignments required stitch to durable Chunk 043/044 stores
 
-- **Source:** Chunk 045 implementation wave; durable orchestration/memory assignment stores from Chunks 043/044 were not present in this isolated worktree.
-- **Severity:** Medium for production persistence; low for current wave acceptance.
-- **Status:** Open / stitcher follow-up.
-- **Root cause:** Template preview/apply needs role assignment targets, but the durable stores/routes from sibling chunks are not available during wave 2. Chunk 045 therefore adds secret-free additive interfaces plus in-memory assignment stores so template apply can be tested without touching provider secrets or provider records.
-- **Plan:** Stitcher should connect `OrchestrationAssignmentStore` and `MemoryRoleAssignmentStore` to the durable stores from Chunks 043/044, preserve the current template schema/API contract, and add restart-persistence tests once those stores land.
-- **Traceability:** `src/providers/orchestrationAssignments.ts`, `src/providers/memoryAssignments.ts`, `src/templates/templateService.ts`, `tests/templateService.test.ts`, `tests/templateApi.test.ts`.
+- **Source:** Chunk 045 implementation wave; durable orchestration/memory assignment stores from Chunks 043/044 were not present in that isolated worktree.
+- **Severity:** Low after stitch for current local/file-backed behavior; persistence coverage still needs final verification.
+- **Status:** Partially resolved during 042f stitch.
+- **Root cause:** Template preview/apply needs role assignment targets, but the durable stores/routes from sibling chunks were unavailable during wave 2. Chunk 045 added secret-free additive interfaces plus in-memory assignment stores so template apply could be tested without touching provider secrets or provider records.
+- **Plan:** Final 042f verification must confirm template apply writes through `OrchestrationAssignmentStore` and `MemoryAssignmentStore` from Chunks 043/044 and preserve the current template schema/API contract.
+- **Traceability:** `src/providers/orchestrationAssignments.ts`, `src/providers/memoryAssignmentStore.ts`, `src/providers/memoryAssignments.ts`, `src/templates/templateService.ts`, `tests/templateService.test.ts`, `tests/templateApi.test.ts`.
+
+### Chunk 046 commercial auth/RBAC baseline still needs durable workspace membership backing
+
+- **Source:** Chunk 046 implementation.
+- **Severity:** Medium for hosted/team production, low for local-dev.
+- **Status:** Open.
+- **Root cause:** RBAC, quotas, audit logging, deployment readiness checks, and workspace isolation helpers are now centralized and tested, but the default workspace directory is an in-memory helper. The live server persists audit events to `.rector/audit-events.jsonl`, and per-user provider/memory/secret stores already exist, but workspace/user/membership administration needs a durable store before relying on team membership changes across restarts.
+- **Plan / Mitigations:** Local-dev auth-disabled mode remains implicit owner and zero-config. Auth-enabled deployments can inject a `WorkspaceDirectory` implementation; route-level authorization/audit/quota checks are centralized around that interface. Follow-up production hardening should add SQLite/TiDB-backed users/workspaces/memberships, invitation flows, owner-transfer constraints, and backup/restore coverage for membership state.
+- **Traceability:** `docs/plans/chunks/046-commercial-readiness-auth-rbac.md`, `src/security/rbac.ts`, `src/security/workspaces.ts`, `src/security/auditLog.ts`, `src/security/quotas.ts`, `src/deployment/readiness.ts`, `tests/rbacApiAuthorization.test.ts`, `tests/workspaceIsolation.test.ts`.
 
 ### External mode fail-fast startup check ignores UI-persisted configurations
 

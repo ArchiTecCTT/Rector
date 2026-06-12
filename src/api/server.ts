@@ -28,16 +28,42 @@ import {
 } from "../security/rateLimiter";
 import {
   SESSION_COOKIE_NAME,
-  SESSION_MAX_AGE_MS,
   authErrorMessage,
+  buildClearSessionCookie,
+  buildSessionCookie,
   createSessionToken,
   parseAuthConfig,
+  parseAuthMode,
   verifyPassword,
   verifySessionToken,
+  type AuthMode,
   type ParsedAuthConfig,
 } from "../security/auth";
 import { createAuthMiddleware } from "../security/authMiddleware";
 import { createUserStoresResolver, type UserStores } from "../security/userStores";
+import {
+  permissionsForRole,
+  requirePermission as evaluatePermission,
+  sendPermissionDenied,
+  type Permission,
+  type PermissionDenial,
+  type WorkspaceRole,
+} from "../security/rbac";
+import {
+  createInMemoryWorkspaceDirectory,
+  WorkspaceMembershipSchema,
+  type WorkspaceDirectory,
+} from "../security/workspaces";
+import {
+  createInMemoryAuditLogService,
+  hashAuditValue,
+  type AuditLogService,
+} from "../security/auditLog";
+import {
+  QuotaPolicySchema,
+  createInMemoryQuotaService,
+  type QuotaService,
+} from "../security/quotas";
 import { computeSetupStatus } from "../setupStatus";
 import {
   ApprovalProcessingError,
@@ -150,6 +176,7 @@ import {
 import { MemoryLayerSchema, RunEventSchema } from "../store/schemas";
 import type { Artifact, MemoryLayer, Run, RunEvent } from "../store/schemas";
 import { RunPhaseSchema, isTerminalRunPhase } from "../protocol/phases";
+import { computeCommercialDeploymentReadiness } from "../deployment/readiness";
 
 export interface ApiSecurityOptions {
   corsAllowedOrigins?: string[];
@@ -284,6 +311,21 @@ export interface ApiSecurityOptions {
    * mode requires zero auth (Req 9).
    */
   auth?: ParsedAuthConfig;
+
+  /** Commercial auth mode selection. Defaults from RECTOR_AUTH_MODE/RECTOR_AUTH_ENABLED. */
+  authMode?: AuthMode;
+
+  /** Optional workspace directory/membership backing for RBAC and isolation tests/deployments. */
+  workspaceDirectory?: WorkspaceDirectory;
+
+  /** Optional audit log service. Real boot can inject a durable local JSONL service. */
+  auditLog?: AuditLogService;
+
+  /** Optional workspace quota service. Defaults to an allow-all in-memory service. */
+  quotaService?: QuotaService;
+
+  /** Env map consumed by deployment-readiness checks. Defaults to process.env. */
+  deploymentEnv?: Record<string, string | undefined>;
 
   /**
    * 32-byte AES key for per-user Secret_Store envelopes when auth is enabled.
@@ -931,9 +973,15 @@ export async function handleRunStream(options: RunStreamHandlerOptions): Promise
  */
 export function registerRunStreamRoute(
   app: express.Application,
-  deps: { store: RectorStore; broker: RunEventBroker; heartbeatMs?: number }
+  deps: {
+    store: RectorStore;
+    broker: RunEventBroker;
+    heartbeatMs?: number;
+    authorizeRunRead?: (req: express.Request, res: express.Response, runId: string) => Promise<boolean>;
+  }
 ): void {
-  app.get("/api/runs/:id/stream", (req, res) => {
+  app.get("/api/runs/:id/stream", async (req, res) => {
+    if (deps.authorizeRunRead && !(await deps.authorizeRunRead(req, res, req.params.id))) return;
     void handleRunStream({
       runId: req.params.id,
       req,
@@ -1666,12 +1714,141 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     };
   };
 
+  const authMode = securityOptions.authMode ?? parseAuthMode(process.env);
+  const workspaceDirectory = securityOptions.workspaceDirectory ?? createInMemoryWorkspaceDirectory();
+  const auditLog = securityOptions.auditLog ?? createInMemoryAuditLogService();
+  const quotaService = securityOptions.quotaService ?? createInMemoryQuotaService();
+  const deploymentEnv = securityOptions.deploymentEnv ?? process.env;
+  app.locals.authMode = authMode;
+  app.locals.auditLog = auditLog;
+  app.locals.quotaService = quotaService;
+  app.locals.workspaceDirectory = workspaceDirectory;
+  const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+
+  const requestActorId = (req: express.Request): string => req.rectorAuth?.userId ?? "default";
+
+  const auditRequest = async (
+    req: express.Request,
+    input: {
+      workspaceId?: string;
+      actorUserId?: string;
+      action: string;
+      targetType: string;
+      targetId?: string;
+      outcome: "success" | "denied" | "failed";
+      reason?: string;
+    },
+  ): Promise<void> => {
+    try {
+      await auditLog.record({
+        ...input,
+        actorUserId: input.actorUserId ?? req.rectorAuth?.userId,
+        ipHash: hashAuditValue(req.ip),
+        userAgentHash: hashAuditValue(req.header("user-agent")),
+      });
+    } catch {
+      // Audit logging must never fail the primary request path.
+    }
+  };
+
+  const resolveRequestWorkspace = async (
+    req: express.Request,
+    requestedWorkspaceId?: string,
+  ): Promise<{ ok: true; workspaceId: string; role: WorkspaceRole } | { ok: false; status: 401 | 403; reason: string; workspaceId?: string }> => {
+    if (!authConfig.enabled) {
+      const workspaceId = requestedWorkspaceId ?? "local";
+      req.rectorWorkspace = { workspaceId, role: "owner" };
+      return { ok: true, workspaceId, role: "owner" };
+    }
+
+    const auth = req.rectorAuth;
+    if (!auth) return { ok: false, status: 401, reason: "Authentication required", workspaceId: requestedWorkspaceId };
+    const workspace = requestedWorkspaceId
+      ? await workspaceDirectory.getWorkspace(requestedWorkspaceId)
+      : await workspaceDirectory.getDefaultWorkspaceForUser(auth.userId);
+    if (!workspace) return { ok: false, status: 403, reason: "Workspace not found", workspaceId: requestedWorkspaceId };
+    const membership = await workspaceDirectory.getMembership(auth.userId, workspace.id);
+    if (!membership) {
+      return { ok: false, status: 403, reason: "Workspace access denied", workspaceId: workspace.id };
+    }
+    req.rectorWorkspace = { workspaceId: workspace.id, role: membership.role };
+    return { ok: true, workspaceId: workspace.id, role: membership.role };
+  };
+
+  const authorize = async (
+    req: express.Request,
+    res: express.Response,
+    permission: Permission,
+    options: { workspaceId?: string; targetType?: string; targetId?: string } = {},
+  ): Promise<{ ok: true; workspaceId: string; role: WorkspaceRole } | false> => {
+    const workspace = await resolveRequestWorkspace(req, options.workspaceId);
+    if (!workspace.ok) {
+      await auditRequest(req, {
+        workspaceId: workspace.workspaceId,
+        action: `permission.${permission}`,
+        targetType: options.targetType ?? "permission",
+        targetId: options.targetId,
+        outcome: "denied",
+        reason: workspace.reason,
+      });
+      res.status(workspace.status).json({ error: workspace.reason });
+      return false;
+    }
+
+    const decision = evaluatePermission(
+      { authEnabled: authConfig.enabled, userId: requestActorId(req), workspaceId: workspace.workspaceId, role: workspace.role },
+      permission,
+    );
+    if (!decision.ok) {
+      await auditRequest(req, {
+        workspaceId: workspace.workspaceId,
+        action: `permission.${permission}`,
+        targetType: options.targetType ?? "permission",
+        targetId: options.targetId,
+        outcome: "denied",
+        reason: decision.reason,
+      });
+      sendPermissionDenied(res, decision as PermissionDenial);
+      return false;
+    }
+    return { ok: true, workspaceId: workspace.workspaceId, role: workspace.role };
+  };
+
+  const workspaceIdForConversation = async (conversationId: string): Promise<string | undefined> => {
+    const conversation = await rectorStore.getConversation(conversationId);
+    return conversation?.workspaceId;
+  };
+
+  const workspaceIdForRun = async (runId: string): Promise<string | undefined> => {
+    const run = await rectorStore.getRun(runId);
+    if (!run) return undefined;
+    return workspaceIdForConversation(run.conversationId);
+  };
+
+  const enforceRunQuota = async (
+    req: express.Request,
+    res: express.Response,
+    workspaceId: string,
+  ): Promise<boolean> => {
+    const quota = await quotaService.checkRunCreation(workspaceId);
+    if (quota.allowed) return true;
+    await auditRequest(req, {
+      workspaceId,
+      action: "quota.denied",
+      targetType: "quota",
+      outcome: "denied",
+      reason: quota.reason,
+    });
+    res.status(429).json({ error: "Quota exceeded", reason: quota.reason, quota: { policy: quota.policy, usage: quota.usage } });
+    return false;
+  };
+
   const LoginRequestSchema = z.object({
     username: z.string().min(1),
     password: z.string().min(1),
   });
 
-  app.post("/api/auth/login", (req, res) => {
+  app.post("/api/auth/login", async (req, res) => {
     if (!authConfig.enabled) {
       const outcome = redactOutbound({ authenticated: true, username: "default" });
       return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
@@ -1686,24 +1863,61 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
 
     const username = body.username.trim().toLowerCase();
+    const attemptKey = `${username}:${req.ip}`;
+    const nowMs = Date.now();
+    const currentAttempt = loginAttempts.get(attemptKey);
+    if (currentAttempt && currentAttempt.resetAt > nowMs && currentAttempt.count >= 5) {
+      await auditRequest(req, {
+        actorUserId: username,
+        action: "auth.login",
+        targetType: "user",
+        targetId: username,
+        outcome: "denied",
+        reason: "Login attempt rate limit exceeded.",
+      });
+      const outcome = redactOutbound({ error: authErrorMessage("Too many login attempts") });
+      return res.status(429).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
+    }
+
     const storedHash = authConfig.users.get(username);
     if (!storedHash || !verifyPassword(body.password, storedHash)) {
+      const nextAttempt = currentAttempt && currentAttempt.resetAt > nowMs
+        ? { count: currentAttempt.count + 1, resetAt: currentAttempt.resetAt }
+        : { count: 1, resetAt: nowMs + 15 * 60 * 1000 };
+      loginAttempts.set(attemptKey, nextAttempt);
+      await auditRequest(req, {
+        actorUserId: username,
+        action: "auth.login",
+        targetType: "user",
+        targetId: username,
+        outcome: "failed",
+        reason: "Invalid username or password.",
+      });
       const outcome = redactOutbound({ error: authErrorMessage("Invalid username or password") });
       return res.status(401).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
     }
 
+    loginAttempts.delete(attemptKey);
     const token = createSessionToken(username, username, authConfig.sessionSecret);
-    const maxAgeSec = Math.floor(SESSION_MAX_AGE_MS / 1000);
-    res.setHeader(
-      "Set-Cookie",
-      `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`,
-    );
+    res.setHeader("Set-Cookie", buildSessionCookie(token, deploymentEnv));
+    await auditRequest(req, {
+      actorUserId: username,
+      action: "auth.login",
+      targetType: "user",
+      targetId: username,
+      outcome: "success",
+    });
     const outcome = redactOutbound({ authenticated: true, username });
     return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
   });
 
-  app.post("/api/auth/logout", (_req, res) => {
-    res.setHeader("Set-Cookie", `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  app.post("/api/auth/logout", async (req, res) => {
+    res.setHeader("Set-Cookie", buildClearSessionCookie(deploymentEnv));
+    await auditRequest(req, {
+      action: "auth.logout",
+      targetType: "session",
+      outcome: "success",
+    });
     const outcome = redactOutbound({ authenticated: false });
     return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
   });
@@ -1730,6 +1944,160 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   });
 
   app.use(createAuthMiddleware(authConfig, resolveUserStores));
+  app.use(csrfProtectionMiddleware(authConfig, securityOptions));
+
+  app.get("/api/rbac/permissions", async (req, res) => {
+    const workspace = await authorize(req, res, "workspace.read", {
+      workspaceId: typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined,
+      targetType: "workspace",
+    });
+    if (!workspace) return;
+    sendRedacted(res, 200, {
+      workspaceId: workspace.workspaceId,
+      role: workspace.role,
+      permissions: permissionsForRole(workspace.role),
+    });
+  });
+
+  app.get("/api/workspaces", async (req, res) => {
+    try {
+      const userId = requestActorId(req);
+      const entries = authConfig.enabled
+        ? await workspaceDirectory.listWorkspacesForUser(userId)
+        : [{ workspace: await workspaceDirectory.getDefaultWorkspaceForUser("default"), membership: WorkspaceMembershipSchema.parse({ id: "local-owner", workspaceId: "local", userId: "default", role: "owner", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }) }];
+      sendRedacted(res, 200, {
+        workspaces: entries.map((entry) => ({ ...entry.workspace, role: entry.membership.role })),
+      });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/workspaces", async (req, res) => {
+    if (authConfig.enabled && !req.rectorAuth) return res.status(401).json({ error: "Authentication required" });
+    try {
+      const body = z.object({ name: z.string().min(1) }).parse(req.body ?? {});
+      const ownerUserId = requestActorId(req);
+      const workspace = await workspaceDirectory.createWorkspace({ name: body.name, ownerUserId });
+      await auditRequest(req, { workspaceId: workspace.id, action: "workspace.create", targetType: "workspace", targetId: workspace.id, outcome: "success" });
+      sendRedacted(res, 201, { workspace });
+    } catch (error) {
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.get("/api/workspaces/:id/members", async (req, res) => {
+    const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "workspace", targetId: req.params.id });
+    if (!workspace) return;
+    try {
+      sendRedacted(res, 200, { members: await workspaceDirectory.listMembers(workspace.workspaceId) });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/workspaces/:id/members", async (req, res) => {
+    const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "workspace", targetId: req.params.id });
+    if (!workspace) return;
+    try {
+      const body = z.object({ userId: z.string().min(1), role: z.enum(["owner", "admin", "operator", "developer", "viewer"]) }).parse(req.body ?? {});
+      const member = await workspaceDirectory.addMembership({ workspaceId: workspace.workspaceId, userId: body.userId, role: body.role });
+      await auditRequest(req, { workspaceId: workspace.workspaceId, action: "members.add", targetType: "membership", targetId: member.id, outcome: "success" });
+      sendRedacted(res, 201, { member });
+    } catch (error) {
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.patch("/api/workspaces/:id/members/:memberId", async (req, res) => {
+    const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "membership", targetId: req.params.memberId });
+    if (!workspace) return;
+    try {
+      const body = z.object({ role: z.enum(["owner", "admin", "operator", "developer", "viewer"]) }).parse(req.body ?? {});
+      const members = await workspaceDirectory.listMembers(workspace.workspaceId);
+      if (!members.some((member) => member.id === req.params.memberId)) {
+        return sendRedacted(res, 404, { error: "Member not found" });
+      }
+      const member = await workspaceDirectory.updateMembershipRole(req.params.memberId, body.role);
+      if (!member) return sendRedacted(res, 404, { error: "Member not found" });
+      await auditRequest(req, { workspaceId: workspace.workspaceId, action: "members.update", targetType: "membership", targetId: member.id, outcome: "success" });
+      sendRedacted(res, 200, { member });
+    } catch (error) {
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.delete("/api/workspaces/:id/members/:memberId", async (req, res) => {
+    const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "membership", targetId: req.params.memberId });
+    if (!workspace) return;
+    const members = await workspaceDirectory.listMembers(workspace.workspaceId);
+    const target = members.find((member) => member.id === req.params.memberId);
+    if (!target) return sendRedacted(res, 404, { error: "Member not found" });
+    const removed = await workspaceDirectory.removeMembership(req.params.memberId);
+    await auditRequest(req, { workspaceId: workspace.workspaceId, action: "members.remove", targetType: "membership", targetId: req.params.memberId, outcome: removed ? "success" : "failed" });
+    sendRedacted(res, 200, { removed, id: req.params.memberId });
+  });
+
+  app.get("/api/audit/events", async (req, res) => {
+    const workspace = await authorize(req, res, "audit.read", {
+      workspaceId: typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined,
+      targetType: "audit",
+    });
+    if (!workspace) return;
+    const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+    const events = await auditLog.list({ workspaceId: workspace.workspaceId, limit: Number.isFinite(limitRaw) ? limitRaw : 100 });
+    sendRedacted(res, 200, { events });
+  });
+
+  app.get("/api/quotas", async (req, res) => {
+    const workspace = await authorize(req, res, "workspace.read", {
+      workspaceId: typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined,
+      targetType: "quota",
+    });
+    if (!workspace) return;
+    sendRedacted(res, 200, {
+      workspaceId: workspace.workspaceId,
+      policy: await quotaService.getPolicy(workspace.workspaceId),
+      usage: await quotaService.getUsage(workspace.workspaceId),
+    });
+  });
+
+  app.put("/api/quotas", async (req, res) => {
+    const workspaceId = typeof req.body?.workspaceId === "string" ? req.body.workspaceId : undefined;
+    const workspace = await authorize(req, res, "billing.manage", { workspaceId, targetType: "quota" });
+    if (!workspace) return;
+    try {
+      const policy = QuotaPolicySchema.parse(req.body?.policy ?? req.body ?? {});
+      const saved = await quotaService.setPolicy(workspace.workspaceId, policy);
+      await auditRequest(req, { workspaceId: workspace.workspaceId, action: "quota.update", targetType: "quota", outcome: "success" });
+      sendRedacted(res, 200, { workspaceId: workspace.workspaceId, policy: saved });
+    } catch (error) {
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.get("/api/setup/deployment-readiness", async (req, res) => {
+    const workspace = await authorize(req, res, "workspace.read", { targetType: "setup" });
+    if (!workspace) return;
+    sendRedacted(res, 200, computeCommercialDeploymentReadiness(deploymentEnv));
+  });
+
+  app.post("/api/secrets/:id/rotate", async (req, res) => {
+    const workspace = await authorize(req, res, "secrets.rotate", { targetType: "secret", targetId: req.params.id });
+    if (!workspace) return;
+    try {
+      const body = z.object({ value: z.string().min(1) }).parse(req.body ?? {});
+      const result = await storesFor(req).secretStore.setSecret(req.params.id, body.value);
+      if (!result.ok) return sendRedacted(res, 500, { error: redactString(result.error) });
+      await auditRequest(req, { workspaceId: workspace.workspaceId, action: "secret.rotate", targetType: "secret", targetId: req.params.id, outcome: "success" });
+      sendRedactedPreservingPresence(res, 200, { id: req.params.id, rotated: true, secretPresent: true }, (redacted) => {
+        redacted.secretPresent = true;
+        return redacted;
+      });
+    } catch (error) {
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+    }
+  });
 
   const memoryRoleRouterByUser = new Map<string, MemoryRoleRouter>();
   const makeMemoryRoleRouter = (stores: UserStores): MemoryRoleRouter =>
@@ -1852,9 +2220,15 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return res.status(400).json({ error: "retentionPolicy must be a string" });
       }
 
+      const access = await authorize(req, res, "runs.create", {
+        workspaceId: typeof workspaceId === "string" && workspaceId.trim().length > 0 ? workspaceId.trim() : undefined,
+        targetType: "conversation",
+      });
+      if (!access) return;
+
       const conversation = await rectorStore.createConversation({
         title: nonEmptyOrDefault(title, "New conversation"),
-        workspaceId: nonEmptyOrDefault(workspaceId, "local"),
+        workspaceId: access.workspaceId,
         retentionPolicy: nonEmptyOrDefault(retentionPolicy, "session"),
       });
       res.status(201).json(conversation);
@@ -1866,7 +2240,19 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.get("/api/chat/conversations", async (req, res) => {
     try {
       const workspaceId = typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined;
-      const conversations = await rectorStore.listConversations(workspaceId);
+      if (!authConfig.enabled) {
+        const conversations = await rectorStore.listConversations(workspaceId);
+        return res.json({ conversations });
+      }
+      if (workspaceId) {
+        const access = await authorize(req, res, "runs.read", { workspaceId, targetType: "conversation" });
+        if (!access) return;
+        const conversations = await rectorStore.listConversations(access.workspaceId);
+        return res.json({ conversations });
+      }
+      const memberships = await workspaceDirectory.listWorkspacesForUser(requestActorId(req));
+      const allowedIds = new Set(memberships.map((entry) => entry.workspace.id));
+      const conversations = (await rectorStore.listConversations()).filter((conversation) => allowedIds.has(conversation.workspaceId));
       res.json({ conversations });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1877,6 +2263,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     try {
       const conversation = await rectorStore.getConversation(req.params.id);
       if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+      const access = await authorize(req, res, "runs.read", { workspaceId: conversation.workspaceId, targetType: "conversation", targetId: conversation.id });
+      if (!access) return;
       const messages = await rectorStore.listMessages(conversation.id);
       res.json({ conversation, messages });
     } catch (err: any) {
@@ -1893,6 +2281,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.get("/api/chat/conversations/:id/cost", async (req, res) => {
     try {
       const conversationId = req.params.id;
+      const conversation = await rectorStore.getConversation(conversationId);
+      const access = await authorize(req, res, "runs.read", { workspaceId: conversation?.workspaceId, targetType: "conversation", targetId: conversationId });
+      if (!access) return;
       const runs = await rectorStore.listRuns(conversationId);
       const eventsByRun = new Map<string, RunEvent[]>();
       for (const run of runs) {
@@ -1908,6 +2299,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     try {
       const conversation = await rectorStore.getConversation(req.params.id);
       if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+      const access = await authorize(req, res, "runs.create", { workspaceId: conversation.workspaceId, targetType: "conversation", targetId: conversation.id });
+      if (!access) return;
+      if (!(await enforceRunQuota(req, res, access.workspaceId))) return;
 
       const { content, deepPlanning } = req.body ?? {};
       if (!content || typeof content !== "string") {
@@ -2051,6 +2445,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
         try {
           const run = await runCreated;
+          await quotaService.recordRunCreated(access.workspaceId, { estimatedUsd: numericField(run.costEstimate, "usd") });
           return res.status(202).json({ runId: run.id, traceId: run.traceId });
         } catch (error) {
           // Run-creation failure: redacted error, no background run persisted, and no stream opened
@@ -2061,6 +2456,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
       // Synchronous (non-stream) path — unchanged behavior, preserved as the streaming fallback.
       const { run, synthesis, observabilitySummary, assistantMessage } = await runChatPipeline(rectorStore);
+      await quotaService.recordRunCreated(access.workspaceId, { estimatedUsd: numericField(run.costEstimate, "usd") });
       await moduleRegistry.invokeOnRunCompleted({
         store: rectorStore,
         run,
@@ -2092,6 +2488,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       if (!content || typeof content !== "string") {
         return sendRedacted(res, 400, { error: "content (string) is required" });
       }
+
+      const noteWorkspaceId = typeof conversationId === "string" ? await workspaceIdForConversation(conversationId) : undefined;
+      const access = await authorize(req, res, "runs.create", { workspaceId: noteWorkspaceId, targetType: "memory" });
+      if (!access) return;
 
       const redacted = redactString(content);
       const now = new Date().toISOString();
@@ -2130,6 +2530,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // the resolved MemoryProvider — no secrets, no mutation.
   app.get("/api/memory/entries", async (req, res) => {
     try {
+      const access = await authorize(req, res, "workspace.read", { targetType: "memory" });
+      if (!access) return;
       const layerRaw = req.query.layer;
       let layer: MemoryLayer | undefined;
       if (layerRaw !== undefined) {
@@ -2156,6 +2558,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     try {
       const run = await rectorStore.getRun(req.params.id);
       if (!run) return res.status(404).json({ error: "Run not found" });
+      const workspaceId = await workspaceIdForConversation(run.conversationId);
+      const access = await authorize(req, res, "runs.read", { workspaceId, targetType: "run", targetId: run.id });
+      if (!access) return;
       const events = await rectorStore.listEvents(run.id);
       res.json({ run, events });
     } catch (err: any) {
@@ -2166,7 +2571,15 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // Live SSE run stream (ORN-40): catch-up replay of persisted events, then live frames from the
   // broker-wrapped store, with a heartbeat keep-alive and clean teardown. The polling endpoint
   // above is preserved unchanged as the fallback.
-  registerRunStreamRoute(app, { store: rectorStore, broker: runEventBroker });
+  registerRunStreamRoute(app, {
+    store: rectorStore,
+    broker: runEventBroker,
+    authorizeRunRead: async (req, res, runId) => {
+      const workspaceId = await workspaceIdForRun(runId);
+      const access = await authorize(req, res, "runs.read", { workspaceId, targetType: "run", targetId: runId });
+      return Boolean(access);
+    },
+  });
 
   // Per-run cost aggregate (ORN-41, Req 3.6/3.10). Derives the RunCostAggregate from the run's
   // persisted (already-redacted) events. For an UNKNOWN run id we do NOT 404: `listEvents` returns
@@ -2175,6 +2588,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.get("/api/runs/:id/cost", async (req, res) => {
     try {
       const runId = req.params.id;
+      const workspaceId = await workspaceIdForRun(runId);
+      const access = await authorize(req, res, "runs.read", { workspaceId, targetType: "run", targetId: runId });
+      if (!access) return;
       const events = await rectorStore.listEvents(runId);
       res.json(aggregateRunCost(runId, events));
     } catch (err: any) {
@@ -2206,6 +2622,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
 
     try {
+      const workspaceId = await workspaceIdForRun(runId);
+      const access = await authorize(req, res, "runs.approve", { workspaceId, targetType: "run", targetId: runId });
+      if (!access) return;
       const record = await recordApprovalDecision(
         rectorStore,
         { runId, operationId, decision: decision as ApprovalDecision, decidedBy },
@@ -2213,6 +2632,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       );
       // Outbound boundary: route the decision record through the suppression helper so a redaction
       // failure suppresses the raw record and returns a redaction-failed error (Req 9.6, 11.1, 11.5).
+      await auditRequest(req, { workspaceId: access.workspaceId, action: "run.decision", targetType: "run", targetId: runId, outcome: "success" });
       return sendRedacted(res, 200, { decisionProcessed: true, record });
     } catch (error) {
       if (error instanceof ApprovalProcessingError) {
@@ -2234,6 +2654,13 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   });
 
   // --- Local-only operator routes for optional Retool console ---
+
+  app.use("/api/operator", async (req, res, next) => {
+    const permission: Permission = req.method === "GET" ? "operator.read" : "operator.manage";
+    const access = await authorize(req, res, permission, { targetType: "operator" });
+    if (!access) return;
+    next();
+  });
 
   app.get("/api/operator/runs", async (_req, res) => {
     try {
@@ -2419,6 +2846,17 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // --- Task routes ---
 
+  app.use("/api/tasks", async (req, res, next) => {
+    let permission: Permission = "runs.read";
+    if (req.method === "POST" && req.path === "/") permission = "runs.create";
+    else if (req.method === "POST" && req.path.endsWith("/approve")) permission = "runs.approve";
+    else if (req.method === "POST" && req.path.endsWith("/abort")) permission = "runs.abort";
+    else if (req.method === "POST") permission = "operator.manage";
+    const access = await authorize(req, res, permission, { targetType: "task" });
+    if (!access) return;
+    next();
+  });
+
   app.post("/api/tasks", (req, res) => {
     try {
       const { description } = req.body ?? {};
@@ -2516,13 +2954,17 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // --- Telemetry ---
 
-  app.get("/api/telemetry", (_req, res) => {
+  app.get("/api/telemetry", async (req, res) => {
+    const access = await authorize(req, res, "operator.read", { targetType: "telemetry" });
+    if (!access) return;
     res.json(manager.telemetry.getMetrics());
   });
 
   // --- Setup checklist ---
 
-  app.get("/api/setup", (_req, res) => {
+  app.get("/api/setup", async (req, res) => {
+    const access = await authorize(req, res, "workspace.read", { targetType: "setup" });
+    if (!access) return;
     res.json(getSetupChecklist());
   });
 
@@ -2565,7 +3007,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // `sendRedacted`, which redacts the outbound body and — if redaction itself fails — suppresses the
   // raw content and returns a redaction-failed error instead (Req 11.5).
   const workspaceSafetyConfig = securityOptions.workspaceSafety ?? resolveWorkspaceSafetyConfig(process.env);
-  app.get("/api/setup/workspace", (_req, res) => {
+  app.get("/api/setup/workspace", async (req, res) => {
+    const access = await authorize(req, res, "workspace.read", { targetType: "setup" });
+    if (!access) return;
     let response: WorkspaceSafetyResponse;
     try {
       response = buildWorkspaceSafetyResponse(workspaceSafetyConfig);
@@ -2581,6 +3025,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // --- Provider connection test (ORN-32) ---
 
   app.post("/api/setup/test-connection", async (req, res) => {
+    const access = await authorize(req, res, "providers.configure", { targetType: "provider" });
+    if (!access) return;
     let request: TestConnectionRequest;
     try {
       request = TestConnectionRequestSchema.parse(req.body ?? {});
@@ -2848,6 +3294,18 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }
+  });
+
+  app.use("/api/providers", async (req, res, next) => {
+    let permission: Permission = "providers.read";
+    if (req.method === "POST" && req.path === "/active") permission = "models.assign";
+    else if (req.method === "POST" && req.path.endsWith("/secret")) permission = "providers.secrets.write";
+    else if (req.method === "POST" && req.path.endsWith("/models/refresh")) permission = "providers.configure";
+    else if (req.method === "POST") permission = "providers.configure";
+    else if (req.method === "DELETE") permission = "providers.configure";
+    const access = await authorize(req, res, permission, { targetType: "provider" });
+    if (!access) return;
+    next();
   });
 
   // --- Provider_Config_API: BYOK CRUD + selection (design C7, Req 10/11/14) ---
@@ -3205,6 +3663,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       // Persist a newly supplied secret BEFORE the config upsert so a secret failure leaves both
       // the prior secret and the prior config untouched (Req 11.7).
       if (apiKey !== undefined) {
+        const secretAccess = await authorize(req, res, "providers.secrets.write", { targetType: "provider", targetId: body.id });
+        if (!secretAccess) return;
         const secretResult = await userStores.secretStore.setSecret(secretRef, apiKey);
         if (!secretResult.ok) {
           return sendRedacted(res, 500, { error: redactString(secretResult.error) });
@@ -3225,6 +3685,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return sendRedacted(res, 500, { error: redactString(upsertResult.error) });
       }
 
+      if (apiKey !== undefined) {
+        await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "provider.secret.write", targetType: "provider", targetId: record.id, outcome: "success" });
+      }
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "provider.configure", targetType: "provider", targetId: record.id, outcome: "success" });
       const secretPresent = await userStores.secretStore.hasSecret(secretRef);
       // Re-apply the presence boolean after redaction (the sensitive-key rule
       // would otherwise replace it with `[REDACTED]`), so the response exposes a
@@ -3255,6 +3719,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
       const state = await userStores.providerConfigStore.getState();
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "provider.route.assign", targetType: "provider", targetId: body.providerId ?? body.role, outcome: "success" });
       sendRedacted(res, 200, { activeRoutes: state.activeRoutes });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
@@ -3282,6 +3747,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       if (!result.ok) {
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "provider.secret.write", targetType: "provider", targetId: existing.id, outcome: "success" });
       sendRedactedPreservingPresence(res, 200, { id: existing.id, secretPresent: true }, (redacted) => {
         redacted.secretPresent = true;
         return redacted;
@@ -3313,10 +3779,18 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         }
       }
 
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "provider.delete", targetType: "provider", targetId: existing.id, outcome: "success" });
       sendRedacted(res, 200, { removed: true, id: existing.id });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }
+  });
+
+  app.use("/api/modules", async (req, res, next) => {
+    const permission: Permission = req.method === "GET" ? "workspace.read" : "modules.configure";
+    const access = await authorize(req, res, permission, { targetType: "module" });
+    if (!access) return;
+    next();
   });
 
   const ModuleToggleSchema = z.object({
@@ -3367,6 +3841,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return sendRedacted(res, 500, { error: redactString(persisted.error) });
       }
 
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "module.configure", targetType: "module", targetId: body.moduleId, outcome: "success" });
       sendRedacted(res, 200, {
         moduleId: body.moduleId,
         enabled: body.enabled,
@@ -3469,6 +3944,15 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
+  app.use("/api/memory-providers", async (req, res, next) => {
+    let permission: Permission = "providers.read";
+    if (req.method === "POST" && req.path.endsWith("/secret")) permission = "providers.secrets.write";
+    else if (req.method === "POST" || req.method === "DELETE") permission = "memory.configure";
+    const access = await authorize(req, res, permission, { targetType: "memory-provider" });
+    if (!access) return;
+    next();
+  });
+
   // --- Memory_Provider_API: CRUD + selection (Chunk 36, mirrors Provider_Config_API) ---
   //
   // Every response is routed through `sendRedacted`/`redactOutbound` so no full or partial secret
@@ -3522,6 +4006,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const secretRef = `memory:${body.id}`;
 
       if (apiKey !== undefined) {
+        const secretAccess = await authorize(req, res, "providers.secrets.write", { targetType: "memory-provider", targetId: body.id });
+        if (!secretAccess) return;
         const secretResult = await userStores.secretStore.setSecret(secretRef, apiKey);
         if (!secretResult.ok) {
           return sendRedacted(res, 500, { error: redactString(secretResult.error) });
@@ -3541,6 +4027,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       }
 
       clearMemoryRoutingCaches();
+      if (apiKey !== undefined) {
+        await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "memory.secret.write", targetType: "memory-provider", targetId: record.id, outcome: "success" });
+      }
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "memory.configure", targetType: "memory-provider", targetId: record.id, outcome: "success" });
       const secretPresent = await userStores.secretStore.hasSecret(secretRef);
       sendRedactedPreservingPresence(
         res,
@@ -3573,6 +4063,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       }
       clearMemoryRoutingCaches();
       const state = await userStores.memoryConfigStore.getState();
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "memory.assignment.update", targetType: "memory-provider", targetId: body.providerId ?? "local-inmemory", outcome: "success" });
       sendRedacted(res, 200, { activeMemoryProviderId: state.activeMemoryProviderId });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
@@ -3599,6 +4090,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
       clearMemoryRoutingCaches();
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "memory.secret.write", targetType: "memory-provider", targetId: existing.id, outcome: "success" });
       sendRedactedPreservingPresence(res, 200, { id: existing.id, secretPresent: true }, (redacted) => {
         redacted.secretPresent = true;
         return redacted;
@@ -3629,6 +4121,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       }
 
       clearMemoryRoutingCaches();
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "memory.delete", targetType: "memory-provider", targetId: existing.id, outcome: "success" });
       sendRedacted(res, 200, { removed: true, id: existing.id });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
@@ -3775,6 +4268,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // header can escape in the response (Req 4.4). A refresh can be requested via `?refresh=1` or a
   // truthy `refresh` body field.
   app.post("/api/config/providers/:id/discover", async (req, res) => {
+    const access = await authorize(req, res, "providers.configure", { targetType: "provider", targetId: req.params.id });
+    if (!access) return;
     const mode = securityOptions.orchestration?.mode ?? "local";
     const body = (req.body ?? {}) as Record<string, unknown>;
     const refresh =
@@ -3800,6 +4295,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // --- Scenario seeding ---
 
   app.post("/api/dev/scenario", async (req, res) => {
+    const access = await authorize(req, res, "operator.manage", { targetType: "dev" });
+    if (!access) return;
     if (process.env.NODE_ENV === "production") {
       return res.status(404).json({ error: "Not found" });
     }
@@ -3821,6 +4318,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // Manual trigger for proactive "alive" behavior (Chunk 28).
   app.post("/api/dev/proactive-trigger", async (req, res) => {
+    const access = await authorize(req, res, "operator.manage", { targetType: "dev" });
+    if (!access) return;
     try {
       const proactiveAgent = getNeuroAliveState().proactiveAgent;
       if (!proactiveAgent) {
@@ -3887,6 +4386,44 @@ function corsMiddleware(options: ApiSecurityOptions): express.RequestHandler {
 
     if (req.method === "OPTIONS") {
       res.status(204).end();
+      return;
+    }
+    next();
+  };
+}
+
+function csrfProtectionMiddleware(authConfig: ParsedAuthConfig, options: ApiSecurityOptions): express.RequestHandler {
+  const configuredOrigins = new Set([
+    ...(options.corsAllowedOrigins ?? []),
+    ...parseCsvEnv(process.env.CORS_ALLOWED_ORIGINS),
+  ]);
+
+  return (req, res, next) => {
+    if (!authConfig.enabled) {
+      next();
+      return;
+    }
+    if (["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+      next();
+      return;
+    }
+    const origin = req.header("Origin");
+    if (!origin) {
+      next();
+      return;
+    }
+    const host = req.header("Host");
+    let allowed = configuredOrigins.has(origin) || isDevLocalhostOrigin(origin);
+    if (!allowed && host) {
+      try {
+        const url = new URL(origin);
+        allowed = url.host === host;
+      } catch {
+        allowed = false;
+      }
+    }
+    if (!allowed) {
+      res.status(403).json({ error: "CSRF origin denied" });
       return;
     }
     next();
