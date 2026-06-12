@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import express from "express";
 import path from "node:path";
@@ -6,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { TaskManager } from "../thalamus/router";
 import { getSetupChecklist } from "../setupChecklist";
-import { STATES } from "../domain/states";
 import { buildContextPack, createContextMaterial } from "../orchestration/contextBuilder";
 import type { ExecutorSimulatorOptions } from "../orchestration/executorSimulator";
 import { runChat } from "../orchestration/chatRunner";
@@ -57,11 +55,6 @@ import {
   type QuotaService,
 } from "../security/quotas";
 import { computeSetupStatus } from "../setupStatus";
-import {
-  ApprovalProcessingError,
-  recordApprovalDecision,
-  type ApprovalDecision,
-} from "./approvalFlow";
 import type { SecretStore } from "../security/secretStore";
 import {
   createInMemoryProviderConfigStore,
@@ -151,13 +144,16 @@ import {
   type RectorStore,
 } from "../store";
 import { MemoryLayerSchema, RunEventSchema } from "../store/schemas";
-import type { Artifact, MemoryLayer, Run, RunEvent } from "../store/schemas";
+import type { MemoryLayer, Run, RunEvent } from "../store/schemas";
 import { RunPhaseSchema, isTerminalRunPhase } from "../protocol/phases";
 import { registerCommercialRoutes } from "./routes/commercial";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerMemoryAssignmentRoutes } from "./routes/memoryAssignments";
 import { registerOrchestrationModelRoutes } from "./routes/orchestrationModels";
 import { registerTemplateRoutes } from "./routes/templates";
+import { registerRunApprovalRoutes } from "./routes/runApprovals";
+import { registerOperatorRoutes } from "./routes/operator";
+import { registerTaskRoutes } from "./routes/tasks";
 
 export interface ApiSecurityOptions {
   corsAllowedOrigins?: string[];
@@ -2352,366 +2348,22 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // Run Approval UX decision endpoint (Requirement 9). Records a user's approve/deny decision over a
-  // pending operation and continues the run. `recordApprovalDecision` appends the decision (with the
-  // deciding identity and timestamp) to the Event_Log atomically with the run transition, BEFORE the
-  // operation executes or is cancelled (Req 9.3): an approval resumes to EXECUTING, a denial (or a
-  // 30-minute timeout) resumes to a final answer that excludes the operation (Req 9.5, 9.8). When the
-  // decision cannot be recorded — the run is not awaiting this operation's decision, or the Event_Log
-  // write fails — the run is left pending and a redacted indication is surfaced (Req 9.7). Every
-  // outbound message is routed through `redactString` so no secret substring escapes (Req 9.6/11.3).
-  app.post("/api/runs/:id/decision", async (req, res) => {
-    const runId = req.params.id;
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const { operationId, decision, decidedBy } = body;
-
-    if (typeof operationId !== "string" || operationId.length === 0) {
-      return res.status(400).json({ error: "operationId (string) is required" });
-    }
-    if (decision !== "approve" && decision !== "deny") {
-      return res.status(400).json({ error: "decision must be 'approve' or 'deny'" });
-    }
-    if (typeof decidedBy !== "string" || decidedBy.length === 0) {
-      return res.status(400).json({ error: "decidedBy (string) is required" });
-    }
-
-    try {
-      const workspaceId = await workspaceIdForRun(runId);
-      const access = await authorize(req, res, "runs.approve", { workspaceId, targetType: "run", targetId: runId });
-      if (!access) return;
-      const record = await recordApprovalDecision(
-        rectorStore,
-        { runId, operationId, decision: decision as ApprovalDecision, decidedBy },
-        {}
-      );
-      // Outbound boundary: route the decision record through the suppression helper so a redaction
-      // failure suppresses the raw record and returns a redaction-failed error (Req 9.6, 11.1, 11.5).
-      await auditRequest(req, { workspaceId: access.workspaceId, action: "run.decision", targetType: "run", targetId: runId, outcome: "success" });
-      return sendRedacted(res, 200, { decisionProcessed: true, record });
-    } catch (error) {
-      if (error instanceof ApprovalProcessingError) {
-        // Req 9.7: do not execute, keep the run in its pending-decision state, and indicate the
-        // decision could not be processed. RUN_NOT_FOUND maps to 404; everything else is a conflict
-        // with the run's current state (409).
-        const httpStatus = error.code === "RUN_NOT_FOUND" ? 404 : 409;
-        return sendRedacted(res, httpStatus, {
-          decisionProcessed: false,
-          code: error.code,
-          error: redactString(error.message),
-        });
-      }
-      return sendRedacted(res, 500, {
-        decisionProcessed: false,
-        error: redactString(error instanceof Error ? error.message : String(error)),
-      });
-    }
+  registerRunApprovalRoutes(app, {
+    store: rectorStore,
+    workspaceIdForRun,
+    authorize,
+    auditRequest,
+    sendRedacted,
   });
 
-  // --- Local-only operator routes for optional Retool console ---
-
-  app.use("/api/operator", async (req, res, next) => {
-    const permission: Permission = req.method === "GET" ? "operator.read" : "operator.manage";
-    const access = await authorize(req, res, permission, { targetType: "operator" });
-    if (!access) return;
-    next();
+  registerOperatorRoutes(app, {
+    store: rectorStore,
+    authorize,
   });
 
-  app.get("/api/operator/runs", async (_req, res) => {
-    try {
-      const runs = await rectorStore.listRuns();
-      res.json(operatorEnvelope({ runs: runs.map(summarizeOperatorRun) }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/operator/runs/:id", async (req, res) => {
-    try {
-      const run = await rectorStore.getRun(req.params.id);
-      if (!run) return res.status(404).json({ error: "Run not found" });
-
-      const conversation = await rectorStore.getConversation(run.conversationId);
-      const messages = await rectorStore.listMessages(run.conversationId);
-      const events = await rectorStore.listEvents(run.id);
-      const artifactHandles = collectArtifactHandles(events);
-
-      res.json(
-        operatorEnvelope({
-          run,
-          conversation,
-          userMessage: messages.find((message) => message.id === run.userMessageId),
-          assistantMessages: messages.filter((message) => message.role === "assistant" && message.runId === run.id),
-          events,
-          artifactHandles,
-        })
-      );
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/operator/failures", async (_req, res) => {
-    try {
-      const runs = await rectorStore.listRuns();
-      const events = await rectorStore.listEvents();
-      const failures = runs
-        .filter(isOperatorFailureRun)
-        .map((run) => ({
-          ...summarizeOperatorRun(run),
-          lastError: run.lastError,
-          failureEvents: events.filter((event) => event.runId === run.id && isFailureEvent(event)),
-        }));
-
-      res.json(operatorEnvelope({ failures }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/operator/approvals", async (_req, res) => {
-    try {
-      const runs = await rectorStore.listRuns();
-      const approvals = runs
-        .filter((run) => run.phase === "NEEDS_DECISION" || run.decisionRequest !== undefined)
-        .map((run) => ({
-          ...summarizeOperatorRun(run),
-          decisionRequest: run.decisionRequest ?? {},
-        }));
-
-      res.json(operatorEnvelope({ approvals }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/operator/approvals/:runId/decision", async (req, res) => {
-    try {
-      const run = await rectorStore.getRun(req.params.runId);
-      if (!run) return res.status(404).json({ error: "Run not found" });
-      const { decision, note } = req.body ?? {};
-      if (decision === undefined) {
-        return res.status(400).json({ error: "decision is required" });
-      }
-
-      res.status(202).json(
-        operatorEnvelope({
-          status: "placeholder",
-          mutated: false,
-          run: summarizeOperatorRun(run),
-          decision: redactSecrets({ decision, note }),
-          message: "Decision captured as a local-only placeholder; approval resume is not implemented in Chunk 21.",
-        })
-      );
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/operator/costs", async (_req, res) => {
-    try {
-      const runs = await rectorStore.listRuns();
-      res.json(operatorEnvelope({ summary: summarizeOperatorCosts(runs), runs: runs.map(summarizeOperatorRun) }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/operator/runs/:id/retry", async (req, res) => {
-    try {
-      const run = await rectorStore.getRun(req.params.id);
-      if (!run) return res.status(404).json({ error: "Run not found" });
-      res.status(202).json(
-        operatorEnvelope({
-          status: "placeholder",
-          action: "retry",
-          mutated: false,
-          run: summarizeOperatorRun(run),
-          message: "Retry control is a local-only placeholder until real executor resume semantics exist.",
-        })
-      );
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/operator/runs/:id/abort", async (req, res) => {
-    try {
-      const run = await rectorStore.getRun(req.params.id);
-      if (!run) return res.status(404).json({ error: "Run not found" });
-      res.status(202).json(
-        operatorEnvelope({
-          status: "placeholder",
-          action: "abort",
-          mutated: false,
-          run: summarizeOperatorRun(run),
-          message: "Abort control is a local-only placeholder until cancellable execution exists.",
-        })
-      );
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/operator/artifacts/:id", async (req, res) => {
-    try {
-      const artifact = await rectorStore.getArtifact(req.params.id);
-      if (!artifact) return res.status(404).json({ error: "Artifact not found" });
-      res.json(operatorEnvelope({ artifact: artifactMetadataOnly(artifact) }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/operator/linear/issues", async (req, res) => {
-    try {
-      const { runId, title, description } = req.body ?? {};
-      if (runId !== undefined && typeof runId !== "string") {
-        return res.status(400).json({ error: "runId must be a string when provided" });
-      }
-      if (!title || typeof title !== "string") {
-        return res.status(400).json({ error: "title (string) is required" });
-      }
-      if (description !== undefined && typeof description !== "string") {
-        return res.status(400).json({ error: "description must be a string when provided" });
-      }
-      if (runId) {
-        const run = await rectorStore.getRun(runId);
-        if (!run) return res.status(404).json({ error: "Run not found" });
-      }
-
-      res.status(202).json(
-        operatorEnvelope({
-          status: "stubbed",
-          networkCalls: 0,
-          issue: {
-            key: `LOCAL-LINEAR-${stableStubIssueNumber(runId ?? title)}`,
-            title: title.trim(),
-            description: description?.trim() ?? "",
-            runId,
-            url: null,
-          },
-          message: "Linear issue creation is stubbed locally; no network request was made.",
-        })
-      );
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  // --- Task routes ---
-
-  app.use("/api/tasks", async (req, res, next) => {
-    let permission: Permission = "runs.read";
-    if (req.method === "POST" && req.path === "/") permission = "runs.create";
-    else if (req.method === "POST" && req.path.endsWith("/approve")) permission = "runs.approve";
-    else if (req.method === "POST" && req.path.endsWith("/abort")) permission = "runs.abort";
-    else if (req.method === "POST") permission = "operator.manage";
-    const access = await authorize(req, res, permission, { targetType: "task" });
-    if (!access) return;
-    next();
-  });
-
-  app.post("/api/tasks", (req, res) => {
-    try {
-      const { description } = req.body ?? {};
-      if (!description || typeof description !== "string") {
-        return res.status(400).json({ error: "description (string) is required" });
-      }
-      const task = manager.createTask(description);
-      res.status(201).json(task);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/tasks", async (_req, res) => {
-    try {
-      const tasks = await manager.listTasks();
-      res.json(tasks);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/tasks/:id", async (req, res) => {
-    try {
-      const task = await manager.getTask(req.params.id);
-      if (!task) return res.status(404).json({ error: "Not found" });
-      res.json(task);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // --- Control routes ---
-
-  app.post("/api/tasks/:id/retry", async (req, res) => {
-    try {
-      const task = await manager.getTask(req.params.id);
-      if (!task) return res.status(404).json({ error: "Not found" });
-      if (task.state !== STATES.PAUSED) {
-        return res.status(400).json({ error: `Cannot retry from ${task.state}` });
-      }
-      const updated = await manager.transition(req.params.id, STATES.INTAKE);
-      res.json(updated);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/tasks/:id/pause", async (req, res) => {
-    try {
-      const task = await manager.getTask(req.params.id);
-      if (!task) return res.status(404).json({ error: "Not found" });
-      const updated = await manager.transition(req.params.id, STATES.PAUSED);
-      res.json(updated);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/tasks/:id/approve", async (req, res) => {
-    try {
-      const task = await manager.getTask(req.params.id);
-      if (!task) return res.status(404).json({ error: "Not found" });
-      if (task.state !== STATES.HUMAN_HANDOFF) {
-        return res.status(400).json({ error: `Cannot approve from ${task.state}` });
-      }
-      const approved = await manager.approve(req.params.id);
-      res.json(approved);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/tasks/:id/abort", async (req, res) => {
-    try {
-      const task = await manager.getTask(req.params.id);
-      if (!task) return res.status(404).json({ error: "Not found" });
-      const updated = await manager.transition(req.params.id, STATES.ABORTED);
-      res.json(updated);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  // --- Advance pipeline one step ---
-
-  app.post("/api/tasks/:id/advance", async (req, res) => {
-    try {
-      const task = await manager.advance(req.params.id);
-      res.json(task);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // --- Telemetry ---
-
-  app.get("/api/telemetry", async (req, res) => {
-    const access = await authorize(req, res, "operator.read", { targetType: "telemetry" });
-    if (!access) return;
-    res.json(manager.telemetry.getMetrics());
+  registerTaskRoutes(app, {
+    manager,
+    authorize,
   });
 
   // --- Setup checklist ---
@@ -3844,150 +3496,8 @@ function nonEmptyOrDefault(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
 }
 
-type OperatorEnvelopePayload = Record<string, unknown>;
-
-type OperatorArtifactHandle = {
-  artifactId: string;
-  kind?: string;
-  uri?: string;
-  summary?: string;
-  hash?: string;
-  sizeBytes?: number;
-  piiState?: string;
-  retentionPolicy?: string;
-};
-
-function operatorEnvelope(payload: OperatorEnvelopePayload): OperatorEnvelopePayload {
-  return {
-    localOnly: true,
-    auth: "local-only-no-auth",
-    surface: "retool-operator-console-api",
-    ...payload,
-  };
-}
-
-function summarizeOperatorRun(run: Run): Record<string, unknown> {
-  return {
-    id: run.id,
-    conversationId: run.conversationId,
-    userMessageId: run.userMessageId,
-    status: run.status,
-    phase: run.phase,
-    route: run.route,
-    complexity: run.complexity,
-    traceId: run.traceId,
-    attempts: run.attempts,
-    healingAttempts: run.healingAttempts,
-    validationAttempts: run.validationAttempts,
-    lastError: run.lastError,
-    dagId: run.dagId,
-    estimatedUsd: numericField(run.costEstimate, "usd"),
-    actualUsd: numericField(run.actualCost, "usd"),
-    estimatedInputTokens: numericField(run.tokenEstimate, "input"),
-    estimatedOutputTokens: numericField(run.tokenEstimate, "output"),
-    actualInputTokens: numericField(run.actualTokens, "input"),
-    actualOutputTokens: numericField(run.actualTokens, "output"),
-    createdAt: run.createdAt,
-    updatedAt: run.updatedAt,
-  };
-}
-
-function summarizeOperatorCosts(runs: Run[]): Record<string, unknown> {
-  return runs.reduce(
-    (summary, run) => ({
-      runCount: summary.runCount + 1,
-      estimatedUsd: summary.estimatedUsd + numericField(run.costEstimate, "usd"),
-      actualUsd: summary.actualUsd + numericField(run.actualCost, "usd"),
-      estimatedInputTokens: summary.estimatedInputTokens + numericField(run.tokenEstimate, "input"),
-      estimatedOutputTokens: summary.estimatedOutputTokens + numericField(run.tokenEstimate, "output"),
-      actualInputTokens: summary.actualInputTokens + numericField(run.actualTokens, "input"),
-      actualOutputTokens: summary.actualOutputTokens + numericField(run.actualTokens, "output"),
-      modelCalls: summary.modelCalls + numericField(run.actualCost, "modelCalls"),
-    }),
-    {
-      runCount: 0,
-      estimatedUsd: 0,
-      actualUsd: 0,
-      estimatedInputTokens: 0,
-      estimatedOutputTokens: 0,
-      actualInputTokens: 0,
-      actualOutputTokens: 0,
-      modelCalls: 0,
-    }
-  );
-}
-
-function isOperatorFailureRun(run: Run): boolean {
-  return run.status === "failed" || run.status === "aborted" || run.status === "needs_decision" || run.lastError !== undefined;
-}
-
-function isFailureEvent(event: RunEvent): boolean {
-  return event.type === "RUN_FAILED" || event.type === "RUN_ABORTED" || event.type === "DECISION_REQUESTED";
-}
-
-function collectArtifactHandles(events: RunEvent[]): OperatorArtifactHandle[] {
-  const handles = new Map<string, OperatorArtifactHandle>();
-  for (const event of events) {
-    collectArtifactHandlesFromValue(event.payload, handles);
-  }
-  return Array.from(handles.values());
-}
-
-function collectArtifactHandlesFromValue(value: unknown, handles: Map<string, OperatorArtifactHandle>): void {
-  if (Array.isArray(value)) {
-    for (const item of value) collectArtifactHandlesFromValue(item, handles);
-    return;
-  }
-
-  if (!isRecord(value)) return;
-
-  if (typeof value.artifactId === "string") {
-    handles.set(value.artifactId, {
-      artifactId: value.artifactId,
-      kind: stringField(value, "kind"),
-      uri: stringField(value, "uri"),
-      summary: stringField(value, "summary"),
-      hash: stringField(value, "hash"),
-      sizeBytes: numberField(value, "sizeBytes"),
-      piiState: stringField(value, "piiState"),
-      retentionPolicy: stringField(value, "retentionPolicy"),
-    });
-  }
-
-  for (const nested of Object.values(value)) {
-    collectArtifactHandlesFromValue(nested, handles);
-  }
-}
-
-function artifactMetadataOnly(artifact: Artifact): Artifact {
-  const { content: _content, ...metadata } = artifact.metadata;
-  return {
-    ...artifact,
-    metadata,
-  };
-}
-
-function stableStubIssueNumber(seed: string): string {
-  const hash = crypto.createHash("sha256").update(seed).digest("hex");
-  return String(Number.parseInt(hash.slice(0, 8), 16) % 1_000_000).padStart(6, "0");
-}
-
 function numericField(value: Record<string, unknown> | undefined, key: string): number {
   if (value === undefined) return 0;
   const field = value[key];
   return typeof field === "number" && Number.isFinite(field) ? field : 0;
-}
-
-function stringField(value: Record<string, unknown>, key: string): string | undefined {
-  const field = value[key];
-  return typeof field === "string" ? field : undefined;
-}
-
-function numberField(value: Record<string, unknown>, key: string): number | undefined {
-  const field = value[key];
-  return typeof field === "number" && Number.isFinite(field) ? field : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
