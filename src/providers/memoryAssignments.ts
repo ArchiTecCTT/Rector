@@ -328,8 +328,8 @@ export function createMemoryRoleAssignment(input: {
 }): MemoryRoleAssignment {
   return MemoryRoleAssignmentSchema.parse({
     id: input.existing?.id ?? memoryAssignmentIdFor(input),
-    userId: input.userId,
-    workspaceId: input.workspaceId,
+    userId: input.userId ?? input.existing?.userId,
+    workspaceId: input.workspaceId ?? input.existing?.workspaceId,
     role: input.role,
     providerRecordId: input.providerRecordId,
     enabled: input.enabled ?? input.existing?.enabled ?? true,

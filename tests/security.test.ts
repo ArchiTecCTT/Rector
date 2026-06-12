@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import http from "node:http";
 import { createApp } from "../src/api/server";
-import { evaluateBudget } from "../src/security/budget";
+import { enforceMaxPerRunBudget, evaluateBudget, evaluateSandboxRuntimeSafety } from "../src/security/budget";
 import { redactSecrets, redactString } from "../src/security/redaction";
 import { TaskManager } from "../src/thalamus/router";
 import type { Budget, Run } from "../src/store";
@@ -107,6 +107,47 @@ describe("budget enforcement", () => {
     expect(decision.reasons).toEqual([
       "output tokens 501 exceed maxOutputTokens 500",
     ]);
+  });
+
+  it("clamps negative cost/token counters so they cannot reduce accumulated budget usage", () => {
+    const decision = evaluateBudget(
+      run({ costEstimate: { usd: 0.4, modelCalls: 1, runtimeMs: 500 }, tokenEstimate: { input: 50, output: 60 } }),
+      {
+        estimatedUsd: -100,
+        actualUsd: -100,
+        inputTokens: -500,
+        outputTokens: -500,
+        modelCalls: -3,
+        runtimeMs: -30_000,
+        healingAttempts: -1,
+      },
+    );
+
+    expect(decision.status).toBe("allowed");
+    expect(decision.usage).toMatchObject({
+      estimatedUsd: 0.4,
+      actualUsd: 0,
+      inputTokens: 50,
+      outputTokens: 60,
+      modelCalls: 1,
+      runtimeMs: 500,
+      healingAttempts: 0,
+    });
+  });
+
+  it("ignores negative projected deltas in per-run budget enforcement and rejects negative sandbox runtime", () => {
+    const perRun = enforceMaxPerRunBudget(
+      run({ budget: { ...budget, maxUsd: 1, maxModelCalls: 2 } }),
+      { estimatedUsd: 0.75, modelCalls: 1 },
+      { estimatedUsd: -0.9, modelCalls: -1 },
+    );
+    expect(perRun.status).toBe("allowed");
+    expect(perRun.usage.estimatedUsd).toBe(0.75);
+    expect(perRun.usage.modelCalls).toBe(1);
+
+    const sandbox = evaluateSandboxRuntimeSafety({ runtimeMs: -1, maxRuntimeMs: 1_000 });
+    expect(sandbox.status).toBe("denied");
+    expect(sandbox.reasons[0]).toContain("non-negative");
   });
 });
 

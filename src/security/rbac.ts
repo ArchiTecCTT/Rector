@@ -138,6 +138,16 @@ export function can(subject: AuthorizationSubject, permission: Permission): bool
  */
 export function requirePermission(subject: AuthorizationSubject, permission: Permission): PermissionResult {
   const role: WorkspaceRole = subject.authEnabled ? subject.role ?? "viewer" : "owner";
+  if (subject.authEnabled && !subject.role) {
+    return {
+      ok: false,
+      permission,
+      role,
+      workspaceId: subject.workspaceId,
+      status: 403,
+      reason: `No workspace role is assigned for permission "${permission}".`,
+    };
+  }
   if (canRole(role, permission)) {
     return { ok: true, permission, role, workspaceId: subject.workspaceId };
   }

@@ -75,4 +75,28 @@ describe("Memory role assignment schema/store", () => {
     expect(selectMemoryAssignmentForRole(assignments, { role: "semanticMemory", userId: "bob" })?.providerRecordId)
       .toBe("local");
   });
+
+  it("preserves existing user/workspace scope when updating an assignment", () => {
+    const existing = createMemoryRoleAssignment({
+      role: "semanticMemory",
+      providerRecordId: "local",
+      userId: "alice",
+      workspaceId: "project",
+      now: NOW,
+    });
+
+    const updated = createMemoryRoleAssignment({
+      role: "semanticMemory",
+      providerRecordId: "mem0:alice-project",
+      existing,
+      now: "2026-06-12T12:30:00.000Z",
+    });
+
+    expect(updated).toMatchObject({
+      id: existing.id,
+      userId: "alice",
+      workspaceId: "project",
+      providerRecordId: "mem0:alice-project",
+    });
+  });
 });

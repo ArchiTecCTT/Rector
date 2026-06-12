@@ -19,7 +19,7 @@ export const QuotaUsageSchema = z.object({
   usdMonth: z.number().nonnegative(),
   sandboxMinutesToday: z.number().nonnegative(),
   storageMb: z.number().nonnegative(),
-  providerCallsByRun: z.record(z.number().int().nonnegative()),
+  providerCallsByRun: z.record(z.string(), z.number().int().nonnegative()),
 });
 export type QuotaUsage = z.infer<typeof QuotaUsageSchema>;
 
@@ -78,6 +78,19 @@ function allow(policy: QuotaPolicy, usage: QuotaUsage): QuotaCheck {
   return { allowed: true, policy: clone(policy), usage: clone(usage) };
 }
 
+function nonNegativeUsageDelta(value: unknown): number | undefined {
+  if (value === undefined) return 0;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function requireNonNegativeUsageDelta(value: unknown, fieldName: string): number {
+  const normalized = nonNegativeUsageDelta(value);
+  if (normalized === undefined) {
+    throw new Error(`Invalid quota usage delta for ${fieldName}: expected a non-negative finite number.`);
+  }
+  return normalized;
+}
+
 export function createInMemoryQuotaService(options: {
   policies?: Record<string, QuotaPolicy>;
   now?: () => Date;
@@ -107,6 +120,9 @@ export function createInMemoryQuotaService(options: {
   }
 
   function checkUsd(policy: QuotaPolicy, usage: QuotaUsage, deltaUsd: number): QuotaCheck | undefined {
+    if (deltaUsd < 0 || !Number.isFinite(deltaUsd)) {
+      return deny(policy, usage, "Invalid USD quota delta: expected a non-negative finite number.");
+    }
     if (policy.maxUsdPerDay !== undefined && usage.usdToday + deltaUsd > policy.maxUsdPerDay) {
       return deny(policy, usage, `Daily USD quota exceeded: ${usage.usdToday + deltaUsd} > ${policy.maxUsdPerDay}.`);
     }
@@ -142,7 +158,7 @@ export function createInMemoryQuotaService(options: {
 
     async recordRunCreated(workspaceId: string, input: { estimatedUsd?: number } = {}): Promise<QuotaUsage> {
       const usage = getCurrentUsage(workspaceId);
-      const estimatedUsd = input.estimatedUsd ?? 0;
+      const estimatedUsd = requireNonNegativeUsageDelta(input.estimatedUsd, "estimatedUsd");
       usage.runsToday += 1;
       usage.usdToday += estimatedUsd;
       usage.usdMonth += estimatedUsd;
@@ -157,15 +173,17 @@ export function createInMemoryQuotaService(options: {
       if (policy.maxProviderCallsPerRun !== undefined && currentCalls + 1 > policy.maxProviderCallsPerRun) {
         return deny(policy, usage, `Provider-call quota for run ${runId} exceeded: ${currentCalls + 1} > ${policy.maxProviderCallsPerRun}.`);
       }
-      const usdDenial = checkUsd(policy, usage, input.estimatedUsd ?? 0);
+      const estimatedUsd = nonNegativeUsageDelta(input.estimatedUsd);
+      if (estimatedUsd === undefined) return deny(policy, usage, "Invalid USD quota delta: expected a non-negative finite number.");
+      const usdDenial = checkUsd(policy, usage, estimatedUsd);
       if (usdDenial) return usdDenial;
       return allow(policy, usage);
     },
 
     async recordProviderCall(workspaceId: string, runId: string, input: { estimatedUsd?: number } = {}): Promise<QuotaUsage> {
       const usage = getCurrentUsage(workspaceId);
+      const estimatedUsd = requireNonNegativeUsageDelta(input.estimatedUsd, "estimatedUsd");
       usage.providerCallsByRun = { ...usage.providerCallsByRun, [runId]: (usage.providerCallsByRun[runId] ?? 0) + 1 };
-      const estimatedUsd = input.estimatedUsd ?? 0;
       usage.usdToday += estimatedUsd;
       usage.usdMonth += estimatedUsd;
       usageByWorkspace.set(workspaceId, clone(usage));
@@ -175,15 +193,17 @@ export function createInMemoryQuotaService(options: {
     async checkSandboxMinutes(workspaceId: string, minutes: number): Promise<QuotaCheck> {
       const policy = currentPolicy(workspaceId);
       const usage = getCurrentUsage(workspaceId);
-      if (policy.maxSandboxMinutesPerDay !== undefined && usage.sandboxMinutesToday + minutes > policy.maxSandboxMinutesPerDay) {
-        return deny(policy, usage, `Daily sandbox-minutes quota exceeded: ${usage.sandboxMinutesToday + minutes} > ${policy.maxSandboxMinutesPerDay}.`);
+      const normalizedMinutes = nonNegativeUsageDelta(minutes);
+      if (normalizedMinutes === undefined) return deny(policy, usage, "Invalid sandbox-minutes delta: expected a non-negative finite number.");
+      if (policy.maxSandboxMinutesPerDay !== undefined && usage.sandboxMinutesToday + normalizedMinutes > policy.maxSandboxMinutesPerDay) {
+        return deny(policy, usage, `Daily sandbox-minutes quota exceeded: ${usage.sandboxMinutesToday + normalizedMinutes} > ${policy.maxSandboxMinutesPerDay}.`);
       }
       return allow(policy, usage);
     },
 
     async recordSandboxMinutes(workspaceId: string, minutes: number): Promise<QuotaUsage> {
       const usage = getCurrentUsage(workspaceId);
-      usage.sandboxMinutesToday += minutes;
+      usage.sandboxMinutesToday += requireNonNegativeUsageDelta(minutes, "sandboxMinutes");
       usageByWorkspace.set(workspaceId, clone(usage));
       return clone(usage);
     },
@@ -191,15 +211,17 @@ export function createInMemoryQuotaService(options: {
     async checkStorage(workspaceId: string, storageMb: number): Promise<QuotaCheck> {
       const policy = currentPolicy(workspaceId);
       const usage = getCurrentUsage(workspaceId);
-      if (policy.maxStorageMb !== undefined && storageMb > policy.maxStorageMb) {
-        return deny(policy, usage, `Storage quota exceeded: ${storageMb} MB > ${policy.maxStorageMb} MB.`);
+      const normalizedStorageMb = nonNegativeUsageDelta(storageMb);
+      if (normalizedStorageMb === undefined) return deny(policy, usage, "Invalid storage usage: expected a non-negative finite number.");
+      if (policy.maxStorageMb !== undefined && normalizedStorageMb > policy.maxStorageMb) {
+        return deny(policy, usage, `Storage quota exceeded: ${normalizedStorageMb} MB > ${policy.maxStorageMb} MB.`);
       }
       return allow(policy, usage);
     },
 
     async recordStorage(workspaceId: string, storageMb: number): Promise<QuotaUsage> {
       const usage = getCurrentUsage(workspaceId);
-      usage.storageMb = storageMb;
+      usage.storageMb = requireNonNegativeUsageDelta(storageMb, "storageMb");
       usageByWorkspace.set(workspaceId, clone(usage));
       return clone(usage);
     },

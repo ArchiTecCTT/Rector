@@ -39,4 +39,29 @@ describe("Quota policy service", () => {
     expect((await quotas.checkStorage("team", 9)).allowed).toBe(true);
     expect((await quotas.checkStorage("team", 11)).allowed).toBe(false);
   });
+
+  it("fails closed for invalid negative quota deltas without mutating usage", async () => {
+    const quotas = createInMemoryQuotaService({ policies: { team: { maxUsdPerDay: 1, maxSandboxMinutesPerDay: 5 } } });
+    await quotas.recordProviderCall("team", "run-1", { estimatedUsd: 0.5 });
+
+    const providerCheck = await quotas.checkProviderCall("team", "run-1", { estimatedUsd: -0.25 });
+    const sandboxCheck = await quotas.checkSandboxMinutes("team", -1);
+    const storageCheck = await quotas.checkStorage("team", -10);
+
+    expect(providerCheck.allowed).toBe(false);
+    expect(sandboxCheck.allowed).toBe(false);
+    expect(storageCheck.allowed).toBe(false);
+    expect(providerCheck.reason).toContain("Invalid USD quota delta");
+
+    await expect(quotas.recordProviderCall("team", "run-2", { estimatedUsd: -1 })).rejects.toThrow(/non-negative/);
+    await expect(quotas.recordRunCreated("team", { estimatedUsd: -1 })).rejects.toThrow(/non-negative/);
+    await expect(quotas.recordSandboxMinutes("team", -1)).rejects.toThrow(/non-negative/);
+    await expect(quotas.recordStorage("team", -1)).rejects.toThrow(/non-negative/);
+
+    const usage = await quotas.getUsage("team");
+    expect(usage.usdToday).toBe(0.5);
+    expect(usage.providerCallsByRun["run-2"]).toBeUndefined();
+    expect(usage.sandboxMinutesToday).toBe(0);
+    expect(usage.storageMb).toBe(0);
+  });
 });

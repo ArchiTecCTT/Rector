@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { auditHashSaltReadiness } from "../security/auditLog";
 
 export const DeploymentReadinessCheckSchema = z.object({
   id: z.string().min(1),
@@ -116,6 +117,15 @@ export function computeCommercialDeploymentReadiness(
         : production
           ? "No production rate limiter adapter is configured; in-memory limits do not coordinate across instances."
           : "Local development uses in-memory rate limiting.",
+    ),
+  );
+
+  const auditSalt = auditHashSaltReadiness(env);
+  checks.push(
+    check(
+      "audit-hash-salt",
+      auditSalt.configured ? "pass" : production ? "warning" : "pass",
+      auditSalt.message,
     ),
   );
 

@@ -38,4 +38,17 @@ describe("commercial deployment readiness", () => {
     expect(configured.blockers).toHaveLength(0);
     expect(configured.checks.find((check) => check.id === "auth-mode")?.status).toBe("pass");
   });
+
+  it("warns in production when audit hash salt is not configured without exposing configured salt values", () => {
+    const missing = computeCommercialDeploymentReadiness({ NODE_ENV: "production", RECTOR_AUTH_MODE: "self-hosted", RECTOR_AUTH_SESSION_SECRET: "session", RECTOR_PERSISTENCE: "sqlite" });
+    const missingCheck = missing.checks.find((check) => check.id === "audit-hash-salt");
+    expect(missingCheck?.status).toBe("warning");
+    expect(missingCheck?.message).toContain("RECTOR_AUDIT_HASH_SALT");
+
+    const secretSalt = "audit-salt-do-not-leak";
+    const configured = computeCommercialDeploymentReadiness({ NODE_ENV: "production", RECTOR_AUTH_MODE: "self-hosted", RECTOR_AUTH_SESSION_SECRET: "session", RECTOR_PERSISTENCE: "sqlite", RECTOR_AUDIT_HASH_SALT: secretSalt });
+    const configuredCheck = configured.checks.find((check) => check.id === "audit-hash-salt");
+    expect(configuredCheck?.status).toBe("pass");
+    expect(JSON.stringify(configured)).not.toContain(secretSalt);
+  });
 });

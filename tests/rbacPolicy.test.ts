@@ -34,6 +34,22 @@ describe("RBAC permission policy", () => {
     });
   });
 
+  it("fails closed when auth is enabled but no workspace role is assigned", () => {
+    const decision = requirePermission(
+      { authEnabled: true, userId: "viewer", workspaceId: "team" },
+      "workspace.read",
+    );
+
+    expect(decision).toMatchObject({
+      ok: false,
+      status: 403,
+      permission: "workspace.read",
+      role: "viewer",
+      workspaceId: "team",
+    });
+    expect(decision.reason).toContain("No workspace role");
+  });
+
   it("exposes the role permission summary for the API", () => {
     expect(permissionsForRole("viewer")).toContain("workspace.read");
     expect(permissionsForRole("viewer")).not.toContain("billing.manage");

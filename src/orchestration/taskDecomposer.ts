@@ -508,7 +508,7 @@ function buildLiveDecomposerPrompt(input: LiveTaskDecomposerInput): LLMRequest["
       content: redactString(JSON.stringify({
         intent: input.distilled,
         contextSummary: input.context.userIntentSummary,
-        maxSubGoals: input.maxSubGoals ?? DEFAULT_MAX_SUB_GOALS,
+        maxSubGoals: boundedMaxSubGoals(input.context, input.maxSubGoals),
         maxConcurrency: input.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY,
       })),
     },
@@ -535,11 +535,12 @@ function parseLiveGraph(
     if (!result.success) {
       return { ok: false, error: result.error.issues.map((issue) => issue.path.join(".") || "(root)").join(", ") };
     }
+    const maxSubGoals = boundedMaxSubGoals(input.context, input.maxSubGoals);
     const normalized = normalizeSubGoalGraph({
       ...result.data,
-      subGoals: result.data.subGoals.slice(0, input.maxSubGoals ?? DEFAULT_MAX_SUB_GOALS),
+      subGoals: result.data.subGoals.slice(0, maxSubGoals),
       maxConcurrency: boundedConcurrency(input.maxConcurrency ?? result.data.maxConcurrency),
-      trace: [...result.data.trace, "live decomposition schema validated"],
+      trace: [...result.data.trace, "live decomposition schema validated", `capped sub-goals at ${maxSubGoals}`],
     });
     return { ok: true, graph: normalized };
   } catch (error) {

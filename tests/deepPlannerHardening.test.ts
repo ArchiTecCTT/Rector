@@ -112,4 +112,18 @@ describe("deep planner hardening", () => {
     expect(provider.invokeCount).toBe(0);
     expect(result.plan).toEqual(createFakePlan(input));
   });
+
+  it("selects a deterministic fallback instead of a rejected candidate when all candidates fail", () => {
+    const input = makeInput("Update package.json safely and run tests");
+    const basePlan = oneTaskPlan();
+    const planner = createMultiCandidatePlanner({ maxEstimatedRuntimeMs: 1 });
+
+    const result = planner.plan(input, basePlan);
+
+    expect(result.selectedSource).toBe("fallback-local");
+    expect(result.selectedPlan).toEqual(createFakePlan(input));
+    expect(result.traces.filter((trace) => trace.selected)).toHaveLength(1);
+    expect(result.traces.find((trace) => trace.selected)?.rejected).toBe(false);
+    expect(result.traces.some((trace) => trace.rejected)).toBe(true);
+  });
 });

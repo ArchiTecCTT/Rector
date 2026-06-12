@@ -138,4 +138,28 @@ describe("context builder hardening", () => {
     expect(pack.inlineContext[0].content).toContain("token=[REDACTED]");
     expect(JSON.stringify(pack)).not.toContain("supersecret-value");
   });
+
+  it("falls back to timestamp when optional lastMentioned is absent during memory ranking", async () => {
+    const { store, conversation, message, triage } = await harness("alpha decision");
+    const withoutLastMentioned = memory({
+      id: "missing-last-mentioned",
+      content: "alpha missing last mentioned",
+      timestamp: "2026-06-12T00:00:00.000Z",
+      tags: ["note"],
+      source: "user-note",
+    }) as Partial<MemoryEntry>;
+    delete withoutLastMentioned.lastMentioned;
+
+    const pack = await buildContextPack(store, {
+      conversation,
+      messages: [message],
+      userMessage: message,
+      triage,
+      memoryEntries: [withoutLastMentioned as MemoryEntry],
+      contextBudget: { maxMemoryEntries: 1 },
+      now: () => NOW,
+    });
+
+    expect(pack.memoryContext?.[0]).toContain("alpha missing last mentioned");
+  });
 });

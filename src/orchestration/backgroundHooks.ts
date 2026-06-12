@@ -3,7 +3,6 @@ import type { ModelRouter } from "../providers/llm";
 import type { OrchestratorMode } from "../deployment";
 import type { RectorStore } from "../store";
 import type { Run } from "../store/schemas";
-import { createDecisionRequest } from "./runStateMachine";
 import {
   detectContradictions,
   PonderTriggerPolicy,
@@ -88,7 +87,7 @@ export function createNeuroBackgroundHooks(deps: {
         }
       }
 
-      await writeContradictionSignals(memoryProvider, contradictions, allEntries, completedRun, deps.store, now);
+      await writeContradictionSignals(memoryProvider, contradictions, allEntries, completedRun, now);
     } catch {
       // Background hooks never throw past boundary.
     } finally {
@@ -125,7 +124,6 @@ async function writeContradictionSignals(
   contradictions: ContradictionSignal[],
   allEntries: Awaited<ReturnType<MemoryProvider["listMemoryEntries"]>>,
   completedRun: Run | undefined,
-  store: RectorStore,
   now: () => string,
 ): Promise<void> {
   const existingContradictionHashes = new Set(
@@ -140,18 +138,6 @@ async function writeContradictionSignals(
     existingContradictionHashes.add(signal.contentHash);
 
     const redacted = redactString(signal.message);
-    if (completedRun && completedRun.status === "running") {
-      try {
-        await createDecisionRequest(store, completedRun.id, {
-          kind: "subconscious-contradiction",
-          message: redacted,
-          source: "subconscious-daemon",
-        });
-        continue;
-      } catch {
-        // Fall through to core memory note when decision request is not possible.
-      }
-    }
 
     await memoryProvider.createMemoryEntry({
       layer: "core",

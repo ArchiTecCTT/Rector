@@ -418,8 +418,9 @@ function validateNodePolicyMetadata(node: DagNode, errors: string[]): void {
       errors.push(`Task node ${node.id} missing validation contract metadata`);
     }
 
-    const risk = metadata.risk;
-    const approvalRequired = metadata.approvalRequired === true;
+    const input = recordFrom(node.input);
+    const risk = typeof input?.risk === "string" ? input.risk : metadata.risk;
+    const approvalRequired = input?.approvalRequired === true;
     if ((risk === "high" || risk === "destructive" || approvalRequired) && typeof metadata.rollbackHint !== "string") {
       errors.push(`Risky task node ${node.id} missing rollback/cleanup hint`);
     }

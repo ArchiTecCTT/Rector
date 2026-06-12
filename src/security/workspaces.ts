@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { sanitizeUserId } from "./userDataPaths";
 import { WORKSPACE_ROLES, type WorkspaceRole } from "./rbac";
@@ -73,6 +74,13 @@ function defaultUser(userId: string, now: string): User {
 }
 
 function workspaceIdForUser(userId: string): string {
+  if (userId === "default") return "local";
+  const sanitized = sanitizeUserId(userId);
+  if (sanitized === userId) return `user-${sanitized}`;
+  return `user-${sanitized}-${createHash("sha256").update(userId).digest("hex").slice(0, 8)}`;
+}
+
+function legacyWorkspaceIdForUser(userId: string): string {
   return userId === "default" ? "local" : `user-${sanitizeUserId(userId)}`;
 }
 
@@ -98,12 +106,16 @@ export function createInMemoryWorkspaceDirectory(
   }
 
   function nextWorkspaceId(): string {
-    workspaceCounter += 1;
+    do {
+      workspaceCounter += 1;
+    } while (workspaces.has(`ws-${workspaceCounter}`));
     return `ws-${workspaceCounter}`;
   }
 
   function nextMembershipId(): string {
-    membershipCounter += 1;
+    do {
+      membershipCounter += 1;
+    } while (memberships.has(`member-${membershipCounter}`));
     return `member-${membershipCounter}`;
   }
 
@@ -122,11 +134,28 @@ export function createInMemoryWorkspaceDirectory(
 
   function ensurePersonalWorkspace(userId: string): Workspace {
     const user = ensureUser(userId);
-    const existingMemberships = membershipsForUser(userId);
-    if (existingMemberships.length > 0) {
-      const first = existingMemberships[0]!;
-      const workspace = workspaces.get(first.workspaceId);
-      if (workspace) return workspace;
+    const personalWorkspaceIds = [workspaceIdForUser(user.id), legacyWorkspaceIdForUser(user.id)];
+    const existingPersonalWorkspace = personalWorkspaceIds
+      .map((workspaceId) => workspaces.get(workspaceId))
+      .find((workspace): workspace is Workspace => workspace !== undefined && workspace.ownerUserId === user.id);
+
+    if (existingPersonalWorkspace) {
+      const existingMembership = Array.from(memberships.values()).find(
+        (membership) => membership.workspaceId === existingPersonalWorkspace.id && membership.userId === user.id,
+      );
+      if (!existingMembership) {
+        const stamped = now();
+        const membership = WorkspaceMembershipSchema.parse({
+          id: uniqueMembershipId(`member-${existingPersonalWorkspace.id}-${sanitizeUserId(user.id)}`),
+          workspaceId: existingPersonalWorkspace.id,
+          userId: user.id,
+          role: "owner",
+          createdAt: stamped,
+          updatedAt: stamped,
+        });
+        memberships.set(membership.id, clone(membership));
+      }
+      return existingPersonalWorkspace;
     }
 
     const stamped = now();
@@ -137,9 +166,12 @@ export function createInMemoryWorkspaceDirectory(
       createdAt: stamped,
       updatedAt: stamped,
     });
+    if (workspaces.has(workspace.id)) {
+      throw new Error(`Personal workspace id collision for user ${user.id}`);
+    }
     workspaces.set(workspace.id, clone(workspace));
     const membership = WorkspaceMembershipSchema.parse({
-      id: `member-${workspace.id}-${sanitizeUserId(user.id)}`,
+      id: uniqueMembershipId(`member-${workspace.id}-${sanitizeUserId(user.id)}`),
       workspaceId: workspace.id,
       userId: user.id,
       role: "owner",
@@ -148,6 +180,11 @@ export function createInMemoryWorkspaceDirectory(
     });
     memberships.set(membership.id, clone(membership));
     return workspace;
+  }
+
+  function uniqueMembershipId(preferred: string): string {
+    if (!memberships.has(preferred)) return preferred;
+    return nextMembershipId();
   }
 
   return {
@@ -173,7 +210,7 @@ export function createInMemoryWorkspaceDirectory(
       const first = membershipsForCurrentUser[0];
       const workspace = first ? workspaces.get(first.workspaceId) : undefined;
       if (workspace) return clone(workspace);
-      return clone(ensurePersonalWorkspace(userId));
+      throw new Error(`No default workspace is provisioned for user ${userId}`);
     },
 
     async listWorkspacesForUser(userId: string): Promise<Array<{ workspace: Workspace; membership: WorkspaceMembership }>> {
@@ -198,6 +235,9 @@ export function createInMemoryWorkspaceDirectory(
         createdAt: stamped,
         updatedAt: stamped,
       });
+      if (workspaces.has(workspace.id)) {
+        throw new Error(`Workspace id already exists: ${workspace.id}`);
+      }
       workspaces.set(workspace.id, clone(workspace));
       const membership = WorkspaceMembershipSchema.parse({
         id: nextMembershipId(),
@@ -212,7 +252,7 @@ export function createInMemoryWorkspaceDirectory(
     },
 
     async getMembership(userId: string, workspaceId: string): Promise<WorkspaceMembership | undefined> {
-      if (autoProvisionPersonalWorkspaces && workspaceId === workspaceIdForUser(userId)) {
+      if (autoProvisionPersonalWorkspaces && (workspaceId === workspaceIdForUser(userId) || workspaceId === legacyWorkspaceIdForUser(userId))) {
         ensurePersonalWorkspace(userId);
       }
       const membership = Array.from(memberships.values()).find(

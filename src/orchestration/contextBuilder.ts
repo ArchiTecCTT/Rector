@@ -422,7 +422,9 @@ function rankMemoryEntries(entries: MemoryEntry[], query: string, nowIso: string
     .map((entry) => ({ entry, score: scoreMemoryEntry(entry, terms, nowIso) }))
     .sort((left, right) => {
       if (right.score !== left.score) return right.score - left.score;
-      const recencyDelta = right.entry.lastMentioned.localeCompare(left.entry.lastMentioned);
+      const rightMentioned = right.entry.lastMentioned ?? right.entry.timestamp ?? "";
+      const leftMentioned = left.entry.lastMentioned ?? left.entry.timestamp ?? "";
+      const recencyDelta = rightMentioned.localeCompare(leftMentioned);
       if (recencyDelta !== 0) return recencyDelta;
       return left.entry.id.localeCompare(right.entry.id);
     })

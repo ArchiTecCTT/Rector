@@ -1,5 +1,5 @@
 import type { PlannerInput, PlannerOutput, LivePlannerResult, PlannerRiskLevel } from "./planner";
-import { validatePlannerOutput } from "./planner";
+import { createFakePlan, validatePlannerOutput } from "./planner";
 import type { LLMProvider, LLMUsage } from "../providers/llm";
 import type { Run } from "../store";
 import { DEFAULT_PREPROCESSOR_RULES } from "../symbolic/defaultRules";
@@ -136,11 +136,14 @@ export function createMultiCandidatePlanner(config: MultiCandidatePlannerConfig 
     plan(input: PlannerInput, basePlan: PlannerOutput): MultiCandidatePlannerResult {
       const candidates = generateCandidates(input, basePlan).slice(0, config.maxCandidates ?? DEEP_PLANNER_MAX_CANDIDATES);
       const scored = candidates.map((candidate) => scoreCandidate(candidate, config));
-      const selected = selectBestCandidate(scored, basePlan);
+      const selected = selectBestCandidate(scored, input, basePlan);
       const traces = scored.map((candidate) => ({
         ...candidate.trace,
         selected: candidate.id === selected.id,
       }));
+      if (!traces.some((trace) => trace.selected)) {
+        traces.push({ ...selected.trace, selected: true });
+      }
 
       return {
         selectedPlan: selected.plan,
@@ -344,18 +347,27 @@ function scoreCandidate(candidate: DeepPlanCandidate, config: MultiCandidatePlan
   };
 }
 
-function selectBestCandidate(scored: ScoredCandidate[], basePlan: PlannerOutput): ScoredCandidate {
+function selectBestCandidate(scored: ScoredCandidate[], input: PlannerInput, basePlan: PlannerOutput): ScoredCandidate {
   const eligible = scored.filter((candidate) => !candidate.trace.rejected);
-  const pool = eligible.length > 0 ? eligible : scored.filter((candidate) => candidate.source === "base-live");
-  const fallback = scored[0] ?? {
-    id: "base-live-1",
-    source: "base-live" as const,
-    plan: basePlan,
-    order: 0,
-    trace: scoreDeepPlanCandidate({ source: "base-live", plan: basePlan }),
-  };
+  if (eligible.length === 0) {
+    const fallbackPlan = createFakePlan(input);
+    const fallbackTrace = scoreDeepPlanCandidate({ source: "fallback-local", plan: fallbackPlan });
+    return {
+      id: "fallback-local-1",
+      source: "fallback-local",
+      plan: fallbackPlan,
+      order: scored.length,
+      trace: {
+        ...fallbackTrace,
+        id: "fallback-local-1",
+        rejected: false,
+        selected: true,
+        rejectionReasons: ["all live deep-planner candidates were rejected; selected deterministic local fallback"],
+      },
+    };
+  }
 
-  return [...(pool.length > 0 ? pool : [fallback])].sort((left, right) => {
+  return [...eligible].sort((left, right) => {
     if (right.trace.score !== left.trace.score) return right.trace.score - left.trace.score;
     const sourceDelta = sourcePriority(left.source) - sourcePriority(right.source);
     if (sourceDelta !== 0) return sourceDelta;

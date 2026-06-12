@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   decomposeIntoTasks,
   executeDecomposedSubGoals,
+  runLiveTaskDecomposer,
   stitchResults,
   type SubGoalGraph,
 } from "../src/orchestration/taskDecomposer";
-import { makeContextPack } from "./support/byokArbitraries";
+import { DEFAULT_SPY_USAGE, makeContextPack, SpyLLMProvider } from "./support/byokArbitraries";
 import { triageUserMessage } from "../src/orchestration/triage";
 import { WorkspaceSandboxAdapter } from "../src/sandbox";
 import type { Run } from "../src/store/schemas";
@@ -179,5 +180,36 @@ describe("task decomposer hardening", () => {
     expect(stitched).toContain("sub-goal-0 [SUCCESS]");
     expect(stitched).toContain("sub-goal-1 [FAILED]");
     expect(stitched).toContain("simulated sub-goal failure");
+  });
+
+  it("applies the risk-based sub-goal cap to live decomposer output", async () => {
+    const context = makeContext("Delete generated files, update code, and validate the destructive change");
+    expect(context.triage.riskFlags).toContain("destructive_change");
+    const liveGraph: SubGoalGraph = {
+      subGoals: Array.from({ length: 5 }, (_, index) => ({
+        id: `sub-${index}`,
+        goal: `Live destructive goal ${index} with enough detail`,
+        dependencies: [],
+        expectedArtifacts: ["Sub-goal result"],
+        validation: ["Done"],
+        parallelizable: true,
+      })),
+      dependencies: [],
+      maxConcurrency: 4,
+      trace: [],
+    };
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [{ content: JSON.stringify(liveGraph) }],
+    });
+
+    const result = await runLiveTaskDecomposer(
+      { distilled: "delete generated files, update code, validate", context, maxSubGoals: 5 },
+      { provider, run: makeRun() },
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.subGoalGraph.subGoals).toHaveLength(3);
+    expect(result.subGoalGraph.trace).toContain("capped sub-goals at 3");
   });
 });

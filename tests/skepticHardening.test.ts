@@ -82,4 +82,66 @@ describe("skeptic hardening", () => {
     expect(review.verdict).toBe("NEEDS_REVISION");
     expect(review.findings.some((item) => item.category === "risk" && item.severity === "MAJOR")).toBe(true);
   });
+
+  it("does not let a live reviewer suppress deterministic non-blocker findings", async () => {
+    const input = inputFor("Explain Rector.");
+    const plan = createFakePlan(input);
+    const underestimated: PlannerOutput = {
+      ...plan,
+      riskLevel: "low",
+      tasks: [
+        {
+          ...plan.tasks[0],
+          description: "Edit files and deploy this to production.",
+          risk: "low",
+        },
+      ],
+    };
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [JSON.stringify({ verdict: "SOUND", findings: [] })],
+    });
+
+    const result = await runLiveSkeptic(
+      { plannerOutput: underestimated, contextPack: input.contextPack, triage: input.triage },
+      { provider, run: makeExternalRun(generousBudget()) },
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.review?.verdict).toBe("NEEDS_REVISION");
+    expect(result.review?.findings.some((item) => item.category === "risk" && item.severity === "MAJOR")).toBe(true);
+  });
+
+  it("keeps info-only live findings informational without escalating to NEEDS_REVISION", async () => {
+    const input = inputFor("Explain Rector.");
+    const plan = createFakePlan(input);
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [
+        JSON.stringify({
+          verdict: "NEEDS_REVISION",
+          findings: [
+            finding({
+              id: "info-1",
+              severity: "INFO",
+              category: "note",
+              message: "Informational observation.",
+              evidence: "FYI",
+              recommendation: "No action required.",
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const result = await runLiveSkeptic(
+      { plannerOutput: plan, contextPack: input.contextPack, triage: input.triage },
+      { provider, run: makeExternalRun(generousBudget()) },
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.review?.findings).toHaveLength(1);
+    expect(result.review?.findings[0].severity).toBe("INFO");
+    expect(result.review?.verdict).toBe("SOUND");
+  });
 });
