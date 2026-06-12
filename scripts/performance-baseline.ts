@@ -10,12 +10,22 @@
  * Pass --enforce to fail on acceptable-threshold exceedance.
  */
 
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 import request from "supertest";
 import type express from "express";
 
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const COLD_START_PROBE = join(SCRIPT_DIR, "performance-baseline-cold-start.ts");
+const requireFromScript = createRequire(import.meta.url);
+const TSX_CLI = join(dirname(requireFromScript.resolve("tsx/package.json")), "dist/cli.mjs");
+
 export const PERFORMANCE_BASELINE_SECTIONS = [
   "startup_import",
+  "startup_cold_subprocess",
   "local_direct_answer",
   "local_fake_pipeline",
   "orchestration_assignment_resolution",
@@ -45,6 +55,7 @@ interface BenchmarkResult {
 
 const THRESHOLDS: Record<SectionId, Threshold> = {
   startup_import: { preferredMs: 1_000, acceptableMs: 2_000 },
+  startup_cold_subprocess: { preferredMs: 1_000, acceptableMs: 2_000 },
   local_direct_answer: { preferredMs: 100, acceptableMs: 250 },
   local_fake_pipeline: { preferredMs: 500, acceptableMs: 1_000 },
   orchestration_assignment_resolution: { preferredMs: 10, acceptableMs: 25 },
@@ -58,7 +69,8 @@ const THRESHOLDS: Record<SectionId, Threshold> = {
 };
 
 const LABELS: Record<SectionId, string> = {
-  startup_import: "Server startup / import",
+  startup_import: "Server startup / import (warm, in-process)",
+  startup_cold_subprocess: "Server startup / import (cold subprocess)",
   local_direct_answer: "Local direct answer",
   local_fake_pipeline: "Local full fake pipeline",
   orchestration_assignment_resolution: "Orchestration assignment resolution",
@@ -143,11 +155,43 @@ function emptySecretStore() {
   };
 }
 
+function providerFreeEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of PROVIDER_ENV_KEYS) {
+    delete env[key];
+  }
+  return env;
+}
+
+function parseColdStartProbeMs(output: string): number {
+  const match = output.match(/^RECTOR_PERF_MS=([0-9.]+)/m);
+  if (!match) {
+    throw new Error(`cold-start probe missing RECTOR_PERF_MS line: ${output.trim()}`);
+  }
+  return Number(match[1]);
+}
+
 async function measureStartupImport(): Promise<number> {
   return measureMedian(1, async () => {
     const serverMod = await import("../src/api/server");
     const { TaskManager } = await import("../src/thalamus/router");
     serverMod.createApp(new TaskManager());
+  });
+}
+
+async function measureStartupColdSubprocess(): Promise<number> {
+  const env = providerFreeEnv();
+  return measureMedian(3, () => {
+    const output = execFileSync(process.execPath, [TSX_CLI, COLD_START_PROBE], {
+      cwd: join(SCRIPT_DIR, ".."),
+      encoding: "utf8",
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const probeMs = parseColdStartProbeMs(output);
+    if (!Number.isFinite(probeMs) || probeMs <= 0) {
+      throw new Error(`cold-start probe returned invalid ms: ${probeMs}`);
+    }
   });
 }
 
@@ -388,6 +432,7 @@ async function runBenchmarks(): Promise<BenchmarkResult[]> {
 
   const measurements: Array<{ id: SectionId; ms: number }> = [
     { id: "startup_import", ms: await measureStartupImport() },
+    { id: "startup_cold_subprocess", ms: await measureStartupColdSubprocess() },
     { id: "local_direct_answer", ms: await measureLocalDirectAnswer() },
     { id: "local_fake_pipeline", ms: await measureLocalFakePipeline() },
     { id: "orchestration_assignment_resolution", ms: await measureOrchestrationAssignmentResolution() },
