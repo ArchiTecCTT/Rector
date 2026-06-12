@@ -82,7 +82,7 @@ export async function executePlanningPhase(
             messageContent: input.effectiveMessageContent,
             deepPlanning: true,
           },
-          { provider: selection.provider, run: input.budgetRun },
+          { provider: selection.provider, run: input.budgetRun, model: selection.model },
         )
       : runLivePlanner(
           {
@@ -90,7 +90,7 @@ export async function executePlanningPhase(
             contextPack: prep.plannerContextPack,
             messageContent: input.effectiveMessageContent,
           },
-          { provider: selection.provider, run: input.budgetRun },
+          { provider: selection.provider, run: input.budgetRun, model: selection.model },
         ),
   );
 }

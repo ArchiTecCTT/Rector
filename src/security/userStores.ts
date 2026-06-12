@@ -1,6 +1,10 @@
 import type { ProviderConfigStore } from "../providers/configStore";
 import { createLocalProviderConfigStore } from "../providers/configStore";
 import { createLocalMemoryConfigStore, type MemoryConfigStore } from "../providers/memoryConfigStore";
+import {
+  createLocalOrchestrationAssignmentStore,
+  type OrchestrationAssignmentStore,
+} from "../providers/orchestrationAssignments";
 import { createLocalSecretStore, type SecretStore } from "./secretStore";
 import { resolveUserDataDir } from "./userDataPaths";
 
@@ -8,6 +12,7 @@ export interface UserStores {
   secretStore: SecretStore;
   providerConfigStore: ProviderConfigStore;
   memoryConfigStore: MemoryConfigStore;
+  orchestrationAssignmentStore: OrchestrationAssignmentStore;
 }
 
 export interface UserStoresResolverOptions {
@@ -44,6 +49,9 @@ export function createUserStoresResolver(options: UserStoresResolverOptions): (u
       }),
       memoryConfigStore: createLocalMemoryConfigStore({
         filePath: `${userDir}memory-providers.json`,
+      }),
+      orchestrationAssignmentStore: createLocalOrchestrationAssignmentStore({
+        filePath: `${userDir}orchestration-assignments.json`,
       }),
     };
     cache.set(userId, stores);

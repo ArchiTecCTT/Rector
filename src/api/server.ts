@@ -50,7 +50,24 @@ import {
   ProviderModelRoleSchema,
   type ProviderConfigRecord,
 } from "../providers/config";
-import { resolveTestProvider } from "../providers/configBridge";
+import { buildConfiguredRouter, resolveTestProvider } from "../providers/configBridge";
+import {
+  ORCHESTRATION_ROLE_DESCRIPTORS,
+  OrchestrationAssignmentUpsertSchema,
+  OrchestrationModelAssignmentSchema,
+  OrchestrationRoleSchema,
+  buildConfiguredAssignmentAwareRouter,
+  createInMemoryOrchestrationAssignmentStore,
+  createOrchestrationModelRouter,
+  providerOptionsFromConfigState,
+  resolveEffectiveAssignment,
+  type EffectiveModelRoute,
+  type OrchestrationAssignmentScope,
+  type OrchestrationAssignmentStore,
+  orchestrationAssignmentId,
+  type OrchestrationModelAssignment,
+  type OrchestrationRole,
+} from "../providers/orchestrationAssignments";
 
 // Chunk 34 memory providers (config + resolution). The runtime MemoryProvider + Local impl
 // live in src/memory/provider.ts. We resolve once per app and use for neuro memory paths.
@@ -175,6 +192,14 @@ export interface ApiSecurityOptions {
    * the resolved provider; RectorStore.memory* surface remains for main persistence tests.
    */
   memoryConfigStore?: MemoryConfigStore;
+
+  /**
+   * Optional non-secret role → provider/model assignment store (Chunk 043). Assignments contain
+   * provider/model ids, budgets, and capability flags only; API keys remain exclusively in
+   * SecretStore-backed provider records. When omitted, tests/local mode get an in-memory empty store
+   * and the deterministic/provider-free fallback remains unchanged.
+   */
+  orchestrationAssignmentStore?: OrchestrationAssignmentStore;
 
   /** Optional persisted module enable/disable state (Chunk 041). */
   moduleConfigStore?: ModuleConfigStore;
@@ -1109,6 +1134,10 @@ export const SetActiveRouteRequestSchema = z
   .strict();
 export type SetActiveRouteRequest = z.infer<typeof SetActiveRouteRequestSchema>;
 
+/** Body for `POST /api/orchestration-models/assignments/:role/test`. Empty means test saved/effective assignment. */
+export const TestOrchestrationAssignmentRequestSchema = OrchestrationAssignmentUpsertSchema.partial().strict();
+export type TestOrchestrationAssignmentRequest = z.infer<typeof TestOrchestrationAssignmentRequestSchema>;
+
 // --- Memory_Provider_API request schemas (Chunk 36, mirrors Provider_Config_API) ---
 
 /**
@@ -1503,10 +1532,13 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
   const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
   const memoryConfigStore = securityOptions.memoryConfigStore ?? createInMemoryMemoryConfigStore();
+  const orchestrationAssignmentStore =
+    securityOptions.orchestrationAssignmentStore ?? createInMemoryOrchestrationAssignmentStore();
   const defaultUserStores: UserStores = {
     secretStore: setupSecretStore,
     providerConfigStore,
     memoryConfigStore,
+    orchestrationAssignmentStore,
   };
   const resolveUserStores = createUserStoresResolver({
     authEnabled: authConfig.enabled,
@@ -1514,6 +1546,47 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     defaultStores: defaultUserStores,
   });
   const storesFor = (req: express.Request): UserStores => req.rectorStores ?? defaultUserStores;
+  const assignmentScopeFor = (
+    req: express.Request,
+    workspaceId?: string,
+  ): OrchestrationAssignmentScope => ({
+    ...(authConfig.enabled && req.rectorAuth ? { userId: req.rectorAuth.userId } : {}),
+    ...(workspaceId ? { workspaceId } : {}),
+  });
+  const workspaceIdFromQuery = (req: express.Request): string | undefined =>
+    typeof req.query.workspaceId === "string" && req.query.workspaceId.trim().length > 0
+      ? req.query.workspaceId.trim()
+      : undefined;
+
+  const buildOrchestrationModelsPayload = async (
+    req: express.Request,
+    workspaceId?: string,
+  ): Promise<{
+    roles: typeof ORCHESTRATION_ROLE_DESCRIPTORS;
+    assignments: OrchestrationModelAssignment[];
+    effective: EffectiveModelRoute[];
+    providers: ReturnType<typeof providerOptionsFromConfigState>;
+  }> => {
+    const userStores = storesFor(req);
+    const scope = assignmentScopeFor(req, workspaceId);
+    const [assignments, providerState] = await Promise.all([
+      userStores.orchestrationAssignmentStore.listAssignments(scope),
+      userStores.providerConfigStore.getState(),
+    ]);
+    return {
+      roles: ORCHESTRATION_ROLE_DESCRIPTORS,
+      assignments,
+      effective: ORCHESTRATION_ROLE_DESCRIPTORS.map((role) =>
+        resolveEffectiveAssignment({
+          role: role.id,
+          assignments,
+          providerState,
+          scope,
+        }),
+      ),
+      providers: providerOptionsFromConfigState(providerState),
+    };
+  };
 
   const LoginRequestSchema = z.object({
     username: z.string().min(1),
@@ -1620,6 +1693,42 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     const userId = req.rectorAuth.userId;
     const stores = storesFor(req);
     return () => getMemoryProviderForUserStores(userId, stores);
+  };
+
+  const resolveRuntimeModelRouterFor = async (req: express.Request, workspaceId?: string): Promise<ModelRouter | undefined> => {
+    const mode = securityOptions.orchestration?.mode ?? "local";
+    if (mode !== "external") return securityOptions.orchestration?.router;
+    const userStores = storesFor(req);
+    const scope = assignmentScopeFor(req, workspaceId);
+    try {
+      const assignments = await userStores.orchestrationAssignmentStore.listAssignments(scope);
+      if (assignments.length === 0 && securityOptions.orchestration?.router) {
+        // Compatibility path: when no Chunk 043 assignment exists, preserve the injected/startup
+        // ModelRouter exactly. Existing external-mode tests and deployments depend on this router
+        // for BYOK provider selection and provider spies.
+        return securityOptions.orchestration.router;
+      }
+      const baseRouter = await buildConfiguredRouter({
+        store: userStores.providerConfigStore,
+        secrets: userStores.secretStore,
+        mode: "external",
+        enableNetwork: true,
+        fetchImpl: fetch,
+      });
+      return buildConfiguredAssignmentAwareRouter({
+        baseRouter,
+        assignmentStore: userStores.orchestrationAssignmentStore,
+        providerConfigStore: userStores.providerConfigStore,
+        secrets: userStores.secretStore,
+        scope,
+        enableNetwork: true,
+        fetchImpl: fetch,
+      });
+    } catch {
+      // Compatibility fallback: preserve the startup router if dynamic per-user assignment routing
+      // cannot be built. Local mode never reaches this branch.
+      return securityOptions.orchestration?.router;
+    }
   };
 
   // --- Chat routes ---
@@ -1747,6 +1856,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             memoryEntries: recentMemory,
           });
         });
+        const runtimeRouter = await resolveRuntimeModelRouterFor(req, conversation.workspaceId);
         const result = await runChat(
           pipelineStore,
           {
@@ -1765,7 +1875,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             // Default to local (provider-free) when no orchestration option is configured so existing
             // behavior and tests are unchanged. enableNetwork is only meaningful in external mode.
             mode: orchestration?.mode ?? "local",
-            router: orchestration?.router,
+            router: runtimeRouter,
             enableNetwork: orchestration?.mode === "external",
             moduleRegistry,
           }
@@ -2422,15 +2532,223 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
+  const errorMessageOf = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
+  // --- Orchestration_Model_Assignment_API (Chunk 043) ---
+  // Stores only non-secret role → provider/model/budget assignments. Provider credentials remain in
+  // Secret_Store-backed Provider_Config_Records and are never serialized by these endpoints.
+
+  app.get("/api/orchestration-models/roles", async (req, res) => {
+    try {
+      const payload = await buildOrchestrationModelsPayload(req, workspaceIdFromQuery(req));
+      sendRedacted(res, 200, {
+        roles: payload.roles,
+        providers: payload.providers,
+      });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.get("/api/orchestration-models/assignments", async (req, res) => {
+    try {
+      const payload = await buildOrchestrationModelsPayload(req, workspaceIdFromQuery(req));
+      sendRedacted(res, 200, payload);
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.get("/api/orchestration-models/effective", async (req, res) => {
+    try {
+      const payload = await buildOrchestrationModelsPayload(req, workspaceIdFromQuery(req));
+      sendRedacted(res, 200, payload);
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.put("/api/orchestration-models/assignments/:role", async (req, res) => {
+    let role: OrchestrationRole;
+    let body: z.infer<typeof OrchestrationAssignmentUpsertSchema>;
+    try {
+      role = OrchestrationRoleSchema.parse(req.params.role);
+      body = OrchestrationAssignmentUpsertSchema.parse(req.body ?? {});
+    } catch (err: unknown) {
+      return sendRedacted(res, 400, { error: redactString(requestValidationMessage(err)) });
+    }
+
+    try {
+      const userStores = storesFor(req);
+      const scope = assignmentScopeFor(req, body.workspaceId);
+      const [existing, existingAssignments, providerState] = await Promise.all([
+        userStores.orchestrationAssignmentStore.getAssignment(role, scope),
+        userStores.orchestrationAssignmentStore.listAssignments(scope),
+        userStores.providerConfigStore.getState(),
+      ]);
+      const now = new Date().toISOString();
+      const candidate = OrchestrationModelAssignmentSchema.parse({
+        id: existing?.id ?? orchestrationAssignmentId(role, scope),
+        ...(scope.userId ? { userId: scope.userId } : {}),
+        ...(scope.workspaceId ? { workspaceId: scope.workspaceId } : {}),
+        role,
+        providerId: body.providerId,
+        ...(body.modelId ? { modelId: body.modelId } : {}),
+        ...(body.fallbackProviderId ? { fallbackProviderId: body.fallbackProviderId } : {}),
+        ...(body.fallbackModelId ? { fallbackModelId: body.fallbackModelId } : {}),
+        enabled: body.enabled ?? existing?.enabled ?? true,
+        ...(body.maxUsdPerCall !== undefined ? { maxUsdPerCall: body.maxUsdPerCall } : {}),
+        ...(body.maxTokens !== undefined ? { maxTokens: body.maxTokens } : {}),
+        ...(body.timeoutMs !== undefined ? { timeoutMs: body.timeoutMs } : {}),
+        ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
+        ...(body.requiresJsonMode !== undefined ? { requiresJsonMode: body.requiresJsonMode } : {}),
+        ...(body.requiresToolCalling !== undefined ? { requiresToolCalling: body.requiresToolCalling } : {}),
+        ...(body.requiresStreaming !== undefined ? { requiresStreaming: body.requiresStreaming } : {}),
+        ...(body.notes !== undefined ? { notes: body.notes } : {}),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      });
+      const withoutCandidate = existingAssignments.filter((assignment) => assignment.role !== role);
+      const effective = resolveEffectiveAssignment({
+        role,
+        assignments: [...withoutCandidate, candidate],
+        providerState,
+        scope,
+      });
+      const blockers = effective.warnings.filter((warning) => warning.severity === "blocker");
+      if (blockers.length > 0) {
+        return sendRedacted(res, 400, {
+          error: "Assignment does not satisfy required role capabilities.",
+          warnings: effective.warnings,
+        });
+      }
+
+      const result = await userStores.orchestrationAssignmentStore.upsertAssignment(role, body, scope);
+      if (!result.ok) {
+        return sendRedacted(res, 500, { error: redactString(result.error) });
+      }
+      const payload = await buildOrchestrationModelsPayload(req, scope.workspaceId);
+      sendRedacted(res, 200, { assignment: result.value, effective, assignments: payload.assignments });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/orchestration-models/assignments/:role/test", async (req, res) => {
+    let role: OrchestrationRole;
+    let body: TestOrchestrationAssignmentRequest;
+    try {
+      role = OrchestrationRoleSchema.parse(req.params.role);
+      body = TestOrchestrationAssignmentRequestSchema.parse(req.body ?? {});
+    } catch (err: unknown) {
+      return sendRedacted(res, 400, { error: redactString(requestValidationMessage(err)) });
+    }
+
+    try {
+      const userStores = storesFor(req);
+      const scope = assignmentScopeFor(req, body.workspaceId);
+      const providerState = await userStores.providerConfigStore.getState();
+      const saved = await userStores.orchestrationAssignmentStore.getAssignment(role, scope);
+      const draft = body.providerId
+        ? OrchestrationModelAssignmentSchema.parse({
+            id: saved?.id ?? orchestrationAssignmentId(role, scope),
+            ...(scope.userId ? { userId: scope.userId } : {}),
+            ...(scope.workspaceId ? { workspaceId: scope.workspaceId } : {}),
+            role,
+            providerId: body.providerId,
+            ...(body.modelId ? { modelId: body.modelId } : {}),
+            ...(body.fallbackProviderId ? { fallbackProviderId: body.fallbackProviderId } : {}),
+            ...(body.fallbackModelId ? { fallbackModelId: body.fallbackModelId } : {}),
+            enabled: body.enabled ?? saved?.enabled ?? true,
+            ...(body.maxUsdPerCall !== undefined ? { maxUsdPerCall: body.maxUsdPerCall } : {}),
+            ...(body.maxTokens !== undefined ? { maxTokens: body.maxTokens } : {}),
+            ...(body.timeoutMs !== undefined ? { timeoutMs: body.timeoutMs } : {}),
+            ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
+            ...(body.requiresJsonMode !== undefined ? { requiresJsonMode: body.requiresJsonMode } : {}),
+            ...(body.requiresToolCalling !== undefined ? { requiresToolCalling: body.requiresToolCalling } : {}),
+            ...(body.requiresStreaming !== undefined ? { requiresStreaming: body.requiresStreaming } : {}),
+            ...(body.notes !== undefined ? { notes: body.notes } : {}),
+            createdAt: saved?.createdAt ?? new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          })
+        : saved;
+      const effective = draft
+        ? resolveEffectiveAssignment({ role, assignments: [draft], providerState, scope })
+        : resolveEffectiveAssignment({ role, assignments: [], providerState, scope });
+
+      if (!effective.enabled || effective.providerId === "disabled") {
+        return sendRedacted(res, 200, {
+          ok: true,
+          role,
+          providerId: effective.providerId,
+          model: effective.modelId,
+          networkAttempted: false,
+          warnings: effective.warnings,
+        });
+      }
+      if (effective.providerId === "deterministic") {
+        return sendRedacted(res, 200, {
+          ok: true,
+          role,
+          providerId: "deterministic",
+          model: effective.modelId ?? "deterministic-local",
+          networkAttempted: false,
+          warnings: effective.warnings,
+        });
+      }
+
+      const provider = await resolveTestProvider(
+        effective.providerId,
+        userStores.providerConfigStore,
+        userStores.secretStore,
+        { enableNetwork: true, fetchImpl: fetch },
+        effective.modelId ? { model: effective.modelId, deployment: effective.modelId } : {},
+      );
+      if (!provider) {
+        return sendRedacted(res, 400, {
+          ok: false,
+          role,
+          providerId: effective.providerId,
+          code: "CONFIG_INVALID",
+          error: redactString(`Provider ${effective.providerId} is not configured.`),
+          networkAttempted: false,
+          warnings: effective.warnings,
+        });
+      }
+
+      const result = await runConnectionTest({
+        providerId: effective.providerId,
+        provider,
+        model: effective.modelId,
+        deployment: effective.modelId,
+        fetchImpl: fetch,
+      });
+      sendRedacted(res, result.ok ? 200 : 400, { ...result, role, warnings: effective.warnings });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.post("/api/orchestration-models/assignments/reset", async (req, res) => {
+    try {
+      const workspaceId = typeof (req.body ?? {}).workspaceId === "string" ? String((req.body ?? {}).workspaceId).trim() : undefined;
+      const userStores = storesFor(req);
+      const result = await userStores.orchestrationAssignmentStore.resetAssignments(assignmentScopeFor(req, workspaceId));
+      if (!result.ok) return sendRedacted(res, 500, { error: redactString(result.error) });
+      const payload = await buildOrchestrationModelsPayload(req, workspaceId);
+      sendRedacted(res, 200, payload);
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
   // --- Provider_Config_API: BYOK CRUD + selection (design C7, Req 10/11/14) ---
   //
   // Every response is routed through `sendRedacted`/`redactOutbound` so no full or partial secret
   // value can appear in any response (Req 11.4). Secrets are accepted on input, persisted ONLY via
   // the Secret_Store, and never written to the Provider_Config_Store or echoed back (Req 11.6);
   // responses expose a `secretPresent` boolean only (Req 11.2).
-  const errorMessageOf = (error: unknown): string =>
-    error instanceof Error ? error.message : String(error);
-
   // GET /api/providers — non-secret records + activeRoutes + per-provider secretPresent (Req 10.4).
   app.get("/api/providers", async (req, res) => {
     try {

@@ -13,7 +13,7 @@ import { getSymbolicEngine } from "../symbolic";
  */
 export async function runDeepPlanner(
   input: PlannerInput & { deepPlanning?: boolean },
-  deps: { provider: LLMProvider; run: Run }
+  deps: { provider: LLMProvider; run: Run; model?: string }
 ): Promise<LivePlannerResult> {
   const { createFakePlan, runLivePlanner } = await import("./planner");
 
@@ -30,7 +30,7 @@ export async function runDeepPlanner(
         modelCalls: 0,
       },
       provider: deps.provider.metadata.id,
-      model: deps.provider.metadata.models.flagship,
+      model: deps.model ?? deps.provider.metadata.models.flagship,
       attempts: 0,
     };
   }

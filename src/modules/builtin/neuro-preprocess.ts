@@ -52,7 +52,7 @@ export async function executePreprocessorPhase(
   const preprocessorResult = await input.recordSpan("PREPROCESSING", () =>
     runSLMPreprocessor(
       { rawPrompt: input.prompt, contextPack: input.contextPack, triage: input.triage },
-      { slmProvider: selection.provider, run: input.run },
+      { slmProvider: selection.provider, run: input.run, model: selection.model },
     ),
   );
 

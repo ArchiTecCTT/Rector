@@ -274,6 +274,8 @@ export interface LiveSynthesisResult {
 export interface LiveSynthesizerDeps {
   provider: LLMProvider;
   run: Run;
+  /** Optional concrete model/deployment selected by the orchestration assignment router. */
+  model?: string;
   buildPrompt?: typeof buildSynthesizerPrompt;
   buildRepairPrompt?: typeof buildSynthesizerRepairPrompt;
 }
@@ -362,7 +364,7 @@ export async function synthesizeHeavyDeveloperRoute(
   deps: GatedSynthesizerDeps
 ): Promise<LiveSynthesisResult> {
   const { provider } = deps;
-  const model = synthesisModel(provider);
+  const model = deps.model ?? synthesisModel(provider);
 
   // Req 7.5: gate closed -> deterministic Legacy_Status_Response, zero provider calls, no network I/O.
   if (!shouldRunLiveSynthesizer(input, deps.gate)) {
@@ -407,7 +409,7 @@ export async function runLiveSynthesizer(
   const { provider, run } = deps;
   const buildPrompt = deps.buildPrompt ?? buildSynthesizerPrompt;
   const buildRepairPrompt = deps.buildRepairPrompt ?? buildSynthesizerRepairPrompt;
-  const model = synthesisModel(provider);
+  const model = deps.model ?? synthesisModel(provider);
 
   let totalUsage = ZERO_SYNTHESIS_USAGE;
   let attempts = 0;
@@ -429,6 +431,7 @@ export async function runLiveSynthesizer(
     const request: LLMRequest = {
       messages,
       modelRoute: "flagship",
+      ...(deps.model ? { model: deps.model } : {}),
       responseFormat: { type: "json_object" },
       task: "synthesizer",
     };

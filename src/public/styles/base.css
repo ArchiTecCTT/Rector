@@ -2853,6 +2853,134 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
   background: var(--err-soft);
 }
 
+/* --- Orchestration model assignments (Chunk 043) --- */
+.orchestration-model-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+
+.orchestration-model-status {
+  font-size: 12px;
+  padding: var(--space-1, 4px) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.orchestration-model-status[hidden] {
+  display: none;
+}
+
+.orchestration-model-status--ok {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.orchestration-model-status--err {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+
+.orchestration-model-callout {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  background: var(--surface);
+  font-size: 12.5px;
+}
+
+.orchestration-model-callout[hidden] {
+  display: none;
+}
+
+.orchestration-model-table-wrap {
+  overflow-x: auto;
+}
+
+.orchestration-model-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.orchestration-model-table th,
+.orchestration-model-table td {
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-2);
+  text-align: left;
+  vertical-align: top;
+}
+
+.orchestration-model-table th {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.orchestration-model-role__name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.orchestration-model-role__desc {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.35;
+  max-width: 220px;
+}
+
+.orchestration-model-row select,
+.orchestration-model-row input {
+  width: 100%;
+  min-width: 120px;
+  margin-bottom: var(--space-1, 4px);
+  padding: var(--space-1, 4px) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.orchestration-model-budget-usd,
+.orchestration-model-budget-tokens {
+  max-width: 110px;
+}
+
+.orchestration-model-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1, 4px);
+  color: var(--text-dim);
+}
+
+.orchestration-model-warnings {
+  margin-top: var(--space-1, 4px);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.orchestration-model-warnings.is-blocked {
+  color: var(--err);
+}
+
+.orchestration-model-dirty {
+  display: inline-block;
+  margin-right: var(--space-2);
+  color: var(--warn, var(--err));
+  font-size: 11px;
+}
+
+.orchestration-model-dirty[hidden] {
+  display: none;
+}
+
 /* --- Model_Picker (model discovery + per-role selection, Req 19–24) --- */
 .model-picker {
   display: flex;
