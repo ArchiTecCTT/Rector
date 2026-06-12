@@ -868,6 +868,25 @@
             <div class="provider-config-cards" id="memory-provider-config-cards"></div>
           </section>
 
+          <section class="provider-config-tier" aria-labelledby="memory-assignment-title">
+            <div class="provider-config-tier__head">
+              <h3 class="provider-config-tier__title" id="memory-assignment-title">Memory role assignments</h3>
+              <button class="btn btn--ghost btn--sm" id="memory-assignment-reset" type="button">Reset to local defaults</button>
+            </div>
+            <p class="provider-config-tier__desc">
+              Assign each memory role to a configured provider, Local default, or Disabled. Assignments only store provider ids;
+              API keys remain in the encrypted Secret Store and are never returned to the browser.
+            </p>
+            <div class="provider-config-cards" id="memory-assignment-matrix"></div>
+            <div
+              class="provider-config-result"
+              id="memory-assignment-result"
+              role="status"
+              aria-live="polite"
+              hidden
+            ></div>
+          </section>
+
           <section class="provider-config-tier" aria-labelledby="memory-provider-config-add-title">
             <h3 class="provider-config-tier__title" id="memory-provider-config-add-title">Add memory provider</h3>
             <p class="provider-config-tier__desc">

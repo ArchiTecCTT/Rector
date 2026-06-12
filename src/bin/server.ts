@@ -21,6 +21,7 @@ import {
 import { createLocalSecretStore } from "../security/secretStore";
 import { createLocalProviderConfigStore } from "../providers/configStore";
 import { createLocalMemoryConfigStore } from "../providers/memoryConfigStore";
+import { createLocalMemoryAssignmentStore } from "../providers/memoryAssignmentStore";
 import { createLocalOrchestrationAssignmentStore } from "../providers/orchestrationAssignments";
 import { redactString } from "../security/redaction";
 import { parseAuthConfig } from "../security/auth";
@@ -58,6 +59,7 @@ const RECTOR_DATA_DIR = ".rector";
 const SECRETS_FILE = `${RECTOR_DATA_DIR}/secrets.enc`;
 const PROVIDER_CONFIG_FILE = `${RECTOR_DATA_DIR}/providers.json`;
 const ORCHESTRATION_ASSIGNMENTS_FILE = `${RECTOR_DATA_DIR}/orchestration-assignments.json`;
+const MEMORY_ASSIGNMENTS_FILE = `${RECTOR_DATA_DIR}/memory-assignments.json`;
 const SECRET_KEY_FILE = `${RECTOR_DATA_DIR}/secret.key`;
 
 /**
@@ -113,6 +115,7 @@ const memoryConfigStore = createLocalMemoryConfigStore({ filePath: ".rector/memo
 const orchestrationAssignmentStore = createLocalOrchestrationAssignmentStore({
   filePath: ORCHESTRATION_ASSIGNMENTS_FILE,
 });
+const memoryAssignmentStore = createLocalMemoryAssignmentStore({ filePath: MEMORY_ASSIGNMENTS_FILE });
 
 /**
  * Build the model router for the resolved orchestration mode (design C6, Req 13.3/14.3).
@@ -289,6 +292,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
     providerConfigStore,
     memoryConfigStore,
     orchestrationAssignmentStore,
+    memoryAssignmentStore,
     auth: authConfig,
     secretEncryptionKey,
   });
