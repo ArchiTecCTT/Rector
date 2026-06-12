@@ -55,5 +55,5 @@ describe("performance baseline script", () => {
     for (const pattern of SECRET_OUTPUT_PATTERNS) {
       expect(output).not.toMatch(pattern);
     }
-  }, 180_000);
+  }, 240_000);
 });

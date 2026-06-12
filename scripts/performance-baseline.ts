@@ -11,23 +11,35 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 import request from "supertest";
 import type express from "express";
+import type { ChatRunArgs } from "../src/orchestration/chatRunner";
+import type { InMemoryRectorStore } from "../src/store/inMemoryRectorStore";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(SCRIPT_DIR, "..");
 const COLD_START_PROBE = join(SCRIPT_DIR, "performance-baseline-cold-start.ts");
+const COLD_START_COMPILED_PROBE = join(SCRIPT_DIR, "performance-baseline-cold-start-compiled.mjs");
+const COMPILED_SERVER_ENTRY = join(REPO_ROOT, "dist/api/server.js");
 const requireFromScript = createRequire(import.meta.url);
 const TSX_CLI = join(dirname(requireFromScript.resolve("tsx/package.json")), "dist/cli.mjs");
 
 export const PERFORMANCE_BASELINE_SECTIONS = [
   "startup_import",
   "startup_cold_subprocess",
+  "startup_cold_compiled_subprocess",
   "local_direct_answer",
   "local_fake_pipeline",
+  "pipeline_triage",
+  "pipeline_context_building",
+  "pipeline_planning",
+  "pipeline_executing",
+  "pipeline_synthesizing",
   "orchestration_assignment_resolution",
   "memory_role_resolution",
   "template_preview",
@@ -50,14 +62,21 @@ interface BenchmarkResult {
   label: string;
   ms: number;
   threshold: Threshold;
-  status: "ok" | "warn" | "fail";
+  status: "ok" | "warn" | "fail" | "skip";
+  skipReason?: string;
 }
 
 const THRESHOLDS: Record<SectionId, Threshold> = {
   startup_import: { preferredMs: 1_000, acceptableMs: 2_000 },
   startup_cold_subprocess: { preferredMs: 1_000, acceptableMs: 2_000 },
+  startup_cold_compiled_subprocess: { preferredMs: 1_000, acceptableMs: 2_000 },
   local_direct_answer: { preferredMs: 100, acceptableMs: 250 },
   local_fake_pipeline: { preferredMs: 500, acceptableMs: 1_000 },
+  pipeline_triage: { preferredMs: 10, acceptableMs: 25 },
+  pipeline_context_building: { preferredMs: 50, acceptableMs: 100 },
+  pipeline_planning: { preferredMs: 50, acceptableMs: 150 },
+  pipeline_executing: { preferredMs: 50, acceptableMs: 150 },
+  pipeline_synthesizing: { preferredMs: 50, acceptableMs: 150 },
   orchestration_assignment_resolution: { preferredMs: 10, acceptableMs: 25 },
   memory_role_resolution: { preferredMs: 10, acceptableMs: 25 },
   template_preview: { preferredMs: 50, acceptableMs: 100 },
@@ -70,9 +89,15 @@ const THRESHOLDS: Record<SectionId, Threshold> = {
 
 const LABELS: Record<SectionId, string> = {
   startup_import: "Server startup / import (warm, in-process)",
-  startup_cold_subprocess: "Server startup / import (cold subprocess)",
+  startup_cold_subprocess: "Server startup / import (cold subprocess, tsx)",
+  startup_cold_compiled_subprocess: "Server startup / import (cold subprocess, compiled)",
   local_direct_answer: "Local direct answer",
-  local_fake_pipeline: "Local full fake pipeline",
+  local_fake_pipeline: "Local full fake pipeline (total)",
+  pipeline_triage: "Pipeline phase: TRIAGE",
+  pipeline_context_building: "Pipeline phase: CONTEXT_BUILDING",
+  pipeline_planning: "Pipeline phase: PLANNING",
+  pipeline_executing: "Pipeline phase: EXECUTING",
+  pipeline_synthesizing: "Pipeline phase: SYNTHESIZING",
   orchestration_assignment_resolution: "Orchestration assignment resolution",
   memory_role_resolution: "Memory role resolution",
   template_preview: "Template preview (local-free)",
@@ -179,20 +204,147 @@ async function measureStartupImport(): Promise<number> {
   });
 }
 
-async function measureStartupColdSubprocess(): Promise<number> {
-  const env = providerFreeEnv();
-  return measureMedian(3, () => {
-    const output = execFileSync(process.execPath, [TSX_CLI, COLD_START_PROBE], {
-      cwd: join(SCRIPT_DIR, ".."),
-      encoding: "utf8",
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const probeMs = parseColdStartProbeMs(output);
-    if (!Number.isFinite(probeMs) || probeMs <= 0) {
-      throw new Error(`cold-start probe returned invalid ms: ${probeMs}`);
-    }
+function runColdStartProbe(command: string, args: string[]): string {
+  const output = execFileSync(command, args, {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    env: providerFreeEnv(),
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  const probeMs = parseColdStartProbeMs(output);
+  if (!Number.isFinite(probeMs) || probeMs <= 0) {
+    throw new Error(`cold-start probe returned invalid ms: ${probeMs}`);
+  }
+  return output;
+}
+
+async function measureStartupColdSubprocess(): Promise<number> {
+  return measureMedian(3, () => {
+    runColdStartProbe(process.execPath, [TSX_CLI, COLD_START_PROBE]);
+  });
+}
+
+async function measureStartupColdCompiledSubprocess(): Promise<BenchmarkResult> {
+  if (!existsSync(COMPILED_SERVER_ENTRY)) {
+    return {
+      id: "startup_cold_compiled_subprocess",
+      label: LABELS.startup_cold_compiled_subprocess,
+      ms: 0,
+      threshold: THRESHOLDS.startup_cold_compiled_subprocess,
+      status: "skip",
+      skipReason: "dist/api/server.js missing — run npm run build first",
+    };
+  }
+
+  const ms = await measureMedian(3, () => {
+    runColdStartProbe(process.execPath, [COLD_START_COMPILED_PROBE]);
+  });
+
+  const threshold = THRESHOLDS.startup_cold_compiled_subprocess;
+  return {
+    id: "startup_cold_compiled_subprocess",
+    label: LABELS.startup_cold_compiled_subprocess,
+    ms,
+    threshold,
+    status: classify(ms, threshold),
+  };
+}
+
+interface FakePipelineRun {
+  store: InMemoryRectorStore;
+  args: ChatRunArgs;
+  triageMs: number;
+  contextMs: number;
+}
+
+async function buildFakePipelineRun(): Promise<FakePipelineRun> {
+  const { InMemoryRectorStore } = await import("../src/store/inMemoryRectorStore");
+  const { triageUserMessage } = await import("../src/orchestration/triage");
+  const { buildContextPack } = await import("../src/orchestration/contextBuilder");
+  const { createInMemoryObservabilityTrace } = await import("../src/observability");
+
+  const store = new InMemoryRectorStore({ now: () => FIXED_NOW });
+  const conversation = await store.createConversation({
+    title: "perf pipeline",
+    workspaceId: "local",
+    retentionPolicy: "session",
+  });
+  const userMessage = await store.createMessage({
+    conversationId: conversation.id,
+    role: "user",
+    content: BENCHMARK_PROMPT,
+    status: "created",
+    redactionState: "none",
+  });
+
+  const triageStart = performance.now();
+  const triage = triageUserMessage(BENCHMARK_PROMPT);
+  const triageMs = performance.now() - triageStart;
+
+  const contextStart = performance.now();
+  const contextPack = await buildContextPack(store, {
+    conversation,
+    messages: [userMessage],
+    userMessage,
+    triage,
+    now: () => FIXED_NOW,
+  });
+  const contextMs = performance.now() - contextStart;
+
+  return {
+    store,
+    args: {
+      conversationId: conversation.id,
+      userMessageId: userMessage.id,
+      prompt: BENCHMARK_PROMPT,
+      triage,
+      contextPack,
+      observability: createInMemoryObservabilityTrace({ provider: "local" }),
+    },
+    triageMs,
+    contextMs,
+  };
+}
+
+function spanDurationMs(spans: Array<{ phase: string; durationMs: number }>, phase: string): number {
+  const span = [...spans].reverse().find((candidate) => candidate.phase === phase);
+  if (!span) {
+    throw new Error(`missing observability span for phase ${phase}`);
+  }
+  return span.durationMs;
+}
+
+async function measurePipelinePhaseBreakdown(): Promise<
+  Array<{ id: SectionId; ms: number }>
+> {
+  const { runFakeChatRun } = await import("../src/orchestration/chatRunner");
+  const phaseIds = [
+    "pipeline_triage",
+    "pipeline_context_building",
+    "pipeline_planning",
+    "pipeline_executing",
+    "pipeline_synthesizing",
+  ] as const;
+  const samples: Record<(typeof phaseIds)[number], number[]> = {
+    pipeline_triage: [],
+    pipeline_context_building: [],
+    pipeline_planning: [],
+    pipeline_executing: [],
+    pipeline_synthesizing: [],
+  };
+
+  for (let i = 0; i < 3; i += 1) {
+    const { store, args, triageMs, contextMs } = await buildFakePipelineRun();
+    samples.pipeline_triage.push(triageMs);
+    samples.pipeline_context_building.push(contextMs);
+    await runFakeChatRun(store, args);
+    const spans = args.observability.getSummary().spans;
+    samples.pipeline_planning.push(spanDurationMs(spans, "PLANNING"));
+    samples.pipeline_executing.push(spanDurationMs(spans, "EXECUTING"));
+    samples.pipeline_synthesizing.push(spanDurationMs(spans, "SYNTHESIZING"));
+  }
+
+  return phaseIds.map((id) => ({ id, ms: median(samples[id]) }));
 }
 
 async function measureLocalDirectAnswer(): Promise<number> {
@@ -236,51 +388,10 @@ async function measureLocalDirectAnswer(): Promise<number> {
 }
 
 async function measureLocalFakePipeline(): Promise<number> {
-  const { InMemoryRectorStore } = await import("../src/store/inMemoryRectorStore");
   const { runFakeChatRun } = await import("../src/orchestration/chatRunner");
-  const { triageUserMessage } = await import("../src/orchestration/triage");
-  const { createInMemoryObservabilityTrace } = await import("../src/observability");
-  const { ContextPackSchema } = await import("../src/orchestration/contextBuilder");
-
   return measureMedian(3, async () => {
-    const store = new InMemoryRectorStore({ now: () => FIXED_NOW });
-    const conversation = await store.createConversation({
-      title: "perf pipeline",
-      workspaceId: "local",
-      retentionPolicy: "session",
-    });
-    const userMessage = await store.createMessage({
-      conversationId: conversation.id,
-      role: "user",
-      content: BENCHMARK_PROMPT,
-      status: "created",
-      redactionState: "none",
-    });
-    const triage = triageUserMessage(BENCHMARK_PROMPT);
-    const contextPack = ContextPackSchema.parse({
-      id: "ctx-perf-pipeline",
-      createdAt: FIXED_NOW,
-      userIntentSummary: "What is Rector?",
-      conversationRef: { id: conversation.id, title: conversation.title, workspaceId: conversation.workspaceId },
-      messageRefs: [{ id: userMessage.id, role: "user", status: "created", createdAt: userMessage.createdAt }],
-      relevantDocs: [],
-      relevantMemory: [],
-      constraints: [],
-      availableProviders: { configured: [], unavailable: [], notes: [] },
-      availableTools: { names: [], notes: [] },
-      riskFlags: triage.riskFlags,
-      triage,
-      artifactHandles: [],
-      inlineContext: [],
-    });
-    await runFakeChatRun(store, {
-      conversationId: conversation.id,
-      userMessageId: userMessage.id,
-      prompt: BENCHMARK_PROMPT,
-      triage,
-      contextPack,
-      observability: createInMemoryObservabilityTrace({ provider: "local" }),
-    });
+    const { store, args } = await buildFakePipelineRun();
+    await runFakeChatRun(store, args);
   });
 }
 
@@ -405,20 +516,28 @@ function formatMs(ms: number): string {
 }
 
 function printReport(results: BenchmarkResult[], enforce: boolean): void {
-  const exceeded = results.filter((result) => result.status !== "ok");
+  const exceeded = results.filter((result) => result.status === "warn" || result.status === "fail");
 
   console.log("# Rector performance baseline (local/provider-free)\n");
   console.log("| Section | ms | preferred | acceptable | status |");
   console.log("|---|---:|---:|---:|---|");
   for (const result of results) {
+    const msCell = result.status === "skip" ? "skipped" : formatMs(result.ms);
     console.log(
-      `| ${result.label} (\`${result.id}\`) | ${formatMs(result.ms)} | <${result.threshold.preferredMs}ms | <${result.threshold.acceptableMs}ms | ${result.status} |`,
+      `| ${result.label} (\`${result.id}\`) | ${msCell} | <${result.threshold.preferredMs}ms | <${result.threshold.acceptableMs}ms | ${result.status} |`,
     );
   }
 
   console.log("");
+  const skipped = results.filter((result) => result.status === "skip");
+  if (skipped.length > 0) {
+    for (const result of skipped) {
+      console.log(`Skipped \`${result.id}\`: ${result.skipReason ?? "not available"}`);
+    }
+    console.log("");
+  }
   if (exceeded.length === 0) {
-    console.log("All benchmarks within preferred thresholds.");
+    console.log("All measured benchmarks within preferred thresholds.");
   } else {
     const warns = exceeded.filter((result) => result.status === "warn").length;
     const fails = exceeded.filter((result) => result.status === "fail").length;
@@ -427,14 +546,29 @@ function printReport(results: BenchmarkResult[], enforce: boolean): void {
   console.log(`Sections: ${PERFORMANCE_BASELINE_SECTIONS.join(", ")}`);
 }
 
+function toBenchmarkResult(id: SectionId, ms: number): BenchmarkResult {
+  const threshold = THRESHOLDS[id];
+  return {
+    id,
+    label: LABELS[id],
+    ms,
+    threshold,
+    status: classify(ms, threshold),
+  };
+}
+
 async function runBenchmarks(): Promise<BenchmarkResult[]> {
   const app = await createBenchmarkApp();
+  const compiledColdStart = await measureStartupColdCompiledSubprocess();
+  const pipelinePhases = await measurePipelinePhaseBreakdown();
 
-  const measurements: Array<{ id: SectionId; ms: number }> = [
+  const measurements: Array<{ id: SectionId; ms: number } | BenchmarkResult> = [
     { id: "startup_import", ms: await measureStartupImport() },
     { id: "startup_cold_subprocess", ms: await measureStartupColdSubprocess() },
+    compiledColdStart,
     { id: "local_direct_answer", ms: await measureLocalDirectAnswer() },
     { id: "local_fake_pipeline", ms: await measureLocalFakePipeline() },
+    ...pipelinePhases,
     { id: "orchestration_assignment_resolution", ms: await measureOrchestrationAssignmentResolution() },
     { id: "memory_role_resolution", ms: await measureMemoryRoleResolution() },
     { id: "template_preview", ms: await measureTemplatePreview() },
@@ -445,15 +579,9 @@ async function runBenchmarks(): Promise<BenchmarkResult[]> {
     { id: "api_templates", ms: await measureApiRoute(app, "/api/templates") },
   ];
 
-  return measurements.map(({ id, ms }) => {
-    const threshold = THRESHOLDS[id];
-    return {
-      id,
-      label: LABELS[id],
-      ms,
-      threshold,
-      status: classify(ms, threshold),
-    };
+  return measurements.map((entry) => {
+    if ("status" in entry) return entry;
+    return toBenchmarkResult(entry.id, entry.ms);
   });
 }
 
