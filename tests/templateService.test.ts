@@ -74,7 +74,7 @@ function makeService(options: { withProvider?: boolean; withSecret?: boolean } =
     userTemplateStore: createInMemoryUserTemplateStore(),
     now: () => now,
   });
-  return { service, orchestrationAssignmentStore, memoryAssignmentStore };
+  return { service, orchestrationAssignmentStore, memoryAssignmentStore, moduleConfigStore };
 }
 
 describe("TemplateService", () => {
@@ -132,6 +132,40 @@ describe("TemplateService", () => {
     expect(text).not.toContain("sk-test-value-not-exported");
     expect(text).not.toContain("apiKey");
     expect(text).not.toContain("secretRef");
+  });
+
+  it("does not count disabled optional provider assignments as missing preview providers", async () => {
+    const { service } = makeService({ withProvider: true });
+
+    const preview = await service.preview("cheap-byok");
+
+    expect(preview.missingProviderConfigs.map((item) => item.providerId)).toContain("openai-compatible:mid");
+    expect(preview.missingProviderConfigs.map((item) => item.providerId)).not.toContain("chroma:optional");
+    expect(preview.externalNetworkImplications.join("\n")).not.toContain("chroma:optional");
+  });
+
+  it("handles malformed template JSON as validation/import errors", () => {
+    const { service } = makeService();
+
+    expect(service.validate({ template: "{not-json" })).toEqual({
+      ok: false,
+      issues: [{ path: "template", message: "Template JSON is malformed." }],
+    });
+    expect(() => service.importTemplate({ template: "{not-json" })).toThrow("Template JSON is malformed.");
+  });
+
+  it("keeps scoped module toggle application from mutating global module config", async () => {
+    const { service, moduleConfigStore } = makeService();
+
+    const result = await service.apply("local-free", {
+      mode: "replaceAssignments",
+      confirmReplace: true,
+      scopeId: "user-a",
+    });
+
+    expect(result.changed.moduleToggles).toBe(0);
+    expect(result.skipped).toContain("module:neuro-alive:scoped-scope");
+    await expect(moduleConfigStore.getState()).resolves.toEqual({ disabledModuleIds: [], enabledModuleIds: [] });
   });
 
   it("rejects imported secret-like fields before schema parsing", () => {

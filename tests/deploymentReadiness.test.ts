@@ -19,6 +19,20 @@ describe("commercial deployment readiness", () => {
     expect(readiness.blockers.map((check) => check.id)).toContain("persistence");
   });
 
+  it("blocks unsupported persistence drivers instead of treating them as ready", () => {
+    const readiness = computeCommercialDeploymentReadiness({
+      NODE_ENV: "production",
+      RECTOR_AUTH_MODE: "self-hosted",
+      RECTOR_AUTH_SESSION_SECRET: "session-secret",
+      RECTOR_PERSISTENCE: "postgres",
+    });
+
+    expect(readiness.ready).toBe(false);
+    expect(readiness.blockers).toContainEqual(
+      expect.objectContaining({ id: "persistence", message: expect.stringContaining("Unsupported persistence driver") }),
+    );
+  });
+
   it("keeps OIDC/Auth0 optional but validates external-oidc shape when selected", () => {
     const missing = computeCommercialDeploymentReadiness({ NODE_ENV: "production", RECTOR_AUTH_MODE: "external-oidc", RECTOR_PERSISTENCE: "sqlite" });
     expect(missing.blockers.map((check) => check.id)).toContain("auth-mode");

@@ -46,4 +46,27 @@ describe("template schema and built-ins", () => {
     expect(result.ok).toBe(false);
     expect(result.issues.some((issue) => issue.message.includes("duplicate orchestration role"))).toBe(true);
   });
+
+  it("rejects local templates that carry external provider assignments", () => {
+    const local = BUILT_IN_TEMPLATES.find((template) => template.id === "local-free")!;
+    const invalid = {
+      ...local,
+      id: "bad-local-external-provider",
+      orchestrationAssignments: [
+        { ...local.orchestrationAssignments[0], providerId: "openai-compatible:cheap" },
+        ...local.orchestrationAssignments.slice(1),
+      ],
+      memoryAssignments: [
+        { ...local.memoryAssignments[0], providerRecordId: "mem0:main", providerKind: "mem0" },
+        ...local.memoryAssignments.slice(1),
+      ],
+    };
+
+    const result = validateRectorTemplate(invalid);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((issue) => issue.path === "orchestrationAssignments.0.providerId")).toBe(true);
+    expect(result.issues.some((issue) => issue.path === "memoryAssignments.0.providerRecordId")).toBe(true);
+    expect(result.issues.some((issue) => issue.path === "memoryAssignments.0.providerKind")).toBe(true);
+  });
 });
