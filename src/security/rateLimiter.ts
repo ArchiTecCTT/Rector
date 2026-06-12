@@ -72,54 +72,33 @@ export function createRateLimitPolicy(
   const baseMaxRequests = intOrFallback(config.maxRequests, numberFromEnv(env, "CHAT_RATE_LIMIT_MAX", DEFAULT_CHAT_MAX));
   const failClosed = config.failClosed ?? booleanFromEnv(env, "RATE_LIMIT_FAIL_CLOSED", true);
 
-  const chat = mergeRule(
-    { windowMs: baseWindowMs, maxRequests: baseMaxRequests, failClosed },
-    {
-      windowMs: numberFromEnv(env, "CHAT_RATE_LIMIT_WINDOW_MS", baseWindowMs),
-      maxRequests: numberFromEnv(env, "CHAT_RATE_LIMIT_MAX", baseMaxRequests),
-    },
-    config.chat,
-  );
-
+  const baseRule = { windowMs: baseWindowMs, maxRequests: baseMaxRequests, failClosed };
   const derivedGeneralMax = Math.max(10, Math.max(0, baseMaxRequests) * 5);
   const derivedTestMax = Math.max(5, Math.max(0, baseMaxRequests));
 
   return {
     failClosed,
     routes: {
-      chat,
-      "auth-login": mergeRule(
-        { windowMs: baseWindowMs, maxRequests: derivedGeneralMax, failClosed },
-        {
-          windowMs: numberFromEnv(env, "AUTH_LOGIN_RATE_LIMIT_WINDOW_MS", baseWindowMs),
-          maxRequests: numberFromEnv(env, "AUTH_LOGIN_RATE_LIMIT_MAX", derivedGeneralMax),
-        },
-        config.authLogin,
-      ),
-      "provider-test-connection": mergeRule(
-        { windowMs: baseWindowMs, maxRequests: derivedTestMax, failClosed },
-        {
-          windowMs: numberFromEnv(env, "PROVIDER_TEST_RATE_LIMIT_WINDOW_MS", baseWindowMs),
-          maxRequests: numberFromEnv(env, "PROVIDER_TEST_RATE_LIMIT_MAX", derivedTestMax),
-        },
-        config.providerTestConnection,
-      ),
-      "memory-provider-test": mergeRule(
-        { windowMs: baseWindowMs, maxRequests: derivedTestMax, failClosed },
-        {
-          windowMs: numberFromEnv(env, "MEMORY_PROVIDER_TEST_RATE_LIMIT_WINDOW_MS", baseWindowMs),
-          maxRequests: numberFromEnv(env, "MEMORY_PROVIDER_TEST_RATE_LIMIT_MAX", derivedTestMax),
-        },
-        config.memoryProviderTest,
-      ),
-      general: mergeRule(
-        { windowMs: baseWindowMs, maxRequests: derivedGeneralMax, failClosed },
-        {
-          windowMs: numberFromEnv(env, "API_RATE_LIMIT_WINDOW_MS", baseWindowMs),
-          maxRequests: numberFromEnv(env, "API_RATE_LIMIT_MAX", derivedGeneralMax),
-        },
-        config.general,
-      ),
+      chat: buildRouteRule(baseRule, env, {
+        windowMs: "CHAT_RATE_LIMIT_WINDOW_MS",
+        maxRequests: "CHAT_RATE_LIMIT_MAX",
+      }, config.chat),
+      "auth-login": buildRouteRule({ ...baseRule, maxRequests: derivedGeneralMax }, env, {
+        windowMs: "AUTH_LOGIN_RATE_LIMIT_WINDOW_MS",
+        maxRequests: "AUTH_LOGIN_RATE_LIMIT_MAX",
+      }, config.authLogin),
+      "provider-test-connection": buildRouteRule({ ...baseRule, maxRequests: derivedTestMax }, env, {
+        windowMs: "PROVIDER_TEST_RATE_LIMIT_WINDOW_MS",
+        maxRequests: "PROVIDER_TEST_RATE_LIMIT_MAX",
+      }, config.providerTestConnection),
+      "memory-provider-test": buildRouteRule({ ...baseRule, maxRequests: derivedTestMax }, env, {
+        windowMs: "MEMORY_PROVIDER_TEST_RATE_LIMIT_WINDOW_MS",
+        maxRequests: "MEMORY_PROVIDER_TEST_RATE_LIMIT_MAX",
+      }, config.memoryProviderTest),
+      general: buildRouteRule({ ...baseRule, maxRequests: derivedGeneralMax }, env, {
+        windowMs: "API_RATE_LIMIT_WINDOW_MS",
+        maxRequests: "API_RATE_LIMIT_MAX",
+      }, config.general),
     },
   };
 }
@@ -212,6 +191,27 @@ export function createUnavailableDistributedRateLimiter(
     },
     async reset(): Promise<void> {},
   };
+}
+
+interface RateLimitRuleEnvKeys {
+  windowMs: string;
+  maxRequests: string;
+}
+
+function buildRouteRule(
+  base: RateLimitRule,
+  env: Record<string, string | undefined>,
+  envKeys: RateLimitRuleEnvKeys,
+  override: RateLimitRuleInput = {},
+): RateLimitRule {
+  return mergeRule(
+    base,
+    {
+      windowMs: numberFromEnv(env, envKeys.windowMs, base.windowMs),
+      maxRequests: numberFromEnv(env, envKeys.maxRequests, base.maxRequests),
+    },
+    override,
+  );
 }
 
 function mergeRule(base: RateLimitRule, envRule: Partial<RateLimitRule>, override: RateLimitRuleInput = {}): RateLimitRule {

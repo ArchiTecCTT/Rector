@@ -106,6 +106,8 @@ export class MemoryRoleRouter {
   private readonly secrets: SecretStore;
   private readonly defaults: Omit<ResolveMemoryRoleContext, "userId" | "workspaceId">;
   private readonly providerCache = new Map<string, MemoryProvider>();
+  private readonly contextObjectIds = new WeakMap<object, string>();
+  private contextObjectSeq = 0;
 
   constructor(options: MemoryRoleRouterOptions) {
     this.assignmentStore = options.assignmentStore;
@@ -144,7 +146,7 @@ export class MemoryRoleRouter {
           code: "EXTERNAL_MEMORY",
           severity: "info",
           message: `${MEMORY_ROLE_DEFINITIONS[role].label} is assigned to ${assignment.providerRecordId}, but Local Mode forces the built-in local memory provider without reading secrets.`,
-        });
+        }, merged);
       }
 
       const primary = await this.buildProvider(role, assignment.providerRecordId, "assignment", configState.providers, merged);
@@ -171,13 +173,13 @@ export class MemoryRoleRouter {
       }
 
       return {
-        ...this.localFallback(role, assignment),
+        ...this.localFallback(role, assignment, undefined, merged),
         error: primary.error,
       };
     }
 
     if (mode === "local") {
-      return this.localFallback(role);
+      return this.localFallback(role, undefined, undefined, merged);
     }
 
     if (configState.activeMemoryProviderId) {
@@ -189,10 +191,10 @@ export class MemoryRoleRouter {
         merged,
       );
       if (active.status === "ready") return active;
-      return { ...this.localFallback(role), error: active.error };
+      return { ...this.localFallback(role, undefined, undefined, merged), error: active.error };
     }
 
-    return this.localFallback(role);
+    return this.localFallback(role, undefined, undefined, merged);
   }
 
   private disabled(role: MemoryRole, assignment: MemoryRoleAssignment): EffectiveMemoryProvider {
@@ -213,10 +215,15 @@ export class MemoryRoleRouter {
     };
   }
 
-  private localFallback(role: MemoryRole, assignment?: MemoryRoleAssignment, extraWarning?: MemoryCapabilityWarning): EffectiveMemoryProvider {
+  private localFallback(
+    role: MemoryRole,
+    assignment?: MemoryRoleAssignment,
+    extraWarning?: MemoryCapabilityWarning,
+    context: ResolveMemoryRoleContext = this.defaults,
+  ): EffectiveMemoryProvider {
     const providerRecordId = "local";
-    const provider = this.cachedProvider(`local:${role}`, () =>
-      createPureLocalMemoryProvider({ id: "local-inmemory:default", label: "Local (in-memory)" }),
+    const provider = this.cachedProvider(`local:${role}:${this.cacheContextKey(context)}`, () =>
+      createPureLocalMemoryProvider({ id: "local-inmemory:default", label: "Local (in-memory)", now: context.now }),
     );
     const capabilities = memoryProviderCapabilitiesForKind("local-inmemory");
     const warnings = memoryCapabilityWarningsForRole({
@@ -225,7 +232,7 @@ export class MemoryRoleRouter {
       providerKind: "local-inmemory",
       providerLabel: "Local (in-memory)",
       providerRecordId,
-      mode: this.defaults.mode,
+      mode: context.mode,
     });
     if (extraWarning) warnings.push(extraWarning);
     return {
@@ -260,7 +267,7 @@ export class MemoryRoleRouter {
     }
 
     if (providerRecordId === "local") {
-      const provider = this.cachedProvider(`local:${role}`, () =>
+      const provider = this.cachedProvider(`local:${role}:${this.cacheContextKey(context)}`, () =>
         createPureLocalMemoryProvider({ id: "local-inmemory:default", label: "Local (in-memory)", now: context.now }),
       );
       const capabilities = memoryProviderCapabilitiesForKind("local-inmemory");
@@ -307,7 +314,7 @@ export class MemoryRoleRouter {
     });
 
     try {
-      const cacheKey = `${source}:${role}:${record.id}:${record.updatedAt}:${context.mode ?? "external"}`;
+      const cacheKey = `${source}:${role}:${record.id}:${record.updatedAt}:${this.cacheContextKey(context)}`;
       const provider = await this.cachedProviderAsync(cacheKey, async () => {
         const secret = record.kind === "local-inmemory" || record.kind === "local-sqlite-mem"
           ? undefined
@@ -342,6 +349,27 @@ export class MemoryRoleRouter {
     const result = await this.secrets.getSecret(secretRef);
     if (!result.ok) return undefined;
     return result.value;
+  }
+
+  private cacheContextKey(context: ResolveMemoryRoleContext): string {
+    return [
+      context.mode ?? "external",
+      context.run?.id ?? this.contextObjectKey(context.run),
+      this.contextObjectKey(context.delegateStoreForLocalSqliteMem),
+      this.contextObjectKey(context.now),
+    ].join(":");
+  }
+
+  private contextObjectKey(value: unknown): string {
+    if (value === undefined || value === null) return "none";
+    if ((typeof value !== "object" && typeof value !== "function")) return String(value);
+    const objectValue = value as object;
+    const existing = this.contextObjectIds.get(objectValue);
+    if (existing) return existing;
+    this.contextObjectSeq += 1;
+    const next = `ctx${this.contextObjectSeq}`;
+    this.contextObjectIds.set(objectValue, next);
+    return next;
   }
 
   private cachedProvider(key: string, factory: () => MemoryProvider): MemoryProvider {
