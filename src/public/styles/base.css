@@ -155,6 +155,12 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+
 .t-mono {
   font-family: var(--font-mono);
   font-size: 0.85em;

@@ -42,7 +42,6 @@ import {
 import { createAuthMiddleware } from "../security/authMiddleware";
 import { createUserStoresResolver, type UserStores } from "../security/userStores";
 import {
-  permissionsForRole,
   requirePermission as evaluatePermission,
   sendPermissionDenied,
   type Permission,
@@ -51,7 +50,6 @@ import {
 } from "../security/rbac";
 import {
   createInMemoryWorkspaceDirectory,
-  WorkspaceMembershipSchema,
   type WorkspaceDirectory,
 } from "../security/workspaces";
 import {
@@ -60,7 +58,6 @@ import {
   type AuditLogService,
 } from "../security/auditLog";
 import {
-  QuotaPolicySchema,
   createInMemoryQuotaService,
   type QuotaService,
 } from "../security/quotas";
@@ -88,27 +85,18 @@ import { buildConfiguredRouter, resolveTestProvider } from "../providers/configB
 import {
   ORCHESTRATION_ROLE_DESCRIPTORS,
   OrchestrationAssignmentUpsertSchema,
-  OrchestrationModelAssignmentSchema,
-  OrchestrationRoleSchema,
   buildConfiguredAssignmentAwareRouter,
   createInMemoryOrchestrationAssignmentStore,
-  createOrchestrationModelRouter,
   providerOptionsFromConfigState,
   resolveEffectiveAssignment,
   type EffectiveModelRoute,
   type OrchestrationAssignmentScope,
   type OrchestrationAssignmentStore,
-  orchestrationAssignmentId,
   type OrchestrationModelAssignment,
-  type OrchestrationRole,
 } from "../providers/orchestrationAssignments";
 import {
-  TemplateApplyRequestSchema,
-  TemplateImportSecretError,
-  TemplateSaveCurrentRequestSchema,
   TemplateService,
   createInMemoryUserTemplateStore,
-  type TemplatePreview,
   type UserTemplateStore,
 } from "../templates";
 
@@ -124,17 +112,11 @@ import {
   type MemoryProviderRecord,
   createInMemoryMemoryConfigStore,
   type MemoryConfigStore,
-  MEMORY_ROLES,
-  MEMORY_ROLE_DEFINITIONS,
   MemoryRoleSchema,
   createMemoryRoleAssignment,
   createInMemoryMemoryAssignmentStore,
   MemoryRoleRouter,
-  memoryRoleResolutionToJson,
-  memoryProviderCapabilitiesForKind,
-  memoryCapabilityWarningsForRole,
   type MemoryRole,
-  type MemoryRoleAssignment,
   type MemoryAssignmentStore,
 } from "../providers";
 import type { MemoryProvider } from "../memory/provider";
@@ -176,7 +158,10 @@ import {
 import { MemoryLayerSchema, RunEventSchema } from "../store/schemas";
 import type { Artifact, MemoryLayer, Run, RunEvent } from "../store/schemas";
 import { RunPhaseSchema, isTerminalRunPhase } from "../protocol/phases";
-import { computeCommercialDeploymentReadiness } from "../deployment/readiness";
+import { registerCommercialRoutes } from "./routes/commercial";
+import { registerMemoryAssignmentRoutes } from "./routes/memoryAssignments";
+import { registerOrchestrationModelRoutes } from "./routes/orchestrationModels";
+import { registerTemplateRoutes } from "./routes/templates";
 
 export interface ApiSecurityOptions {
   corsAllowedOrigins?: string[];
@@ -1942,157 +1927,18 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.use(createAuthMiddleware(authConfig, resolveUserStores));
   app.use(csrfProtectionMiddleware(authConfig, securityOptions));
 
-  app.get("/api/rbac/permissions", async (req, res) => {
-    const workspace = await authorize(req, res, "workspace.read", {
-      workspaceId: typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined,
-      targetType: "workspace",
-    });
-    if (!workspace) return;
-    sendRedacted(res, 200, {
-      workspaceId: workspace.workspaceId,
-      role: workspace.role,
-      permissions: permissionsForRole(workspace.role),
-    });
-  });
-
-  app.get("/api/workspaces", async (req, res) => {
-    try {
-      const userId = requestActorId(req);
-      const entries = authConfig.enabled
-        ? await workspaceDirectory.listWorkspacesForUser(userId)
-        : [{ workspace: await workspaceDirectory.getDefaultWorkspaceForUser("default"), membership: WorkspaceMembershipSchema.parse({ id: "local-owner", workspaceId: "local", userId: "default", role: "owner", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }) }];
-      sendRedacted(res, 200, {
-        workspaces: entries.map((entry) => ({ ...entry.workspace, role: entry.membership.role })),
-      });
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.post("/api/workspaces", async (req, res) => {
-    if (authConfig.enabled && !req.rectorAuth) return res.status(401).json({ error: "Authentication required" });
-    try {
-      const body = z.object({ name: z.string().min(1) }).parse(req.body ?? {});
-      const ownerUserId = requestActorId(req);
-      const workspace = await workspaceDirectory.createWorkspace({ name: body.name, ownerUserId });
-      await auditRequest(req, { workspaceId: workspace.id, action: "workspace.create", targetType: "workspace", targetId: workspace.id, outcome: "success" });
-      sendRedacted(res, 201, { workspace });
-    } catch (error) {
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.get("/api/workspaces/:id/members", async (req, res) => {
-    const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "workspace", targetId: req.params.id });
-    if (!workspace) return;
-    try {
-      sendRedacted(res, 200, { members: await workspaceDirectory.listMembers(workspace.workspaceId) });
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.post("/api/workspaces/:id/members", async (req, res) => {
-    const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "workspace", targetId: req.params.id });
-    if (!workspace) return;
-    try {
-      const body = z.object({ userId: z.string().min(1), role: z.enum(["owner", "admin", "operator", "developer", "viewer"]) }).parse(req.body ?? {});
-      const member = await workspaceDirectory.addMembership({ workspaceId: workspace.workspaceId, userId: body.userId, role: body.role });
-      await auditRequest(req, { workspaceId: workspace.workspaceId, action: "members.add", targetType: "membership", targetId: member.id, outcome: "success" });
-      sendRedacted(res, 201, { member });
-    } catch (error) {
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.patch("/api/workspaces/:id/members/:memberId", async (req, res) => {
-    const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "membership", targetId: req.params.memberId });
-    if (!workspace) return;
-    try {
-      const body = z.object({ role: z.enum(["owner", "admin", "operator", "developer", "viewer"]) }).parse(req.body ?? {});
-      const members = await workspaceDirectory.listMembers(workspace.workspaceId);
-      if (!members.some((member) => member.id === req.params.memberId)) {
-        return sendRedacted(res, 404, { error: "Member not found" });
-      }
-      const member = await workspaceDirectory.updateMembershipRole(req.params.memberId, body.role);
-      if (!member) return sendRedacted(res, 404, { error: "Member not found" });
-      await auditRequest(req, { workspaceId: workspace.workspaceId, action: "members.update", targetType: "membership", targetId: member.id, outcome: "success" });
-      sendRedacted(res, 200, { member });
-    } catch (error) {
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.delete("/api/workspaces/:id/members/:memberId", async (req, res) => {
-    const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "membership", targetId: req.params.memberId });
-    if (!workspace) return;
-    const members = await workspaceDirectory.listMembers(workspace.workspaceId);
-    const target = members.find((member) => member.id === req.params.memberId);
-    if (!target) return sendRedacted(res, 404, { error: "Member not found" });
-    const removed = await workspaceDirectory.removeMembership(req.params.memberId);
-    await auditRequest(req, { workspaceId: workspace.workspaceId, action: "members.remove", targetType: "membership", targetId: req.params.memberId, outcome: removed ? "success" : "failed" });
-    sendRedacted(res, 200, { removed, id: req.params.memberId });
-  });
-
-  app.get("/api/audit/events", async (req, res) => {
-    const workspace = await authorize(req, res, "audit.read", {
-      workspaceId: typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined,
-      targetType: "audit",
-    });
-    if (!workspace) return;
-    const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
-    const events = await auditLog.list({ workspaceId: workspace.workspaceId, limit: Number.isFinite(limitRaw) ? limitRaw : 100 });
-    sendRedacted(res, 200, { events });
-  });
-
-  app.get("/api/quotas", async (req, res) => {
-    const workspace = await authorize(req, res, "workspace.read", {
-      workspaceId: typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined,
-      targetType: "quota",
-    });
-    if (!workspace) return;
-    sendRedacted(res, 200, {
-      workspaceId: workspace.workspaceId,
-      policy: await quotaService.getPolicy(workspace.workspaceId),
-      usage: await quotaService.getUsage(workspace.workspaceId),
-    });
-  });
-
-  app.put("/api/quotas", async (req, res) => {
-    const workspaceId = typeof req.body?.workspaceId === "string" ? req.body.workspaceId : undefined;
-    const workspace = await authorize(req, res, "billing.manage", { workspaceId, targetType: "quota" });
-    if (!workspace) return;
-    try {
-      const policy = QuotaPolicySchema.parse(req.body?.policy ?? req.body ?? {});
-      const saved = await quotaService.setPolicy(workspace.workspaceId, policy);
-      await auditRequest(req, { workspaceId: workspace.workspaceId, action: "quota.update", targetType: "quota", outcome: "success" });
-      sendRedacted(res, 200, { workspaceId: workspace.workspaceId, policy: saved });
-    } catch (error) {
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.get("/api/setup/deployment-readiness", async (req, res) => {
-    const workspace = await authorize(req, res, "workspace.read", { targetType: "setup" });
-    if (!workspace) return;
-    sendRedacted(res, 200, computeCommercialDeploymentReadiness(deploymentEnv));
-  });
-
-  app.post("/api/secrets/:id/rotate", async (req, res) => {
-    const workspace = await authorize(req, res, "secrets.rotate", { targetType: "secret", targetId: req.params.id });
-    if (!workspace) return;
-    try {
-      const body = z.object({ value: z.string().min(1) }).parse(req.body ?? {});
-      const result = await storesFor(req).secretStore.setSecret(req.params.id, body.value);
-      if (!result.ok) return sendRedacted(res, 500, { error: redactString(result.error) });
-      await auditRequest(req, { workspaceId: workspace.workspaceId, action: "secret.rotate", targetType: "secret", targetId: req.params.id, outcome: "success" });
-      sendRedactedPreservingPresence(res, 200, { id: req.params.id, rotated: true, secretPresent: true }, (redacted) => {
-        redacted.secretPresent = true;
-        return redacted;
-      });
-    } catch (error) {
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
-    }
+  registerCommercialRoutes(app, {
+    authEnabled: authConfig.enabled,
+    workspaceDirectory,
+    auditLog,
+    quotaService,
+    deploymentEnv,
+    authorize,
+    requestActorId,
+    auditRequest,
+    storesFor,
+    sendRedacted,
+    sendRedactedPreservingPresence,
   });
 
   const memoryRoleRouterByUser = new Map<string, MemoryRoleRouter>();
@@ -3088,208 +2934,14 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // Stores only non-secret role → provider/model/budget assignments. Provider credentials remain in
   // Secret_Store-backed Provider_Config_Records and are never serialized by these endpoints.
 
-  app.get("/api/orchestration-models/roles", async (req, res) => {
-    try {
-      const payload = await buildOrchestrationModelsPayload(req, workspaceIdFromQuery(req));
-      sendRedacted(res, 200, {
-        roles: payload.roles,
-        providers: payload.providers,
-      });
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.get("/api/orchestration-models/assignments", async (req, res) => {
-    try {
-      const payload = await buildOrchestrationModelsPayload(req, workspaceIdFromQuery(req));
-      sendRedacted(res, 200, payload);
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.get("/api/orchestration-models/effective", async (req, res) => {
-    try {
-      const payload = await buildOrchestrationModelsPayload(req, workspaceIdFromQuery(req));
-      sendRedacted(res, 200, payload);
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.put("/api/orchestration-models/assignments/:role", async (req, res) => {
-    let role: OrchestrationRole;
-    let body: z.infer<typeof OrchestrationAssignmentUpsertSchema>;
-    try {
-      role = OrchestrationRoleSchema.parse(req.params.role);
-      body = OrchestrationAssignmentUpsertSchema.parse(req.body ?? {});
-    } catch (err: unknown) {
-      return sendRedacted(res, 400, { error: redactString(requestValidationMessage(err)) });
-    }
-
-    try {
-      const userStores = storesFor(req);
-      const scope = assignmentScopeFor(req, body.workspaceId);
-      const [existing, existingAssignments, providerState] = await Promise.all([
-        userStores.orchestrationAssignmentStore.getAssignment(role, scope),
-        userStores.orchestrationAssignmentStore.listAssignments(scope),
-        userStores.providerConfigStore.getState(),
-      ]);
-      const now = new Date().toISOString();
-      const candidate = OrchestrationModelAssignmentSchema.parse({
-        id: existing?.id ?? orchestrationAssignmentId(role, scope),
-        ...(scope.userId ? { userId: scope.userId } : {}),
-        ...(scope.workspaceId ? { workspaceId: scope.workspaceId } : {}),
-        role,
-        providerId: body.providerId,
-        ...(body.modelId ? { modelId: body.modelId } : {}),
-        ...(body.fallbackProviderId ? { fallbackProviderId: body.fallbackProviderId } : {}),
-        ...(body.fallbackModelId ? { fallbackModelId: body.fallbackModelId } : {}),
-        enabled: body.enabled ?? existing?.enabled ?? true,
-        ...(body.maxUsdPerCall !== undefined ? { maxUsdPerCall: body.maxUsdPerCall } : {}),
-        ...(body.maxTokens !== undefined ? { maxTokens: body.maxTokens } : {}),
-        ...(body.timeoutMs !== undefined ? { timeoutMs: body.timeoutMs } : {}),
-        ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
-        ...(body.requiresJsonMode !== undefined ? { requiresJsonMode: body.requiresJsonMode } : {}),
-        ...(body.requiresToolCalling !== undefined ? { requiresToolCalling: body.requiresToolCalling } : {}),
-        ...(body.requiresStreaming !== undefined ? { requiresStreaming: body.requiresStreaming } : {}),
-        ...(body.notes !== undefined ? { notes: body.notes } : {}),
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
-      });
-      const withoutCandidate = existingAssignments.filter((assignment) => assignment.role !== role);
-      const effective = resolveEffectiveAssignment({
-        role,
-        assignments: [...withoutCandidate, candidate],
-        providerState,
-        scope,
-      });
-      const blockers = effective.warnings.filter((warning) => warning.severity === "blocker");
-      if (blockers.length > 0) {
-        return sendRedacted(res, 400, {
-          error: "Assignment does not satisfy required role capabilities.",
-          warnings: effective.warnings,
-        });
-      }
-
-      const result = await userStores.orchestrationAssignmentStore.upsertAssignment(role, body, scope);
-      if (!result.ok) {
-        return sendRedacted(res, 500, { error: redactString(result.error) });
-      }
-      const payload = await buildOrchestrationModelsPayload(req, scope.workspaceId);
-      sendRedacted(res, 200, { assignment: result.value, effective, assignments: payload.assignments });
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.post("/api/orchestration-models/assignments/:role/test", async (req, res) => {
-    let role: OrchestrationRole;
-    let body: TestOrchestrationAssignmentRequest;
-    try {
-      role = OrchestrationRoleSchema.parse(req.params.role);
-      body = TestOrchestrationAssignmentRequestSchema.parse(req.body ?? {});
-    } catch (err: unknown) {
-      return sendRedacted(res, 400, { error: redactString(requestValidationMessage(err)) });
-    }
-
-    try {
-      const userStores = storesFor(req);
-      const scope = assignmentScopeFor(req, body.workspaceId);
-      const providerState = await userStores.providerConfigStore.getState();
-      const saved = await userStores.orchestrationAssignmentStore.getAssignment(role, scope);
-      const draft = body.providerId
-        ? OrchestrationModelAssignmentSchema.parse({
-            id: saved?.id ?? orchestrationAssignmentId(role, scope),
-            ...(scope.userId ? { userId: scope.userId } : {}),
-            ...(scope.workspaceId ? { workspaceId: scope.workspaceId } : {}),
-            role,
-            providerId: body.providerId,
-            ...(body.modelId ? { modelId: body.modelId } : {}),
-            ...(body.fallbackProviderId ? { fallbackProviderId: body.fallbackProviderId } : {}),
-            ...(body.fallbackModelId ? { fallbackModelId: body.fallbackModelId } : {}),
-            enabled: body.enabled ?? saved?.enabled ?? true,
-            ...(body.maxUsdPerCall !== undefined ? { maxUsdPerCall: body.maxUsdPerCall } : {}),
-            ...(body.maxTokens !== undefined ? { maxTokens: body.maxTokens } : {}),
-            ...(body.timeoutMs !== undefined ? { timeoutMs: body.timeoutMs } : {}),
-            ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
-            ...(body.requiresJsonMode !== undefined ? { requiresJsonMode: body.requiresJsonMode } : {}),
-            ...(body.requiresToolCalling !== undefined ? { requiresToolCalling: body.requiresToolCalling } : {}),
-            ...(body.requiresStreaming !== undefined ? { requiresStreaming: body.requiresStreaming } : {}),
-            ...(body.notes !== undefined ? { notes: body.notes } : {}),
-            createdAt: saved?.createdAt ?? new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          })
-        : saved;
-      const effective = draft
-        ? resolveEffectiveAssignment({ role, assignments: [draft], providerState, scope })
-        : resolveEffectiveAssignment({ role, assignments: [], providerState, scope });
-
-      if (!effective.enabled || effective.providerId === "disabled") {
-        return sendRedacted(res, 200, {
-          ok: true,
-          role,
-          providerId: effective.providerId,
-          model: effective.modelId,
-          networkAttempted: false,
-          warnings: effective.warnings,
-        });
-      }
-      if (effective.providerId === "deterministic") {
-        return sendRedacted(res, 200, {
-          ok: true,
-          role,
-          providerId: "deterministic",
-          model: effective.modelId ?? "deterministic-local",
-          networkAttempted: false,
-          warnings: effective.warnings,
-        });
-      }
-
-      const provider = await resolveTestProvider(
-        effective.providerId,
-        userStores.providerConfigStore,
-        userStores.secretStore,
-        { enableNetwork: true, fetchImpl: fetch },
-        effective.modelId ? { model: effective.modelId, deployment: effective.modelId } : {},
-      );
-      if (!provider) {
-        return sendRedacted(res, 400, {
-          ok: false,
-          role,
-          providerId: effective.providerId,
-          code: "CONFIG_INVALID",
-          error: redactString(`Provider ${effective.providerId} is not configured.`),
-          networkAttempted: false,
-          warnings: effective.warnings,
-        });
-      }
-
-      const result = await runConnectionTest({
-        providerId: effective.providerId,
-        provider,
-        model: effective.modelId,
-        deployment: effective.modelId,
-        fetchImpl: fetch,
-      });
-      sendRedacted(res, result.ok ? 200 : 400, { ...result, role, warnings: effective.warnings });
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.post("/api/orchestration-models/assignments/reset", async (req, res) => {
-    try {
-      const workspaceId = typeof (req.body ?? {}).workspaceId === "string" ? String((req.body ?? {}).workspaceId).trim() : undefined;
-      const userStores = storesFor(req);
-      const result = await userStores.orchestrationAssignmentStore.resetAssignments(assignmentScopeFor(req, workspaceId));
-      if (!result.ok) return sendRedacted(res, 500, { error: redactString(result.error) });
-      const payload = await buildOrchestrationModelsPayload(req, workspaceId);
-      sendRedacted(res, 200, payload);
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
+  registerOrchestrationModelRoutes(app, {
+    storesFor,
+    assignmentScopeFor,
+    workspaceIdFromQuery,
+    buildOrchestrationModelsPayload,
+    sendRedacted,
+    requestValidationMessage,
+    runConnectionTest,
   });
 
   app.use("/api/providers", async (req, res, next) => {
@@ -3310,256 +2962,52 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // value can appear in any response (Req 11.4). Secrets are accepted on input, persisted ONLY via
   // the Secret_Store, and never written to the Provider_Config_Store or echoed back (Req 11.6);
   // responses expose a `secretPresent` boolean only (Req 11.2).
-  const parseMemoryRoleParam = (raw: string): MemoryRole | undefined => {
-    const parsed = MemoryRoleSchema.safeParse(raw);
-    return parsed.success ? parsed.data : undefined;
-  };
-
   const requestUserId = (req: express.Request): string | undefined =>
     authConfig.enabled ? req.rectorAuth?.userId : undefined;
 
-  const exactAssignmentFor = (
-    assignments: MemoryRoleAssignment[],
-    input: { role: MemoryRole; userId?: string; workspaceId?: string },
-  ): MemoryRoleAssignment | undefined =>
-    assignments.find(
-      (assignment) =>
-        assignment.role === input.role &&
-        assignment.userId === input.userId &&
-        assignment.workspaceId === input.workspaceId,
-    );
-
-  const ensureMemoryProviderRefExists = async (
-    stores: UserStores,
+  const resolveSelectedMemoryProviderFor = async (
+    req: express.Request,
+    role: MemoryRole,
     providerRecordId: string | undefined,
-  ): Promise<string | undefined> => {
-    if (providerRecordId === undefined || providerRecordId === "local" || providerRecordId === "disabled") {
-      return undefined;
+    workspaceId?: string,
+  ) => {
+    if (!providerRecordId) {
+      return resolveEffectiveMemoryProviderFor(req, role, workspaceId);
     }
-    const state = await stores.memoryConfigStore.getState();
-    return state.providers.some((provider) => provider.id === providerRecordId)
-      ? undefined
-      : `Memory provider "${providerRecordId}" is not configured.`;
+    const draftStore = createInMemoryMemoryAssignmentStore();
+    const draft = createMemoryRoleAssignment({
+      role,
+      providerRecordId,
+      userId: requestUserId(req),
+      workspaceId,
+      now: new Date().toISOString(),
+    });
+    const saved = await draftStore.upsertAssignment(draft);
+    if (!saved.ok) {
+      return resolveEffectiveMemoryProviderFor(req, role, workspaceId);
+    }
+    const draftRouter = new MemoryRoleRouter({
+      assignmentStore: draftStore,
+      configStore: storesFor(req).memoryConfigStore,
+      secrets: storesFor(req).secretStore,
+      mode: securityOptions.orchestration?.mode,
+      delegateStoreForLocalSqliteMem: isSqlBackedStore(baseStore) ? rectorStore : undefined,
+    });
+    return draftRouter.resolveMemoryProvider(role, {
+      ...memoryRoleContextFor(req, workspaceId),
+      mode: securityOptions.orchestration?.mode,
+    });
   };
 
-  const providerOptionsForAssignments = async (stores: UserStores): Promise<Array<Record<string, unknown>>> => {
-    const state = await stores.memoryConfigStore.getState();
-    return [
-      {
-        id: "local",
-        kind: "local-inmemory",
-        label: "Local default",
-        capabilities: memoryProviderCapabilitiesForKind("local-inmemory"),
-        builtIn: true,
-      },
-      {
-        id: "disabled",
-        kind: "disabled",
-        label: "Disabled",
-        capabilities: memoryProviderCapabilitiesForKind("disabled"),
-        builtIn: true,
-      },
-      ...state.providers.map((provider) => ({
-        id: provider.id,
-        kind: provider.kind,
-        label: provider.label,
-        config: provider.config,
-        capabilities: memoryProviderCapabilitiesForKind(provider.kind),
-        builtIn: false,
-      })),
-    ];
-  };
-
-  const memoryAssignmentsPayload = async (req: express.Request) => {
-    const userStores = storesFor(req);
-    const assignments = await userStores.memoryAssignmentStore.listAssignments();
-    return {
-      roles: Object.values(MEMORY_ROLE_DEFINITIONS),
-      assignments,
-      providers: await providerOptionsForAssignments(userStores),
-    };
-  };
-
-  const effectiveMemoryAssignmentsPayload = async (req: express.Request, workspaceId?: string) => ({
-    roles: Object.values(MEMORY_ROLE_DEFINITIONS),
-    effective: await Promise.all(
-      MEMORY_ROLES.map(async (role) =>
-        memoryRoleResolutionToJson(await resolveEffectiveMemoryProviderFor(req, role, workspaceId)),
-      ),
-    ),
-  });
-
-  // --- Memory_Assignment_API (Chunk 044): role -> provider wiring, no secrets. ---
-
-  app.get("/api/memory-roles", (_req, res) => {
-    sendRedacted(res, 200, { roles: Object.values(MEMORY_ROLE_DEFINITIONS) });
-  });
-
-  app.get("/api/memory-assignments", async (req, res) => {
-    try {
-      sendRedacted(res, 200, await memoryAssignmentsPayload(req));
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.get("/api/memory-assignments/effective", async (req, res) => {
-    try {
-      const workspaceId = typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined;
-      sendRedacted(res, 200, await effectiveMemoryAssignmentsPayload(req, workspaceId));
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.put("/api/memory-assignments/:role", async (req, res) => {
-    const role = parseMemoryRoleParam(req.params.role);
-    if (!role) return sendRedacted(res, 404, { error: "Unknown memory role" });
-
-    let body: UpsertMemoryAssignmentRequest;
-    try {
-      body = UpsertMemoryAssignmentRequestSchema.parse(req.body ?? {});
-    } catch (err: unknown) {
-      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
-    }
-
-    try {
-      const userStores = storesFor(req);
-      const providerError = await ensureMemoryProviderRefExists(userStores, body.providerRecordId);
-      if (providerError) return sendRedacted(res, 400, { error: providerError });
-      const fallbackError = await ensureMemoryProviderRefExists(userStores, body.fallbackProviderRecordId);
-      if (fallbackError) return sendRedacted(res, 400, { error: fallbackError });
-
-      const userId = requestUserId(req);
-      const assignments = await userStores.memoryAssignmentStore.listAssignments();
-      const existing = exactAssignmentFor(assignments, { role, userId, workspaceId: body.workspaceId });
-      const now = new Date().toISOString();
-      const assignment = createMemoryRoleAssignment({
-        role,
-        providerRecordId: body.providerRecordId,
-        userId,
-        workspaceId: body.workspaceId,
-        enabled: body.enabled,
-        readPriority: body.readPriority,
-        writePriority: body.writePriority,
-        fallbackProviderRecordId: body.fallbackProviderRecordId,
-        retentionPolicy: body.retentionPolicy,
-        maxEntries: body.maxEntries,
-        maxUsdPerDay: body.maxUsdPerDay,
-        existing,
-        now,
-      });
-
-      const result = await userStores.memoryAssignmentStore.upsertAssignment(assignment);
-      if (!result.ok) return sendRedacted(res, 500, { error: redactString(result.error) });
-      clearMemoryRoutingCaches();
-
-      sendRedacted(res, 200, {
-        assignment: result.value,
-        effective: memoryRoleResolutionToJson(await resolveEffectiveMemoryProviderFor(req, role, body.workspaceId)),
-      });
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.post("/api/memory-assignments/:role/test", async (req, res) => {
-    const role = parseMemoryRoleParam(req.params.role);
-    if (!role) return sendRedacted(res, 404, { error: "Unknown memory role" });
-
-    try {
-      const workspaceId = typeof req.body?.workspaceId === "string" ? req.body.workspaceId : undefined;
-      const effective = await resolveEffectiveMemoryProviderFor(req, role, workspaceId);
-      if (effective.status === "disabled" || !effective.provider) {
-        return sendRedacted(res, 200, {
-          ok: effective.status === "disabled",
-          role,
-          providerId: effective.providerRecordId,
-          code: effective.status === "disabled" ? undefined : "CONFIG_INVALID",
-          error: effective.error,
-          networkAttempted: false,
-          effective: memoryRoleResolutionToJson(effective),
-        });
-      }
-
-      const result = runMemoryProviderConnectionTest({
-        providerId: effective.provider.id,
-        provider: effective.provider,
-        kind: effective.provider.kind,
-      });
-      sendRedacted(res, 200, { role, ...result, effective: memoryRoleResolutionToJson(effective) });
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.post("/api/memory-assignments/reset", async (req, res) => {
-    let body: MemoryAssignmentResetRequest;
-    try {
-      body = MemoryAssignmentResetRequestSchema.parse(req.body ?? {});
-    } catch (err: unknown) {
-      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
-    }
-
-    try {
-      const userStores = storesFor(req);
-      const result = await userStores.memoryAssignmentStore.resetAssignments(
-        body?.workspaceId ? { workspaceId: body.workspaceId } : undefined,
-      );
-      if (!result.ok) return sendRedacted(res, 500, { error: redactString(result.error) });
-      clearMemoryRoutingCaches();
-      sendRedacted(res, 200, await memoryAssignmentsPayload(req));
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.post("/api/memory-assignments/:role/migrate/plan", async (req, res) => {
-    const role = parseMemoryRoleParam(req.params.role);
-    if (!role) return sendRedacted(res, 404, { error: "Unknown memory role" });
-
-    let body: MemoryAssignmentMigrationPlanRequest;
-    try {
-      body = MemoryAssignmentMigrationPlanRequestSchema.parse(req.body ?? {});
-    } catch (err: unknown) {
-      return res.status(400).json({ error: redactString(requestValidationMessage(err)) });
-    }
-
-    try {
-      const userStores = storesFor(req);
-      const targetProviderRecordId = body?.targetProviderRecordId;
-      const providerError = await ensureMemoryProviderRefExists(userStores, targetProviderRecordId);
-      if (providerError) return sendRedacted(res, 400, { error: providerError });
-
-      const workspaceId = body?.workspaceId;
-      const effective = await resolveEffectiveMemoryProviderFor(req, role, workspaceId);
-      const target = targetProviderRecordId ?? effective.providerRecordId;
-      const targetCapabilities = target === "local" || target === "disabled"
-        ? memoryProviderCapabilitiesForKind(target)
-        : memoryProviderCapabilitiesForKind(
-            (await userStores.memoryConfigStore.getState()).providers.find((provider) => provider.id === target)?.kind,
-          );
-      sendRedacted(res, 200, {
-        role,
-        destructive: false,
-        sourceProviderRecordId: effective.providerRecordId,
-        targetProviderRecordId: target,
-        estimatedEntries: "unknown",
-        steps: [
-          "Read current role assignment and provider readiness.",
-          "Estimate entries for this role when a store exposes counts.",
-          "Copy to the target provider in a later migration chunk.",
-          "Verify copied entries before any future cutover.",
-        ],
-        warnings: [
-          ...effective.warnings,
-          ...memoryCapabilityWarningsForRole({ role, capabilities: targetCapabilities, providerRecordId: target }),
-        ],
-        automaticExecution: false,
-      });
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
+  registerMemoryAssignmentRoutes(app, {
+    storesFor,
+    requestUserId,
+    sendRedacted,
+    requestValidationMessage,
+    clearMemoryRoutingCaches,
+    resolveEffectiveMemoryProviderFor,
+    resolveSelectedMemoryProviderFor,
+    runMemoryProviderConnectionTest,
   });
 
   const restoreTemplateSafeFields = (redacted: unknown, original: unknown): unknown => {
@@ -3849,95 +3297,11 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // --- Template_API (Chunk 045): built-in presets, import/export, preview/apply ---
-  app.get("/api/templates", async (req, res) => {
-    try {
-      const templates = await templateServiceFor(req).listTemplates(scopeIdFor(req));
-      sendTemplateResponse(res, 200, { templates });
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.get("/api/templates/export/current", async (req, res) => {
-    try {
-      const template = await templateServiceFor(req).exportCurrentConfig({ scopeId: scopeIdFor(req) });
-      sendTemplateResponse(res, 200, { template });
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.post("/api/templates/save-current", async (req, res) => {
-    try {
-      const body = TemplateSaveCurrentRequestSchema.parse(req.body ?? {});
-      const template = await templateServiceFor(req).saveCurrentConfig({ ...body, scopeId: scopeIdFor(req) });
-      sendTemplateResponse(res, 200, { template });
-    } catch (error) {
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.post("/api/templates/import/preview", async (req, res) => {
-    try {
-      const service = templateServiceFor(req);
-      const template = service.importTemplate(req.body ?? {});
-      const preview: TemplatePreview = await service.preview(template, undefined, scopeIdFor(req));
-      sendTemplateResponse(res, 200, { template, preview });
-    } catch (error) {
-      if (error instanceof TemplateImportSecretError) {
-        return sendTemplateResponse(res, 400, { error: error.message, findings: error.findings });
-      }
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.post("/api/templates/import/apply", async (req, res) => {
-    try {
-      const service = templateServiceFor(req);
-      const template = service.importTemplate(req.body ?? {});
-      const rawBody = req.body && typeof req.body === "object" ? { ...(req.body as Record<string, unknown>) } : {};
-      delete rawBody.template;
-      const body = TemplateApplyRequestSchema.parse(rawBody);
-      const result = await service.apply(template, { ...body, scopeId: scopeIdFor(req) });
-      sendTemplateResponse(res, 200, result);
-    } catch (error) {
-      if (error instanceof TemplateImportSecretError) {
-        return sendTemplateResponse(res, 400, { error: error.message, findings: error.findings });
-      }
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.get("/api/templates/:id", async (req, res) => {
-    try {
-      const template = await templateServiceFor(req).getTemplate(req.params.id, scopeIdFor(req));
-      if (!template) return sendRedacted(res, 404, { error: "Template not found" });
-      sendTemplateResponse(res, 200, { template });
-    } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.post("/api/templates/:id/preview", async (req, res) => {
-    try {
-      const preview = await templateServiceFor(req).preview(req.params.id, undefined, scopeIdFor(req));
-      sendTemplateResponse(res, 200, { preview });
-    } catch (error) {
-      const status = errorMessageOf(error).startsWith("Template not found") ? 404 : 400;
-      sendRedacted(res, status, { error: redactString(errorMessageOf(error)) });
-    }
-  });
-
-  app.post("/api/templates/:id/apply", async (req, res) => {
-    try {
-      const body = TemplateApplyRequestSchema.parse(req.body ?? {});
-      const result = await templateServiceFor(req).apply(req.params.id, { ...body, scopeId: scopeIdFor(req) });
-      sendTemplateResponse(res, 200, result);
-    } catch (error) {
-      const status = errorMessageOf(error).startsWith("Template not found") ? 404 : 400;
-      sendRedacted(res, status, { error: redactString(errorMessageOf(error)) });
-    }
+  registerTemplateRoutes(app, {
+    templateServiceFor,
+    scopeIdFor,
+    sendRedacted,
+    sendTemplateResponse,
   });
 
   app.use("/api/memory-providers", async (req, res, next) => {

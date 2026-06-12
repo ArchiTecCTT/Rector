@@ -42,13 +42,13 @@ const INDEX_HTML = readFileSync(INDEX_HTML_PATH, "utf8");
 // ---------------------------------------------------------------------------
 
 // The exact id list cacheEls() caches, parsed straight from the app.js source so the test tracks
-// the real code rather than a hand-maintained duplicate. We slice the cacheEls() body (the `ids`
-// array literal up to the `for (const id of ids)` loop) and collect every quoted string in it.
+// the real code rather than a hand-maintained duplicate. cacheEls() delegates to per-feature
+// cache helpers; each helper funnels through cacheElementIds([...]), so collect every quoted id from
+// those literal arrays.
 function parseCachedIds(source: string): string[] {
-  const fnMatch = /function cacheEls\(\)\s*\{([\s\S]*?)for \(const id of ids\)/.exec(source);
-  if (!fnMatch) throw new Error("could not locate cacheEls() id list in app.js");
-  const body = fnMatch[1];
-  const ids = [...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  const groups = [...source.matchAll(/cacheElementIds\(\s*\[([\s\S]*?)\]\s*\)/g)];
+  if (groups.length === 0) throw new Error("could not locate cacheElementIds() id groups in app.js");
+  const ids = groups.flatMap((group) => [...group[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]));
   if (ids.length === 0) throw new Error("cacheEls() id list parsed as empty");
   return ids;
 }

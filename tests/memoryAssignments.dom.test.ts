@@ -75,6 +75,70 @@ describe("Memory_Assignment_UI", () => {
     expect(select.querySelectorAll("option").map((option: AnyEl) => option.value)).toContain("mem0:main");
   });
 
+  it("keeps configured provider cards visible when assignment loading fails", async () => {
+    harness.setFetchHandler(async (url) => {
+      if (url === "/api/memory-providers") {
+        return jsonResponse({
+          providers: [{ id: "mem0:main", kind: "mem0", label: "Mem0", config: {}, secretPresent: true }],
+          activeMemoryProviderId: null,
+        });
+      }
+      if (url === "/api/memory-assignments") {
+        return jsonResponse({ error: "assignment store unavailable" }, { status: 500 });
+      }
+      return jsonResponse({});
+    });
+
+    await harness.sandbox.loadMemoryProviderConfig();
+    await flush();
+
+    const cards = harness.getEl("memory-provider-config-cards").querySelectorAll(".provider-config-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].querySelector(".provider-config-card__name").textContent).toContain("Mem0");
+    expect(harness.getEl("memory-assignment-result").textContent).toContain("Memory assignments could not be loaded");
+  });
+
+  it("tests and previews migration for the currently selected dropdown provider", async () => {
+    const captured: Array<{ url: string; body: any }> = [];
+    harness.setFetchHandler(async (url, opts) => {
+      if (url === "/api/memory-providers") {
+        return jsonResponse({
+          providers: [{ id: "mem0:main", kind: "mem0", label: "Mem0", config: {}, secretPresent: true }],
+          activeMemoryProviderId: null,
+        });
+      }
+      if (url === "/api/memory-assignments") {
+        return jsonResponse({ roles: ROLES, assignments: [], providers: [] });
+      }
+      if (url === "/api/memory-assignments/effective") {
+        return jsonResponse({ roles: ROLES, effective: ROLES.map((role) => effective(role.role)) });
+      }
+      if (url === "/api/memory-assignments/episodicMemory/test" && opts.method === "POST") {
+        captured.push({ url, body: JSON.parse(opts.body) });
+        return jsonResponse({ ok: true, role: "episodicMemory", providerId: "mem0:main", networkAttempted: false });
+      }
+      if (url === "/api/memory-assignments/episodicMemory/migrate/plan" && opts.method === "POST") {
+        captured.push({ url, body: JSON.parse(opts.body) });
+        return jsonResponse({ destructive: false, steps: ["preview"], warnings: [] });
+      }
+      return jsonResponse({});
+    });
+
+    await harness.sandbox.loadMemoryProviderConfig();
+    const episodic = rowFor(harness, "episodicMemory");
+    const select = episodic.querySelector(".memory-assignment-provider");
+    select.value = "mem0:main";
+    episodic.querySelector(".memory-assignment-test").dispatch("click");
+    await flush();
+    episodic.querySelector(".memory-assignment-migrate").dispatch("click");
+    await flush();
+
+    expect(captured).toEqual([
+      { url: "/api/memory-assignments/episodicMemory/test", body: { providerRecordId: "mem0:main" } },
+      { url: "/api/memory-assignments/episodicMemory/migrate/plan", body: { targetProviderRecordId: "mem0:main" } },
+    ]);
+  });
+
   it("saves a role assignment by provider id without sending secrets", async () => {
     let capturedBody: any;
     harness.setFetchHandler(async (url, opts) => {

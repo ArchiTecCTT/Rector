@@ -89,6 +89,41 @@ describe("Template_Manager_UI", () => {
     expect(harness.getEl("template-manager-result").textContent).toContain("Applied Local Free");
   });
 
+  it("applies the current import text instead of a stale preview cache", async () => {
+    const harness = createProviderPanelHarness();
+    const previewed = { ...localTemplate(), id: "previewed-import", name: "Previewed Import" };
+    const edited = { ...localTemplate(), id: "edited-import", name: "Edited Import" };
+    const textarea = harness.getEl("template-manager-import-json");
+    let capturedApply: any;
+    harness.setFetchHandler(async (url, opts) => {
+      if (url === "/api/templates/import/preview") {
+        return jsonResponse({ template: previewed, preview: { ...previewPayload(), template: previewed } });
+      }
+      if (url === "/api/templates/import/apply") {
+        capturedApply = JSON.parse(opts.body);
+        return jsonResponse({
+          applied: true,
+          template: edited,
+          preview: { ...previewPayload(), template: edited },
+          changed: { orchestrationAssignments: 1, memoryAssignments: 0, moduleToggles: 0 },
+        });
+      }
+      if (url === "/api/templates") return jsonResponse({ templates: [localTemplate()] });
+      if (url === "/api/templates/local-free/preview") return jsonResponse({ preview: previewPayload() });
+      return jsonResponse({});
+    });
+
+    textarea.value = JSON.stringify(previewed);
+    await harness.sandbox.previewImportedTemplate();
+    await flush();
+    textarea.value = JSON.stringify(edited);
+    await harness.sandbox.applyImportedTemplate();
+    await flush();
+
+    expect(capturedApply.template.id).toBe("edited-import");
+    expect(capturedApply.template.name).toBe("Edited Import");
+  });
+
   it("renders imported-template secret rejection without storing the secret in browser storage", async () => {
     const harness = createProviderPanelHarness();
     const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
