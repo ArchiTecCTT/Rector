@@ -28,13 +28,8 @@ import {
 } from "../security/rateLimiter";
 import {
   SESSION_COOKIE_NAME,
-  authErrorMessage,
-  buildClearSessionCookie,
-  buildSessionCookie,
-  createSessionToken,
   parseAuthConfig,
   parseAuthMode,
-  verifyPassword,
   verifySessionToken,
   type AuthMode,
   type ParsedAuthConfig,
@@ -159,6 +154,7 @@ import { MemoryLayerSchema, RunEventSchema } from "../store/schemas";
 import type { Artifact, MemoryLayer, Run, RunEvent } from "../store/schemas";
 import { RunPhaseSchema, isTerminalRunPhase } from "../protocol/phases";
 import { registerCommercialRoutes } from "./routes/commercial";
+import { registerAuthRoutes } from "./routes/auth";
 import { registerMemoryAssignmentRoutes } from "./routes/memoryAssignments";
 import { registerOrchestrationModelRoutes } from "./routes/orchestrationModels";
 import { registerTemplateRoutes } from "./routes/templates";
@@ -1716,8 +1712,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.locals.auditLog = auditLog;
   app.locals.quotaService = quotaService;
   app.locals.workspaceDirectory = workspaceDirectory;
-  const loginAttempts = new Map<string, { count: number; resetAt: number }>();
-
   const requestActorId = (req: express.Request): string => req.rectorAuth?.userId ?? "default";
 
   const auditRequest = async (
@@ -1836,104 +1830,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     return false;
   };
 
-  const LoginRequestSchema = z.object({
-    username: z.string().min(1),
-    password: z.string().min(1),
-  });
-
-  app.post("/api/auth/login", async (req, res) => {
-    if (!authConfig.enabled) {
-      const outcome = redactOutbound({ authenticated: true, username: "default" });
-      return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-    }
-
-    let body: z.infer<typeof LoginRequestSchema>;
-    try {
-      body = LoginRequestSchema.parse(req.body ?? {});
-    } catch {
-      const outcome = redactOutbound({ error: authErrorMessage("Invalid username or password") });
-      return res.status(400).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-    }
-
-    const username = body.username.trim().toLowerCase();
-    const attemptKey = `${username}:${req.ip}`;
-    const nowMs = Date.now();
-    const currentAttempt = loginAttempts.get(attemptKey);
-    if (currentAttempt && currentAttempt.resetAt > nowMs && currentAttempt.count >= 5) {
-      await auditRequest(req, {
-        actorUserId: username,
-        action: "auth.login",
-        targetType: "user",
-        targetId: username,
-        outcome: "denied",
-        reason: "Login attempt rate limit exceeded.",
-      });
-      const outcome = redactOutbound({ error: authErrorMessage("Too many login attempts") });
-      return res.status(429).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-    }
-
-    const storedHash = authConfig.users.get(username);
-    if (!storedHash || !verifyPassword(body.password, storedHash)) {
-      const nextAttempt = currentAttempt && currentAttempt.resetAt > nowMs
-        ? { count: currentAttempt.count + 1, resetAt: currentAttempt.resetAt }
-        : { count: 1, resetAt: nowMs + 15 * 60 * 1000 };
-      loginAttempts.set(attemptKey, nextAttempt);
-      await auditRequest(req, {
-        actorUserId: username,
-        action: "auth.login",
-        targetType: "user",
-        targetId: username,
-        outcome: "failed",
-        reason: "Invalid username or password.",
-      });
-      const outcome = redactOutbound({ error: authErrorMessage("Invalid username or password") });
-      return res.status(401).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-    }
-
-    loginAttempts.delete(attemptKey);
-    const token = createSessionToken(username, username, authConfig.sessionSecret);
-    res.setHeader("Set-Cookie", buildSessionCookie(token, deploymentEnv));
-    await auditRequest(req, {
-      actorUserId: username,
-      action: "auth.login",
-      targetType: "user",
-      targetId: username,
-      outcome: "success",
-    });
-    const outcome = redactOutbound({ authenticated: true, username });
-    return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-  });
-
-  app.post("/api/auth/logout", async (req, res) => {
-    res.setHeader("Set-Cookie", buildClearSessionCookie(deploymentEnv));
-    await auditRequest(req, {
-      action: "auth.logout",
-      targetType: "session",
-      outcome: "success",
-    });
-    const outcome = redactOutbound({ authenticated: false });
-    return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-  });
-
-  app.get("/api/auth/session", (req, res) => {
-    if (!authConfig.enabled) {
-      const outcome = redactOutbound({ authenticated: true, username: "default" });
-      return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-    }
-
-    const cookies = (req.header("cookie") ?? "")
-      .split(";")
-      .map((part) => part.trim())
-      .reduce<Record<string, string>>((acc, part) => {
-        const eq = part.indexOf("=");
-        if (eq > 0) acc[part.slice(0, eq)] = part.slice(eq + 1);
-        return acc;
-      }, {});
-    const session = verifySessionToken(cookies[SESSION_COOKIE_NAME], authConfig.sessionSecret);
-    const outcome = redactOutbound(
-      session ? { authenticated: true, username: session.username } : { authenticated: false },
-    );
-    return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
+  registerAuthRoutes(app, {
+    authConfig,
+    deploymentEnv,
+    auditRequest,
   });
 
   app.use(createAuthMiddleware(authConfig, resolveUserStores));

@@ -9,7 +9,7 @@ import { createFakePlan, runLivePlanner, type LivePlannerResult, type PlannerBlo
 import type { PreprocessorOutput } from "./preprocessor";
 import { buildRepairPrompt } from "./prompts";
 import { createDecisionRequest, transitionRun } from "./runStateMachine";
-import { executeDagThroughSandbox } from "./sandboxExecutor";
+import { executeDagThroughSandbox, type ExecutionArtifact, type SandboxDagExecutionResult } from "./sandboxExecutor";
 import { executeDecomposedSubGoals, stitchResults, type SubGoalGraph } from "./taskDecomposer";
 import { reviewPlanWithSkeptic, runLiveSkeptic, type SkepticBlocker, type SkepticReview } from "./skeptic";
 import {
@@ -525,6 +525,20 @@ interface ExternalPostPlanningParams {
   pathsExplored?: string[];
 }
 
+interface ExternalExecutionPhaseResult {
+  executionResult?: SandboxDagExecutionResult;
+  decomposedResults?: string;
+  executionArtifacts: ExecutionArtifact[];
+  executionPayload: Record<string, unknown>;
+}
+
+interface ExternalSynthesisPhaseResult {
+  synthesis: BrainstemSynthesis;
+  synthProviderCall?: ProviderCallMetadata;
+  directAnswerFallback?: LiveDirectAnswerFallback;
+  budgetRun: Run;
+}
+
 /**
  * Runs the external post-planning phase sequence (ORN-37/38). Unlike the deterministic
  * {@link runPostPlanningPhases} (kept byte-for-byte for local mode), this path drives the
@@ -569,7 +583,89 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
   // path before the healing loop applies the patch through the sandbox (containment + denylist are
   // still enforced by the executor).
   const approvals: SandboxApproval[] = [...(deps.approvals ?? [])];
-  const sandbox = new WorkspaceSandboxAdapter({
+  const sandbox = createExternalSandbox(deps, approvals);
+  let budgetRun = run;
+  const repairAgent = createExternalRepairAgent({ store, deps, approvals, getRun: () => budgetRun, setRun: (next) => { budgetRun = next; } });
+
+  const executionPhase = await runExternalExecutionPhase({
+    args,
+    deps,
+    sandbox,
+    budgetRun,
+    compiledDag,
+    crucibleDecision,
+    subGoals,
+    subGoalGraph,
+  });
+  const { executionResult, decomposedResults, executionArtifacts, executionPayload } = executionPhase;
+
+  const validationHealingResult = await runExternalValidationPhase({
+    args,
+    deps,
+    sandbox,
+    compiledDag,
+    executionResult,
+    repairAgent,
+    budgetRun,
+    options,
+  });
+  const validationPayload = validationHealingResult
+    ? { validationHealingResult }
+    : { skippedReason: "Execution skipped or missing; validation and healing skipped" };
+
+  const healingStatus = validationHealingResult?.status;
+  const proceedToSynthesis = shouldProceedToSynthesis(healingStatus);
+  const synthesisPhase = await runExternalSynthesisPhase({
+    store,
+    args,
+    deps,
+    budgetRun,
+    plannerOutput,
+    skepticReview,
+    crucibleDecision,
+    compiledDag,
+    executionResult,
+    validationHealingResult,
+    decomposedResults,
+    proceedToSynthesis,
+  });
+  budgetRun = synthesisPhase.budgetRun;
+  const { synthesis, synthProviderCall, directAnswerFallback } = synthesisPhase;
+
+  const current = await transitionExternalPostPlanningRun({
+    params,
+    dagCompilationPayload,
+    executionPayload,
+    validationPayload,
+    validationHealingResult,
+    healingStatus,
+    proceedToSynthesis,
+    synthesis,
+    synthProviderCall,
+    directAnswerFallback,
+    decomposedResults,
+    executionArtifacts,
+  });
+
+  return { run: current, synthesis, observabilitySummary: observability.getSummary() };
+}
+
+const EXTERNAL_PREFIX_PHASES = [
+  "TRIAGE",
+  "CONTEXT_BUILDING",
+  "PLANNING",
+  "SKEPTIC_REVIEW",
+  "CRUCIBLE",
+  "DAG_COMPILATION",
+  "EXECUTING",
+  "VALIDATING",
+] as const;
+
+type ExternalPrefixPhase = typeof EXTERNAL_PREFIX_PHASES[number];
+type ExternalCompletionPhase = "SYNTHESIZING" | "DONE";
+
+function createExternalSandbox(deps: ChatRunnerDeps, approvals: SandboxApproval[]): WorkspaceSandboxAdapter {
+  return new WorkspaceSandboxAdapter({
     workspaceRoot: deps.workspaceRoot ?? process.cwd(),
     allowlistedCommands: deps.allowlistedCommands ?? [],
     approvals,
@@ -577,44 +673,92 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
     commandRunner: deps.commandRunner,
     now: deps.now,
   });
-  let budgetRun = run;
-  const repairSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "repair", run: budgetRun });
-  const repairAgent: LiveRepairAgent =
-    deps.repairAgent ??
-    createLiveRepairAgent({
-      provider: repairSelection.provider,
-      model: repairSelection.model,
-      approvals,
-      getRun: () => budgetRun,
-      commitUsage: async (usage, provider) => {
-        budgetRun = await addProviderUsageToRun(store, budgetRun, usage, provider);
-      },
-    });
+}
 
-  // EXECUTING — dispatch the DAG through the safe executor.
+function createExternalRepairAgent(input: {
+  store: RectorStore;
+  deps: ChatRunnerDeps & { router: ModelRouter };
+  approvals: SandboxApproval[];
+  getRun(): Run;
+  setRun(run: Run): void;
+}): LiveRepairAgent {
+  const { store, deps, approvals, getRun, setRun } = input;
+  const repairSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "repair", run: getRun() });
+  return deps.repairAgent ?? createLiveRepairAgent({
+    provider: repairSelection.provider,
+    model: repairSelection.model,
+    approvals,
+    getRun,
+    commitUsage: async (usage, provider) => {
+      setRun(await addProviderUsageToRun(store, getRun(), usage, provider));
+    },
+  });
+}
+
+async function runExternalExecutionPhase(input: {
+  args: ChatRunArgs;
+  deps: ChatRunnerDeps;
+  sandbox: WorkspaceSandboxAdapter;
+  budgetRun: Run;
+  compiledDag?: CompiledDag;
+  crucibleDecision: CrucibleDecision;
+  subGoals: string[];
+  subGoalGraph?: SubGoalGraph;
+}): Promise<ExternalExecutionPhaseResult> {
+  const { args, deps, sandbox, budgetRun, compiledDag, crucibleDecision, subGoals, subGoalGraph } = input;
+  const { observability } = args;
   const executionResult = await observability.recordSpan("EXECUTING", () =>
     compiledDag ? executeDagThroughSandbox(compiledDag, { sandbox, now: deps.now }) : undefined
   );
-
-  let decomposedResults: string | undefined;
-  if (
-    args.triage.complexity === "high" &&
-    crucibleDecision.verdict === "ACCEPTED" &&
-    subGoals.length > 1
-  ) {
-    const decomposed = await observability.recordSpan("EXECUTING", () =>
-      executeDecomposedSubGoals(subGoalGraph ?? subGoals, { sandbox, run: budgetRun, now: deps.now })
-    );
-    decomposedResults = stitchResults(decomposed);
-  }
-
+  const decomposedResults = await runExternalDecomposedExecution({
+    args,
+    deps,
+    sandbox,
+    budgetRun,
+    crucibleDecision,
+    subGoals,
+    subGoalGraph,
+  });
   const executionArtifacts = executionResult?.artifacts ?? [];
   const executionPayload = executionResult
     ? { executionResult, executionArtifacts }
     : { skippedReason: "Execution skipped because no compiled DAG exists" };
+  return { executionResult, decomposedResults, executionArtifacts, executionPayload };
+}
 
-  // VALIDATING + HEALING — bounded live repair over real failures (patches applied only via sandbox).
-  const validationHealingResult: HealingLoopResult | undefined = await observability.recordSpan("VALIDATING", () =>
+async function runExternalDecomposedExecution(input: {
+  args: ChatRunArgs;
+  deps: ChatRunnerDeps;
+  sandbox: WorkspaceSandboxAdapter;
+  budgetRun: Run;
+  crucibleDecision: CrucibleDecision;
+  subGoals: string[];
+  subGoalGraph?: SubGoalGraph;
+}): Promise<string | undefined> {
+  const { args, deps, sandbox, budgetRun, crucibleDecision, subGoals, subGoalGraph } = input;
+  if (!shouldRunDecomposedExecution(args, crucibleDecision, subGoals)) return undefined;
+  const decomposed = await args.observability.recordSpan("EXECUTING", () =>
+    executeDecomposedSubGoals(subGoalGraph ?? subGoals, { sandbox, run: budgetRun, now: deps.now })
+  );
+  return stitchResults(decomposed);
+}
+
+function shouldRunDecomposedExecution(args: ChatRunArgs, crucibleDecision: CrucibleDecision, subGoals: string[]): boolean {
+  return args.triage.complexity === "high" && crucibleDecision.verdict === "ACCEPTED" && subGoals.length > 1;
+}
+
+async function runExternalValidationPhase(input: {
+  args: ChatRunArgs;
+  deps: ChatRunnerDeps;
+  sandbox: WorkspaceSandboxAdapter;
+  compiledDag?: CompiledDag;
+  executionResult?: SandboxDagExecutionResult;
+  repairAgent: LiveRepairAgent;
+  budgetRun: Run;
+  options: ChatRunOptions;
+}): Promise<HealingLoopResult | undefined> {
+  const { args, deps, sandbox, compiledDag, executionResult, repairAgent, budgetRun, options } = input;
+  return args.observability.recordSpan("VALIDATING", () =>
     compiledDag && executionResult
       ? validateAndHealExecution({
           compiledDag,
@@ -629,211 +773,300 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
         })
       : undefined
   );
-  const validationPayload = validationHealingResult
-    ? { validationHealingResult }
-    : { skippedReason: "Execution skipped or missing; validation and healing skipped" };
+}
 
-  const healingStatus = validationHealingResult?.status;
-  // A NEEDS_DECISION / FAILED healing outcome terminates the run before synthesis (Req 9.7/9.8).
-  const proceedToSynthesis = healingStatus === undefined || healingStatus === "VALIDATED" || healingStatus === "HEALED";
+function shouldProceedToSynthesis(healingStatus: HealingLoopResult["status"] | undefined): boolean {
+  return healingStatus === undefined || healingStatus === "VALIDATED" || healingStatus === "HEALED";
+}
 
-  const synthInput: BrainstemSynthesisInput = {
-    traceId,
+async function runExternalSynthesisPhase(input: {
+  store: RectorStore;
+  args: ChatRunArgs;
+  deps: ChatRunnerDeps & { router: ModelRouter };
+  budgetRun: Run;
+  plannerOutput: PlannerOutput;
+  skepticReview: SkepticReview;
+  crucibleDecision: CrucibleDecision;
+  compiledDag?: CompiledDag;
+  executionResult?: SandboxDagExecutionResult;
+  validationHealingResult?: HealingLoopResult;
+  decomposedResults?: string;
+  proceedToSynthesis: boolean;
+}): Promise<ExternalSynthesisPhaseResult> {
+  const synthInput = buildExternalSynthesisInput(input);
+  if (!input.proceedToSynthesis) {
+    return { synthesis: synthesizeChatBrainstemResponse(synthInput), budgetRun: input.budgetRun };
+  }
+  return input.args.triage.route === "DIRECT_ANSWER"
+    ? runExternalDirectAnswerSynthesis({ ...input, synthInput })
+    : runExternalFlagshipSynthesis({ ...input, synthInput });
+}
+
+function buildExternalSynthesisInput(input: {
+  args: ChatRunArgs;
+  plannerOutput: PlannerOutput;
+  skepticReview: SkepticReview;
+  crucibleDecision: CrucibleDecision;
+  compiledDag?: CompiledDag;
+  executionResult?: SandboxDagExecutionResult;
+  validationHealingResult?: HealingLoopResult;
+  decomposedResults?: string;
+}): BrainstemSynthesisInput {
+  const { args } = input;
+  return {
+    traceId: args.observability.traceId,
     triage: args.triage,
     contextPack: args.contextPack,
-    plannerOutput,
-    skepticReview,
-    crucibleDecision,
-    compiledDag,
-    executionResult,
-    validationHealingResult,
-    observabilitySummary: observability.getSummary(),
-    decomposedResults,
+    plannerOutput: input.plannerOutput,
+    skepticReview: input.skepticReview,
+    crucibleDecision: input.crucibleDecision,
+    compiledDag: input.compiledDag,
+    executionResult: input.executionResult,
+    validationHealingResult: input.validationHealingResult,
+    observabilitySummary: args.observability.getSummary(),
+    decomposedResults: input.decomposedResults,
   };
+}
 
-  let synthesis: BrainstemSynthesis;
-  let synthProviderCall: ProviderCallMetadata | undefined;
-  // Set only on a DIRECT_ANSWER turn that fell back to the deterministic local text (Req 8.4, 9.3).
-  let directAnswerFallback: LiveDirectAnswerFallback | undefined;
-
-  if (proceedToSynthesis && args.triage.route === "DIRECT_ANSWER") {
-    // SYNTHESIZING — ORN-58 lightweight direct answer. For the DIRECT_ANSWER route only, External_Mode
-    // produces the user-facing answer with a cheap (`slm` role → `cheap` route) model via
-    // runLiveDirectAnswer, which mirrors the runLiveSynthesizer discipline (budget preflight → invoke →
-    // redact → deterministic fallback) and reports `providerCalls === 0` on every fallback path
-    // (budget denial, provider error, missing provider) (Req 7.1, 7.2, 7.3, 8.1, 8.2, 8.3).
-    const directSelection: ModelSelection = deps.router.select({ capability: "cheap", task: "direct-answer", run: budgetRun });
-    const directResult = await observability.recordSpan("SYNTHESIZING", () =>
-      runLiveDirectAnswer(synthInput, { provider: directSelection.provider, run: budgetRun, model: directSelection.model })
-    );
-    directAnswerFallback = directResult.fallback;
-    // Keep the deterministic base (status/route/trace/evidence/observability) so trace surfaces are
-    // unchanged; only the user-facing `response` and `providerCalls` reflect the direct-answer step.
-    const base = synthesizeChatBrainstemResponse(synthInput);
-    synthesis = { ...base, response: directResult.response, providerCalls: directResult.providerCalls };
-    // runLiveDirectAnswer surfaces only the accumulated cost (USD + model calls) for the cheap call;
-    // its contract does not surface token counts, so they are recorded as zero for this step.
-    const directUsage: LLMUsage = LLMUsageSchema.parse({
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      estimatedUsd: directResult.cost?.estimatedUsd ?? 0,
-      modelCalls: directResult.cost?.modelCalls ?? 0,
-    });
-    // Record the provider call attempt on the SYNTHESIZING event (`attempts === 0` on a fallback, Req
-    // 9.1/9.2/9.3); only a real provider call accumulates cost into the run (Req 9.2).
-    synthProviderCall = buildProviderCallMetadata(
-      directSelection,
-      directSelection.provider.metadata.id,
-      directSelection.model,
-      directUsage,
-      directResult.providerCalls
-    );
-    if (directResult.providerCalls > 0) {
-      budgetRun = await addProviderUsageToRun(store, budgetRun, directUsage, directSelection.provider.metadata.id);
-    }
-    await observability.recordSpan("DONE", () => undefined);
-  } else if (proceedToSynthesis) {
-    // SYNTHESIZING — live, evidence-cited answer with deterministic fallback (ORN-36).
-    const synthSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "synthesizer", run: budgetRun });
-    const synthResult = await observability.recordSpan("SYNTHESIZING", () =>
-      runLiveSynthesizer(synthInput, { provider: synthSelection.provider, run: budgetRun, model: synthSelection.model })
-    );
-    synthesis = synthResult.synthesis;
-    synthProviderCall = buildProviderCallMetadata(
-      synthSelection,
-      synthResult.provider,
-      synthResult.model,
-      synthResult.usage,
-      synthResult.attempts
-    );
-    budgetRun = await addProviderUsageToRun(store, budgetRun, synthResult.usage, synthResult.provider);
-    await observability.recordSpan("DONE", () => undefined);
-  } else {
-    // Terminal NEEDS_DECISION / FAILED: return the deterministic synthesis (status derived from the
-    // healing result), which never hides failed validation output.
-    synthesis = synthesizeChatBrainstemResponse(synthInput);
+async function runExternalDirectAnswerSynthesis(input: {
+  store: RectorStore;
+  args: ChatRunArgs;
+  deps: ChatRunnerDeps & { router: ModelRouter };
+  budgetRun: Run;
+  synthInput: BrainstemSynthesisInput;
+}): Promise<ExternalSynthesisPhaseResult> {
+  const { store, args, deps, synthInput } = input;
+  let { budgetRun } = input;
+  const directSelection: ModelSelection = deps.router.select({ capability: "cheap", task: "direct-answer", run: budgetRun });
+  const directResult = await args.observability.recordSpan("SYNTHESIZING", () =>
+    runLiveDirectAnswer(synthInput, { provider: directSelection.provider, run: budgetRun, model: directSelection.model })
+  );
+  const base = synthesizeChatBrainstemResponse(synthInput);
+  const synthesis = { ...base, response: directResult.response, providerCalls: directResult.providerCalls };
+  const directUsage: LLMUsage = LLMUsageSchema.parse({
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    estimatedUsd: directResult.cost?.estimatedUsd ?? 0,
+    modelCalls: directResult.cost?.modelCalls ?? 0,
+  });
+  const synthProviderCall = buildProviderCallMetadata(
+    directSelection,
+    directSelection.provider.metadata.id,
+    directSelection.model,
+    directUsage,
+    directResult.providerCalls
+  );
+  if (directResult.providerCalls > 0) {
+    budgetRun = await addProviderUsageToRun(store, budgetRun, directUsage, directSelection.provider.metadata.id);
   }
+  await args.observability.recordSpan("DONE", () => undefined);
+  return { synthesis, synthProviderCall, directAnswerFallback: directResult.fallback, budgetRun };
+}
 
-  // --- Phase transitions (TRIAGE … VALIDATING), then branch on the healing outcome. ---
-  const prefixPhases = [
-    "TRIAGE",
-    "CONTEXT_BUILDING",
-    "PLANNING",
-    "SKEPTIC_REVIEW",
-    "CRUCIBLE",
-    "DAG_COMPILATION",
-    "EXECUTING",
-    "VALIDATING",
-  ] as const;
+async function runExternalFlagshipSynthesis(input: {
+  store: RectorStore;
+  args: ChatRunArgs;
+  deps: ChatRunnerDeps & { router: ModelRouter };
+  budgetRun: Run;
+  synthInput: BrainstemSynthesisInput;
+}): Promise<ExternalSynthesisPhaseResult> {
+  const { store, args, deps, synthInput } = input;
+  let { budgetRun } = input;
+  const synthSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "synthesizer", run: budgetRun });
+  const synthResult = await args.observability.recordSpan("SYNTHESIZING", () =>
+    runLiveSynthesizer(synthInput, { provider: synthSelection.provider, run: budgetRun, model: synthSelection.model })
+  );
+  const synthProviderCall = buildProviderCallMetadata(
+    synthSelection,
+    synthResult.provider,
+    synthResult.model,
+    synthResult.usage,
+    synthResult.attempts
+  );
+  budgetRun = await addProviderUsageToRun(store, budgetRun, synthResult.usage, synthResult.provider);
+  await args.observability.recordSpan("DONE", () => undefined);
+  return { synthesis: synthResult.synthesis, synthProviderCall, budgetRun };
+}
 
-  let current = run;
-  for (const phase of prefixPhases) {
-    const result = await transitionRun(store, current.id, phase, {
-      traceId,
-      now: deps.now,
-      payload: {
-        source: "external-orchestrator",
-        note: "External brainstem run advanced",
-        ...(phase === "TRIAGE" ? { triage: args.triage } : {}),
-        ...(phase === "CONTEXT_BUILDING" ? { contextPack: args.contextPack } : {}),
-        ...(phase === "PLANNING"
-          ? {
-              plannerOutput,
-              providerCall: params.planningProviderCall,
-              // Chunk 26: preprocessor result is attached for observability and downstream stages.
-              // It is already redacted inside the preprocessor.
-              preprocessor: {
-                distilledContext: preprocessorOutput?.distilledContext,
-                proposedToolCalls: preprocessorOutput?.proposedToolCalls ?? [],
-                intent: preprocessorOutput?.intent,
-                entities: preprocessorOutput?.entities ?? [],
-                constraints: preprocessorOutput?.constraints ?? [],
-              },
-              ...(pathsExplored?.length ? { pathsExplored } : {}),
-            }
-          : {}),
-        ...(phase === "SKEPTIC_REVIEW" ? { skepticReview, providerCall: params.skepticProviderCall } : {}),
-        ...(phase === "CRUCIBLE" ? { crucibleDecision } : {}),
-        ...(phase === "DAG_COMPILATION" ? dagCompilationPayload : {}),
-        ...(phase === "EXECUTING" ? executionPayload : {}),
-        ...(phase === "VALIDATING" ? validationPayload : {}),
-        observability: phaseObservabilityPayload(observability, phase),
-      },
-      ...(phase === "VALIDATING" && validationHealingResult
-        ? {
-            validationAttempts: validationHealingResult.attempts + 1,
-            healingAttempts: validationHealingResult.attempts,
-          }
-        : {}),
-    });
+async function transitionExternalPostPlanningRun(input: {
+  params: ExternalPostPlanningParams;
+  dagCompilationPayload: Record<string, unknown>;
+  executionPayload: Record<string, unknown>;
+  validationPayload: Record<string, unknown>;
+  validationHealingResult?: HealingLoopResult;
+  healingStatus?: HealingLoopResult["status"];
+  proceedToSynthesis: boolean;
+  synthesis: BrainstemSynthesis;
+  synthProviderCall?: ProviderCallMetadata;
+  directAnswerFallback?: LiveDirectAnswerFallback;
+  decomposedResults?: string;
+  executionArtifacts: ExecutionArtifact[];
+}): Promise<Run> {
+  const { params } = input;
+  let current = params.run;
+  for (const phase of EXTERNAL_PREFIX_PHASES) {
+    const result = await transitionRun(params.store, current.id, phase, externalPrefixTransitionInput(phase, input));
     current = result.run;
   }
+  return finishExternalPostPlanningRun(current, input);
+}
 
-  if (proceedToSynthesis) {
-    for (const phase of ["SYNTHESIZING", "DONE"] as const) {
-      const result = await transitionRun(store, current.id, phase, {
-        traceId,
-        now: deps.now,
-        payload: {
-          source: "external-orchestrator",
-          note: `External brainstem run ${phase === "DONE" ? "completed" : "advanced"}`,
-          ...(phase === "SYNTHESIZING"
-            ? {
-                synthesis,
-                providerCall: synthProviderCall,
-                ...(decomposedResults ? { decomposedResults } : {}),
-                // Record the route and (when present) the fallback status for a DIRECT_ANSWER turn so
-                // an auditor can see the cheap-model attempt and whether it fell back (Req 8.4, 9.1, 9.3).
-                ...(args.triage.route === "DIRECT_ANSWER"
-                  ? { route: args.triage.route, ...(directAnswerFallback ? { fallback: directAnswerFallback } : {}) }
-                  : {}),
-              }
-            : {}),
-          observability: phaseObservabilityPayload(observability, phase),
-        },
-      });
-      current = result.run;
-    }
-  } else if (healingStatus === "NEEDS_DECISION") {
-    // Req 9.7: healing NEEDS_DECISION → run NEEDS_DECISION, all artifacts preserved.
-    const decision = await createDecisionRequest(
-      store,
-      current.id,
-      { reason: "HEALING_NEEDS_DECISION", message: "Healing requires an operator decision", validationHealingResult },
-      {
-        traceId,
-        now: deps.now,
-        payload: {
-          source: "external-orchestrator",
-          note: "Healing requires an operator decision",
-          validationHealingResult,
-          executionArtifacts,
-          synthesis,
-          observability: phaseObservabilityPayload(observability, "NEEDS_DECISION"),
-        },
-      }
-    );
-    current = decision.run;
-  } else {
-    // Req 9.8: healing FAILED → run FAILED, final execution result and all artifacts preserved.
-    const failed = await transitionRun(store, current.id, "FAILED", {
-      traceId,
-      now: deps.now,
-      lastError: "Healing failed to resolve execution failures within the bound",
+function externalPrefixTransitionInput(phase: ExternalPrefixPhase, input: Parameters<typeof transitionExternalPostPlanningRun>[0]) {
+  const { params, validationHealingResult } = input;
+  return {
+    traceId: params.args.observability.traceId,
+    now: params.deps.now,
+    payload: externalPrefixPayload(phase, input),
+    ...(phase === "VALIDATING" && validationHealingResult
+      ? {
+          validationAttempts: validationHealingResult.attempts + 1,
+          healingAttempts: validationHealingResult.attempts,
+        }
+      : {}),
+  };
+}
+
+function externalPrefixPayload(phase: ExternalPrefixPhase, input: Parameters<typeof transitionExternalPostPlanningRun>[0]) {
+  const { params } = input;
+  const base = externalPhasePayloadBase(params, phase, "External brainstem run advanced");
+  switch (phase) {
+    case "TRIAGE":
+      return { ...base, triage: params.args.triage };
+    case "CONTEXT_BUILDING":
+      return { ...base, contextPack: params.args.contextPack };
+    case "PLANNING":
+      return externalPlanningPayload(base, params);
+    case "SKEPTIC_REVIEW":
+      return { ...base, skepticReview: params.skepticReview, providerCall: params.skepticProviderCall };
+    case "CRUCIBLE":
+      return { ...base, crucibleDecision: params.crucibleDecision };
+    case "DAG_COMPILATION":
+      return { ...base, ...input.dagCompilationPayload };
+    case "EXECUTING":
+      return { ...base, ...input.executionPayload };
+    case "VALIDATING":
+      return { ...base, ...input.validationPayload };
+  }
+}
+
+function externalPlanningPayload(base: Record<string, unknown>, params: ExternalPostPlanningParams): Record<string, unknown> {
+  return {
+    ...base,
+    plannerOutput: params.plannerOutput,
+    providerCall: params.planningProviderCall,
+    // Chunk 26: preprocessor result is attached for observability and downstream stages.
+    // It is already redacted inside the preprocessor.
+    preprocessor: {
+      distilledContext: params.preprocessorOutput?.distilledContext,
+      proposedToolCalls: params.preprocessorOutput?.proposedToolCalls ?? [],
+      intent: params.preprocessorOutput?.intent,
+      entities: params.preprocessorOutput?.entities ?? [],
+      constraints: params.preprocessorOutput?.constraints ?? [],
+    },
+    ...(params.pathsExplored?.length ? { pathsExplored: params.pathsExplored } : {}),
+  };
+}
+
+async function finishExternalPostPlanningRun(
+  current: Run,
+  input: Parameters<typeof transitionExternalPostPlanningRun>[0],
+): Promise<Run> {
+  if (input.proceedToSynthesis) return transitionExternalSynthesisDone(current, input);
+  if (input.healingStatus === "NEEDS_DECISION") return transitionExternalNeedsDecision(current, input);
+  return transitionExternalFailed(current, input);
+}
+
+async function transitionExternalSynthesisDone(
+  current: Run,
+  input: Parameters<typeof transitionExternalPostPlanningRun>[0],
+): Promise<Run> {
+  const { params } = input;
+  let next = current;
+  for (const phase of ["SYNTHESIZING", "DONE"] as const) {
+    const result = await transitionRun(params.store, next.id, phase, {
+      traceId: params.args.observability.traceId,
+      now: params.deps.now,
+      payload: externalCompletionPayload(phase, input),
+    });
+    next = result.run;
+  }
+  return next;
+}
+
+function externalCompletionPayload(
+  phase: ExternalCompletionPhase,
+  input: Parameters<typeof transitionExternalPostPlanningRun>[0],
+): Record<string, unknown> {
+  const note = `External brainstem run ${phase === "DONE" ? "completed" : "advanced"}`;
+  const base = externalPhasePayloadBase(input.params, phase, note);
+  return phase === "SYNTHESIZING" ? { ...base, ...externalSynthesisPayload(input) } : base;
+}
+
+function externalSynthesisPayload(input: Parameters<typeof transitionExternalPostPlanningRun>[0]): Record<string, unknown> {
+  const routePayload = input.params.args.triage.route === "DIRECT_ANSWER"
+    ? { route: input.params.args.triage.route, ...(input.directAnswerFallback ? { fallback: input.directAnswerFallback } : {}) }
+    : {};
+  return {
+    synthesis: input.synthesis,
+    providerCall: input.synthProviderCall,
+    ...(input.decomposedResults ? { decomposedResults: input.decomposedResults } : {}),
+    ...routePayload,
+  };
+}
+
+async function transitionExternalNeedsDecision(
+  current: Run,
+  input: Parameters<typeof transitionExternalPostPlanningRun>[0],
+): Promise<Run> {
+  const { params } = input;
+  const decision = await createDecisionRequest(
+    params.store,
+    current.id,
+    { reason: "HEALING_NEEDS_DECISION", message: "Healing requires an operator decision", validationHealingResult: input.validationHealingResult },
+    {
+      traceId: params.args.observability.traceId,
+      now: params.deps.now,
       payload: {
         source: "external-orchestrator",
-        note: "Healing exhausted; run failed with artifacts preserved",
-        validationHealingResult,
-        executionArtifacts,
-        synthesis,
-        observability: phaseObservabilityPayload(observability, "FAILED"),
+        note: "Healing requires an operator decision",
+        validationHealingResult: input.validationHealingResult,
+        executionArtifacts: input.executionArtifacts,
+        synthesis: input.synthesis,
+        observability: phaseObservabilityPayload(params.args.observability, "NEEDS_DECISION"),
       },
-    });
-    current = failed.run;
-  }
+    }
+  );
+  return decision.run;
+}
 
-  return { run: current, synthesis, observabilitySummary: observability.getSummary() };
+async function transitionExternalFailed(
+  current: Run,
+  input: Parameters<typeof transitionExternalPostPlanningRun>[0],
+): Promise<Run> {
+  const { params } = input;
+  const failed = await transitionRun(params.store, current.id, "FAILED", {
+    traceId: params.args.observability.traceId,
+    now: params.deps.now,
+    lastError: "Healing failed to resolve execution failures within the bound",
+    payload: {
+      source: "external-orchestrator",
+      note: "Healing exhausted; run failed with artifacts preserved",
+      validationHealingResult: input.validationHealingResult,
+      executionArtifacts: input.executionArtifacts,
+      synthesis: input.synthesis,
+      observability: phaseObservabilityPayload(params.args.observability, "FAILED"),
+    },
+  });
+  return failed.run;
+}
+
+function externalPhasePayloadBase(params: ExternalPostPlanningParams, phase: string, note: string): Record<string, unknown> {
+  return {
+    source: "external-orchestrator",
+    note,
+    observability: phaseObservabilityPayload(params.args.observability, phase),
+  };
 }
 
 /**
