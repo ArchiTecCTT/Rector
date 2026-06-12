@@ -10,7 +10,7 @@ import type { PreprocessorOutput } from "./preprocessor";
 import { buildRepairPrompt } from "./prompts";
 import { createDecisionRequest, transitionRun } from "./runStateMachine";
 import { executeDagThroughSandbox } from "./sandboxExecutor";
-import { executeDecomposedSubGoals, stitchResults } from "./taskDecomposer";
+import { executeDecomposedSubGoals, stitchResults, type SubGoalGraph } from "./taskDecomposer";
 import { reviewPlanWithSkeptic, runLiveSkeptic, type SkepticBlocker, type SkepticReview } from "./skeptic";
 import {
   runLiveSynthesizer,
@@ -386,7 +386,7 @@ export async function runExternalChatRun(
       })
     : { subGoals: [] as string[], plannerContextPack: activeContextPack };
 
-  const { subGoals, plannerContextPack } = planningPrep;
+  const { subGoals, subGoalGraph, plannerContextPack } = planningPrep;
 
   const plannerResult: LivePlannerResult = planningEnabled
     ? await executePlanningPhase(
@@ -495,6 +495,7 @@ export async function runExternalChatRun(
     deps: { ...deps, router: deps.router },
     preprocessorOutput,
     subGoals,
+    subGoalGraph,
     pathsExplored: plannerResult.pathsExplored,
   });
 }
@@ -513,7 +514,9 @@ interface ExternalPostPlanningParams {
   preprocessorOutput?: PreprocessorOutput;
   /** Sub-goals from task decomposition (external high-complexity only). */
   subGoals?: string[];
-  /** Deep-planner MCTS paths explored (trace drawer observability). */
+  /** Dependency-aware sub-goal graph from task decomposition. */
+  subGoalGraph?: SubGoalGraph;
+  /** Deep-planner bounded candidate paths explored (trace drawer observability). */
   pathsExplored?: string[];
 }
 
@@ -539,6 +542,7 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
     deps,
     preprocessorOutput,
     subGoals = [],
+    subGoalGraph,
     pathsExplored,
   } = params;
   const { observability } = args;
@@ -593,7 +597,7 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
     subGoals.length > 1
   ) {
     const decomposed = await observability.recordSpan("EXECUTING", () =>
-      executeDecomposedSubGoals(subGoals, { sandbox, run: budgetRun, now: deps.now })
+      executeDecomposedSubGoals(subGoalGraph ?? subGoals, { sandbox, run: budgetRun, now: deps.now })
     );
     decomposedResults = stitchResults(decomposed);
   }
