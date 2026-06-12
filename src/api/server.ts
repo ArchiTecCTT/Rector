@@ -1566,7 +1566,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
   const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
   const memoryConfigStore = securityOptions.memoryConfigStore ?? createInMemoryMemoryConfigStore();
-  const memoryAssignmentStore = securityOptions.memoryAssignmentStore ?? createInMemoryMemoryAssignmentStore();
+  const orchestrationAssignmentStore =
+    securityOptions.orchestrationAssignmentStore ?? createInMemoryOrchestrationAssignmentStore();
+  const memoryAssignmentStore =
+    securityOptions.memoryAssignmentStore ?? securityOptions.memoryRoleAssignmentStore ?? createInMemoryMemoryAssignmentStore();
 
   // Chunk 34 (pluggable memory providers): resolve the active MemoryProvider for neuro/agent
   // memory (notes, episodic context for contextBuilder/preprocessor/planner, prune, etc.).
@@ -1652,13 +1655,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.use(express.json());
   const publicDir = resolvePublicDir();
   app.use(express.static(publicDir));
-  const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
-  const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
-  const memoryConfigStore = securityOptions.memoryConfigStore ?? createInMemoryMemoryConfigStore();
-  const orchestrationAssignmentStore =
-    securityOptions.orchestrationAssignmentStore ?? createInMemoryOrchestrationAssignmentStore();
-  const memoryAssignmentStore =
-    securityOptions.memoryAssignmentStore ?? securityOptions.memoryRoleAssignmentStore ?? createInMemoryMemoryAssignmentStore();
   const defaultUserStores: UserStores = {
     secretStore: setupSecretStore,
     providerConfigStore,

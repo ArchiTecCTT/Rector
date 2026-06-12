@@ -347,7 +347,12 @@ function lessonAlreadyExists(lesson: string, contentHash: string, existingLesson
   const normalized = normalizeText(lesson);
   return existingLessons.some((entry) => {
     const metadataHash = typeof entry.metadata.contentHash === "string" ? entry.metadata.contentHash : undefined;
-    return metadataHash === contentHash || hashLesson(entry.content) === contentHash || normalizeText(entry.content) === normalized;
+    const existing = normalizeText(entry.content);
+    const semanticallyContained =
+      existing.length >= 20 &&
+      normalized.length >= 20 &&
+      (normalized.includes(existing) || existing.includes(normalized));
+    return metadataHash === contentHash || hashLesson(entry.content) === contentHash || existing === normalized || semanticallyContained;
   });
 }
 

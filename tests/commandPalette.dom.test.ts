@@ -42,6 +42,7 @@ const APP_JS_PATH = resolve(HERE, "../src/public/app.js");
 const COMMANDS: Array<{ id: string; label: string; fn: string }> = [
   { id: "setup", label: "Setup status", fn: "openSetupWizard" },
   { id: "provider-config", label: "Provider configuration", fn: "openProviderConfig" },
+  { id: "templates", label: "Templates", fn: "openTemplateManager" },
   { id: "provider-test", label: "Test provider connection", fn: "openProviderTest" },
   { id: "safety", label: "Workspace safety", fn: "openWorkspaceSafety" },
   { id: "appearance", label: "Appearance", fn: "openAppearance" },
