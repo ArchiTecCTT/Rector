@@ -214,24 +214,31 @@ export function createInMemoryMemoryRoleAssignmentStore(
   });
 }
 
+function memoryAssignmentMatchesRoleScope(
+  assignment: MemoryRoleAssignment,
+  input: { role: MemoryRole; userId?: string; workspaceId?: string },
+): boolean {
+  if (assignment.role !== input.role) return false;
+  if (assignment.userId !== undefined && assignment.userId !== input.userId) return false;
+  if (assignment.workspaceId !== undefined && assignment.workspaceId !== input.workspaceId) return false;
+  return true;
+}
+
+function memoryAssignmentSpecificity(assignment: MemoryRoleAssignment): number {
+  return (assignment.userId ? 2 : 0) + (assignment.workspaceId ? 1 : 0);
+}
+
+function compareMemoryAssignmentPriority(a: MemoryRoleAssignment, b: MemoryRoleAssignment): number {
+  const bySpecificity = memoryAssignmentSpecificity(b) - memoryAssignmentSpecificity(a);
+  if (bySpecificity !== 0) return bySpecificity;
+  return (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0);
+}
+
 export function selectMemoryAssignmentForRole(
   assignments: MemoryRoleAssignment[],
   input: { role: MemoryRole; userId?: string; workspaceId?: string },
 ): MemoryRoleAssignment | undefined {
-  const candidates = assignments.filter((assignment) => {
-    if (assignment.role !== input.role) return false;
-    if (assignment.userId !== undefined && assignment.userId !== input.userId) return false;
-    if (assignment.workspaceId !== undefined && assignment.workspaceId !== input.workspaceId) return false;
-    return true;
-  });
-
-  candidates.sort((a, b) => {
-    const score = (assignment: MemoryRoleAssignment): number =>
-      (assignment.userId ? 2 : 0) + (assignment.workspaceId ? 1 : 0);
-    const bySpecificity = score(b) - score(a);
-    if (bySpecificity !== 0) return bySpecificity;
-    return (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0);
-  });
-
-  return candidates[0];
+  return assignments
+    .filter((assignment) => memoryAssignmentMatchesRoleScope(assignment, input))
+    .sort(compareMemoryAssignmentPriority)[0];
 }

@@ -222,9 +222,7 @@ export class MemoryRoleRouter {
     context: ResolveMemoryRoleContext = this.defaults,
   ): EffectiveMemoryProvider {
     const providerRecordId = "local";
-    const provider = this.cachedProvider(`local:${role}:${this.cacheContextKey(context)}`, () =>
-      createPureLocalMemoryProvider({ id: "local-inmemory:default", label: "Local (in-memory)", now: context.now }),
-    );
+    const provider = this.localProvider(role, context);
     const capabilities = memoryProviderCapabilitiesForKind("local-inmemory");
     const warnings = memoryCapabilityWarningsForRole({
       role,
@@ -254,55 +252,74 @@ export class MemoryRoleRouter {
     records: MemoryProviderRecord[],
     context: ResolveMemoryRoleContext,
   ): Promise<BuildProviderResult> {
-    if (providerRecordId === "disabled") {
-      const capabilities = memoryProviderCapabilitiesForKind("disabled");
-      return {
-        role,
-        status: "disabled",
-        source: "disabled",
-        providerRecordId,
-        capabilities,
-        warnings: memoryCapabilityWarningsForRole({ role, capabilities, providerKind: "disabled", providerRecordId }),
-      };
-    }
-
-    if (providerRecordId === "local") {
-      const provider = this.cachedProvider(`local:${role}:${this.cacheContextKey(context)}`, () =>
-        createPureLocalMemoryProvider({ id: "local-inmemory:default", label: "Local (in-memory)", now: context.now }),
-      );
-      const capabilities = memoryProviderCapabilitiesForKind("local-inmemory");
-      return {
-        role,
-        status: "ready",
-        source,
-        providerRecordId,
-        provider,
-        capabilities,
-        warnings: memoryCapabilityWarningsForRole({
-          role,
-          capabilities,
-          providerKind: "local-inmemory",
-          providerLabel: "Local (in-memory)",
-          providerRecordId,
-          mode: context.mode,
-        }),
-      };
-    }
-
+    if (providerRecordId === "disabled") return this.disabledProviderBuild(role, providerRecordId);
+    if (providerRecordId === "local") return this.localProviderBuild(role, providerRecordId, source, context);
     const record = records.find((candidate) => candidate.id === providerRecordId);
-    if (!record) {
-      const capabilities = memoryProviderCapabilitiesForKind(undefined);
-      return {
-        role,
-        status: "notReady",
-        source,
-        providerRecordId,
-        capabilities,
-        warnings: [],
-        error: `Memory provider "${providerRecordId}" is not configured.`,
-      };
-    }
+    if (!record) return this.missingProviderBuild(role, providerRecordId, source);
+    return this.configuredProviderBuild(role, providerRecordId, source, record, context);
+  }
 
+  private disabledProviderBuild(role: MemoryRole, providerRecordId: string): BuildProviderResult {
+    const capabilities = memoryProviderCapabilitiesForKind("disabled");
+    return {
+      role,
+      status: "disabled",
+      source: "disabled",
+      providerRecordId,
+      capabilities,
+      warnings: memoryCapabilityWarningsForRole({ role, capabilities, providerKind: "disabled", providerRecordId }),
+    };
+  }
+
+  private localProviderBuild(
+    role: MemoryRole,
+    providerRecordId: string,
+    source: MemoryRoleResolutionSource,
+    context: ResolveMemoryRoleContext,
+  ): BuildProviderResult {
+    const provider = this.localProvider(role, context);
+    const capabilities = memoryProviderCapabilitiesForKind("local-inmemory");
+    return {
+      role,
+      status: "ready",
+      source,
+      providerRecordId,
+      provider,
+      capabilities,
+      warnings: memoryCapabilityWarningsForRole({
+        role,
+        capabilities,
+        providerKind: "local-inmemory",
+        providerLabel: "Local (in-memory)",
+        providerRecordId,
+        mode: context.mode,
+      }),
+    };
+  }
+
+  private missingProviderBuild(
+    role: MemoryRole,
+    providerRecordId: string,
+    source: MemoryRoleResolutionSource,
+  ): BuildProviderResult {
+    return {
+      role,
+      status: "notReady",
+      source,
+      providerRecordId,
+      capabilities: memoryProviderCapabilitiesForKind(undefined),
+      warnings: [],
+      error: `Memory provider "${providerRecordId}" is not configured.`,
+    };
+  }
+
+  private async configuredProviderBuild(
+    role: MemoryRole,
+    providerRecordId: string,
+    source: MemoryRoleResolutionSource,
+    record: MemoryProviderRecord,
+    context: ResolveMemoryRoleContext,
+  ): Promise<BuildProviderResult> {
     const capabilities = memoryProviderCapabilitiesForKind(record.kind);
     const warnings = memoryCapabilityWarningsForRole({
       role,
@@ -314,35 +331,33 @@ export class MemoryRoleRouter {
     });
 
     try {
-      const cacheKey = `${source}:${role}:${record.id}:${record.updatedAt}:${this.cacheContextKey(context)}`;
-      const provider = await this.cachedProviderAsync(cacheKey, async () => {
-        const secret = record.kind === "local-inmemory" || record.kind === "local-sqlite-mem"
-          ? undefined
-          : await this.readSecret(record.secretRef);
-        return buildMemoryProviderFromRecord(record, secret, context);
-      });
-      return {
-        role,
-        status: "ready",
-        source,
-        providerRecordId,
-        provider,
-        providerRecord: record,
-        capabilities,
-        warnings,
-      };
+      const provider = await this.cachedProviderAsync(this.configuredProviderCacheKey(source, role, record, context), async () =>
+        buildMemoryProviderFromRecord(record, await this.secretForProviderRecord(record), context),
+      );
+      return { role, status: "ready", source, providerRecordId, provider, providerRecord: record, capabilities, warnings };
     } catch (error) {
-      return {
-        role,
-        status: "notReady",
-        source,
-        providerRecordId,
-        providerRecord: record,
-        capabilities,
-        warnings,
-        error: safeError(error),
-      };
+      return { role, status: "notReady", source, providerRecordId, providerRecord: record, capabilities, warnings, error: safeError(error) };
     }
+  }
+
+  private localProvider(role: MemoryRole, context: ResolveMemoryRoleContext): MemoryProvider {
+    return this.cachedProvider(`local:${role}:${this.cacheContextKey(context)}`, () =>
+      createPureLocalMemoryProvider({ id: "local-inmemory:default", label: "Local (in-memory)", now: context.now }),
+    );
+  }
+
+  private configuredProviderCacheKey(
+    source: MemoryRoleResolutionSource,
+    role: MemoryRole,
+    record: MemoryProviderRecord,
+    context: ResolveMemoryRoleContext,
+  ): string {
+    return `${source}:${role}:${record.id}:${record.updatedAt}:${this.cacheContextKey(context)}`;
+  }
+
+  private async secretForProviderRecord(record: MemoryProviderRecord): Promise<string | undefined> {
+    if (record.kind === "local-inmemory" || record.kind === "local-sqlite-mem") return undefined;
+    return this.readSecret(record.secretRef);
   }
 
   private async readSecret(secretRef: string): Promise<string | undefined> {

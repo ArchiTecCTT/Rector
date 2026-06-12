@@ -61,6 +61,13 @@ interface Bucket {
   count: number;
 }
 
+interface BucketCheckContext {
+  rule: RateLimitRule;
+  now: number;
+  bucketKey: string;
+  disabled: boolean;
+}
+
 const DEFAULT_WINDOW_MS = 60_000;
 const DEFAULT_CHAT_MAX = 60;
 
@@ -113,44 +120,45 @@ export class InMemoryRateLimiter implements RateLimiter {
   constructor(private readonly policy: RateLimitPolicy = createRateLimitPolicy()) {}
 
   check(key: string, route: string, now: number): RateLimitDecision {
-    const rule = rateLimitRuleFor(this.policy, route);
-    const normalizedNow = normalizeNow(now);
-    if (rule.maxRequests <= 0) return disabledDecision(key, route, normalizedNow);
-
-    this.sweep(normalizedNow);
-    const bucketKey = this.bucketKey(key, route);
-    const bucket = this.buckets.get(bucketKey);
-    if (!bucket || bucket.resetAt <= normalizedNow) {
-      return allowedDecision(key, route, rule, normalizedNow + rule.windowMs, rule.maxRequests);
-    }
-
-    if (bucket.count >= rule.maxRequests) {
-      return deniedDecision(key, route, rule, bucket.resetAt, bucket.resetAt - normalizedNow);
-    }
-
-    return allowedDecision(key, route, rule, bucket.resetAt, rule.maxRequests - bucket.count);
+    const context = this.bucketContext(key, route, now);
+    if (context.disabled) return disabledDecision(key, route, context.now);
+    const bucket = this.activeBucket(context.bucketKey, context.now);
+    return bucket
+      ? decisionForExistingBucket(key, route, context.rule, bucket, context.now)
+      : allowedDecision(key, route, context.rule, context.now + context.rule.windowMs, context.rule.maxRequests);
   }
 
   commit(key: string, route: string, now: number): RateLimitDecision {
+    const context = this.bucketContext(key, route, now);
+    if (context.disabled) return disabledDecision(key, route, context.now);
+    const bucket = this.activeBucket(context.bucketKey, context.now);
+    if (!bucket) return this.createBucketDecision(key, route, context);
+    if (bucket.count >= context.rule.maxRequests) {
+      return deniedDecision(key, route, context.rule, bucket.resetAt, bucket.resetAt - context.now);
+    }
+    bucket.count += 1;
+    return allowedDecision(key, route, context.rule, bucket.resetAt, Math.max(0, context.rule.maxRequests - bucket.count));
+  }
+
+  private bucketContext(key: string, route: string, now: number): BucketCheckContext {
     const rule = rateLimitRuleFor(this.policy, route);
     const normalizedNow = normalizeNow(now);
-    if (rule.maxRequests <= 0) return disabledDecision(key, route, normalizedNow);
-
+    if (rule.maxRequests <= 0) {
+      return { rule, now: normalizedNow, bucketKey: "", disabled: true };
+    }
     this.sweep(normalizedNow);
-    const bucketKey = this.bucketKey(key, route);
-    const current = this.buckets.get(bucketKey);
-    if (!current || current.resetAt <= normalizedNow) {
-      const bucket = { resetAt: normalizedNow + rule.windowMs, count: 1 };
-      this.buckets.set(bucketKey, bucket);
-      return allowedDecision(key, route, rule, bucket.resetAt, Math.max(0, rule.maxRequests - 1));
-    }
+    return { rule, now: normalizedNow, bucketKey: this.bucketKey(key, route), disabled: false };
+  }
 
-    if (current.count >= rule.maxRequests) {
-      return deniedDecision(key, route, rule, current.resetAt, current.resetAt - normalizedNow);
-    }
+  private activeBucket(bucketKey: string, now: number): Bucket | undefined {
+    const bucket = this.buckets.get(bucketKey);
+    return bucket && bucket.resetAt > now ? bucket : undefined;
+  }
 
-    current.count += 1;
-    return allowedDecision(key, route, rule, current.resetAt, Math.max(0, rule.maxRequests - current.count));
+  private createBucketDecision(key: string, route: string, context: BucketCheckContext): RateLimitDecision {
+    const bucket = { resetAt: context.now + context.rule.windowMs, count: 1 };
+    this.buckets.set(context.bucketKey, bucket);
+    return allowedDecision(key, route, context.rule, bucket.resetAt, Math.max(0, context.rule.maxRequests - 1));
   }
 
   reset(key?: string, route?: string): void {
@@ -220,6 +228,19 @@ function mergeRule(base: RateLimitRule, envRule: Partial<RateLimitRule>, overrid
     maxRequests: intOrFallback(override.maxRequests, intOrFallback(envRule.maxRequests, base.maxRequests)),
     failClosed: override.failClosed ?? envRule.failClosed ?? base.failClosed,
   };
+}
+
+function decisionForExistingBucket(
+  key: string,
+  route: string,
+  rule: RateLimitRule,
+  bucket: Bucket,
+  now: number,
+): RateLimitDecision {
+  if (bucket.count >= rule.maxRequests) {
+    return deniedDecision(key, route, rule, bucket.resetAt, bucket.resetAt - now);
+  }
+  return allowedDecision(key, route, rule, bucket.resetAt, rule.maxRequests - bucket.count);
 }
 
 function allowedDecision(
