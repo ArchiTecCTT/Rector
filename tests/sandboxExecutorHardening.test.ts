@@ -122,4 +122,37 @@ describe("sandbox executor hardening", () => {
     expect(result.nodeResults.find((entry) => entry.nodeId === "validate:build")?.status).toBe("SUCCESS");
     expect(result.events[result.events.length - 1]).toMatchObject({ type: "DAG_COMPLETED", status: "PARTIAL" });
   });
+
+  it("retains expected outputs on successful sandbox node results for downstream validation", async () => {
+    const { sandbox } = buildSandbox({ files: { "src/result.txt": "ok" } });
+    const compiled = DagSchema.parse({
+      id: "dag-sandbox-expected-outputs",
+      runId: "run-sandbox-expected-outputs",
+      version: "1",
+      nodes: [
+        makeNode({
+          id: "task:read",
+          type: "LLM_EXECUTION",
+          input: { sandboxOperation: { kind: "READ_FILE", path: "src/result.txt" } },
+          expectedOutputs: ["src/result.txt"],
+        }),
+        makeNode({
+          id: "validate:read",
+          type: "VALIDATION",
+          dependsOn: ["task:read"],
+          input: { targetNodeId: "task:read", expectedArtifacts: ["src/result.txt"] },
+        }),
+      ],
+      edges: [{ from: "task:read", to: "validate:read" }],
+      createdAt: NOW,
+    });
+
+    const result = await executeDagThroughSandbox(compiled, { sandbox }, { now: () => NOW });
+
+    expect(result.status).toBe("SUCCESS");
+    expect(result.nodeResults.find((entry) => entry.nodeId === "task:read")?.output).toMatchObject({
+      expectedOutputs: ["src/result.txt"],
+    });
+    expect(result.nodeResults.find((entry) => entry.nodeId === "validate:read")?.status).toBe("SUCCESS");
+  });
 });

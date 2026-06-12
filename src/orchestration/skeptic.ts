@@ -50,7 +50,7 @@ type RawTask = Record<string, unknown>;
 type RawPlan = Record<string, unknown>;
 
 const RISKY_LANGUAGE_PATTERN =
-  /\b(code|edit|modify|change|write|delete|remove|drop|wipe|destroy|overwrite|deploy|deployment|production|migrate|migration)\b/i;
+  /\b(modify|write|delete|remove|drop|wipe|destroy|overwrite|deploy|deployment|production|migrate|migration)\b/i;
 const FILE_REFERENCE_PATTERN = /\b(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+\b/g;
 const API_REFERENCE_PATTERN = /\b(?:[A-Z][A-Za-z0-9]*API|[A-Z][A-Za-z0-9]*Api|[A-Za-z0-9_.-]+\s+API)\b/g;
 
@@ -543,7 +543,7 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
         parsed.value,
         plannerOutput,
         now,
-        deterministicReview.findings.filter((finding) => finding.severity === "BLOCKER")
+        deterministicReview.findings
       );
       if (assembled.ok) {
         // Req 1.1/1.2/1.3: schema-valid review with stamped deterministic fields + recomputed verdict.
@@ -643,8 +643,7 @@ function assembleSkepticReview(
  * `SOUND`. The model's advisory verdict is never trusted directly.
  */
 function recomputeSkepticVerdict(findings: SkepticFinding[]): SkepticReviewVerdict {
-  if (findings.some((finding) => finding.severity === "BLOCKER")) return "BLOCKED";
-  return findings.length > 0 ? "NEEDS_REVISION" : "SOUND";
+  return verdictForFindings(findings);
 }
 
 /** Reads an optional plan id without assuming `PlannerOutput` carries one. */

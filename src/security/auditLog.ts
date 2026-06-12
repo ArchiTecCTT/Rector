@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
@@ -64,7 +64,41 @@ function filterEvents(events: AuditEvent[], filter: AuditEventFilter = {}): Audi
     .map(clone);
 }
 
-export function hashAuditValue(value: string | undefined, salt = "rector.audit.v1"): string | undefined {
+const PROCESS_AUDIT_HASH_SALT = randomBytes(32).toString("hex");
+
+export interface AuditHashSaltReadiness {
+  configured: boolean;
+  status: "pass" | "warning";
+  message: string;
+}
+
+function configuredAuditHashSalt(env: Record<string, string | undefined> = process.env): string | undefined {
+  const value = env.RECTOR_AUDIT_HASH_SALT;
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function auditHashSalt(env?: Record<string, string | undefined>): string {
+  return configuredAuditHashSalt(env) ?? PROCESS_AUDIT_HASH_SALT;
+}
+
+/**
+ * Readiness metadata for audit hashing. It names only the config key, never the
+ * configured salt. Missing salt uses a random per-process fallback so repo-wide
+ * hashes are not linkable, but production operators should configure a stable
+ * salt for restart-stable audit correlation.
+ */
+export function auditHashSaltReadiness(env: Record<string, string | undefined> = process.env): AuditHashSaltReadiness {
+  const configured = configuredAuditHashSalt(env) !== undefined;
+  return {
+    configured,
+    status: configured ? "pass" : "warning",
+    message: configured
+      ? "RECTOR_AUDIT_HASH_SALT is configured for stable audit identifier hashing."
+      : "RECTOR_AUDIT_HASH_SALT is not configured; audit identifiers use a random per-process salt and will not correlate across restarts.",
+  };
+}
+
+export function hashAuditValue(value: string | undefined, salt = auditHashSalt()): string | undefined {
   if (!value || value.trim().length === 0) return undefined;
   return createHash("sha256").update(salt).update("\0").update(value).digest("hex");
 }

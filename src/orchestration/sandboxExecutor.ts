@@ -402,6 +402,8 @@ function nodeResultFromOperation(
     sandboxStatus: result.status,
     preview: preview.preview,
     previewTruncated: preview.truncated,
+    expectedOutputs: node.expectedOutputs,
+    artifacts: result.artifacts.map((artifact) => artifact.id),
   };
 
   if (result.status === "SUCCEEDED") {

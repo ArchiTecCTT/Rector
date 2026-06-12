@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createInMemoryAuditLogService, hashAuditValue } from "../src/security/auditLog";
+import { auditHashSaltReadiness, createInMemoryAuditLogService, hashAuditValue } from "../src/security/auditLog";
 
 describe("Audit log service", () => {
   it("records security-relevant events without exposing raw network identifiers", async () => {
@@ -38,5 +38,20 @@ describe("Audit log service", () => {
     const deniedA = await audit.list({ workspaceId: "a", outcome: "denied" });
     expect(deniedA).toHaveLength(1);
     expect(deniedA[0].action).toBe("quota.denied");
+  });
+
+  it("uses configured salts when supplied and reports missing salt without leaking secrets", () => {
+    const secretSalt = "audit-salt-super-secret";
+
+    expect(hashAuditValue("203.0.113.10", secretSalt)).toBe(hashAuditValue("203.0.113.10", secretSalt));
+    expect(hashAuditValue("203.0.113.10", "other-salt")).not.toBe(hashAuditValue("203.0.113.10", secretSalt));
+
+    const missing = auditHashSaltReadiness({ NODE_ENV: "production" });
+    expect(missing.status).toBe("warning");
+    expect(missing.message).toContain("RECTOR_AUDIT_HASH_SALT");
+
+    const configured = auditHashSaltReadiness({ RECTOR_AUDIT_HASH_SALT: secretSalt });
+    expect(configured.status).toBe("pass");
+    expect(configured.message).not.toContain(secretSalt);
   });
 });

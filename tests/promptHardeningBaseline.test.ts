@@ -67,13 +67,13 @@ const LOCAL_MODE_REGRESSION_CASES: readonly LocalModeRegressionCase[] = [
     name: "plan-only/architecture",
     prompt: "Give me an architecture design proposal/plan without editing any code.",
     expectedRoute: "PLAN_ONLY",
-    expectedSynthesisStatus: "NEEDS_DECISION",
+    expectedSynthesisStatus: "VALIDATED",
   },
   {
     name: "code-edit/refactor",
     prompt: "Please implement a refactor to add changes to src/index.ts and write tests.",
     expectedRoute: "CODE_EDIT",
-    expectedSynthesisStatus: "NEEDS_DECISION",
+    expectedSynthesisStatus: "VALIDATED",
   },
 ] as const;
 

@@ -111,4 +111,26 @@ describe("DAG compiler hardening", () => {
     expect(result.valid).toBe(false);
     expect(result.errors.join("\n")).toContain("unsafe shell permission is denied by default");
   });
+
+  it("requires rollback hints from the task payload even when metadata understates risk", () => {
+    const plan = createFakePlan(inputFor("Fix src/api/server.ts and update tests."));
+    const dag = compileAcceptedPlanToDag({ runId: "run-rollback", crucibleDecision: acceptedDecision(plan), now: () => NOW });
+    const tampered = {
+      ...dag,
+      nodes: dag.nodes.map((node) =>
+        node.id === "task:code.edit"
+          ? {
+              ...node,
+              input: { ...node.input, risk: "high", approvalRequired: true },
+              metadata: { ...node.metadata, risk: "low", approvalRequired: false, rollbackHint: undefined },
+            }
+          : node,
+      ),
+    };
+
+    const result = validateCompiledDag(tampered);
+
+    expect(result.valid).toBe(false);
+    expect(result.errors.join("\n")).toContain("missing rollback/cleanup hint");
+  });
 });
