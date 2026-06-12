@@ -560,6 +560,55 @@ function activeMemoryAssignments(template: RectorTemplate): TemplateMemoryAssign
   return template.memoryAssignments.filter((assignment) => assignment.enabled);
 }
 
+function requiredProviderKindImplications(template: RectorTemplate): string[] {
+  return (template.requiredProviderKinds ?? [])
+    .filter(isExternalProviderKind)
+    .map((kind) => `requires external provider kind ${kind}`);
+}
+
+function orchestrationNetworkImplications(
+  template: RectorTemplate,
+  providers: readonly ProviderConfigRecord[],
+): string[] {
+  return activeOrchestrationAssignments(template)
+    .filter((assignment) => isExternalProviderId(assignment.providerId))
+    .map((assignment) => {
+      const kind = providerKindForId(assignment.providerId, providers);
+      return `orchestration role ${assignment.role} may call provider ${assignment.providerId}${kind ? ` (${kind})` : ""}`;
+    });
+}
+
+function memoryNetworkImplications(
+  template: RectorTemplate,
+  providers: readonly MemoryProviderRecord[],
+): string[] {
+  return activeMemoryAssignments(template)
+    .map((assignment) => ({
+      assignment,
+      kind: assignment.providerKind ?? memoryKindForId(assignment.providerRecordId, providers),
+    }))
+    .filter(({ assignment, kind }) => isExternalProviderId(assignment.providerRecordId) || isExternalProviderKind(kind))
+    .map(({ assignment, kind }) =>
+      `memory role ${assignment.role} may use external provider ${assignment.providerRecordId}${kind ? ` (${kind})` : ""}`,
+    );
+}
+
+function sandboxNetworkImplications(template: RectorTemplate): string[] {
+  const policy = template.sandboxPolicy;
+  if (!policy) return [];
+
+  const implications: string[] = [];
+  if (policy.mode === "e2b") implications.push("sandbox policy may use E2B if configured");
+  if (policy.network !== undefined && policy.network !== "disabled") {
+    implications.push(`sandbox network policy is ${policy.network}`);
+  }
+  return implications;
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
 function uniqueMissingProviderConfigs(items: TemplateMissingProviderConfig[]): TemplateMissingProviderConfig[] {
   const seen = new Set<string>();
   return items.filter((item) => {
@@ -1017,27 +1066,12 @@ export class TemplateService {
   }
 
   private externalNetworkImplications(template: RectorTemplate, current: CurrentTemplateConfig): string[] {
-    const implications = new Set<string>();
-    for (const kind of template.requiredProviderKinds ?? []) {
-      if (isExternalProviderKind(kind)) implications.add(`requires external provider kind ${kind}`);
-    }
-    for (const assignment of activeOrchestrationAssignments(template)) {
-      const kind = providerKindForId(assignment.providerId, current.providerRecords);
-      if (isExternalProviderId(assignment.providerId)) {
-        implications.add(`orchestration role ${assignment.role} may call provider ${assignment.providerId}${kind ? ` (${kind})` : ""}`);
-      }
-    }
-    for (const assignment of activeMemoryAssignments(template)) {
-      const kind = assignment.providerKind ?? memoryKindForId(assignment.providerRecordId, current.memoryProviderRecords);
-      if (isExternalProviderId(assignment.providerRecordId) || isExternalProviderKind(kind)) {
-        implications.add(`memory role ${assignment.role} may use external provider ${assignment.providerRecordId}${kind ? ` (${kind})` : ""}`);
-      }
-    }
-    if (template.sandboxPolicy?.mode === "e2b") implications.add("sandbox policy may use E2B if configured");
-    if (template.sandboxPolicy?.network !== undefined && template.sandboxPolicy.network !== "disabled") {
-      implications.add(`sandbox network policy is ${template.sandboxPolicy.network}`);
-    }
-    return [...implications];
+    return uniqueStrings([
+      ...requiredProviderKindImplications(template),
+      ...orchestrationNetworkImplications(template, current.providerRecords),
+      ...memoryNetworkImplications(template, current.memoryProviderRecords),
+      ...sandboxNetworkImplications(template),
+    ]);
   }
 
   private async safeHasSecret(ref: string): Promise<boolean> {

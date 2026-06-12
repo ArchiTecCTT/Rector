@@ -6,7 +6,7 @@ import {
   triageUserMessage,
   TRIAGE_ROUTES,
 } from "../src/orchestration/triage";
-import { DEFAULT_SPY_USAGE, SpyLLMProvider, arbSubThresholdBudget, makeExternalRun } from "./support/byokArbitraries";
+import { DEFAULT_SPY_USAGE, SpyLLMProvider, arbSubThresholdBudget, generousBudget, makeExternalRun } from "./support/byokArbitraries";
 
 describe("triage hardening", () => {
   it("exposes deterministic route signals without changing the local classifier route", () => {
@@ -46,6 +46,31 @@ describe("triage hardening", () => {
       }),
       { numRuns: 100 }
     );
+  });
+
+  it("repairs malformed live triage JSON once before accepting a valid response", async () => {
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [
+        "not-json",
+        JSON.stringify({
+          route: TRIAGE_ROUTES.CODE_EDIT,
+          confidence: 0.91,
+          complexity: "medium",
+          reasons: ["live model detected file edit intent"],
+          riskFlags: [],
+        }),
+      ],
+    });
+    const run = makeExternalRun(generousBudget());
+
+    const result = await runLiveTriage("Fix src/api/server.ts and update tests.", { provider, run });
+
+    expect(result.status).toBe("ok");
+    expect(result.triage.source).toBe("live");
+    expect(result.attempts).toBe(2);
+    expect(provider.invokeCount).toBe(2);
+    expect(provider.requests[1].messages.map((message) => message.content).join("\n")).toContain("not-json");
   });
 
   it("falls back before provider invocation when live triage budget is denied", async () => {

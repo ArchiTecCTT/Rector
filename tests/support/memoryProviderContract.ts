@@ -86,82 +86,134 @@ export type FakeChromaClient = ChromaClient & {
   calls: Array<{ op: string; payload: unknown }>;
 };
 
+type FakeChromaMetadata = Record<string, string | number | boolean>;
+type FakeChromaDocument = { document: string; metadata: FakeChromaMetadata };
+type FakeChromaDocumentStore = Map<string, FakeChromaDocument>;
+type FakeChromaCalls = Array<{ op: string; payload: unknown }>;
+
+function metadataMatches(metadata: FakeChromaMetadata, where?: Record<string, unknown>): boolean {
+  if (!where) return true;
+  return Object.entries(where).every(([key, value]) => metadata[key] === value);
+}
+
+function getOrCreateFakeChromaCollection(
+  collections: Map<string, ChromaCollection>,
+  calls: FakeChromaCalls,
+  name: string,
+): ChromaCollection {
+  const existing = collections.get(name);
+  if (existing) return existing;
+
+  const collection = createFakeChromaCollectionInstance(calls);
+  collections.set(name, collection);
+  return collection;
+}
+
+function createFakeChromaCollectionInstance(calls: FakeChromaCalls): ChromaCollection {
+  const docs: FakeChromaDocumentStore = new Map();
+  return {
+    async add(input) {
+      calls.push({ op: "add", payload: input });
+      addFakeChromaDocuments(docs, input.ids, input.documents, input.metadatas);
+    },
+    async get(input) {
+      calls.push({ op: "get", payload: input });
+      return getFakeChromaDocuments(docs, input?.ids, input?.where);
+    },
+    async query(input) {
+      calls.push({ op: "query", payload: input });
+      return queryFakeChromaDocuments(docs, input.queryTexts[0], input.nResults, input.where);
+    },
+    async update(input) {
+      calls.push({ op: "update", payload: input });
+      updateFakeChromaDocuments(docs, input.ids, input.documents, input.metadatas);
+    },
+    async delete(input) {
+      calls.push({ op: "delete", payload: input });
+      deleteFakeChromaDocuments(docs, input.ids);
+    },
+  };
+}
+
+function addFakeChromaDocuments(
+  docs: FakeChromaDocumentStore,
+  ids: readonly string[],
+  documents: readonly string[],
+  metadatas: readonly FakeChromaMetadata[] | undefined,
+): void {
+  for (let i = 0; i < ids.length; i++) {
+    docs.set(ids[i], {
+      document: documents[i],
+      metadata: metadatas?.[i] ?? {},
+    });
+  }
+}
+
+function getFakeChromaDocuments(
+  docs: FakeChromaDocumentStore,
+  requestedIds?: readonly string[],
+  where?: Record<string, unknown>,
+): Awaited<ReturnType<ChromaCollection["get"]>> {
+  const ids = (requestedIds ?? Array.from(docs.keys())).filter((id) => {
+    const row = docs.get(id);
+    return row !== undefined && metadataMatches(row.metadata, where);
+  });
+  return {
+    ids,
+    documents: ids.map((id) => docs.get(id)?.document ?? null),
+    metadatas: ids.map((id) => docs.get(id)?.metadata ?? null),
+  };
+}
+
+function queryFakeChromaDocuments(
+  docs: FakeChromaDocumentStore,
+  queryText: string | undefined,
+  nResults: number,
+  where?: Record<string, unknown>,
+): ChromaQueryResult {
+  const query = queryText?.toLowerCase() ?? "";
+  const matches = Array.from(docs.entries())
+    .filter(([, row]) => row.document.toLowerCase().includes(query) && metadataMatches(row.metadata, where))
+    .map(([id, row], index) => ({ id, row, distance: index / 10 }));
+  const sliced = matches.slice(0, nResults);
+  return {
+    ids: [sliced.map((match) => match.id)],
+    documents: [sliced.map((match) => match.row.document)],
+    metadatas: [sliced.map((match) => match.row.metadata)],
+    distances: [sliced.map((match) => match.distance)],
+  };
+}
+
+function updateFakeChromaDocuments(
+  docs: FakeChromaDocumentStore,
+  ids: readonly string[],
+  documents: readonly string[] | undefined,
+  metadatas: readonly FakeChromaMetadata[] | undefined,
+): void {
+  for (let i = 0; i < ids.length; i++) {
+    const existing = docs.get(ids[i]);
+    if (!existing) continue;
+    docs.set(ids[i], {
+      document: documents?.[i] ?? existing.document,
+      metadata: metadatas?.[i] ?? existing.metadata,
+    });
+  }
+}
+
+function deleteFakeChromaDocuments(docs: FakeChromaDocumentStore, ids: readonly string[]): void {
+  for (const id of ids) docs.delete(id);
+}
+
 export function createFakeChromaClient(): FakeChromaClient {
   const collections = new Map<string, ChromaCollection>();
-  const calls: Array<{ op: string; payload: unknown }> = [];
-
-  function metadataMatches(metadata: Record<string, string | number | boolean>, where?: Record<string, unknown>): boolean {
-    if (!where) return true;
-    return Object.entries(where).every(([key, value]) => metadata[key] === value);
-  }
-
-  function getCollection(name: string): ChromaCollection {
-    let collection = collections.get(name);
-    if (!collection) {
-      const docs = new Map<string, { document: string; metadata: Record<string, string | number | boolean> }>();
-      collection = {
-        async add(input) {
-          calls.push({ op: "add", payload: input });
-          for (let i = 0; i < input.ids.length; i++) {
-            docs.set(input.ids[i], {
-              document: input.documents[i],
-              metadata: input.metadatas?.[i] ?? {},
-            });
-          }
-        },
-        async get(input) {
-          calls.push({ op: "get", payload: input });
-          const ids = (input?.ids ?? Array.from(docs.keys())).filter((id) => {
-            const row = docs.get(id);
-            return row !== undefined && metadataMatches(row.metadata, input?.where);
-          });
-          return {
-            ids,
-            documents: ids.map((id) => docs.get(id)?.document ?? null),
-            metadatas: ids.map((id) => docs.get(id)?.metadata ?? null),
-          };
-        },
-        async query(input): Promise<ChromaQueryResult> {
-          calls.push({ op: "query", payload: input });
-          const query = input.queryTexts[0]?.toLowerCase() ?? "";
-          const matches = Array.from(docs.entries())
-            .filter(([, row]) => row.document.toLowerCase().includes(query) && metadataMatches(row.metadata, input.where))
-            .map(([id, row], index) => ({ id, row, distance: index / 10 }));
-          const sliced = matches.slice(0, input.nResults);
-          return {
-            ids: [sliced.map((match) => match.id)],
-            documents: [sliced.map((match) => match.row.document)],
-            metadatas: [sliced.map((match) => match.row.metadata)],
-            distances: [sliced.map((match) => match.distance)],
-          };
-        },
-        async update(input) {
-          calls.push({ op: "update", payload: input });
-          for (let i = 0; i < input.ids.length; i++) {
-            const existing = docs.get(input.ids[i]);
-            if (!existing) continue;
-            docs.set(input.ids[i], {
-              document: input.documents?.[i] ?? existing.document,
-              metadata: input.metadatas?.[i] ?? existing.metadata,
-            });
-          }
-        },
-        async delete(input) {
-          calls.push({ op: "delete", payload: input });
-          for (const id of input.ids) docs.delete(id);
-        },
-      };
-      collections.set(name, collection);
-    }
-    return collection;
-  }
+  const calls: FakeChromaCalls = [];
 
   return {
     collections,
     calls,
     async getOrCreateCollection(input) {
       calls.push({ op: "getOrCreateCollection", payload: input });
-      return getCollection(input.name);
+      return getOrCreateFakeChromaCollection(collections, calls, input.name);
     },
   };
 }
