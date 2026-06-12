@@ -187,22 +187,58 @@ export function reviewPlanWithSkeptic(plannerOutput: unknown, contextPack?: Cont
     });
   }
 
-  const verdict: SkepticReviewVerdict = findings.some((finding) => finding.severity === "BLOCKER")
-    ? "BLOCKED"
-    : findings.length > 0
-      ? "NEEDS_REVISION"
-      : "SOUND";
+  const dedupedFindings = deduplicateSkepticFindings(findings);
+  const verdict = verdictForFindings(dedupedFindings);
 
   const reviewedPlanId = stringValue(plan.id);
   const planGoal = stringValue(plan.goal) ?? "unknown plan";
 
   return SkepticReviewSchema.parse({
     verdict,
-    findings,
+    findings: dedupedFindings,
     reviewedPlanId,
     planGoal,
     createdAt: contextPack?.createdAt ?? "1970-01-01T00:00:00.000Z",
   });
+}
+
+export function deduplicateSkepticFindings(findings: SkepticFinding[]): SkepticFinding[] {
+  const byKey = new Map<string, SkepticFinding>();
+  for (const finding of findings) {
+    const parsed = SkepticFindingSchema.parse(sanitizeFinding(finding));
+    const key = [parsed.severity, parsed.taskId ?? "", parsed.category, parsed.message, parsed.evidence].join("\u0000");
+    const existing = byKey.get(key);
+    if (!existing || severityRank(parsed.severity) > severityRank(existing.severity)) {
+      byKey.set(key, parsed);
+    }
+  }
+  return [...byKey.values()].map((finding, index) =>
+    SkepticFindingSchema.parse({ ...finding, id: finding.id.trim() || `skeptic.finding.${index + 1}` })
+  );
+}
+
+export function verdictForFindings(findings: SkepticFinding[]): SkepticReviewVerdict {
+  if (findings.some((finding) => finding.severity === "BLOCKER")) return "BLOCKED";
+  return findings.some((finding) => finding.severity === "MAJOR" || finding.severity === "MINOR")
+    ? "NEEDS_REVISION"
+    : "SOUND";
+}
+
+function severityRank(severity: SkepticFindingSeverity): number {
+  switch (severity) {
+    case "BLOCKER":
+      return 4;
+    case "MAJOR":
+      return 3;
+    case "MINOR":
+      return 2;
+    case "INFO":
+      return 1;
+  }
+}
+
+function sanitizeFinding(finding: SkepticFinding): SkepticFinding {
+  return SkepticFindingSchema.parse(redactSecrets(finding));
 }
 
 function asRecord(value: unknown): RawPlan {
@@ -360,6 +396,8 @@ export interface LiveSkepticResult {
   provider: string;
   model: string;
   attempts: number;
+  /** Traceable reason that explains why live semantic review fell back or blocked. */
+  fallbackReason?: string;
 }
 
 /** Input for {@link runLiveSkeptic}. */
@@ -418,6 +456,11 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
   const model = skepticModel(provider);
 
   const promptInput: SkepticPromptInput = { plannerOutput, contextPack, triage };
+  const deterministicReview = reviewPlanWithSkeptic(plannerOutput, contextPack);
+
+  if (deterministicReview.findings.some((finding) => finding.severity === "BLOCKER")) {
+    return skepticOkResult(deterministicReview, ZERO_SKEPTIC_USAGE, provider, model, 0);
+  }
 
   let totalUsage = ZERO_SKEPTIC_USAGE;
   let messages = buildPrompt(promptInput);
@@ -451,7 +494,8 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
         totalUsage,
         provider,
         model,
-        attempt - 1
+        attempt - 1,
+        "budget preflight denied live skeptic; deterministic findings remain authoritative"
       );
     }
 
@@ -466,7 +510,8 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
         totalUsage,
         provider,
         model,
-        attempt
+        attempt,
+        "provider timeout during live skeptic; deterministic findings remain authoritative"
       );
     }
 
@@ -480,7 +525,8 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
         totalUsage,
         provider,
         model,
-        attempt
+        attempt,
+        "provider error during live skeptic; deterministic findings remain authoritative"
       );
     }
 
@@ -490,7 +536,12 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
 
     const parsed = tryParseSkepticJson(response.content);
     if (parsed.ok) {
-      const assembled = assembleSkepticReview(parsed.value, plannerOutput, now);
+      const assembled = assembleSkepticReview(
+        parsed.value,
+        plannerOutput,
+        now,
+        deterministicReview.findings.filter((finding) => finding.severity === "BLOCKER")
+      );
       if (assembled.ok) {
         // Req 1.1/1.2/1.3: schema-valid review with stamped deterministic fields + recomputed verdict.
         return skepticOkResult(assembled.review, totalUsage, provider, response.model, attempt);
@@ -515,7 +566,8 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
     totalUsage,
     provider,
     model,
-    2
+    2,
+    "live skeptic invalid after one repair; deterministic findings remain authoritative"
   );
 }
 
@@ -538,7 +590,12 @@ type SkepticAssembly =
  * schema-field identifiers on failure so the blocker can report them without
  * echoing raw model output.
  */
-function assembleSkepticReview(value: unknown, plannerOutput: PlannerOutput, now: () => string): SkepticAssembly {
+function assembleSkepticReview(
+  value: unknown,
+  plannerOutput: PlannerOutput,
+  now: () => string,
+  deterministicFindings: SkepticFinding[]
+): SkepticAssembly {
   const draft = SkepticReviewDraftSchema.safeParse(value);
   if (!draft.success) {
     return {
@@ -550,13 +607,14 @@ function assembleSkepticReview(value: unknown, plannerOutput: PlannerOutput, now
     };
   }
 
-  const verdict = recomputeSkepticVerdict(draft.data.findings);
+  const mergedFindings = deduplicateSkepticFindings([...deterministicFindings, ...draft.data.findings]);
+  const verdict = recomputeSkepticVerdict(mergedFindings);
   const reviewedPlanId = planIdOf(plannerOutput);
   const planGoal = typeof plannerOutput.goal === "string" && plannerOutput.goal.trim().length > 0 ? plannerOutput.goal : undefined;
 
   const candidate = {
     verdict,
-    findings: draft.data.findings,
+    findings: mergedFindings,
     ...(reviewedPlanId !== undefined ? { reviewedPlanId } : {}),
     ...(planGoal !== undefined ? { planGoal } : {}),
     createdAt: now(),
@@ -708,7 +766,8 @@ function skepticBlockedResult(
   usage: LLMUsage,
   provider: LLMProvider,
   model: string,
-  attempts: number
+  attempts: number,
+  fallbackReason?: string
 ): LiveSkepticResult {
   return {
     status: "blocked",
@@ -717,6 +776,7 @@ function skepticBlockedResult(
     provider: provider.metadata.id,
     model,
     attempts,
+    ...(fallbackReason ? { fallbackReason } : {}),
   };
 }
 

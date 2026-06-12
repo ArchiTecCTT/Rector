@@ -136,6 +136,11 @@ export function truthItemToArtifactHandle(item: TruthItem): ArtifactHandle {
     sizeBytes: contentBytes,
     piiState: "unknown",
     retentionPolicy: "session",
+    provenance: item.provenance,
+    citations: [...item.citations, ...item.provenance.citations],
+    status: item.status,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
   };
 }
 
