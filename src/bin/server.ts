@@ -23,6 +23,7 @@ import { createLocalProviderConfigStore } from "../providers/configStore";
 import { createLocalMemoryConfigStore } from "../providers/memoryConfigStore";
 import { redactString } from "../security/redaction";
 import { parseAuthConfig } from "../security/auth";
+import { createLocalAuditLogService } from "../security/auditLog";
 import {
   PersistenceInitializationError,
   StoreConfigError,
@@ -57,6 +58,7 @@ const RECTOR_DATA_DIR = ".rector";
 const SECRETS_FILE = `${RECTOR_DATA_DIR}/secrets.enc`;
 const PROVIDER_CONFIG_FILE = `${RECTOR_DATA_DIR}/providers.json`;
 const SECRET_KEY_FILE = `${RECTOR_DATA_DIR}/secret.key`;
+const AUDIT_LOG_FILE = `${RECTOR_DATA_DIR}/audit-events.jsonl`;
 
 /**
  * Resolve the 32-byte AES-256-GCM key the local Secret_Store seals values with. The key must be
@@ -262,6 +264,8 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   const authConfig = parseAuthConfig(process.env);
   const secretEncryptionKey = resolveSecretEncryptionKey();
 
+  const auditLog = createLocalAuditLogService({ filePath: AUDIT_LOG_FILE });
+
   const app = createApp(manager, {
     orchestration: { mode: orchestrationConfig.mode, router: orchestrationRouter, sandbox: orchestrationSandbox },
     persistence: deploymentConfig.persistence,
@@ -269,6 +273,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
     secretStore,
     providerConfigStore,
     memoryConfigStore,
+    auditLog,
     auth: authConfig,
     secretEncryptionKey,
   });

@@ -6,6 +6,15 @@
 
 > Updated during full system audit 2026-06-09 (subagents used; see audits/full-system-audit-2026-06-09.md); follow-up register cleanup 2026-06-10 after Gemini-led test fixes + neuro chunk commits (now 1241 tests green). See audit report for original matrix + evidence.
 
+### Chunk 046 commercial auth/RBAC baseline still needs durable workspace membership backing
+
+- **Source:** Chunk 046 implementation.
+- **Severity:** Medium for hosted/team production, low for local-dev.
+- **Status:** Open.
+- **Root cause:** RBAC, quotas, audit logging, deployment readiness checks, and workspace isolation helpers are now centralized and tested, but the default workspace directory is an in-memory helper. The live server persists audit events to `.rector/audit-events.jsonl`, and per-user provider/memory/secret stores already exist, but workspace/user/membership administration needs a durable store before relying on team membership changes across restarts.
+- **Plan / Mitigations:** Local-dev auth-disabled mode remains implicit owner and zero-config. Auth-enabled deployments can inject a `WorkspaceDirectory` implementation; route-level authorization/audit/quota checks are centralized around that interface. Follow-up production hardening should add SQLite/TiDB-backed users/workspaces/memberships, invitation flows, owner-transfer constraints, and backup/restore coverage for membership state.
+- **Traceability:** `docs/plans/chunks/046-commercial-readiness-auth-rbac.md`, `src/security/rbac.ts`, `src/security/workspaces.ts`, `src/security/auditLog.ts`, `src/security/quotas.ts`, `src/deployment/readiness.ts`, `tests/rbacApiAuthorization.test.ts`, `tests/workspaceIsolation.test.ts`.
+
 ### External mode fail-fast startup check ignores UI-persisted configurations
 
 - **Status:** RESOLVED.

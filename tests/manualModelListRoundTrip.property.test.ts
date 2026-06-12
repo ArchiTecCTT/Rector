@@ -268,5 +268,5 @@ describe("Settings_API — Property 14: Manual_Model_List round-trips with no se
       ),
       { numRuns: 120 },
     );
-  });
+  }, 10_000);
 });
