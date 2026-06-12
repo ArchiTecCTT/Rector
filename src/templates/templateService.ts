@@ -623,6 +623,131 @@ function moduleSkipReason(moduleId: string, scopeId: string): string {
   return scopeId === "default" ? `module:${moduleId}` : `module:${moduleId}:scoped-scope`;
 }
 
+interface TemplateExportSummary {
+  orchestrationAssignments: TemplateOrchestrationAssignment[];
+  memoryAssignments: TemplateMemoryAssignment[];
+  hasExternalOrchestration: boolean;
+  hasExternalMemory: boolean;
+  maxUsdPerRun: number;
+  estimatedCostTier: "free" | "low" | "medium" | "high";
+  requiredProviderKinds: string[];
+}
+
+function memoryAssignmentsForExport(current: CurrentTemplateConfig): TemplateMemoryAssignment[] {
+  return current.memoryAssignments.map((assignment) => {
+    const base = toTemplateMemoryAssignment(assignment);
+    const kind = memoryKindForId(base.providerRecordId, current.memoryProviderRecords);
+    return kind ? { ...base, providerKind: kind } : base;
+  });
+}
+
+function estimateExportCostTier(
+  maxUsdPerRun: number,
+  hasExternalOrchestration: boolean,
+  hasExternalMemory: boolean,
+): "free" | "low" | "medium" | "high" {
+  if (maxUsdPerRun === 0 && !hasExternalOrchestration && !hasExternalMemory) return "free";
+  if (maxUsdPerRun <= 0.25) return "low";
+  if (maxUsdPerRun <= 1.5) return "medium";
+  return "high";
+}
+
+function requiredProviderKindsForExport(
+  current: CurrentTemplateConfig,
+  orchestrationAssignments: readonly TemplateOrchestrationAssignment[],
+  memoryAssignments: readonly TemplateMemoryAssignment[],
+): string[] {
+  const requiredKinds = new Set<string>();
+  for (const assignment of orchestrationAssignments) {
+    const kind = providerKindForId(assignment.providerId, current.providerRecords);
+    if (kind && isExternalProviderKind(kind)) requiredKinds.add(kind);
+  }
+  for (const assignment of memoryAssignments) {
+    if (assignment.providerKind && isExternalProviderKind(assignment.providerKind)) requiredKinds.add(assignment.providerKind);
+  }
+  return [...requiredKinds];
+}
+
+function summarizeCurrentConfigForExport(current: CurrentTemplateConfig): TemplateExportSummary {
+  const orchestrationAssignments = current.orchestrationAssignments.map(toTemplateOrchestrationAssignment);
+  const memoryAssignments = memoryAssignmentsForExport(current);
+  const hasExternalOrchestration = orchestrationAssignments.some((assignment) => isExternalProviderId(assignment.providerId));
+  const hasExternalMemory = memoryAssignments.some((assignment) =>
+    isExternalProviderKind(assignment.providerKind) || isExternalProviderId(assignment.providerRecordId),
+  );
+  const maxUsdPerRun = orchestrationAssignments.reduce((sum, assignment) => sum + (assignment.maxUsdPerCall ?? 0), 0);
+  return {
+    orchestrationAssignments,
+    memoryAssignments,
+    hasExternalOrchestration,
+    hasExternalMemory,
+    maxUsdPerRun,
+    estimatedCostTier: estimateExportCostTier(maxUsdPerRun, hasExternalOrchestration, hasExternalMemory),
+    requiredProviderKinds: requiredProviderKindsForExport(current, orchestrationAssignments, memoryAssignments),
+  };
+}
+
+function buildExportTemplate(
+  options: TemplateExportOptions,
+  current: CurrentTemplateConfig,
+  summary: TemplateExportSummary,
+  name: string,
+  now: string,
+): RectorTemplate {
+  const usesExternalProvider = summary.hasExternalOrchestration || summary.hasExternalMemory;
+  return {
+    schemaVersion: TEMPLATE_SCHEMA_VERSION,
+    id: options.id?.trim() || slugifyTemplateId(name),
+    name,
+    description: options.description?.trim() || "Exported from the current Rector assignment configuration.",
+    ...(options.author?.trim() ? { author: options.author.trim() } : {}),
+    tags: options.tags ?? ["personal", "exported"],
+    intendedUse: options.intendedUse ?? ["personal setup"],
+    riskLevel: usesExternalProvider ? "medium" : "local",
+    orchestrationAssignments: summary.orchestrationAssignments,
+    memoryAssignments: summary.memoryAssignments,
+    moduleToggles: current.moduleToggles,
+    sandboxPolicy: {
+      mode: usesExternalProvider ? "local-safe" : "fake",
+      network: "disabled",
+      allowlist: [],
+      requireApprovalFor: ["write", "delete", "shell"],
+    },
+    budgets: {
+      estimatedCostTier: summary.estimatedCostTier,
+      maxUsdPerRun: summary.maxUsdPerRun,
+      maxUsdPerDay: summary.maxUsdPerRun === 0 ? 0 : Math.max(summary.maxUsdPerRun * 10, summary.maxUsdPerRun),
+      maxUsdPerMonth: summary.maxUsdPerRun === 0 ? 0 : Math.max(summary.maxUsdPerRun * 200, summary.maxUsdPerRun),
+    },
+    requiredProviderKinds: summary.requiredProviderKinds,
+    requiredCapabilities: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+interface TemplateProviderRequirements {
+  requiredKinds: Set<string>;
+  orchestrationProviderIds: Set<string>;
+  memoryProviderIds: Set<string>;
+}
+
+function templateProviderRequirements(template: RectorTemplate): TemplateProviderRequirements {
+  return {
+    requiredKinds: new Set((template.requiredProviderKinds ?? []).filter(isExternalProviderKind)),
+    orchestrationProviderIds: new Set(
+      activeOrchestrationAssignments(template)
+        .map((assignment) => assignment.providerId)
+        .filter(isExternalProviderId),
+    ),
+    memoryProviderIds: new Set(
+      activeMemoryAssignments(template)
+        .map((assignment) => assignment.providerRecordId)
+        .filter(isExternalProviderId),
+    ),
+  };
+}
+
 export class TemplateService {
   private readonly userTemplateStore: UserTemplateStore;
   private readonly now: () => string;
@@ -716,59 +841,10 @@ export class TemplateService {
   }
 
   async exportCurrentConfig(options: TemplateExportOptions = {}): Promise<RectorTemplate> {
-    const scopeId = scopeKey(options.scopeId);
-    const current = await this.currentConfig(scopeId);
-    const now = this.now();
+    const current = await this.currentConfig(scopeKey(options.scopeId));
     const name = options.name?.trim() || "Personal Rector Template";
-    const orchestrationAssignments = current.orchestrationAssignments.map(toTemplateOrchestrationAssignment);
-    const memoryAssignments = current.memoryAssignments.map((assignment) => {
-      const base = toTemplateMemoryAssignment(assignment);
-      const kind = memoryKindForId(base.providerRecordId, current.memoryProviderRecords);
-      return kind ? { ...base, providerKind: kind } : base;
-    });
-    const externalAssignment = orchestrationAssignments.some((assignment) => isExternalProviderId(assignment.providerId));
-    const externalMemory = memoryAssignments.some((assignment) => isExternalProviderKind(assignment.providerKind) || isExternalProviderId(assignment.providerRecordId));
-    const maxUsdPerRun = orchestrationAssignments.reduce((sum, assignment) => sum + (assignment.maxUsdPerCall ?? 0), 0);
-    const estimatedCostTier = maxUsdPerRun === 0 && !externalAssignment && !externalMemory ? "free" : maxUsdPerRun <= 0.25 ? "low" : maxUsdPerRun <= 1.5 ? "medium" : "high";
-    const requiredKinds = new Set<string>();
-    for (const assignment of orchestrationAssignments) {
-      const kind = providerKindForId(assignment.providerId, current.providerRecords);
-      if (kind && isExternalProviderKind(kind)) requiredKinds.add(kind);
-    }
-    for (const assignment of memoryAssignments) {
-      if (assignment.providerKind && isExternalProviderKind(assignment.providerKind)) requiredKinds.add(assignment.providerKind);
-    }
-
-    const template: RectorTemplate = {
-      schemaVersion: TEMPLATE_SCHEMA_VERSION,
-      id: options.id?.trim() || slugifyTemplateId(name),
-      name,
-      description: options.description?.trim() || "Exported from the current Rector assignment configuration.",
-      ...(options.author?.trim() ? { author: options.author.trim() } : {}),
-      tags: options.tags ?? ["personal", "exported"],
-      intendedUse: options.intendedUse ?? ["personal setup"],
-      riskLevel: externalAssignment || externalMemory ? "medium" : "local",
-      orchestrationAssignments,
-      memoryAssignments,
-      moduleToggles: current.moduleToggles,
-      sandboxPolicy: {
-        mode: externalAssignment || externalMemory ? "local-safe" : "fake",
-        network: "disabled",
-        allowlist: [],
-        requireApprovalFor: ["write", "delete", "shell"],
-      },
-      budgets: {
-        estimatedCostTier,
-        maxUsdPerRun,
-        maxUsdPerDay: maxUsdPerRun === 0 ? 0 : Math.max(maxUsdPerRun * 10, maxUsdPerRun),
-        maxUsdPerMonth: maxUsdPerRun === 0 ? 0 : Math.max(maxUsdPerRun * 200, maxUsdPerRun),
-      },
-      requiredProviderKinds: [...requiredKinds],
-      requiredCapabilities: [],
-      createdAt: now,
-      updatedAt: now,
-    };
-
+    const summary = summarizeCurrentConfigForExport(current);
+    const template = buildExportTemplate(options, current, summary, name, this.now());
     const scan = scanTemplateForSecrets(template);
     if (!scan.ok) throw new TemplateImportSecretError(scan.findings);
     return parseRectorTemplate(template);
@@ -1015,46 +1091,47 @@ export class TemplateService {
     template: RectorTemplate,
     current: CurrentTemplateConfig,
   ): Promise<TemplateMissingSecretRequirement[]> {
-    const requiredKinds = new Set((template.requiredProviderKinds ?? []).filter(isExternalProviderKind));
-    const requiredProviderIds = new Set(
-      activeOrchestrationAssignments(template)
-        .map((assignment) => assignment.providerId)
-        .filter(isExternalProviderId),
-    );
-    const requiredMemoryIds = new Set(
-      activeMemoryAssignments(template)
-        .map((assignment) => assignment.providerRecordId)
-        .filter(isExternalProviderId),
-    );
+    const requirements = templateProviderRequirements(template);
+    return [
+      ...(await this.missingProviderSecrets(current.providerRecords, requirements)),
+      ...(await this.missingMemorySecrets(current.memoryProviderRecords, requirements)),
+    ];
+  }
+
+  private async missingProviderSecrets(
+    providers: readonly ProviderConfigRecord[],
+    requirements: TemplateProviderRequirements,
+  ): Promise<TemplateMissingSecretRequirement[]> {
     const missing: TemplateMissingSecretRequirement[] = [];
-
-    for (const provider of current.providerRecords) {
-      if (!requiredKinds.has(provider.kind) && !requiredProviderIds.has(provider.id)) continue;
-      const present = await this.safeHasSecret(provider.secretRef);
-      if (!present) {
-        missing.push({
-          providerId: provider.id,
-          providerKind: provider.kind,
-          label: provider.label,
-          reason: "provider credential is not stored",
-        });
-      }
+    for (const provider of providers) {
+      if (!requirements.requiredKinds.has(provider.kind) && !requirements.orchestrationProviderIds.has(provider.id)) continue;
+      if (await this.safeHasSecret(provider.secretRef)) continue;
+      missing.push({
+        providerId: provider.id,
+        providerKind: provider.kind,
+        label: provider.label,
+        reason: "provider credential is not stored",
+      });
     }
+    return missing;
+  }
 
-    for (const provider of current.memoryProviderRecords) {
-      if (!requiredKinds.has(provider.kind) && !requiredMemoryIds.has(provider.id)) continue;
-      if (!isExternalProviderKind(provider.kind)) continue;
-      const present = await this.safeHasSecret(provider.secretRef);
-      if (!present) {
-        missing.push({
-          providerId: provider.id,
-          providerKind: provider.kind,
-          label: provider.label,
-          reason: "memory provider credential is not stored",
-        });
-      }
+  private async missingMemorySecrets(
+    providers: readonly MemoryProviderRecord[],
+    requirements: TemplateProviderRequirements,
+  ): Promise<TemplateMissingSecretRequirement[]> {
+    const missing: TemplateMissingSecretRequirement[] = [];
+    for (const provider of providers) {
+      const required = requirements.requiredKinds.has(provider.kind) || requirements.memoryProviderIds.has(provider.id);
+      if (!required || !isExternalProviderKind(provider.kind)) continue;
+      if (await this.safeHasSecret(provider.secretRef)) continue;
+      missing.push({
+        providerId: provider.id,
+        providerKind: provider.kind,
+        label: provider.label,
+        reason: "memory provider credential is not stored",
+      });
     }
-
     return missing;
   }
 

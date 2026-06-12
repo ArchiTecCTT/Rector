@@ -1,5 +1,4 @@
 import type { Application, Request, Response } from "express";
-import { redactString } from "../../security/redaction";
 import {
   TemplateApplyRequestSchema,
   TemplateImportSecretError,
@@ -7,6 +6,7 @@ import {
   type TemplatePreview,
   type TemplateService,
 } from "../../templates";
+import { sendRedactedRouteError, statusForMissingTemplate } from "./routeError";
 
 export interface TemplateRoutesDeps {
   templateServiceFor(req: Request): TemplateService;
@@ -15,7 +15,6 @@ export interface TemplateRoutesDeps {
   sendTemplateResponse(res: Response, status: number, payload: unknown): void;
 }
 
-const errorMessageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 export function registerTemplateRoutes(app: Application, deps: TemplateRoutesDeps): void {
   const { templateServiceFor, scopeIdFor, sendRedacted, sendTemplateResponse } = deps;
@@ -25,7 +24,7 @@ export function registerTemplateRoutes(app: Application, deps: TemplateRoutesDep
       const templates = await templateServiceFor(req).listTemplates(scopeIdFor(req));
       sendTemplateResponse(res, 200, { templates });
     } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 500, error);
     }
   });
 
@@ -34,7 +33,7 @@ export function registerTemplateRoutes(app: Application, deps: TemplateRoutesDep
       const template = await templateServiceFor(req).exportCurrentConfig({ scopeId: scopeIdFor(req) });
       sendTemplateResponse(res, 200, { template });
     } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 500, error);
     }
   });
 
@@ -44,7 +43,7 @@ export function registerTemplateRoutes(app: Application, deps: TemplateRoutesDep
       const template = await templateServiceFor(req).saveCurrentConfig({ ...body, scopeId: scopeIdFor(req) });
       sendTemplateResponse(res, 200, { template });
     } catch (error) {
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 400, error);
     }
   });
 
@@ -58,7 +57,7 @@ export function registerTemplateRoutes(app: Application, deps: TemplateRoutesDep
       if (error instanceof TemplateImportSecretError) {
         return sendTemplateResponse(res, 400, { error: error.message, findings: error.findings });
       }
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 400, error);
     }
   });
 
@@ -75,7 +74,7 @@ export function registerTemplateRoutes(app: Application, deps: TemplateRoutesDep
       if (error instanceof TemplateImportSecretError) {
         return sendTemplateResponse(res, 400, { error: error.message, findings: error.findings });
       }
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 400, error);
     }
   });
 
@@ -85,7 +84,7 @@ export function registerTemplateRoutes(app: Application, deps: TemplateRoutesDep
       if (!template) return sendRedacted(res, 404, { error: "Template not found" });
       sendTemplateResponse(res, 200, { template });
     } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 500, error);
     }
   });
 
@@ -94,8 +93,7 @@ export function registerTemplateRoutes(app: Application, deps: TemplateRoutesDep
       const preview = await templateServiceFor(req).preview(req.params.id, undefined, scopeIdFor(req));
       sendTemplateResponse(res, 200, { preview });
     } catch (error) {
-      const status = errorMessageOf(error).startsWith("Template not found") ? 404 : 400;
-      sendRedacted(res, status, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, statusForMissingTemplate(error), error);
     }
   });
 
@@ -105,8 +103,7 @@ export function registerTemplateRoutes(app: Application, deps: TemplateRoutesDep
       const result = await templateServiceFor(req).apply(req.params.id, { ...body, scopeId: scopeIdFor(req) });
       sendTemplateResponse(res, 200, result);
     } catch (error) {
-      const status = errorMessageOf(error).startsWith("Template not found") ? 404 : 400;
-      sendRedacted(res, status, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, statusForMissingTemplate(error), error);
     }
   });
 }

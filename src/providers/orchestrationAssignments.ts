@@ -1027,6 +1027,37 @@ export interface BuildAssignmentAwareRouterInput {
   fakeProvider?: LLMProvider;
 }
 
+function providerModelForRoute(provider: LLMProvider, route: ModelRoute, preferredModel?: string): string {
+  return preferredModel ?? provider.metadata.models[route] ?? Object.values(provider.metadata.models)[0] ?? provider.metadata.id;
+}
+
+function fakeSelection(role: OrchestrationRole, effective: EffectiveModelRoute, provider: LLMProvider): ModelSelection {
+  return {
+    provider,
+    modelRoute: "fake",
+    model: effective.modelId ?? provider.metadata.models.fake,
+    reason: `orchestration assignment ${role} uses ${effective.providerId}`,
+  };
+}
+
+function assignedProviderSelection(role: OrchestrationRole, effective: EffectiveModelRoute, provider: LLMProvider): ModelSelection {
+  return {
+    provider,
+    modelRoute: effective.modelRoute,
+    model: providerModelForRoute(provider, effective.modelRoute, effective.modelId),
+    reason: `orchestration assignment ${role} -> ${effective.providerId}`,
+  };
+}
+
+function fallbackProviderSelection(role: OrchestrationRole, effective: EffectiveModelRoute, provider: LLMProvider): ModelSelection {
+  return {
+    provider,
+    modelRoute: effective.modelRoute,
+    model: providerModelForRoute(provider, effective.modelRoute, effective.fallbackModelId),
+    reason: `orchestration assignment ${role} fallback -> ${effective.fallbackProviderId}`,
+  };
+}
+
 export function buildAssignmentAwareModelRouter(input: BuildAssignmentAwareRouterInput): ModelRouter {
   const fakeProvider = input.fakeProvider ?? new FakeLLMProvider();
 
@@ -1036,35 +1067,14 @@ export function buildAssignmentAwareModelRouter(input: BuildAssignmentAwareRoute
       if (!role) return input.baseRouter.select(routerInput);
       const selected = selectAssignmentForResolution(input.assignments, role, input.scope);
       if (!selected) return input.baseRouter.select(routerInput);
-      const assignment = selected.assignment;
-      const effective = resolveAssignmentRecord(assignment, selected.source, input.providerState);
-      const modelRoute = effective.modelRoute;
+      const effective = resolveAssignmentRecord(selected.assignment, selected.source, input.providerState);
       if (!effective.enabled || effective.providerId === "disabled" || effective.providerId === "deterministic") {
-        return {
-          provider: fakeProvider,
-          modelRoute: "fake",
-          model: effective.modelId ?? fakeProvider.metadata.models.fake,
-          reason: `orchestration assignment ${role} uses ${effective.providerId}`,
-        };
+        return fakeSelection(role, effective, fakeProvider);
       }
       const assignedProvider = input.providersByRole?.[role];
-      if (assignedProvider) {
-        return {
-          provider: assignedProvider,
-          modelRoute,
-          model: effective.modelId ?? assignedProvider.metadata.models[modelRoute] ?? Object.values(assignedProvider.metadata.models)[0] ?? assignedProvider.metadata.id,
-          reason: `orchestration assignment ${role} -> ${effective.providerId}`,
-        };
-      }
+      if (assignedProvider) return assignedProviderSelection(role, effective, assignedProvider);
       const fallbackProvider = input.fallbackProvidersByRole?.[role];
-      if (fallbackProvider) {
-        return {
-          provider: fallbackProvider,
-          modelRoute,
-          model: effective.fallbackModelId ?? fallbackProvider.metadata.models[modelRoute] ?? Object.values(fallbackProvider.metadata.models)[0] ?? fallbackProvider.metadata.id,
-          reason: `orchestration assignment ${role} fallback -> ${effective.fallbackProviderId}`,
-        };
-      }
+      if (fallbackProvider) return fallbackProviderSelection(role, effective, fallbackProvider);
       return input.baseRouter.select(routerInput);
     },
   };
@@ -1078,6 +1088,21 @@ export interface BuildConfiguredAssignmentAwareRouterOptions {
   scope?: OrchestrationAssignmentScope;
   enableNetwork?: boolean;
   fetchImpl?: typeof fetch;
+}
+
+async function resolveAssignmentProvider(
+  options: BuildConfiguredAssignmentAwareRouterOptions,
+  providerId: AssignmentProviderId | undefined,
+  modelId: string | undefined,
+): Promise<LLMProvider | undefined> {
+  if (!providerId || providerId === "deterministic" || providerId === "disabled") return undefined;
+  return resolveTestProvider(
+    providerId,
+    options.providerConfigStore,
+    options.secrets,
+    { enableNetwork: options.enableNetwork, fetchImpl: options.fetchImpl },
+    modelId ? { model: modelId, deployment: modelId } : {},
+  );
 }
 
 export async function buildConfiguredAssignmentAwareRouter(

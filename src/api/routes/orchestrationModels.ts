@@ -45,6 +45,51 @@ export interface OrchestrationModelRoutesDeps {
 
 const errorMessageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
+type AssignmentDraftInput = {
+  role: OrchestrationRole;
+  body: TestOrchestrationAssignmentRequest;
+  existing: OrchestrationModelAssignment | undefined;
+  scope: OrchestrationAssignmentScope;
+  now?: string;
+};
+
+function optionalAssignmentField<T>(value: T | undefined, key: string): Record<string, T> {
+  return value !== undefined ? { [key]: value } as Record<string, T> : {};
+}
+
+function buildAssignmentDraft(input: AssignmentDraftInput): OrchestrationModelAssignment | undefined {
+  const { role, body, existing, scope } = input;
+  if (!body.providerId) return undefined;
+  const now = input.now ?? new Date().toISOString();
+  return OrchestrationModelAssignmentSchema.parse({
+    id: existing?.id ?? orchestrationAssignmentId(role, scope),
+    ...(scope.userId ? { userId: scope.userId } : {}),
+    ...(scope.workspaceId ? { workspaceId: scope.workspaceId } : {}),
+    role,
+    providerId: body.providerId,
+    ...optionalAssignmentField(body.modelId, "modelId"),
+    ...optionalAssignmentField(body.fallbackProviderId, "fallbackProviderId"),
+    ...optionalAssignmentField(body.fallbackModelId, "fallbackModelId"),
+    enabled: body.enabled ?? existing?.enabled ?? true,
+    ...optionalAssignmentField(body.maxUsdPerCall, "maxUsdPerCall"),
+    ...optionalAssignmentField(body.maxTokens, "maxTokens"),
+    ...optionalAssignmentField(body.timeoutMs, "timeoutMs"),
+    ...optionalAssignmentField(body.temperature, "temperature"),
+    ...optionalAssignmentField(body.requiresJsonMode, "requiresJsonMode"),
+    ...optionalAssignmentField(body.requiresToolCalling, "requiresToolCalling"),
+    ...optionalAssignmentField(body.requiresStreaming, "requiresStreaming"),
+    ...optionalAssignmentField(body.notes, "notes"),
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  });
+}
+
+function requireAssignmentDraft(input: AssignmentDraftInput): OrchestrationModelAssignment {
+  const draft = buildAssignmentDraft(input);
+  if (!draft) throw new Error("Assignment providerId is required.");
+  return draft;
+}
+
 export function registerOrchestrationModelRoutes(app: Application, deps: OrchestrationModelRoutesDeps): void {
   const {
     storesFor,
@@ -104,27 +149,12 @@ export function registerOrchestrationModelRoutes(app: Application, deps: Orchest
         userStores.orchestrationAssignmentStore.listAssignments(scope),
         userStores.providerConfigStore.getState(),
       ]);
-      const now = new Date().toISOString();
-      const candidate = OrchestrationModelAssignmentSchema.parse({
-        id: existing?.id ?? orchestrationAssignmentId(role, scope),
-        ...(scope.userId ? { userId: scope.userId } : {}),
-        ...(scope.workspaceId ? { workspaceId: scope.workspaceId } : {}),
+      const candidate = requireAssignmentDraft({
         role,
-        providerId: body.providerId,
-        ...(body.modelId ? { modelId: body.modelId } : {}),
-        ...(body.fallbackProviderId ? { fallbackProviderId: body.fallbackProviderId } : {}),
-        ...(body.fallbackModelId ? { fallbackModelId: body.fallbackModelId } : {}),
-        enabled: body.enabled ?? existing?.enabled ?? true,
-        ...(body.maxUsdPerCall !== undefined ? { maxUsdPerCall: body.maxUsdPerCall } : {}),
-        ...(body.maxTokens !== undefined ? { maxTokens: body.maxTokens } : {}),
-        ...(body.timeoutMs !== undefined ? { timeoutMs: body.timeoutMs } : {}),
-        ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
-        ...(body.requiresJsonMode !== undefined ? { requiresJsonMode: body.requiresJsonMode } : {}),
-        ...(body.requiresToolCalling !== undefined ? { requiresToolCalling: body.requiresToolCalling } : {}),
-        ...(body.requiresStreaming !== undefined ? { requiresStreaming: body.requiresStreaming } : {}),
-        ...(body.notes !== undefined ? { notes: body.notes } : {}),
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
+        body,
+        existing,
+        scope,
+        now: new Date().toISOString(),
       });
       const withoutCandidate = existingAssignments.filter((assignment) => assignment.role !== role);
       const effective = resolveEffectiveAssignment({
@@ -167,29 +197,7 @@ export function registerOrchestrationModelRoutes(app: Application, deps: Orchest
       const scope = assignmentScopeFor(req, body.workspaceId);
       const providerState = await userStores.providerConfigStore.getState();
       const saved = await userStores.orchestrationAssignmentStore.getAssignment(role, scope);
-      const draft = body.providerId
-        ? OrchestrationModelAssignmentSchema.parse({
-            id: saved?.id ?? orchestrationAssignmentId(role, scope),
-            ...(scope.userId ? { userId: scope.userId } : {}),
-            ...(scope.workspaceId ? { workspaceId: scope.workspaceId } : {}),
-            role,
-            providerId: body.providerId,
-            ...(body.modelId ? { modelId: body.modelId } : {}),
-            ...(body.fallbackProviderId ? { fallbackProviderId: body.fallbackProviderId } : {}),
-            ...(body.fallbackModelId ? { fallbackModelId: body.fallbackModelId } : {}),
-            enabled: body.enabled ?? saved?.enabled ?? true,
-            ...(body.maxUsdPerCall !== undefined ? { maxUsdPerCall: body.maxUsdPerCall } : {}),
-            ...(body.maxTokens !== undefined ? { maxTokens: body.maxTokens } : {}),
-            ...(body.timeoutMs !== undefined ? { timeoutMs: body.timeoutMs } : {}),
-            ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
-            ...(body.requiresJsonMode !== undefined ? { requiresJsonMode: body.requiresJsonMode } : {}),
-            ...(body.requiresToolCalling !== undefined ? { requiresToolCalling: body.requiresToolCalling } : {}),
-            ...(body.requiresStreaming !== undefined ? { requiresStreaming: body.requiresStreaming } : {}),
-            ...(body.notes !== undefined ? { notes: body.notes } : {}),
-            createdAt: saved?.createdAt ?? new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          })
-        : saved;
+      const draft = buildAssignmentDraft({ role, body, existing: saved, scope }) ?? saved;
       const effective = draft
         ? resolveEffectiveAssignment({ role, assignments: [draft], providerState, scope })
         : resolveEffectiveAssignment({ role, assignments: [], providerState, scope });

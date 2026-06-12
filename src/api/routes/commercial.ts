@@ -7,6 +7,7 @@ import { WorkspaceMembershipSchema, type WorkspaceDirectory } from "../../securi
 import type { AuditLogService } from "../../security/auditLog";
 import { QuotaPolicySchema, type QuotaService } from "../../security/quotas";
 import { computeCommercialDeploymentReadiness } from "../../deployment/readiness";
+import { sendRedactedRouteError } from "./routeError";
 
 export type AuthorizationResult = { ok: true; workspaceId: string; role: WorkspaceRole };
 
@@ -45,7 +46,6 @@ export interface CommercialRoutesDeps {
   ): void;
 }
 
-const errorMessageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 export function registerCommercialRoutes(app: Application, deps: CommercialRoutesDeps): void {
   const {
@@ -85,7 +85,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
         workspaces: entries.map((entry) => ({ ...entry.workspace, role: entry.membership.role })),
       });
     } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 500, error);
     }
   });
 
@@ -98,7 +98,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
       await auditRequest(req, { workspaceId: workspace.id, action: "workspace.create", targetType: "workspace", targetId: workspace.id, outcome: "success" });
       sendRedacted(res, 201, { workspace });
     } catch (error) {
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 400, error);
     }
   });
 
@@ -108,7 +108,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     try {
       sendRedacted(res, 200, { members: await workspaceDirectory.listMembers(workspace.workspaceId) });
     } catch (error) {
-      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 500, error);
     }
   });
 
@@ -121,7 +121,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
       await auditRequest(req, { workspaceId: workspace.workspaceId, action: "members.add", targetType: "membership", targetId: member.id, outcome: "success" });
       sendRedacted(res, 201, { member });
     } catch (error) {
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 400, error);
     }
   });
 
@@ -139,7 +139,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
       await auditRequest(req, { workspaceId: workspace.workspaceId, action: "members.update", targetType: "membership", targetId: member.id, outcome: "success" });
       sendRedacted(res, 200, { member });
     } catch (error) {
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 400, error);
     }
   });
 
@@ -188,7 +188,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
       await auditRequest(req, { workspaceId: workspace.workspaceId, action: "quota.update", targetType: "quota", outcome: "success" });
       sendRedacted(res, 200, { workspaceId: workspace.workspaceId, policy: saved });
     } catch (error) {
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 400, error);
     }
   });
 
@@ -211,7 +211,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
         return redacted;
       });
     } catch (error) {
-      sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
+      sendRedactedRouteError(sendRedacted, res, 400, error);
     }
   });
 }
