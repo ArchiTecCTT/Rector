@@ -197,7 +197,7 @@ function buildPreprocessorBudgetUsage(provider: LLMProvider, estimate: LLMUsage,
  */
 export async function runSLMPreprocessor(
   input: { rawPrompt: string; contextPack: ContextPack; triage: TriageResult },
-  deps: { slmProvider: LLMProvider; run: Run }
+  deps: { slmProvider: LLMProvider; run: Run; model?: string }
 ): Promise<SLMPreprocessorResult> {
   const { slmProvider, run } = deps;
 
@@ -216,6 +216,7 @@ export async function runSLMPreprocessor(
       },
     ],
     modelRoute: "cheap", // The caller (chatRunner) chooses the actual cheap/SLM provider via router.
+    ...(deps.model ? { model: deps.model } : {}),
     responseFormat: { type: "json_object" },
     task: "preprocessor",
   };

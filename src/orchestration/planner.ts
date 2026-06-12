@@ -548,6 +548,8 @@ export interface LivePlannerResult {
 export interface LivePlannerDeps {
   provider: LLMProvider;
   run: Run;
+  /** Optional concrete model/deployment selected by the orchestration assignment router. */
+  model?: string;
   buildPrompt?: typeof buildPlannerPrompt;
   buildRepairPrompt?: typeof buildPlannerRepairPrompt;
 }
@@ -577,7 +579,7 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
   const { provider, run } = deps;
   const buildPrompt = deps.buildPrompt ?? buildPlannerPrompt;
   const buildRepairPrompt = deps.buildRepairPrompt ?? buildPlannerRepairPrompt;
-  const model = plannerModel(provider);
+  const model = deps.model ?? plannerModel(provider);
 
   let totalUsage = ZERO_USAGE;
   let messages = buildPrompt(parsedInput);
@@ -588,6 +590,7 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
     const request: LLMRequest = {
       messages,
       modelRoute: "flagship",
+      ...(deps.model ? { model: deps.model } : {}),
       responseFormat: { type: "json_object" },
       task: "planner",
     };
@@ -661,7 +664,7 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
     makeBlocker("PLANNER_INVALID", plannerInvalidMessage(lastFailure.issuePaths), { issues: lastFailure.issuePaths }),
     totalUsage,
     provider,
-    plannerModel(provider),
+    model,
     2,
     "live planner invalid after one repair; deterministic fallback plan attached",
     createFakePlan(parsedInput)

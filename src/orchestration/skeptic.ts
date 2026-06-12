@@ -412,6 +412,8 @@ export interface LiveSkepticInput {
 export interface LiveSkepticDeps {
   provider: LLMProvider;
   run: Run;
+  /** Optional concrete model/deployment selected by the orchestration assignment router. */
+  model?: string;
   buildPrompt?: typeof buildSkepticPrompt;
   buildRepairPrompt?: typeof buildSkepticRepairPrompt;
   /**
@@ -453,7 +455,7 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
   const buildPrompt = deps.buildPrompt ?? buildSkepticPrompt;
   const buildRepairPrompt = deps.buildRepairPrompt ?? buildSkepticRepairPrompt;
   const timeoutMs = deps.timeoutMs ?? SKEPTIC_INVOCATION_TIMEOUT_MS;
-  const model = skepticModel(provider);
+  const model = deps.model ?? skepticModel(provider);
 
   const promptInput: SkepticPromptInput = { plannerOutput, contextPack, triage };
   const deterministicReview = reviewPlanWithSkeptic(plannerOutput, contextPack);
@@ -474,6 +476,7 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
     const request: LLMRequest = {
       messages,
       modelRoute: "flagship",
+      ...(deps.model ? { model: deps.model } : {}),
       responseFormat: { type: "json_object" },
       task: "skeptic",
     };

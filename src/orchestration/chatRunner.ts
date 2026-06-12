@@ -402,19 +402,21 @@ export async function runExternalChatRun(
         },
         planningPrep,
       )
-    : await observability.recordSpan("PLANNING", () =>
-        runLivePlanner(
+    : await observability.recordSpan("PLANNING", () => {
+        const selection = deps.router.select({
+          capability: "flagship",
+          task: "planner",
+          run: budgetRun,
+        });
+        return runLivePlanner(
           { triage, contextPack: plannerContextPack, messageContent: effectiveMessageContent },
           {
-            provider: deps.router.select({
-              capability: "flagship",
-              task: "planner",
-              run: budgetRun,
-            }).provider,
+            provider: selection.provider,
             run: budgetRun,
+            model: selection.model,
           },
-        ),
-      );
+        );
+      });
 
   if (plannerResult.status === "blocked" || !plannerResult.plan) {
     const blocker = plannerResult.blocker ?? {
@@ -452,7 +454,10 @@ export async function runExternalChatRun(
   // (Req 9.3) with the skeptic's ProviderCallMetadata recorded on the SKEPTIC_REVIEW event (Req 9.1).
   const skepticSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "skeptic", run: costedRun });
   const skepticResult = await observability.recordSpan("SKEPTIC_REVIEW", () =>
-    runLiveSkeptic({ plannerOutput, contextPack, triage }, { provider: skepticSelection.provider, run: costedRun })
+    runLiveSkeptic(
+      { plannerOutput, contextPack, triage },
+      { provider: skepticSelection.provider, run: costedRun, model: skepticSelection.model },
+    )
   );
   const skepticProviderCall = buildProviderCallMetadata(
     skepticSelection,
@@ -578,6 +583,7 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
     deps.repairAgent ??
     createLiveRepairAgent({
       provider: repairSelection.provider,
+      model: repairSelection.model,
       approvals,
       getRun: () => budgetRun,
       commitUsage: async (usage, provider) => {
@@ -658,7 +664,7 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
     // (budget denial, provider error, missing provider) (Req 7.1, 7.2, 7.3, 8.1, 8.2, 8.3).
     const directSelection: ModelSelection = deps.router.select({ capability: "cheap", task: "direct-answer", run: budgetRun });
     const directResult = await observability.recordSpan("SYNTHESIZING", () =>
-      runLiveDirectAnswer(synthInput, { provider: directSelection.provider, run: budgetRun })
+      runLiveDirectAnswer(synthInput, { provider: directSelection.provider, run: budgetRun, model: directSelection.model })
     );
     directAnswerFallback = directResult.fallback;
     // Keep the deterministic base (status/route/trace/evidence/observability) so trace surfaces are
@@ -691,7 +697,7 @@ async function runExternalPostPlanningPhases(params: ExternalPostPlanningParams)
     // SYNTHESIZING — live, evidence-cited answer with deterministic fallback (ORN-36).
     const synthSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "synthesizer", run: budgetRun });
     const synthResult = await observability.recordSpan("SYNTHESIZING", () =>
-      runLiveSynthesizer(synthInput, { provider: synthSelection.provider, run: budgetRun })
+      runLiveSynthesizer(synthInput, { provider: synthSelection.provider, run: budgetRun, model: synthSelection.model })
     );
     synthesis = synthResult.synthesis;
     synthProviderCall = buildProviderCallMetadata(
@@ -931,6 +937,7 @@ function committedRunNumber(primary: unknown, fallback: unknown): number {
  */
 function createLiveRepairAgent(deps: {
   provider: LLMProvider;
+  model?: string;
   approvals: SandboxApproval[];
   getRun?: () => Run;
   commitUsage?: (usage: LLMUsage, provider: string) => Promise<void>;
@@ -947,6 +954,7 @@ function createLiveRepairAgent(deps: {
       const request: LLMRequest = {
         messages,
         modelRoute: "flagship",
+        ...(deps.model ? { model: deps.model } : {}),
         responseFormat: { type: "json_object" },
         task: "repair",
       };

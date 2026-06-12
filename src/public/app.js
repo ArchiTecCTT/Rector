@@ -224,6 +224,16 @@ function cacheEls() {
     "provider-config-adv-key-toggle",
     "provider-config-adv-add",
     "provider-config-adv-result",
+    "open-orchestration-model-config",
+    "close-orchestration-model-config",
+    "orchestration-model-config-modal",
+    "orchestration-model-config-backdrop",
+    "orchestration-model-config-loading",
+    "orchestration-model-config-error",
+    "orchestration-model-reset",
+    "orchestration-model-status",
+    "orchestration-model-empty-providers",
+    "orchestration-model-rows",
     "open-memory-provider-config",
     "close-memory-provider-config",
     "memory-provider-config-modal",
@@ -2569,6 +2579,337 @@ function bindProviderConfig() {
   });
 }
 
+// --- Orchestration model assignment panel (Chunk 043) ---
+//
+// Talks to the non-secret Orchestration_Model_Assignment_API:
+//   GET  /api/orchestration-models/effective
+//   PUT  /api/orchestration-models/assignments/:role
+//   POST /api/orchestration-models/assignments/:role/test
+//   POST /api/orchestration-models/assignments/reset
+// Assignments never carry API keys or secret refs; provider/model ids and budgets only.
+
+const orchestrationModelState = {
+  roles: [],
+  providers: [],
+  assignments: [],
+  effective: [],
+};
+
+function setOrchestrationModelLoading(loading) {
+  const indicator = els["orchestration-model-config-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+function showOrchestrationModelError(message) {
+  const box = els["orchestration-model-config-error"];
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+}
+
+function hideOrchestrationModelError() {
+  const box = els["orchestration-model-config-error"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+}
+
+function showOrchestrationModelStatus(kind, message) {
+  const box = els["orchestration-model-status"];
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+  box.className = `orchestration-model-status orchestration-model-status--${kind === "ok" ? "ok" : "err"}`;
+}
+
+function clearOrchestrationModelStatus() {
+  const box = els["orchestration-model-status"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+  box.className = "orchestration-model-status";
+}
+
+function orchestrationProviderOptions() {
+  return [
+    { id: "deterministic", label: "Deterministic local", models: [{ id: "deterministic-local", label: "deterministic-local" }] },
+    { id: "disabled", label: "Disabled", models: [] },
+    ...orchestrationModelState.providers,
+  ];
+}
+
+function findOrchestrationProvider(providerId) {
+  return orchestrationProviderOptions().find((provider) => provider.id === providerId) || null;
+}
+
+function findOrchestrationAssignment(roleId) {
+  return orchestrationModelState.assignments.find((assignment) => assignment.role === roleId) || null;
+}
+
+function findOrchestrationEffective(roleId) {
+  return orchestrationModelState.effective.find((route) => route.role === roleId) || null;
+}
+
+function appendSelectOption(select, value, label) {
+  const opt = document.createElement("option");
+  opt.value = value;
+  opt.textContent = label;
+  select.appendChild(opt);
+}
+
+function populateOrchestrationModelSelect(select, providerId, selectedModel) {
+  if (!select) return;
+  select.innerHTML = "";
+  appendSelectOption(select, "", "Default model");
+  const provider = findOrchestrationProvider(providerId);
+  const models = Array.isArray(provider?.models) ? provider.models : [];
+  for (const model of models) {
+    appendSelectOption(select, model.id, model.label || model.id);
+  }
+  if (selectedModel && !models.some((model) => model.id === selectedModel)) {
+    appendSelectOption(select, selectedModel, selectedModel);
+  }
+  select.value = selectedModel || "";
+}
+
+function orchestrationWarningText(effective) {
+  const warnings = Array.isArray(effective?.warnings) ? effective.warnings : [];
+  if (!warnings.length) return "Ready";
+  return warnings.map((warning) => `${warning.severity}: ${warning.message}`).join(" | ");
+}
+
+function roleCapabilityText(role) {
+  const required = Array.isArray(role.requiredCapabilities) ? role.requiredCapabilities : [];
+  return required.length ? required.join(", ") : "text";
+}
+
+function createOrchestrationModelRow(role) {
+  const assignment = findOrchestrationAssignment(role.id);
+  const effective = findOrchestrationEffective(role.id);
+  const providerId = assignment?.providerId || effective?.providerId || "deterministic";
+  const fallbackProviderId = assignment?.fallbackProviderId || effective?.fallbackProviderId || "deterministic";
+
+  const row = document.createElement("tr");
+  row.className = "orchestration-model-row";
+  row.dataset.role = role.id;
+
+  const roleCell = document.createElement("td");
+  const roleName = document.createElement("div");
+  roleName.className = "orchestration-model-role__name";
+  roleName.textContent = role.label || role.id;
+  const roleDesc = document.createElement("div");
+  roleDesc.className = "orchestration-model-role__desc";
+  roleDesc.textContent = role.description || "";
+  roleCell.appendChild(roleName);
+  roleCell.appendChild(roleDesc);
+  row.appendChild(roleCell);
+
+  const providerCell = document.createElement("td");
+  const providerSelect = document.createElement("select");
+  providerSelect.className = "orchestration-model-provider";
+  for (const provider of orchestrationProviderOptions()) {
+    appendSelectOption(providerSelect, provider.id, provider.label || provider.id);
+  }
+  providerSelect.value = providerId;
+  providerCell.appendChild(providerSelect);
+  row.appendChild(providerCell);
+
+  const modelCell = document.createElement("td");
+  const modelSelect = document.createElement("select");
+  modelSelect.className = "orchestration-model-model";
+  populateOrchestrationModelSelect(modelSelect, providerId, assignment?.modelId || effective?.modelId || "");
+  modelCell.appendChild(modelSelect);
+  row.appendChild(modelCell);
+
+  const fallbackCell = document.createElement("td");
+  const fallbackSelect = document.createElement("select");
+  fallbackSelect.className = "orchestration-model-fallback";
+  for (const provider of orchestrationProviderOptions()) {
+    appendSelectOption(fallbackSelect, provider.id, provider.label || provider.id);
+  }
+  fallbackSelect.value = fallbackProviderId;
+  fallbackCell.appendChild(fallbackSelect);
+  row.appendChild(fallbackCell);
+
+  const budgetCell = document.createElement("td");
+  const usd = document.createElement("input");
+  usd.type = "number";
+  usd.className = "orchestration-model-budget-usd";
+  usd.setAttribute("min", "0");
+  usd.setAttribute("step", "0.001");
+  usd.setAttribute("placeholder", "USD");
+  usd.value = assignment?.maxUsdPerCall != null ? String(assignment.maxUsdPerCall) : "";
+  const tokens = document.createElement("input");
+  tokens.type = "number";
+  tokens.className = "orchestration-model-budget-tokens";
+  tokens.setAttribute("min", "1");
+  tokens.setAttribute("step", "1");
+  tokens.setAttribute("placeholder", "tokens");
+  tokens.value = assignment?.maxTokens != null ? String(assignment.maxTokens) : "";
+  budgetCell.appendChild(usd);
+  budgetCell.appendChild(tokens);
+  row.appendChild(budgetCell);
+
+  const capsCell = document.createElement("td");
+  const caps = document.createElement("div");
+  caps.className = "orchestration-model-caps";
+  caps.textContent = roleCapabilityText(role);
+  const warnings = document.createElement("div");
+  warnings.className = (effective?.warnings || []).some((warning) => warning.severity === "blocker")
+    ? "orchestration-model-warnings is-blocked"
+    : "orchestration-model-warnings";
+  warnings.textContent = orchestrationWarningText(effective);
+  capsCell.appendChild(caps);
+  capsCell.appendChild(warnings);
+  row.appendChild(capsCell);
+
+  const actionsCell = document.createElement("td");
+  const dirty = document.createElement("span");
+  dirty.className = "orchestration-model-dirty";
+  dirty.textContent = "Unsaved";
+  dirty.hidden = true;
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "btn btn--primary btn--sm orchestration-model-save";
+  saveBtn.textContent = "Save";
+  const testBtn = document.createElement("button");
+  testBtn.type = "button";
+  testBtn.className = "btn btn--sm orchestration-model-test";
+  testBtn.textContent = "Test";
+  actionsCell.appendChild(dirty);
+  actionsCell.appendChild(saveBtn);
+  actionsCell.appendChild(testBtn);
+  row.appendChild(actionsCell);
+
+  const markDirty = () => {
+    dirty.hidden = false;
+  };
+  providerSelect.addEventListener("change", () => {
+    populateOrchestrationModelSelect(modelSelect, providerSelect.value, "");
+    markDirty();
+  });
+  for (const input of [modelSelect, fallbackSelect, usd, tokens]) {
+    input.addEventListener("change", markDirty);
+    input.addEventListener("input", markDirty);
+  }
+  saveBtn.addEventListener("click", () => void saveOrchestrationModelRow(row));
+  testBtn.addEventListener("click", () => void testOrchestrationModelRow(row));
+
+  return row;
+}
+
+function readOrchestrationModelRow(row) {
+  const role = row.dataset.role;
+  const providerId = row.querySelector(".orchestration-model-provider")?.value || "deterministic";
+  const modelId = row.querySelector(".orchestration-model-model")?.value || "";
+  const fallbackProviderId = row.querySelector(".orchestration-model-fallback")?.value || "deterministic";
+  const usdRaw = row.querySelector(".orchestration-model-budget-usd")?.value || "";
+  const tokensRaw = row.querySelector(".orchestration-model-budget-tokens")?.value || "";
+  const body = {
+    providerId,
+    enabled: providerId !== "disabled",
+    fallbackProviderId,
+  };
+  if (modelId) body.modelId = modelId;
+  if (usdRaw) body.maxUsdPerCall = Number(usdRaw);
+  if (tokensRaw) body.maxTokens = Number.parseInt(tokensRaw, 10);
+  return { role, body };
+}
+
+function renderOrchestrationModelConfig() {
+  const rows = els["orchestration-model-rows"];
+  if (!rows) return;
+  rows.innerHTML = "";
+  const emptyProviders = els["orchestration-model-empty-providers"];
+  if (emptyProviders) emptyProviders.hidden = orchestrationModelState.providers.length > 0;
+  for (const role of orchestrationModelState.roles) {
+    rows.appendChild(createOrchestrationModelRow(role));
+  }
+}
+
+async function loadOrchestrationModelConfig() {
+  setOrchestrationModelLoading(true);
+  hideOrchestrationModelError();
+  clearOrchestrationModelStatus();
+  try {
+    const data = await api("/orchestration-models/effective");
+    orchestrationModelState.roles = Array.isArray(data.roles) ? data.roles : [];
+    orchestrationModelState.providers = Array.isArray(data.providers) ? data.providers : [];
+    orchestrationModelState.assignments = Array.isArray(data.assignments) ? data.assignments : [];
+    orchestrationModelState.effective = Array.isArray(data.effective) ? data.effective : [];
+    renderOrchestrationModelConfig();
+  } catch {
+    orchestrationModelState.roles = [];
+    orchestrationModelState.providers = [];
+    orchestrationModelState.assignments = [];
+    orchestrationModelState.effective = [];
+    renderOrchestrationModelConfig();
+    showOrchestrationModelError("Orchestration model assignments could not be loaded. Chat remains available.");
+  } finally {
+    setOrchestrationModelLoading(false);
+  }
+}
+
+async function saveOrchestrationModelRow(row) {
+  const { role, body } = readOrchestrationModelRow(row);
+  if (!role) return;
+  try {
+    await api(`/orchestration-models/assignments/${encodeURIComponent(role)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+    showOrchestrationModelStatus("ok", `${role} assignment saved.`);
+    await loadOrchestrationModelConfig();
+  } catch (err) {
+    showOrchestrationModelStatus("err", `Could not save ${role}: ${err.message}`);
+  }
+}
+
+async function testOrchestrationModelRow(row) {
+  const { role, body } = readOrchestrationModelRow(row);
+  if (!role) return;
+  try {
+    const result = await api(`/orchestration-models/assignments/${encodeURIComponent(role)}/test`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const model = result.model ? ` (${result.model})` : "";
+    const network = result.networkAttempted ? "connection test sent" : "local validation only";
+    showOrchestrationModelStatus("ok", `${role} route is ready${model}; ${network}.`);
+  } catch (err) {
+    showOrchestrationModelStatus("err", `${role} test failed: ${err.message}`);
+  }
+}
+
+async function resetOrchestrationModelAssignments() {
+  try {
+    await api("/orchestration-models/assignments/reset", { method: "POST", body: JSON.stringify({}) });
+    showOrchestrationModelStatus("ok", "Reset to deterministic local defaults.");
+    await loadOrchestrationModelConfig();
+  } catch (err) {
+    showOrchestrationModelStatus("err", `Could not reset assignments: ${err.message}`);
+  }
+}
+
+function openOrchestrationModelConfig() {
+  const modal = els["orchestration-model-config-modal"];
+  if (!modal) return;
+  modal.hidden = false;
+  void loadOrchestrationModelConfig();
+}
+
+function closeOrchestrationModelConfig() {
+  const modal = els["orchestration-model-config-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindOrchestrationModelConfig() {
+  els["open-orchestration-model-config"]?.addEventListener("click", openOrchestrationModelConfig);
+  els["close-orchestration-model-config"]?.addEventListener("click", closeOrchestrationModelConfig);
+  els["orchestration-model-config-backdrop"]?.addEventListener("click", closeOrchestrationModelConfig);
+  els["orchestration-model-reset"]?.addEventListener("click", () => void resetOrchestrationModelAssignments());
+}
+
 // --- Memory provider configuration panel (Memory_Provider_Config_UI, Chunk 36) ---
 //
 // Mirrors Provider_Config_UI but talks to the Memory_Provider_API:
@@ -4887,6 +5228,7 @@ function init() {
   bindSuggestions();
   bindProviderTest();
   bindProviderConfig();
+  bindOrchestrationModelConfig();
   bindMemoryProviderConfig();
   bindModuleManager();
   bindMemoryBrowser();

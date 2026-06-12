@@ -31,6 +31,8 @@ export type LiveDirectAnswerFallback = "denied" | "provider_error" | "no_provide
 export interface LiveDirectAnswerDeps {
   /** Resolved `slm`-role provider, if any. Absent → `no_provider` fallback (Req 8.2). */
   provider?: LLMProvider;
+  /** Optional concrete model/deployment selected by the orchestration assignment router. */
+  model?: string;
   /** The run whose budget gates the call. Required to evaluate the budget preflight. */
   run: Run;
   /** Budget preflight, injectable for tests; defaults to the real {@link evaluateBudget}. */
@@ -91,7 +93,7 @@ export async function runLiveDirectAnswer(
   // deterministic fallback rather than escaping (never throws out of this function).
   let request: LLMRequest;
   try {
-    request = buildDirectAnswerRequest(input);
+    request = buildDirectAnswerRequest(input, deps.model);
   } catch {
     return fallbackResult(input, "provider_error");
   }
@@ -159,7 +161,7 @@ function fallbackResult(
  * is redacted before it reaches the prompt so no configured secret can be echoed to the provider
  * (Req 8.3); the response is requested as plain text and bounded so the answer stays short (Req 5.3).
  */
-function buildDirectAnswerRequest(input: BrainstemSynthesisInput): LLMRequest {
+function buildDirectAnswerRequest(input: BrainstemSynthesisInput, model?: string): LLMRequest {
   const intent = redactSecrets((input.contextPack.userIntentSummary ?? "").trim());
   return {
     messages: [
@@ -178,6 +180,7 @@ function buildDirectAnswerRequest(input: BrainstemSynthesisInput): LLMRequest {
       },
     ],
     modelRoute: "cheap",
+    ...(model ? { model } : {}),
     responseFormat: { type: "text" },
     task: "direct-answer",
   };

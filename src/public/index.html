@@ -155,6 +155,7 @@
             <div class="menu__popover" id="settings-menu" role="menu" aria-label="System actions" hidden>
               <button class="menu__item" id="open-setup-wizard" role="menuitem" type="button">Setup status</button>
               <button class="menu__item" id="open-provider-config" role="menuitem" type="button">Provider configuration</button>
+              <button class="menu__item" id="open-orchestration-model-config" role="menuitem" type="button">Orchestration models</button>
               <button class="menu__item" id="open-memory-provider-config" role="menuitem" type="button">Memory provider configuration</button>
               <button class="menu__item" id="open-module-manager" role="menuitem" type="button">Module manager</button>
               <button class="menu__item" id="open-memory-browser" role="menuitem" type="button">Browse memory</button>
@@ -759,6 +760,67 @@
               <div class="provider-config-result" id="provider-config-adv-result" role="status" aria-live="polite" hidden></div>
             </form>
           </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Orchestration model assignment panel (Chunk 043).
+         Assigns non-secret role -> provider/model choices. API keys remain in Provider configuration;
+         this panel stores only provider ids, model ids, budgets, and capability preferences. -->
+    <div
+      class="modal"
+      id="orchestration-model-config-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="orchestration-model-config-title"
+    >
+      <div class="modal__backdrop" id="orchestration-model-config-backdrop"></div>
+      <div class="modal__panel modal__panel--wide" role="document">
+        <div class="modal__head">
+          <h2 class="modal__title" id="orchestration-model-config-title">Orchestration models</h2>
+          <button class="btn btn--ghost btn--sm" id="close-orchestration-model-config" type="button" aria-label="Close">✕</button>
+        </div>
+
+        <div class="modal__body">
+          <p class="modal__desc">
+            Choose which configured provider/model powers each Rector role. The local deterministic
+            fallback is always available and no secret value is returned or stored in this panel.
+          </p>
+
+          <div class="provider-config-loading" id="orchestration-model-config-loading" aria-live="polite" hidden>
+            <span class="provider-test__spinner" aria-hidden="true"></span>
+            <span>Loading orchestration model assignments…</span>
+          </div>
+
+          <div class="provider-config-error" id="orchestration-model-config-error" role="alert" hidden></div>
+
+          <div class="orchestration-model-toolbar">
+            <button class="btn btn--sm" id="orchestration-model-reset" type="button">Reset to local defaults</button>
+            <span class="orchestration-model-status" id="orchestration-model-status" role="status" aria-live="polite" hidden></span>
+          </div>
+
+          <div class="orchestration-model-callout" id="orchestration-model-empty-providers" hidden>
+            No external LLM providers are configured yet. Use Provider configuration first, or keep
+            deterministic local defaults.
+          </div>
+
+          <div class="orchestration-model-table-wrap">
+            <table class="orchestration-model-table" aria-label="Role to provider/model assignments">
+              <thead>
+                <tr>
+                  <th scope="col">Role</th>
+                  <th scope="col">Provider</th>
+                  <th scope="col">Model</th>
+                  <th scope="col">Fallback</th>
+                  <th scope="col">Budget</th>
+                  <th scope="col">Capabilities</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="orchestration-model-rows"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
