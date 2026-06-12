@@ -30,6 +30,7 @@
   "scripts": {
     "dev": "tsx watch --env-file=.env src/bin/server.ts",
     "benchmark": "tsx src/bin/benchmark.ts",
+    "benchmark:performance": "tsx scripts/performance-baseline.ts",
     "build": "tsc && node scripts/fix-dist-esm-imports.js",
     "check": "tsc --noEmit",
     "test": "vitest run",

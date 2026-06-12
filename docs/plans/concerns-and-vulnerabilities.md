@@ -4,6 +4,15 @@
 
 ## Open
 
+### Local performance baseline thresholds are advisory until history exists
+
+- **Source:** Performance baseline benchmark (`scripts/performance-baseline.ts`).
+- **Severity:** Low/medium — measurement exists, but production performance readiness is not claimed from local in-process timings alone.
+- **Status:** Open (monitoring).
+- **Root cause:** After Chunks 042–046 the codebase is large (orchestration hardening, assignment stores, templates, RBAC, expanded test suite). We need repeatable evidence before refactoring for speed, but a single developer-machine run cannot define production SLOs.
+- **Plan / Mitigations:** Run `npm run benchmark:performance` locally or in CI for trend tracking. Thresholds in `docs/benchmarks/performance-baseline.md` are advisory unless `--enforce` is passed. Do not claim VPS/cloud performance readiness until multi-machine baseline history, optional cold-start subprocess profiling, and hosted smoke timings exist.
+- **Traceability:** `docs/benchmarks/performance-baseline.md`, `scripts/performance-baseline.ts`, `tests/performanceBaseline.test.ts`, `package.json` (`benchmark:performance`).
+
 > Updated during full system audit 2026-06-09 (subagents used; see audits/full-system-audit-2026-06-09.md); follow-up register cleanup 2026-06-10 after Gemini-led test fixes + neuro chunk commits (now 1241 tests green). See audit report for original matrix + evidence.
 >
 > 2026-06-12 042f stitch note: Chunks 042a-046 are merged on `work/042-046-stitch`; verification passed with `npm run build`, `npm test` (265 files / 1575 tests passed, 5 skipped), and `npm audit` (0 vulnerabilities). The table below supersedes older historical statuses where they conflict.
