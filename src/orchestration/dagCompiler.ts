@@ -109,51 +109,89 @@ export function validateCompiledDag(value: unknown): DagValidationResult {
   const errors = [...baseResult.errors];
   const parsed = DagSchema.safeParse(value);
 
-  if (!parsed.success) {
-    return { valid: false, errors };
+  if (!parsed.success) return validationResult(errors);
+
+  const context = compiledDagValidationContext(parsed.data);
+  for (const node of parsed.data.nodes) {
+    validateCompiledDagNode(node, context, errors);
   }
 
-  const dag = parsed.data;
-  const validationNodes = dag.nodes.filter((node) => node.type === "VALIDATION");
-  const edgeCoverage = new Map<string, Set<string>>();
-  const nodeOrder = new Map(dag.nodes.map((node, index) => [node.id, index]));
+  return validationResult(errors);
+}
 
-  for (const edge of dag.edges) {
-    if (!edgeCoverage.has(edge.from)) edgeCoverage.set(edge.from, new Set());
-    edgeCoverage.get(edge.from)?.add(edge.to);
-  }
+interface CompiledDagValidationContext {
+  validationNodes: DagNode[];
+  edgeCoverage: Map<string, Set<string>>;
+  nodeOrder: Map<string, number>;
+}
 
-  for (const node of dag.nodes) {
-    validateUnsafeShellDenied(node, errors);
-    validateNodePolicyMetadata(node, errors);
-
-    for (const dependencyId of node.dependsOn) {
-      if (!edgeCoverage.get(dependencyId)?.has(node.id)) {
-        errors.push(`Node ${node.id} dependency ${dependencyId} lacks an explicit edge`);
-      }
-      const dependencyOrder = nodeOrder.get(dependencyId);
-      const currentOrder = nodeOrder.get(node.id);
-      if (dependencyOrder !== undefined && currentOrder !== undefined && dependencyOrder > currentOrder) {
-        errors.push(`Node ${node.id} appears before dependency ${dependencyId}; topological order violated`);
-      }
-    }
-
-    if (isPlannerTaskNode(node)) {
-      const hasValidationCoverage = validationNodes.some(
-        (validationNode) =>
-          validationNode.dependsOn.includes(node.id) || edgeCoverage.get(node.id)?.has(validationNode.id)
-      );
-
-      if (!hasValidationCoverage) {
-        errors.push(`Task node ${node.id} lacks validation coverage`);
-      }
-    }
-  }
-
+function compiledDagValidationContext(dag: Dag): CompiledDagValidationContext {
   return {
-    valid: errors.length === 0,
-    errors,
+    validationNodes: dag.nodes.filter((node) => node.type === "VALIDATION"),
+    edgeCoverage: edgeCoverageMap(dag.edges),
+    nodeOrder: new Map(dag.nodes.map((node, index) => [node.id, index])),
   };
+}
+
+function edgeCoverageMap(edges: readonly DagEdge[]): Map<string, Set<string>> {
+  const coverage = new Map<string, Set<string>>();
+  for (const edge of edges) {
+    const outgoing = coverage.get(edge.from) ?? new Set<string>();
+    outgoing.add(edge.to);
+    coverage.set(edge.from, outgoing);
+  }
+  return coverage;
+}
+
+function validateCompiledDagNode(
+  node: DagNode,
+  context: CompiledDagValidationContext,
+  errors: string[],
+): void {
+  validateUnsafeShellDenied(node, errors);
+  validateNodePolicyMetadata(node, errors);
+  validateExplicitDependencyEdges(node, context, errors);
+  validatePlannerTaskCoverage(node, context, errors);
+}
+
+function validateExplicitDependencyEdges(
+  node: DagNode,
+  context: CompiledDagValidationContext,
+  errors: string[],
+): void {
+  for (const dependencyId of node.dependsOn) {
+    if (!context.edgeCoverage.get(dependencyId)?.has(node.id)) {
+      errors.push(`Node ${node.id} dependency ${dependencyId} lacks an explicit edge`);
+    }
+
+    const dependencyOrder = context.nodeOrder.get(dependencyId);
+    const currentOrder = context.nodeOrder.get(node.id);
+    if (dependencyOrder !== undefined && currentOrder !== undefined && dependencyOrder > currentOrder) {
+      errors.push(`Node ${node.id} appears before dependency ${dependencyId}; topological order violated`);
+    }
+  }
+}
+
+function validatePlannerTaskCoverage(
+  node: DagNode,
+  context: CompiledDagValidationContext,
+  errors: string[],
+): void {
+  if (!isPlannerTaskNode(node)) return;
+  if (hasValidationCoverage(node, context)) return;
+
+  errors.push(`Task node ${node.id} lacks validation coverage`);
+}
+
+function hasValidationCoverage(node: DagNode, context: CompiledDagValidationContext): boolean {
+  return context.validationNodes.some(
+    (validationNode) =>
+      validationNode.dependsOn.includes(node.id) || context.edgeCoverage.get(node.id)?.has(validationNode.id),
+  );
+}
+
+function validationResult(errors: string[]): DagValidationResult {
+  return { valid: errors.length === 0, errors };
 }
 
 function taskNodeMap(plan: PlannerOutput): Record<string, string> {

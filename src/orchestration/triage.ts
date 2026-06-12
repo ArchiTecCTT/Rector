@@ -437,75 +437,45 @@ export async function runLiveTriage(content: string, deps: LiveTriageDeps): Prom
 
   let totalUsage = ZERO_TRIAGE_USAGE;
   let messages = buildPrompt(content, baseline);
-  let lastFailure: { repairSummary: string; issuePaths: string[] } = {
-    repairSummary: "Triage output was not produced",
-    issuePaths: [],
-  };
+  let lastFailure = initialTriageFailure();
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const request: LLMRequest = {
-      messages,
-      modelRoute: "fast",
-      responseFormat: { type: "json_object" },
-      task: "triage",
-    };
-
-    const estimate = provider.estimateRequest(request);
-    const decision = evaluateBudget(run, buildTriagePreflightUsage(provider, estimate, run, totalUsage));
-    const ceiling = enforceMaxPerRunBudget(run, accumulatedTriageRunUsage(run, totalUsage), estimate);
-    if (decision.status !== "allowed" || ceiling.status !== "allowed") {
-      const reason = [...decision.reasons, ...ceiling.reasons].join("; ") || "budget preflight denied the triage call";
+    const request = liveTriageRequest(messages);
+    const budgetDenial = liveTriageBudgetDenial(provider, request, run, totalUsage);
+    if (budgetDenial) {
       return fallbackResult(
         baseline,
-        makeTriageBlocker("BUDGET_DENIED", `Triage call denied by budget preflight: ${reason}`),
+        makeTriageBlocker("BUDGET_DENIED", `Triage call denied by budget preflight: ${budgetDenial}`),
         totalUsage,
         provider,
         model,
         attempt - 1,
-        "budget preflight denied live triage"
+        "budget preflight denied live triage",
       );
     }
 
-    let response: LLMResponse;
-    try {
-      response = await invokeWithBudget(provider, request, run);
-    } catch (error) {
-      const rawMessage = error instanceof ProviderError || error instanceof Error ? error.message : String(error);
+    const response = await invokeLiveTriageAttempt(provider, request, run);
+    if (!response.ok) {
       return fallbackResult(
         baseline,
-        makeTriageBlocker("PROVIDER_ERROR", `Provider call failed: ${rawMessage}`),
+        makeTriageBlocker("PROVIDER_ERROR", `Provider call failed: ${response.message}`),
         totalUsage,
         provider,
         model,
         attempt,
-        "provider error during live triage"
+        "provider error during live triage",
       );
     }
 
-    totalUsage = addTriageUsage(totalUsage, response.usage);
-    const parsed = tryParseTriageJson(response.content);
-    if (parsed.ok) {
-      const validation = safeValidateLiveTriage(parsed.value, baseline);
-      if (validation.ok) {
-        return {
-          status: "ok",
-          triage: validation.triage,
-          usage: totalUsage,
-          provider: provider.metadata.id,
-          model: response.model,
-          attempts: attempt,
-        };
-      }
-      lastFailure = validation;
-    } else {
-      lastFailure = {
-        repairSummary: `Response was not valid JSON: ${parsed.error}`,
-        issuePaths: [],
-      };
+    totalUsage = addTriageUsage(totalUsage, response.value.usage);
+    const validation = validateLiveTriageContent(response.value.content, baseline);
+    if (validation.ok) {
+      return liveTriageOkResult(validation.triage, totalUsage, provider, response.value.model, attempt);
     }
 
+    lastFailure = validation.failure;
     if (attempt === 1) {
-      messages = buildRepairPrompt(content, baseline, response.content, lastFailure.repairSummary);
+      messages = buildRepairPrompt(content, baseline, response.value.content, lastFailure.repairSummary);
     }
   }
 
@@ -516,8 +486,96 @@ export async function runLiveTriage(content: string, deps: LiveTriageDeps): Prom
     provider,
     model,
     2,
-    "live triage invalid after one repair attempt"
+    "live triage invalid after one repair attempt",
   );
+}
+
+interface TriageAttemptFailure {
+  repairSummary: string;
+  issuePaths: string[];
+}
+
+type TriageContentValidation =
+  | { ok: true; triage: TriageResult }
+  | { ok: false; failure: TriageAttemptFailure };
+
+type TriageInvocationResult =
+  | { ok: true; value: LLMResponse }
+  | { ok: false; message: string };
+
+function initialTriageFailure(): TriageAttemptFailure {
+  return {
+    repairSummary: "Triage output was not produced",
+    issuePaths: [],
+  };
+}
+
+function liveTriageRequest(messages: LLMRequest["messages"]): LLMRequest {
+  return {
+    messages,
+    modelRoute: "fast",
+    responseFormat: { type: "json_object" },
+    task: "triage",
+  };
+}
+
+function liveTriageBudgetDenial(
+  provider: LLMProvider,
+  request: LLMRequest,
+  run: Run,
+  totalUsage: LLMUsage,
+): string | undefined {
+  const estimate = provider.estimateRequest(request);
+  const decision = evaluateBudget(run, buildTriagePreflightUsage(provider, estimate, run, totalUsage));
+  const ceiling = enforceMaxPerRunBudget(run, accumulatedTriageRunUsage(run, totalUsage), estimate);
+  if (decision.status === "allowed" && ceiling.status === "allowed") return undefined;
+
+  return [...decision.reasons, ...ceiling.reasons].join("; ") || "budget preflight denied the triage call";
+}
+
+async function invokeLiveTriageAttempt(
+  provider: LLMProvider,
+  request: LLMRequest,
+  run: Run,
+): Promise<TriageInvocationResult> {
+  try {
+    return { ok: true, value: await invokeWithBudget(provider, request, run) };
+  } catch (error) {
+    return { ok: false, message: error instanceof ProviderError || error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function validateLiveTriageContent(content: string, baseline: TriageResult): TriageContentValidation {
+  const parsed = tryParseTriageJson(content);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      failure: {
+        repairSummary: `Response was not valid JSON: ${parsed.error}`,
+        issuePaths: [],
+      },
+    };
+  }
+
+  const validation = safeValidateLiveTriage(parsed.value, baseline);
+  return validation.ok ? validation : { ok: false, failure: validation };
+}
+
+function liveTriageOkResult(
+  triage: TriageResult,
+  usage: LLMUsage,
+  provider: LLMProvider,
+  model: string,
+  attempts: number,
+): LiveTriageResult {
+  return {
+    status: "ok",
+    triage,
+    usage,
+    provider: provider.metadata.id,
+    model,
+    attempts,
+  };
 }
 
 export function buildTriagePrompt(content: string, baseline: TriageResult): LLMRequest["messages"] {

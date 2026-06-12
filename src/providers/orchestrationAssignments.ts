@@ -7,7 +7,7 @@ import { redactString } from "../security/redaction";
 import { FakeLLMProvider, type LLMProvider, type ModelRoute, type ModelRouter, type ModelRouterInput, type ModelSelection } from "./llm";
 import type { ProviderConfigRecord, ProviderConfigState } from "./config";
 import type { ProviderConfigStore } from "./configStore";
-import { resolveTestProvider } from "./configBridge";
+import { resolveTestProvider, type ProbeTarget } from "./configBridge";
 import type { SecretStore } from "../security/secretStore";
 
 const NonEmptyStringSchema = z.string().min(1);
@@ -1087,43 +1087,84 @@ export async function buildConfiguredAssignmentAwareRouter(
     options.assignmentStore.getState(),
     options.providerConfigStore.getState(),
   ]);
-  const selectedAssignments = ORCHESTRATION_ROLES
-    .map((role) => selectAssignmentForResolution(assignmentState.assignments, role, options.scope)?.assignment)
-    .filter((assignment): assignment is OrchestrationModelAssignment => assignment !== undefined);
-  const providersByRole: Partial<Record<OrchestrationRole, LLMProvider>> = {};
-  const fallbackProvidersByRole: Partial<Record<OrchestrationRole, LLMProvider>> = {};
-
-  await Promise.all(selectedAssignments.map(async (assignment) => {
-    if (assignment.providerId !== "deterministic" && assignment.providerId !== "disabled") {
-      const provider = await resolveTestProvider(
-        assignment.providerId,
-        options.providerConfigStore,
-        options.secrets,
-        { enableNetwork: options.enableNetwork, fetchImpl: options.fetchImpl },
-        assignment.modelId ? { model: assignment.modelId, deployment: assignment.modelId } : {},
-      );
-      if (provider) providersByRole[assignment.role] = provider;
-    }
-    if (assignment.fallbackProviderId && assignment.fallbackProviderId !== "deterministic" && assignment.fallbackProviderId !== "disabled") {
-      const provider = await resolveTestProvider(
-        assignment.fallbackProviderId,
-        options.providerConfigStore,
-        options.secrets,
-        { enableNetwork: options.enableNetwork, fetchImpl: options.fetchImpl },
-        assignment.fallbackModelId ? { model: assignment.fallbackModelId, deployment: assignment.fallbackModelId } : {},
-      );
-      if (provider) fallbackProvidersByRole[assignment.role] = provider;
-    }
-  }));
+  const selectedAssignments = selectedAssignmentsForRouter(assignmentState.assignments, options.scope);
+  const resolvedProviders = await resolveAssignmentRouterProviders(selectedAssignments, options);
 
   return buildAssignmentAwareModelRouter({
     baseRouter: options.baseRouter,
     assignments: assignmentState.assignments,
     providerState,
     scope: options.scope,
-    providersByRole,
-    fallbackProvidersByRole,
+    ...resolvedProviders,
   });
+}
+
+type ResolvedAssignmentRouterProviders = Pick<
+  BuildAssignmentAwareRouterInput,
+  "providersByRole" | "fallbackProvidersByRole"
+>;
+
+type AssignmentProviderSlot = "primary" | "fallback";
+
+function selectedAssignmentsForRouter(
+  assignments: OrchestrationModelAssignment[],
+  scope?: OrchestrationAssignmentScope,
+): OrchestrationModelAssignment[] {
+  return ORCHESTRATION_ROLES
+    .map((role) => selectAssignmentForResolution(assignments, role, scope)?.assignment)
+    .filter((assignment): assignment is OrchestrationModelAssignment => assignment !== undefined);
+}
+
+async function resolveAssignmentRouterProviders(
+  assignments: OrchestrationModelAssignment[],
+  options: BuildConfiguredAssignmentAwareRouterOptions,
+): Promise<ResolvedAssignmentRouterProviders> {
+  const providersByRole: Partial<Record<OrchestrationRole, LLMProvider>> = {};
+  const fallbackProvidersByRole: Partial<Record<OrchestrationRole, LLMProvider>> = {};
+
+  await Promise.all(
+    assignments.flatMap((assignment) => [
+      resolveAssignmentProviderSlot(assignment, "primary", options, providersByRole),
+      resolveAssignmentProviderSlot(assignment, "fallback", options, fallbackProvidersByRole),
+    ]),
+  );
+
+  return { providersByRole, fallbackProvidersByRole };
+}
+
+async function resolveAssignmentProviderSlot(
+  assignment: OrchestrationModelAssignment,
+  slot: AssignmentProviderSlot,
+  options: BuildConfiguredAssignmentAwareRouterOptions,
+  targetByRole: Partial<Record<OrchestrationRole, LLMProvider>>,
+): Promise<void> {
+  const providerId = assignmentProviderIdForSlot(assignment, slot);
+  if (!isConfiguredProviderId(providerId)) return;
+
+  const provider = await resolveTestProvider(
+    providerId,
+    options.providerConfigStore,
+    options.secrets,
+    { enableNetwork: options.enableNetwork, fetchImpl: options.fetchImpl },
+    probeTargetForAssignment(assignment, slot),
+  );
+  if (provider) targetByRole[assignment.role] = provider;
+}
+
+function assignmentProviderIdForSlot(
+  assignment: OrchestrationModelAssignment,
+  slot: AssignmentProviderSlot,
+): string | undefined {
+  return slot === "primary" ? assignment.providerId : assignment.fallbackProviderId;
+}
+
+function probeTargetForAssignment(assignment: OrchestrationModelAssignment, slot: AssignmentProviderSlot): ProbeTarget {
+  const modelId = slot === "primary" ? assignment.modelId : assignment.fallbackModelId;
+  return modelId ? { model: modelId, deployment: modelId } : {};
+}
+
+function isConfiguredProviderId(providerId: string | undefined): providerId is string {
+  return providerId !== undefined && providerId !== "deterministic" && providerId !== "disabled";
 }
 
 export interface OrchestrationModelRouter {
