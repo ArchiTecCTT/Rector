@@ -137,6 +137,25 @@ describe("Memory_Assignment_API", () => {
     expect(tested.data.networkAttempted).toBe(false);
   });
 
+  it("tests an unsaved selected provider without persisting the assignment", async () => {
+    await api(harness.base, "/api/memory-providers", {
+      method: "POST",
+      body: JSON.stringify({ id: "local-sqlite-mem:main", kind: "local-sqlite-mem", label: "Local SQLite", config: {} }),
+    });
+
+    const tested = await api(harness.base, "/api/memory-assignments/episodicMemory/test", {
+      method: "POST",
+      body: JSON.stringify({ providerRecordId: "local-sqlite-mem:main" }),
+    });
+    expect(tested.status).toBe(200);
+    expect(tested.data.ok).toBe(true);
+    expect(tested.data.effective.providerRecordId).toBe("local-sqlite-mem:main");
+    expect(tested.data.effective.provider.kind).toBe("local-sqlite-mem");
+
+    const listed = await api(harness.base, "/api/memory-assignments");
+    expect(listed.data.assignments).toEqual([]);
+  });
+
   it("does not return submitted provider secrets through assignment endpoints", async () => {
     const secret = "sk-MEMORY-ASSIGNMENT-SECRET-1234567890";
     await api(harness.base, "/api/memory-providers", {

@@ -153,8 +153,14 @@ const liveRun = {
 // --- DOM refs ---
 const els = {};
 
-function cacheEls() {
-  const ids = [
+function cacheElementIds(ids) {
+  for (const id of ids) {
+    els[id] = document.getElementById(id);
+  }
+}
+
+function cacheShellEls() {
+  cacheElementIds([
     "conversation-list",
     "conversation-empty",
     "new-conversation",
@@ -162,21 +168,30 @@ function cacheEls() {
     "chat-title",
     "run-status",
     "live-indicator",
-    "toggle-trace",
-    "close-trace",
     "messages",
     "empty-state",
     "suggestions",
     "composer",
     "composer-input",
     "composer-send",
-    "note-capture-form",
-    "note-capture-input",
-    "note-capture-save",
-    "note-capture-status",
-    "open-note-capture",
     "deep-planning-wrap",
     "deep-planning-toggle",
+    "open-command-palette",
+    "command-palette",
+    "command-palette-backdrop",
+    "command-palette-input",
+    "command-palette-list",
+    "open-settings-menu",
+    "settings-menu",
+    "settings-menu-wrap",
+    "settings-approval-dot",
+  ]);
+}
+
+function cacheTraceAndRunEls() {
+  cacheElementIds([
+    "toggle-trace",
+    "close-trace",
     "trace-drawer",
     "trace-empty",
     "trace-body",
@@ -200,6 +215,41 @@ function cacheEls() {
     "decision-section",
     "decision-card",
     "events",
+  ]);
+}
+
+function cacheNoteAndApprovalEls() {
+  cacheElementIds([
+    "note-capture-form",
+    "note-capture-input",
+    "note-capture-save",
+    "note-capture-status",
+    "open-note-capture",
+    "open-approval",
+    "approval-badge",
+    "close-approval",
+    "approval-modal",
+    "approval-backdrop",
+    "approval-empty",
+    "approval-detail",
+    "approval-run-id",
+    "approval-operation-id",
+    "approval-target-path",
+    "approval-command-block",
+    "approval-command",
+    "approval-risky",
+    "approval-diff",
+    "approval-decided-by",
+    "approval-result",
+    "approval-foot",
+    "approval-loading",
+    "approval-deny",
+    "approval-approve",
+  ]);
+}
+
+function cacheProviderConfigEls() {
+  cacheElementIds([
     "open-provider-test",
     "close-provider-test",
     "provider-test-modal",
@@ -234,6 +284,11 @@ function cacheEls() {
     "orchestration-model-status",
     "orchestration-model-empty-providers",
     "orchestration-model-rows",
+  ]);
+}
+
+function cacheMemoryAndModuleEls() {
+  cacheElementIds([
     "open-memory-provider-config",
     "close-memory-provider-config",
     "memory-provider-config-modal",
@@ -260,6 +315,23 @@ function cacheEls() {
     "module-manager-loading",
     "module-manager-error",
     "module-manager-list",
+    "open-memory-browser",
+    "close-memory-browser",
+    "memory-browser-modal",
+    "memory-browser-backdrop",
+    "memory-browser-loading",
+    "memory-browser-error",
+    "memory-browser-empty",
+    "memory-browser-list",
+    "memory-browser-provider",
+    "memory-browser-filter-all",
+    "memory-browser-filter-episodic",
+    "memory-browser-filter-core",
+  ]);
+}
+
+function cacheTemplateAndSetupEls() {
+  cacheElementIds([
     "open-template-manager",
     "close-template-manager",
     "template-manager-modal",
@@ -281,18 +353,6 @@ function cacheEls() {
     "template-manager-export",
     "template-manager-save-current",
     "template-manager-reset-local-free",
-    "open-memory-browser",
-    "close-memory-browser",
-    "memory-browser-modal",
-    "memory-browser-backdrop",
-    "memory-browser-loading",
-    "memory-browser-error",
-    "memory-browser-empty",
-    "memory-browser-list",
-    "memory-browser-provider",
-    "memory-browser-filter-all",
-    "memory-browser-filter-episodic",
-    "memory-browser-filter-core",
     "open-setup-wizard",
     "close-setup-wizard",
     "setup-wizard-modal",
@@ -313,26 +373,11 @@ function cacheEls() {
     "safety-destructive",
     "safety-allowlist",
     "safety-approval",
-    "open-approval",
-    "approval-badge",
-    "close-approval",
-    "approval-modal",
-    "approval-backdrop",
-    "approval-empty",
-    "approval-detail",
-    "approval-run-id",
-    "approval-operation-id",
-    "approval-target-path",
-    "approval-command-block",
-    "approval-command",
-    "approval-risky",
-    "approval-diff",
-    "approval-decided-by",
-    "approval-result",
-    "approval-foot",
-    "approval-loading",
-    "approval-deny",
-    "approval-approve",
+  ]);
+}
+
+function cacheAppearanceEls() {
+  cacheElementIds([
     "open-appearance",
     "close-appearance",
     "appearance-modal",
@@ -344,20 +389,17 @@ function cacheEls() {
     "appearance-fontscale",
     "appearance-reduced-motion",
     "appearance-reset",
-    // Top-bar action launchers + overlay surfaces (settings menu + command palette).
-    "open-command-palette",
-    "command-palette",
-    "command-palette-backdrop",
-    "command-palette-input",
-    "command-palette-list",
-    "open-settings-menu",
-    "settings-menu",
-    "settings-menu-wrap",
-    "settings-approval-dot",
-  ];
-  for (const id of ids) {
-    els[id] = document.getElementById(id);
-  }
+  ]);
+}
+
+function cacheEls() {
+  cacheShellEls();
+  cacheTraceAndRunEls();
+  cacheNoteAndApprovalEls();
+  cacheProviderConfigEls();
+  cacheMemoryAndModuleEls();
+  cacheTemplateAndSetupEls();
+  cacheAppearanceEls();
 }
 
 // --- API helper ---
@@ -3123,11 +3165,14 @@ async function saveMemoryAssignment(role, providerRecordId, resultBox) {
   }
 }
 
-async function testMemoryAssignment(role, resultBox, button) {
+async function testMemoryAssignment(role, providerRecordId, resultBox, button) {
   if (button) button.disabled = true;
   clearMemoryProviderConfigResult(resultBox);
   try {
-    const data = await api(`/memory-assignments/${encodeURIComponent(role)}/test`, { method: "POST" });
+    const data = await api(`/memory-assignments/${encodeURIComponent(role)}/test`, {
+      method: "POST",
+      body: JSON.stringify({ providerRecordId }),
+    });
     if (data.ok) {
       showMemoryProviderConfigResult(resultBox, "ok", `${role} memory role is ready.`);
     } else {
@@ -3141,9 +3186,12 @@ async function testMemoryAssignment(role, resultBox, button) {
   }
 }
 
-async function previewMemoryAssignmentMigration(role, resultBox) {
+async function previewMemoryAssignmentMigration(role, targetProviderRecordId, resultBox) {
   try {
-    const data = await api(`/memory-assignments/${encodeURIComponent(role)}/migrate/plan`, { method: "POST" });
+    const data = await api(`/memory-assignments/${encodeURIComponent(role)}/migrate/plan`, {
+      method: "POST",
+      body: JSON.stringify({ targetProviderRecordId }),
+    });
     const steps = Array.isArray(data.steps) ? data.steps.length : 0;
     showMemoryProviderConfigResult(
       resultBox,
@@ -3225,12 +3273,12 @@ function createMemoryAssignmentRow(roleDef) {
   testBtn.type = "button";
   testBtn.className = "btn btn--sm memory-assignment-test";
   testBtn.textContent = "Test";
-  testBtn.addEventListener("click", () => void testMemoryAssignment(role, resultBox, testBtn));
+  testBtn.addEventListener("click", () => void testMemoryAssignment(role, select.value, resultBox, testBtn));
   const migrateBtn = document.createElement("button");
   migrateBtn.type = "button";
   migrateBtn.className = "btn btn--ghost btn--sm memory-assignment-migrate";
   migrateBtn.textContent = "Migration plan";
-  migrateBtn.addEventListener("click", () => void previewMemoryAssignmentMigration(role, resultBox));
+  migrateBtn.addEventListener("click", () => void previewMemoryAssignmentMigration(role, select.value, resultBox));
   actions.appendChild(saveBtn);
   actions.appendChild(testBtn);
   actions.appendChild(migrateBtn);
@@ -3593,7 +3641,19 @@ async function loadMemoryProviderConfig() {
       typeof data.activeMemoryProviderId === "string" ? data.activeMemoryProviderId : null;
     renderMemoryProviderConfig();
     renderMemoryProviderAddFields();
-    await loadMemoryAssignments();
+    try {
+      await loadMemoryAssignments();
+    } catch (err) {
+      memoryAssignmentState.roles = [];
+      memoryAssignmentState.assignments = [];
+      memoryAssignmentState.effective = [];
+      renderMemoryAssignmentMatrix();
+      showMemoryProviderConfigResult(
+        els["memory-assignment-result"],
+        "err",
+        `Memory assignments could not be loaded: ${err.message}`,
+      );
+    }
   } catch {
     memoryProviderConfigState.providers = [];
     memoryProviderConfigState.activeMemoryProviderId = null;
@@ -4040,11 +4100,12 @@ async function applyImportedTemplate() {
   clearTemplateManagerError();
   clearTemplateManagerResult();
   try {
-    const template = templateManagerState.importTemplate || parseTemplateImportText();
+    const template = parseTemplateImportText();
     const result = await api("/templates/import/apply", {
       method: "POST",
       body: JSON.stringify({ template, ...selectedTemplateApplyOptions() }),
     });
+    templateManagerState.importTemplate = result.template || null;
     renderTemplatePreview(result.preview);
     showTemplateManagerResult("ok", `Imported template applied: ${result.template?.name || "template"}.`);
     await loadTemplates();
