@@ -1,9 +1,10 @@
-import { redactString, redactStringOrSuppress } from "../security/redaction";
+import { redactStringOrSuppress } from "../security/redaction";
 import { MemoryEntrySchema, type MemoryEntry, type MemoryLayer } from "../store/schemas";
+import { isMemoryLayer, sanitizeMemoryContent, sanitizeMemoryMetadata } from "./entryUtils";
 
 /** Redact secrets from memory content before persistence or egress. */
 export function redactMemoryContent(content: string): string {
-  return redactString(content);
+  return sanitizeMemoryContent(content);
 }
 
 /** Map a provider-native record into a validated {@link MemoryEntry}. */
@@ -29,9 +30,9 @@ export function mapToMemoryEntry(
     timestamp: ts,
     lastMentioned: raw.lastMentioned ?? ts,
     accessCount: raw.accessCount ?? 0,
-    tags: raw.tags ?? [],
-    source: raw.source,
-    metadata: raw.metadata ?? {},
+    tags: (raw.tags ?? []).map((tag) => sanitizeMemoryContent(tag)),
+    source: raw.source === undefined ? undefined : sanitizeMemoryContent(raw.source),
+    metadata: sanitizeMemoryMetadata(raw.metadata ?? {}),
   });
 }
 
@@ -62,12 +63,16 @@ export function memoryEntryToMetadata(entry: {
     timestamp: entry.timestamp,
     lastMentioned: entry.lastMentioned,
     accessCount: entry.accessCount,
-    tags: entry.tags.join(","),
+    tags: entry.tags.map((tag) => sanitizeMemoryContent(tag)).join(","),
   };
-  if (entry.source) flat.source = entry.source;
-  for (const [key, value] of Object.entries(entry.metadata)) {
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      flat[`meta_${key}`] = value;
+  if (entry.source) flat.source = sanitizeMemoryContent(entry.source);
+  const redactedMetadata = sanitizeMemoryMetadata(entry.metadata);
+  for (const [key, value] of Object.entries(redactedMetadata)) {
+    const safeKey = sanitizeMemoryContent(key);
+    if (typeof value === "string") {
+      flat[`meta_${safeKey}`] = sanitizeMemoryContent(value);
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      flat[`meta_${safeKey}`] = value;
     }
   }
   return flat;
@@ -86,10 +91,15 @@ export function metadataToMemoryFields(
   source?: string;
   extraMetadata: Record<string, unknown>;
 } {
-  const layer = (metadata?.layer as MemoryLayer | undefined) ?? "episodic";
+  const layer = isMemoryLayer(metadata?.layer) ? metadata.layer : "episodic";
   const timestamp = typeof metadata?.timestamp === "string" ? metadata.timestamp : fallbackNow;
   const lastMentioned = typeof metadata?.lastMentioned === "string" ? metadata.lastMentioned : timestamp;
-  const accessCount = typeof metadata?.accessCount === "number" ? metadata.accessCount : 0;
+  const accessCount =
+    typeof metadata?.accessCount === "number"
+      ? metadata.accessCount
+      : typeof metadata?.accessCount === "string" && Number.isFinite(Number(metadata.accessCount))
+        ? Number(metadata.accessCount)
+        : 0;
   const tags =
     typeof metadata?.tags === "string"
       ? metadata.tags.split(",").filter((t) => t.length > 0)
@@ -101,7 +111,7 @@ export function metadataToMemoryFields(
   if (metadata) {
     for (const [key, value] of Object.entries(metadata)) {
       if (key.startsWith("meta_")) {
-        extraMetadata[key.slice(5)] = value;
+        extraMetadata[key.slice(5)] = typeof value === "string" ? sanitizeMemoryContent(value) : value;
       }
     }
   }

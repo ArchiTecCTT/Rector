@@ -287,7 +287,7 @@ async function verifyStartupTables(store: RectorStore): Promise<void> {
  * The boot-time Startup_Migration step (Req 8.4, 8.8).
  *
  * Constructs the configured {@link RectorStore} and, for the relational paths,
- * provisions the five entity tables (the {@link SqlRectorStore} constructor runs
+ * provisions the six entity tables (the {@link SqlRectorStore} constructor runs
  * idempotent `CREATE TABLE IF NOT EXISTS` DDL) and then verifies each of the
  * {@link STARTUP_MIGRATION_TABLES} exists and is queryable — all **before** the
  * server serves any request. The combined connect + provision work is raced
