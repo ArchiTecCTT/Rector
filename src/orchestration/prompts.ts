@@ -78,8 +78,12 @@ export const PLANNER_JSON_CONTRACT = `Output a JSON object with this exact shape
 }
 
 Hard invariants (the control plane rejects any plan that violates these):
+- Every task "id" must be unique and stable.
 - Every "dependencies[].from" and "dependencies[].to" must reference an existing task "id".
 - Every task's "dependencies" entry must reference an existing task "id".
+- Every approval gate "taskIds" entry must reference an existing task "id".
+- Every task must carry at least one concrete validation check.
+- Every task with "risk" of "high"/"destructive" must set "approvalRequired": true.
 - If ANY task has "approvalRequired": true or "risk" of "high"/"destructive", OR the top-level
   "riskLevel" is "high"/"destructive", then every such unsafe task must be covered by a required
   approval gate (a gate with "required": true whose "taskIds" include the task), or there must be a

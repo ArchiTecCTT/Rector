@@ -3,7 +3,7 @@ import { DagSchema, type Dag, type DagEdge, type DagNode, type DagValidationResu
 import { CrucibleDecisionSchema, type CrucibleDecision } from "./crucible";
 import { PlannerOutputSchema, type PlannerOutput, type PlannerRiskLevel, type PlannerTask } from "./planner";
 
-const COMPILER_VERSION = "0.1.0-alpha.chunk-12";
+const COMPILER_VERSION = "0.2.0-chunk-042a";
 const UNSAFE_SHELL_PERMISSION = "unsafe.shell";
 const DENIED_TOOL_PERMISSIONS = [UNSAFE_SHELL_PERMISSION, "shell", "shell.command"] as const;
 const SAFE_FAKE_PERMISSION = "fake.local";
@@ -116,6 +116,7 @@ export function validateCompiledDag(value: unknown): DagValidationResult {
   const dag = parsed.data;
   const validationNodes = dag.nodes.filter((node) => node.type === "VALIDATION");
   const edgeCoverage = new Map<string, Set<string>>();
+  const nodeOrder = new Map(dag.nodes.map((node, index) => [node.id, index]));
 
   for (const edge of dag.edges) {
     if (!edgeCoverage.has(edge.from)) edgeCoverage.set(edge.from, new Set());
@@ -124,6 +125,18 @@ export function validateCompiledDag(value: unknown): DagValidationResult {
 
   for (const node of dag.nodes) {
     validateUnsafeShellDenied(node, errors);
+    validateNodePolicyMetadata(node, errors);
+
+    for (const dependencyId of node.dependsOn) {
+      if (!edgeCoverage.get(dependencyId)?.has(node.id)) {
+        errors.push(`Node ${node.id} dependency ${dependencyId} lacks an explicit edge`);
+      }
+      const dependencyOrder = nodeOrder.get(dependencyId);
+      const currentOrder = nodeOrder.get(node.id);
+      if (dependencyOrder !== undefined && currentOrder !== undefined && dependencyOrder > currentOrder) {
+        errors.push(`Node ${node.id} appears before dependency ${dependencyId}; topological order violated`);
+      }
+    }
 
     if (isPlannerTaskNode(node)) {
       const hasValidationCoverage = validationNodes.some(
@@ -230,6 +243,14 @@ function taskDagNode(task: PlannerTask, id: string, dependsOn: string[]): DagNod
       risk: task.risk,
       approvalRequired: task.approvalRequired,
       toolPolicy: safeToolPolicy(),
+      capabilityPolicy: capabilityPolicyFor(type, task),
+      timeoutPolicy: { timeoutMs: timeoutForRisk(task.risk), retryPolicy: retryPolicyFor(task.risk) },
+      rollbackHint: rollbackHintFor(task),
+      validationContract: {
+        required: true,
+        checks: task.validation,
+        expectedArtifacts: task.expectedArtifacts,
+      },
     },
   };
 }
@@ -255,6 +276,13 @@ function validationDagNode(task: PlannerTask, id: string, taskNodeId: string): D
       plannerTaskId: task.id,
       targetNodeId: taskNodeId,
       toolPolicy: safeToolPolicy(),
+      validationContract: {
+        required: true,
+        targetNodeId: taskNodeId,
+        checks: task.validation,
+        expectedArtifacts: task.expectedArtifacts,
+      },
+      timeoutPolicy: { timeoutMs: 15_000, retryPolicy: { maxAttempts: 1, backoffMs: 0 } },
     },
   };
 }
@@ -276,6 +304,26 @@ function toolPermissionsFor(type: DagNode["type"]): string[] {
     default:
       return [SAFE_FAKE_PERMISSION];
   }
+}
+
+function capabilityPolicyFor(type: DagNode["type"], task: PlannerTask): Record<string, unknown> {
+  return {
+    default: "deny",
+    nodeType: type,
+    plannerTaskId: task.id,
+    allowFileWrite: type === "FILE_OPERATION" && task.approvalRequired === false,
+    allowProposedPatch: type === "FILE_OPERATION",
+    allowShell: false,
+    approvalRequired: task.approvalRequired,
+    risk: task.risk,
+  };
+}
+
+function rollbackHintFor(task: PlannerTask): string | undefined {
+  if (task.risk === "high" || task.risk === "destructive" || task.approvalRequired) {
+    return `Capture pre-change artifact handles and require explicit cleanup/rollback notes for planner task ${task.id}.`;
+  }
+  return undefined;
 }
 
 function retryPolicyFor(risk: PlannerRiskLevel): DagNode["retryPolicy"] {
@@ -340,6 +388,46 @@ function validateUnsafeShellDenied(node: DagNode, errors: string[]): void {
 
   if (!denied.includes(UNSAFE_SHELL_PERMISSION)) {
     errors.push(`Node ${node.id} must explicitly deny unsafe shell permission by default`);
+  }
+}
+
+function validateNodePolicyMetadata(node: DagNode, errors: string[]): void {
+  const metadata = recordFrom(node.metadata);
+  if (!metadata) {
+    errors.push(`Node ${node.id} missing policy metadata`);
+    return;
+  }
+
+  const timeoutPolicy = recordFrom(metadata.timeoutPolicy);
+  if (!timeoutPolicy || typeof timeoutPolicy.timeoutMs !== "number" || timeoutPolicy.timeoutMs <= 0) {
+    errors.push(`Node ${node.id} missing executable timeout policy`);
+  }
+
+  if (node.type === "VALIDATION") {
+    const contract = recordFrom(metadata.validationContract);
+    const checks = Array.isArray(contract?.checks) ? contract.checks : [];
+    if (!contract || contract.required !== true || checks.length === 0) {
+      errors.push(`Validation node ${node.id} missing executable validation contract`);
+    }
+  }
+
+  if (isPlannerTaskNode(node)) {
+    const contract = recordFrom(metadata.validationContract);
+    const checks = Array.isArray(contract?.checks) ? contract.checks : [];
+    if (!contract || contract.required !== true || checks.length === 0) {
+      errors.push(`Task node ${node.id} missing validation contract metadata`);
+    }
+
+    const risk = metadata.risk;
+    const approvalRequired = metadata.approvalRequired === true;
+    if ((risk === "high" || risk === "destructive" || approvalRequired) && typeof metadata.rollbackHint !== "string") {
+      errors.push(`Risky task node ${node.id} missing rollback/cleanup hint`);
+    }
+
+    const capabilityPolicy = recordFrom(metadata.capabilityPolicy);
+    if (!capabilityPolicy || capabilityPolicy.default !== "deny" || capabilityPolicy.allowShell !== false) {
+      errors.push(`Task node ${node.id} missing default-deny capability policy`);
+    }
   }
 }
 

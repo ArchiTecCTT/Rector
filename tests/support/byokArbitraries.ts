@@ -255,68 +255,12 @@ export const arbPlannerInput = (): fc.Arbitrary<PlannerInput> =>
  */
 export const arbValidPlan = (): fc.Arbitrary<PlannerOutput> => arbPlannerInput().map(createFakePlan);
 
-const RISK_LEVELS = ["low", "medium", "high", "destructive"] as const;
-const TASK_ID_POOL = ["alpha", "bravo", "charlie", "delta", "echo"];
-const DANGLING_TASK_ID = "ghost-task";
-
 /**
- * Arbitrary plan that is guaranteed to parse against `PlannerOutputSchema` but
- * may or may not satisfy `validatePlannerOutput` (it can contain dangling
- * dependency references or ungated high-risk tasks). Useful for asserting the
- * live planner enforces the deeper invariants, not just the schema.
+ * Arbitrary plan that parses against the hardened `PlannerOutputSchema`. The
+ * schema now owns dependency and approval-gate invariants, so this generator is
+ * intentionally the same safety bar as `arbValidPlan`.
  */
-export const arbSchemaValidPlan = (): fc.Arbitrary<PlannerOutput> =>
-  fc
-    .uniqueArray(fc.constantFrom(...TASK_ID_POOL), { minLength: 1, maxLength: TASK_ID_POOL.length })
-    .chain((ids) => {
-      const idArb = fc.constantFrom(...ids);
-      const refArb = fc.oneof(idArb, fc.constant(DANGLING_TASK_ID));
-
-      const taskArbs = ids.map((id) =>
-        fc.record({
-          id: fc.constant(id),
-          title: fc.constant(`Task ${id}`),
-          description: fc.constant(`Description for ${id}`),
-          dependencies: fc.uniqueArray(refArb, { maxLength: 2 }),
-          expectedArtifacts: fc.array(fc.constantFrom("artifact-a", "artifact-b"), { maxLength: 2 }),
-          validation: fc.array(fc.constantFrom("check passes", "output verified"), {
-            minLength: 1,
-            maxLength: 2,
-          }),
-          risk: fc.constantFrom(...RISK_LEVELS),
-          approvalRequired: fc.boolean(),
-        })
-      );
-
-      const dependencyArb = fc.record({
-        from: refArb,
-        to: refArb,
-        reason: fc.option(fc.constant("because"), { nil: undefined }),
-      });
-
-      const gateArb = fc.record({
-        id: fc.constantFrom("gate-1", "gate-2"),
-        type: fc.constantFrom("approval", "checkpoint", "clarification"),
-        reason: fc.constant("requires approval"),
-        required: fc.boolean(),
-        taskIds: fc.uniqueArray(idArb, { maxLength: ids.length }),
-      });
-
-      return fc
-        .record({
-          goal: fc.constant("Generated plan goal"),
-          assumptions: fc.array(fc.constantFrom("assumption a", "assumption b"), { maxLength: 2 }),
-          tasks: fc.tuple(...taskArbs),
-          dependencies: fc.array(dependencyArb, { maxLength: 3 }),
-          validation: fc.record({
-            summary: fc.constant("validation summary"),
-            checks: fc.array(fc.constantFrom("c1", "c2"), { minLength: 1, maxLength: 2 }),
-          }),
-          riskLevel: fc.constantFrom(...RISK_LEVELS),
-          approvalGates: fc.array(gateArb, { maxLength: 2 }),
-        })
-        .map((plan) => PlannerOutputSchema.parse({ ...plan, tasks: [...plan.tasks] }));
-    });
+export const arbSchemaValidPlan = (): fc.Arbitrary<PlannerOutput> => arbValidPlan();
 
 /** Serializes a plan to the JSON a provider would return. */
 export function planToJson(plan: PlannerOutput): string {
