@@ -436,8 +436,10 @@ export interface LivePlannerResult {
   provider: string;
   model: string;
   attempts: number;
-  /** MCTS / deep-planning candidate goals explored before selection (Chunk 30). */
+  /** Bounded deep-planning candidate trace lines explored before selection (Chunk 042c). */
   pathsExplored?: string[];
+  /** Structured deep-planning trace for observability; provider-free and redacted by callers before persistence. */
+  deepPlanningTrace?: unknown[];
 }
 
 /** Dependencies for {@link runLivePlanner}. The provider is mocked in tests. */

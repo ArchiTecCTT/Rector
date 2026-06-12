@@ -1,7 +1,7 @@
 import type { ContextPack } from "../../orchestration/contextBuilder";
 import { runDeepPlanner } from "../../orchestration/deepPlanner";
 import { runLivePlanner, type LivePlannerResult } from "../../orchestration/planner";
-import { decomposeIntoTasks } from "../../orchestration/taskDecomposer";
+import { decomposeIntoTasks, type SubGoalGraph } from "../../orchestration/taskDecomposer";
 import type { TriageResult } from "../../orchestration/triage";
 import type { ModelRouter, ModelSelection } from "../../providers/llm";
 import type { Run } from "../../store/schemas";
@@ -16,7 +16,7 @@ export const neuroPlanningManifest: ModuleManifest = {
   name: "Neuro Planning",
   version: "0.2.0",
   apiVersion: PUBLIC_MODULE_API_VERSION,
-  description: "Deep planning (MCTS) and task decomposition (Chunks 30, 32).",
+  description: "Bounded multi-candidate planning and dependency-aware task decomposition (Chunks 30, 32, 042c).",
   tier: "builtin",
   hooks: ["onExternalRunPhase"],
   capabilities: [],
@@ -37,11 +37,13 @@ export interface PlanningPhaseInput {
 
 export interface PlanningPhasePrep {
   subGoals: string[];
+  subGoalGraph?: SubGoalGraph;
   plannerContextPack: ContextPack;
 }
 
 export function preparePlanningPhase(input: PlanningPhaseInput): PlanningPhasePrep {
   let subGoals: string[] = [];
+  let subGoalGraph: SubGoalGraph | undefined;
   let plannerContextPack = input.contextPack;
 
   if (
@@ -53,12 +55,13 @@ export function preparePlanningPhase(input: PlanningPhaseInput): PlanningPhasePr
       input.contextPack,
     );
     subGoals = decomposition.subGoals;
+    subGoalGraph = decomposition.subGoalGraph;
     if (subGoals.length > 0) {
       plannerContextPack = { ...input.contextPack, subGoals };
     }
   }
 
-  return { subGoals, plannerContextPack };
+  return { subGoals, subGoalGraph, plannerContextPack };
 }
 
 export async function executePlanningPhase(
