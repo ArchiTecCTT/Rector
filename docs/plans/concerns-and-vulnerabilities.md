@@ -5,6 +5,45 @@
 ## Open
 
 > Updated during full system audit 2026-06-09 (subagents used; see audits/full-system-audit-2026-06-09.md); follow-up register cleanup 2026-06-10 after Gemini-led test fixes + neuro chunk commits (now 1241 tests green). See audit report for original matrix + evidence.
+>
+> 2026-06-12 042f stitch note: Chunks 042a-046 are merged on `work/042-046-stitch`; verification passed with `npm run build`, `npm test` (265 files / 1575 tests passed, 5 skipped), and `npm audit` (0 vulnerabilities). The table below supersedes older historical statuses where they conflict.
+
+### Chunk 042f reconciliation matrix for known hardening concerns
+
+| Concern | 042f status | Evidence | Remaining follow-up |
+|---|---|---|---|
+| SQL/TiDB advanced memory parity | RESOLVED for local/SQL contract coverage | `src/store/sqlRectorStore.ts`, `src/memory/tidbMemoryAdapter.ts`, `tests/sqlMemoryParity.test.ts`, `tests/memoryProviderContract.test.ts` | Live TiDB smoke remains env-gated and not run in default verification. |
+| Startup migration boot path | RESOLVED | `src/bin/server.ts` calls `runStartupMigration` before `createApp` for sqlite/tidb; `tests/startupMigrationBoot.test.ts`, `tests/tidbStartupMigrationBoot.test.ts` | Production migrations still need operator backup/rollback policy. |
+| Deterministic orchestration placeholders | PARTIALLY RESOLVED | 042a/042b added schema validation, repair/fallback, explicit DAG/approval/validation policies; local deterministic mode preserved; `tests/*Hardening.test.ts`, `tests/livePlanner.test.ts`, `tests/liveSkeptic.test.ts` | Local fake planner remains regression baseline; real provider quality/live smokes are optional. |
+| Heuristic skeptic/crucible/planner | PARTIALLY RESOLVED | Deterministic rules are named/deduped; live planner/skeptic paths are schema-gated and cannot suppress deterministic blockers; `src/orchestration/{planner,skeptic,crucible}.ts` | Deep semantic quality and human escalation UX need later product work. |
+| Sandbox mock runner | PARTIALLY RESOLVED | Sandbox policy and safe local runner guard added; E2B remains optional; `src/sandbox/index.ts`, `src/orchestration/sandboxExecutor.ts`, `tests/sandboxPolicyHardening.test.ts`, `tests/safeLocalRunner.guard.test.ts` | Default local mode still avoids real execution; production isolation requires configured external sandbox and live smoke. |
+| Rate limiter local-only | PARTIALLY RESOLVED | `src/security/rateLimiter.ts` introduces interface, route buckets, fail-closed behavior; `tests/rateLimiterHardening.test.ts` | Default backend is still in-memory; distributed backend required for multi-instance hosting. |
+| Truth library keyword-only | PARTIALLY RESOLVED | Hybrid scoring/provenance validation added; `src/memory/truthLibrary.ts`, `tests/truthLibraryHardening.test.ts` | Vector-backed truth retrieval remains future adapter work. |
+| Provider adapter hardening | PARTIALLY RESOLVED | Probe classification, discovery, redaction, model assignment routing, and tests pass; `src/providers/*`, `tests/*Discovery*.test.ts`, `tests/orchestrationAssignments*.test.ts` | Live provider smoke remains opt-in and was not run. |
+| Telemetry no-ops | STILL OPEN | Local telemetry/observability tests pass, but external telemetry integrations remain inert/no-op | Add PostHog/DataDog/New Relic adapters only behind UI config and redaction gates. |
+| Operator API auth/local-only | PARTIALLY RESOLVED | 046 adds RBAC middleware around `/api/operator`; `tests/rbacApiAuthorization.test.ts` | Operator envelope still labels local/no-auth for compatibility; durable team membership/admin UX remains open. |
+| Linear UUID labels | STILL OPEN | Linear export remains network-disabled/stub-oriented | Add real Linear ID mapping once integration is enabled. |
+| `pruneMemory` determinism | RESOLVED for tested stores | Deterministic clock/contract coverage in memory hardening tests | Reassess when external memory pruning is live. |
+| Template assignment stubs | RESOLVED by stitch | `TemplateService` now writes through durable `OrchestrationAssignmentStore`/`MemoryAssignmentStore`; `tests/templateService.test.ts`, `tests/templateApi.test.ts` | Restart-persistence UI smoke can be added later. |
+| Commercial auth/RBAC | PARTIALLY RESOLVED | Auth/RBAC/quotas/audit/readiness merged and tested; OIDC/Auth0 remains adapter-only optional shape | Durable workspace membership, invitation flows, backup/restore, billing, and compliance are not production-ready. |
+
+### Chunk 045 template assignments required stitch to durable Chunk 043/044 stores
+
+- **Source:** Chunk 045 implementation wave; durable orchestration/memory assignment stores from Chunks 043/044 were not present in that isolated worktree.
+- **Severity:** Low after stitch for current local/file-backed behavior; persistence coverage still needs final verification.
+- **Status:** Partially resolved during 042f stitch.
+- **Root cause:** Template preview/apply needs role assignment targets, but the durable stores/routes from sibling chunks were unavailable during wave 2. Chunk 045 added secret-free additive interfaces plus in-memory assignment stores so template apply could be tested without touching provider secrets or provider records.
+- **Plan:** Final 042f verification must confirm template apply writes through `OrchestrationAssignmentStore` and `MemoryAssignmentStore` from Chunks 043/044 and preserve the current template schema/API contract.
+- **Traceability:** `src/providers/orchestrationAssignments.ts`, `src/providers/memoryAssignmentStore.ts`, `src/providers/memoryAssignments.ts`, `src/templates/templateService.ts`, `tests/templateService.test.ts`, `tests/templateApi.test.ts`.
+
+### Chunk 046 commercial auth/RBAC baseline still needs durable workspace membership backing
+
+- **Source:** Chunk 046 implementation.
+- **Severity:** Medium for hosted/team production, low for local-dev.
+- **Status:** Open.
+- **Root cause:** RBAC, quotas, audit logging, deployment readiness checks, and workspace isolation helpers are now centralized and tested, but the default workspace directory is an in-memory helper. The live server persists audit events to `.rector/audit-events.jsonl`, and per-user provider/memory/secret stores already exist, but workspace/user/membership administration needs a durable store before relying on team membership changes across restarts.
+- **Plan / Mitigations:** Local-dev auth-disabled mode remains implicit owner and zero-config. Auth-enabled deployments can inject a `WorkspaceDirectory` implementation; route-level authorization/audit/quota checks are centralized around that interface. Follow-up production hardening should add SQLite/TiDB-backed users/workspaces/memberships, invitation flows, owner-transfer constraints, and backup/restore coverage for membership state.
+- **Traceability:** `docs/plans/chunks/046-commercial-readiness-auth-rbac.md`, `src/security/rbac.ts`, `src/security/workspaces.ts`, `src/security/auditLog.ts`, `src/security/quotas.ts`, `src/deployment/readiness.ts`, `tests/rbacApiAuthorization.test.ts`, `tests/workspaceIsolation.test.ts`.
 
 ### External mode fail-fast startup check ignores UI-persisted configurations
 

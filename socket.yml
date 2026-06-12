@@ -1,0 +1,30 @@
+version: 2
+
+triggerPaths:
+  - package.json
+  - package-lock.json
+  - socket.yml
+
+githubApp:
+  enabled: true
+  dependencyOverviewEnabled: true
+  disableCommentsAndCheckRuns: false
+
+projectIgnorePaths:
+  - dist
+  - coverage
+  - node_modules
+
+issues:
+  criticalCVE: true
+  highCVE: true
+  mediumCVE: true
+  lowCVE: true
+  knownMalware: true
+  aiDetectedPotentialMalware: true
+  possibleTyposquat: true
+  protestware: true
+  gitDependency: true
+  httpDependency: true
+  installScripts: true
+  telemetry: true

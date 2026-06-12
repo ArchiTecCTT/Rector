@@ -51,13 +51,13 @@ import {
 
 /**
  * The deterministic verdict oracle (Req 1.3): any `BLOCKER` finding => BLOCKED;
- * any other non-empty findings => NEEDS_REVISION; no findings => SOUND. The
- * model's advisory verdict is intentionally ignored here so the test pins the
- * control plane's recomputation, not the model's claim.
+ * any `MAJOR`/`MINOR` finding => NEEDS_REVISION; INFO-only or no findings =>
+ * SOUND. The model's advisory verdict is intentionally ignored here so the test
+ * pins the control plane's recomputation, not the model's claim.
  */
 function expectedVerdict(findings: SkepticFinding[]): SkepticReviewVerdict {
   if (findings.some((finding) => finding.severity === "BLOCKER")) return "BLOCKED";
-  return findings.length > 0 ? "NEEDS_REVISION" : "SOUND";
+  return findings.some((finding) => finding.severity === "MAJOR" || finding.severity === "MINOR") ? "NEEDS_REVISION" : "SOUND";
 }
 
 describe("Property 7: live skeptic output conforms to the schema or yields a structured blocker", () => {

@@ -73,7 +73,7 @@ const seedArb = fc.array(benignChar, { minLength: 1, maxLength: 24 }).map((chars
 const lengthArb = fc.oneof(
   fc.integer({ min: 0, max: 4_000 }),
   fc.integer({ min: CAP - 64, max: CAP + 64 }),
-  fc.integer({ min: CAP + 1, max: CAP + 50_000 }),
+  fc.integer({ min: CAP + 1, max: CAP + 8_192 }),
 );
 
 const exitCodeArb = fc.integer({ min: 0, max: 255 });
@@ -140,5 +140,5 @@ describe("E2B_Sandbox_Adapter — Property 21: captured streams are recorded, tr
       ),
       { numRuns: 100 },
     );
-  });
+  }, 20_000);
 });

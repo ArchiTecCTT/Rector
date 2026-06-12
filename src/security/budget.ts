@@ -19,6 +19,25 @@ export interface BudgetDecision {
   usage: Required<Omit<BudgetUsage, "provider">> & { provider?: string };
 }
 
+export type SafetyReasonCode =
+  | "SANDBOX_RUNTIME_BUDGET_EXCEEDED"
+  | "SANDBOX_RUNTIME_APPROVAL_REQUIRED";
+
+export interface SandboxRuntimeSafetyInput {
+  runtimeMs: number;
+  maxRuntimeMs: number;
+  approvalRequiredAboveMs?: number;
+}
+
+export interface SandboxRuntimeSafetyDecision {
+  status: BudgetDecisionStatus;
+  reasonCodes: SafetyReasonCode[];
+  reasons: string[];
+  runtimeMs: number;
+  maxRuntimeMs: number;
+  approvalRequiredAboveMs: number;
+}
+
 export function evaluateBudget(run: Run, usage: BudgetUsage = {}): BudgetDecision {
   const budget = run.budget;
   const normalized = normalizeUsage(run, usage);
@@ -72,8 +91,8 @@ export function enforceMaxPerRunBudget(
   const budget = run.budget;
 
   // Treat absent accumulated/next fields as 0.
-  const projectedUsd = numberFrom(accumulated.estimatedUsd, 0) + numberFrom(nextEstimate.estimatedUsd, 0);
-  const projectedModelCalls = intFrom(accumulated.modelCalls, 0) + intFrom(nextEstimate.modelCalls, 0);
+  const projectedUsd = nonNegativeNumberFrom(accumulated.estimatedUsd, 0) + nonNegativeNumberFrom(nextEstimate.estimatedUsd, 0);
+  const projectedModelCalls = nonNegativeIntFrom(accumulated.modelCalls, 0) + nonNegativeIntFrom(nextEstimate.modelCalls, 0);
 
   // Layer on evaluateBudget: feed the projected pre-flight totals so the returned usage is normalized
   // through the same machinery and existing budget semantics are preserved.
@@ -95,15 +114,65 @@ export function enforceMaxPerRunBudget(
   return { status: "allowed", reasons: [], usage: base.usage };
 }
 
+/**
+ * Sandbox runtime safety gate used before local/E2B command execution.
+ * It turns runtime-budget violations into structured decisions/reason codes so
+ * callers can fail closed or request approval instead of throwing from the
+ * command path.
+ */
+export function evaluateSandboxRuntimeSafety(
+  input: SandboxRuntimeSafetyInput,
+): SandboxRuntimeSafetyDecision {
+  const runtimeMs = nonNegativeIntFrom(input.runtimeMs, 0);
+  const maxRuntimeMs = nonNegativeIntFrom(input.maxRuntimeMs, 0);
+  const approvalRequiredAboveMs = nonNegativeIntFrom(input.approvalRequiredAboveMs, 0);
+  const invalidNegativeRuntime = isNegativeFinite(input.runtimeMs) || isNegativeFinite(input.maxRuntimeMs);
+
+  if (invalidNegativeRuntime || maxRuntimeMs <= 0 || runtimeMs > maxRuntimeMs) {
+    return {
+      status: "denied",
+      reasonCodes: ["SANDBOX_RUNTIME_BUDGET_EXCEEDED"],
+      reasons: [
+        invalidNegativeRuntime
+          ? "sandbox runtime inputs must be non-negative"
+          : `sandbox runtime ${runtimeMs}ms exceeds maxRuntimeMs ${maxRuntimeMs}ms`,
+      ],
+      runtimeMs,
+      maxRuntimeMs,
+      approvalRequiredAboveMs,
+    };
+  }
+
+  if (approvalRequiredAboveMs > 0 && runtimeMs > approvalRequiredAboveMs) {
+    return {
+      status: "NEEDS_DECISION",
+      reasonCodes: ["SANDBOX_RUNTIME_APPROVAL_REQUIRED"],
+      reasons: [`sandbox runtime ${runtimeMs}ms requires approval above ${approvalRequiredAboveMs}ms`],
+      runtimeMs,
+      maxRuntimeMs,
+      approvalRequiredAboveMs,
+    };
+  }
+
+  return {
+    status: "allowed",
+    reasonCodes: [],
+    reasons: [],
+    runtimeMs,
+    maxRuntimeMs,
+    approvalRequiredAboveMs,
+  };
+}
+
 function normalizeUsage(run: Run, usage: BudgetUsage): BudgetDecision["usage"] {
   return {
-    estimatedUsd: numberFrom(usage.estimatedUsd, run.costEstimate.usd, 0),
-    actualUsd: numberFrom(usage.actualUsd, run.actualCost?.usd, 0),
-    inputTokens: intFrom(usage.inputTokens, run.actualTokens?.input, run.tokenEstimate.input, 0),
-    outputTokens: intFrom(usage.outputTokens, run.actualTokens?.output, run.tokenEstimate.output, 0),
-    modelCalls: intFrom(usage.modelCalls, run.actualCost?.modelCalls, run.costEstimate.modelCalls, 0),
-    runtimeMs: intFrom(usage.runtimeMs, run.actualCost?.runtimeMs, run.costEstimate.runtimeMs, 0),
-    healingAttempts: intFrom(usage.healingAttempts, run.healingAttempts, 0),
+    estimatedUsd: nonNegativeNumberFrom(usage.estimatedUsd, run.costEstimate.usd, 0),
+    actualUsd: nonNegativeNumberFrom(usage.actualUsd, run.actualCost?.usd, 0),
+    inputTokens: nonNegativeIntFrom(usage.inputTokens, run.actualTokens?.input, run.tokenEstimate.input, 0),
+    outputTokens: nonNegativeIntFrom(usage.outputTokens, run.actualTokens?.output, run.tokenEstimate.output, 0),
+    modelCalls: nonNegativeIntFrom(usage.modelCalls, run.actualCost?.modelCalls, run.costEstimate.modelCalls, 0),
+    runtimeMs: nonNegativeIntFrom(usage.runtimeMs, run.actualCost?.runtimeMs, run.costEstimate.runtimeMs, 0),
+    healingAttempts: nonNegativeIntFrom(usage.healingAttempts, run.healingAttempts, 0),
     provider: usage.provider ?? stringFrom(run.actualCost?.provider, run.costEstimate.provider),
   };
 }
@@ -152,6 +221,21 @@ function numberFrom(...values: unknown[]): number {
 
 function intFrom(...values: unknown[]): number {
   return Math.trunc(numberFrom(...values));
+}
+
+function nonNegativeNumberFrom(...values: unknown[]): number {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+  }
+  return 0;
+}
+
+function nonNegativeIntFrom(...values: unknown[]): number {
+  return Math.trunc(nonNegativeNumberFrom(...values));
+}
+
+function isNegativeFinite(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value < 0;
 }
 
 function stringFrom(...values: unknown[]): string | undefined {

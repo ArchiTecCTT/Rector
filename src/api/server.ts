@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import express from "express";
 import path from "node:path";
@@ -6,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { TaskManager } from "../thalamus/router";
 import { getSetupChecklist } from "../setupChecklist";
-import { STATES } from "../domain/states";
 import { buildContextPack, createContextMaterial } from "../orchestration/contextBuilder";
 import type { ExecutorSimulatorOptions } from "../orchestration/executorSimulator";
 import { runChat } from "../orchestration/chatRunner";
@@ -19,23 +17,44 @@ import {
 } from "../observability";
 import { redactSecrets, redactString, redactOutbound, REDACTION_FAILED_ERROR } from "../security/redaction";
 import {
+  InMemoryRateLimiter,
+  createRateLimitPolicy,
+  rateLimitRuleFor,
+  type RateLimitConfig,
+  type RateLimitDecision,
+  type RateLimiter,
+} from "../security/rateLimiter";
+import {
   SESSION_COOKIE_NAME,
-  SESSION_MAX_AGE_MS,
-  authErrorMessage,
-  createSessionToken,
   parseAuthConfig,
-  verifyPassword,
+  parseAuthMode,
   verifySessionToken,
+  type AuthMode,
   type ParsedAuthConfig,
 } from "../security/auth";
 import { createAuthMiddleware } from "../security/authMiddleware";
 import { createUserStoresResolver, type UserStores } from "../security/userStores";
-import { computeSetupStatus } from "../setupStatus";
 import {
-  ApprovalProcessingError,
-  recordApprovalDecision,
-  type ApprovalDecision,
-} from "./approvalFlow";
+  requirePermission as evaluatePermission,
+  sendPermissionDenied,
+  type Permission,
+  type PermissionDenial,
+  type WorkspaceRole,
+} from "../security/rbac";
+import {
+  createInMemoryWorkspaceDirectory,
+  type WorkspaceDirectory,
+} from "../security/workspaces";
+import {
+  createInMemoryAuditLogService,
+  hashAuditValue,
+  type AuditLogService,
+} from "../security/auditLog";
+import {
+  createInMemoryQuotaService,
+  type QuotaService,
+} from "../security/quotas";
+import { computeSetupStatus } from "../setupStatus";
 import type { SecretStore } from "../security/secretStore";
 import {
   createInMemoryProviderConfigStore,
@@ -50,7 +69,24 @@ import {
   ProviderModelRoleSchema,
   type ProviderConfigRecord,
 } from "../providers/config";
-import { resolveTestProvider } from "../providers/configBridge";
+import { buildConfiguredRouter, resolveTestProvider } from "../providers/configBridge";
+import {
+  ORCHESTRATION_ROLE_DESCRIPTORS,
+  OrchestrationAssignmentUpsertSchema,
+  buildConfiguredAssignmentAwareRouter,
+  createInMemoryOrchestrationAssignmentStore,
+  providerOptionsFromConfigState,
+  resolveEffectiveAssignment,
+  type EffectiveModelRoute,
+  type OrchestrationAssignmentScope,
+  type OrchestrationAssignmentStore,
+  type OrchestrationModelAssignment,
+} from "../providers/orchestrationAssignments";
+import {
+  TemplateService,
+  createInMemoryUserTemplateStore,
+  type UserTemplateStore,
+} from "../templates";
 
 // Chunk 34 memory providers (config + resolution). The runtime MemoryProvider + Local impl
 // live in src/memory/provider.ts. We resolve once per app and use for neuro memory paths.
@@ -64,6 +100,12 @@ import {
   type MemoryProviderRecord,
   createInMemoryMemoryConfigStore,
   type MemoryConfigStore,
+  MemoryRoleSchema,
+  createMemoryRoleAssignment,
+  createInMemoryMemoryAssignmentStore,
+  MemoryRoleRouter,
+  type MemoryRole,
+  type MemoryAssignmentStore,
 } from "../providers";
 import type { MemoryProvider } from "../memory/provider";
 import { redactMemoryContent } from "../memory/adapterBase";
@@ -102,15 +144,22 @@ import {
   type RectorStore,
 } from "../store";
 import { MemoryLayerSchema, RunEventSchema } from "../store/schemas";
-import type { Artifact, MemoryLayer, Run, RunEvent } from "../store/schemas";
+import type { MemoryLayer, Run, RunEvent } from "../store/schemas";
 import { RunPhaseSchema, isTerminalRunPhase } from "../protocol/phases";
+import { registerCommercialRoutes } from "./routes/commercial";
+import { registerAuthRoutes } from "./routes/auth";
+import { registerMemoryAssignmentRoutes } from "./routes/memoryAssignments";
+import { registerOrchestrationModelRoutes } from "./routes/orchestrationModels";
+import { registerTemplateRoutes } from "./routes/templates";
+import { registerRunApprovalRoutes } from "./routes/runApprovals";
+import { registerOperatorRoutes } from "./routes/operator";
+import { registerTaskRoutes } from "./routes/tasks";
 
 export interface ApiSecurityOptions {
   corsAllowedOrigins?: string[];
-  rateLimit?: {
-    windowMs?: number;
-    maxRequests?: number;
-  };
+  rateLimit?: RateLimitConfig;
+  /** Optional pluggable limiter backend; defaults to process-local in-memory buckets. */
+  rateLimiter?: RateLimiter;
   /**
    * Orchestration wiring for the chat pipeline. `executorOptions`/`maxHealingAttempts` tune the
    * deterministic phases shared by both modes. `mode` and `router` are resolved once at startup
@@ -176,8 +225,28 @@ export interface ApiSecurityOptions {
    */
   memoryConfigStore?: MemoryConfigStore;
 
+  /**
+   * Optional non-secret role → provider/model assignment store (Chunk 043). Assignments contain
+   * provider/model ids, budgets, and capability flags only; API keys remain exclusively in
+   * SecretStore-backed provider records. When omitted, tests/local mode get an in-memory empty store
+   * and the deterministic/provider-free fallback remains unchanged.
+   */
+  orchestrationAssignmentStore?: OrchestrationAssignmentStore;
+
+  /**
+   * Optional Memory_Assignment_Store (Chunk 044). Persists non-secret role -> provider links only;
+   * provider secrets remain exclusively in Secret_Store through MemoryProviderRecord.secretRef.
+   */
+  memoryAssignmentStore?: MemoryAssignmentStore;
+
   /** Optional persisted module enable/disable state (Chunk 041). */
   moduleConfigStore?: ModuleConfigStore;
+
+  /** Optional Chunk 045 user template store. Template application writes through the durable assignment stores above. */
+  userTemplateStore?: UserTemplateStore;
+
+  /** Backward-compatible alias for early Chunk 045 tests/callers; `memoryAssignmentStore` takes precedence. */
+  memoryRoleAssignmentStore?: MemoryAssignmentStore;
 
   /**
    * Optional override for {@link resolveTestMemoryProvider} used by
@@ -219,6 +288,21 @@ export interface ApiSecurityOptions {
    * mode requires zero auth (Req 9).
    */
   auth?: ParsedAuthConfig;
+
+  /** Commercial auth mode selection. Defaults from RECTOR_AUTH_MODE/RECTOR_AUTH_ENABLED. */
+  authMode?: AuthMode;
+
+  /** Optional workspace directory/membership backing for RBAC and isolation tests/deployments. */
+  workspaceDirectory?: WorkspaceDirectory;
+
+  /** Optional audit log service. Real boot can inject a durable local JSONL service. */
+  auditLog?: AuditLogService;
+
+  /** Optional workspace quota service. Defaults to an allow-all in-memory service. */
+  quotaService?: QuotaService;
+
+  /** Env map consumed by deployment-readiness checks. Defaults to process.env. */
+  deploymentEnv?: Record<string, string | undefined>;
 
   /**
    * 32-byte AES key for per-user Secret_Store envelopes when auth is enabled.
@@ -866,9 +950,15 @@ export async function handleRunStream(options: RunStreamHandlerOptions): Promise
  */
 export function registerRunStreamRoute(
   app: express.Application,
-  deps: { store: RectorStore; broker: RunEventBroker; heartbeatMs?: number }
+  deps: {
+    store: RectorStore;
+    broker: RunEventBroker;
+    heartbeatMs?: number;
+    authorizeRunRead?: (req: express.Request, res: express.Response, runId: string) => Promise<boolean>;
+  }
 ): void {
-  app.get("/api/runs/:id/stream", (req, res) => {
+  app.get("/api/runs/:id/stream", async (req, res) => {
+    if (deps.authorizeRunRead && !(await deps.authorizeRunRead(req, res, req.params.id))) return;
     void handleRunStream({
       runId: req.params.id,
       req,
@@ -1014,6 +1104,14 @@ function sendRedacted(res: express.Response, status: number, payload: unknown): 
   res.status(500).json({ error: REDACTION_FAILED_ERROR });
 }
 
+const malformedJsonBodyHandler: express.ErrorRequestHandler = (error, _req, res, next) => {
+  if (error instanceof SyntaxError && typeof error === "object" && error !== null && "body" in error) {
+    sendRedacted(res, 400, { error: "Malformed JSON request body." });
+    return;
+  }
+  next(error);
+};
+
 /**
  * Like {@link sendRedacted}, but re-applies server-computed boolean presence
  * flags that the sensitive-key redaction rule would otherwise clobber.
@@ -1109,6 +1207,10 @@ export const SetActiveRouteRequestSchema = z
   .strict();
 export type SetActiveRouteRequest = z.infer<typeof SetActiveRouteRequestSchema>;
 
+/** Body for `POST /api/orchestration-models/assignments/:role/test`. Empty means test saved/effective assignment. */
+export const TestOrchestrationAssignmentRequestSchema = OrchestrationAssignmentUpsertSchema.partial().strict();
+export type TestOrchestrationAssignmentRequest = z.infer<typeof TestOrchestrationAssignmentRequestSchema>;
+
 // --- Memory_Provider_API request schemas (Chunk 36, mirrors Provider_Config_API) ---
 
 /**
@@ -1154,6 +1256,38 @@ export const TestMemoryProviderConnectionResponseSchema = z.object({
   networkAttempted: z.boolean(),
 });
 export type TestMemoryProviderConnectionResponse = z.infer<typeof TestMemoryProviderConnectionResponseSchema>;
+
+export const UpsertMemoryAssignmentRequestSchema = z
+  .object({
+    providerRecordId: z.string().min(1),
+    enabled: z.boolean().optional(),
+    workspaceId: z.string().min(1).optional(),
+    readPriority: z.number().int().optional(),
+    writePriority: z.number().int().optional(),
+    fallbackProviderRecordId: z.string().min(1).optional(),
+    retentionPolicy: z.enum(["ephemeral", "session", "durable", "longTerm"]).optional(),
+    maxEntries: z.number().int().positive().optional(),
+    maxUsdPerDay: z.number().nonnegative().optional(),
+  })
+  .strict();
+export type UpsertMemoryAssignmentRequest = z.infer<typeof UpsertMemoryAssignmentRequestSchema>;
+
+export const MemoryAssignmentResetRequestSchema = z
+  .object({
+    workspaceId: z.string().min(1).optional(),
+  })
+  .strict()
+  .optional();
+export type MemoryAssignmentResetRequest = z.infer<typeof MemoryAssignmentResetRequestSchema>;
+
+export const MemoryAssignmentMigrationPlanRequestSchema = z
+  .object({
+    targetProviderRecordId: z.string().min(1).optional(),
+    workspaceId: z.string().min(1).optional(),
+  })
+  .strict()
+  .optional();
+export type MemoryAssignmentMigrationPlanRequest = z.infer<typeof MemoryAssignmentMigrationPlanRequestSchema>;
 
 /**
  * Validates a built memory provider's configuration. Local kinds always succeed
@@ -1414,6 +1548,13 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const runEventBroker = createRunEventBroker();
   const baseStore = securityOptions.store ?? createRectorStore(securityOptions.persistence);
   const rectorStore = withEventBroadcast(baseStore, runEventBroker);
+  const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
+  const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
+  const memoryConfigStore = securityOptions.memoryConfigStore ?? createInMemoryMemoryConfigStore();
+  const orchestrationAssignmentStore =
+    securityOptions.orchestrationAssignmentStore ?? createInMemoryOrchestrationAssignmentStore();
+  const memoryAssignmentStore =
+    securityOptions.memoryAssignmentStore ?? securityOptions.memoryRoleAssignmentStore ?? createInMemoryMemoryAssignmentStore();
 
   // Chunk 34 (pluggable memory providers): resolve the active MemoryProvider for neuro/agent
   // memory (notes, episodic context for contextBuilder/preprocessor/planner, prune, etc.).
@@ -1428,12 +1569,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   let activeMemoryProvider: MemoryProvider | undefined;
   const resolvePromise = (async () => {
     try {
-      activeMemoryProvider = securityOptions.memoryConfigStore
-        ? await resolveActiveMemoryProvider(securityOptions.memoryConfigStore, securityOptions.secretStore!, {
-            mode: securityOptions.orchestration?.mode,
-            delegateStoreForLocalSqliteMem: isSqlBackedStore(baseStore) ? rectorStore : undefined,
-          })
-        : createPureLocalMemoryProvider();
+      activeMemoryProvider = await resolveActiveMemoryProvider(memoryConfigStore, setupSecretStore, {
+        mode: securityOptions.orchestration?.mode,
+        delegateStoreForLocalSqliteMem: isSqlBackedStore(baseStore) ? rectorStore : undefined,
+      });
     } catch {
       activeMemoryProvider = createPureLocalMemoryProvider();
     }
@@ -1451,6 +1590,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const moduleConfigStore =
     securityOptions.moduleConfigStore ??
     createLocalModuleConfigStore({ filePath: ".rector/modules.json" });
+  const userTemplateStore = securityOptions.userTemplateStore ?? createInMemoryUserTemplateStore();
   const moduleRegistry: ModuleRegistry = createBuiltinModuleRegistry();
   let moduleBootReady = false;
   let moduleBootPromise: Promise<void> | undefined;
@@ -1491,22 +1631,22 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
+  const authConfig = securityOptions.auth ?? parseAuthConfig(process.env);
+
   app.locals.neuroAliveState = getNeuroAliveState;
   app.use(securityHeadersMiddleware);
   app.use(corsMiddleware(securityOptions));
-  app.use(chatRateLimitMiddleware(securityOptions));
+  app.use(apiRateLimitMiddleware(securityOptions, authConfig));
   app.use(express.json());
+  app.use(malformedJsonBodyHandler);
   const publicDir = resolvePublicDir();
   app.use(express.static(publicDir));
-
-  const authConfig = securityOptions.auth ?? parseAuthConfig(process.env);
-  const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
-  const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
-  const memoryConfigStore = securityOptions.memoryConfigStore ?? createInMemoryMemoryConfigStore();
   const defaultUserStores: UserStores = {
     secretStore: setupSecretStore,
     providerConfigStore,
     memoryConfigStore,
+    orchestrationAssignmentStore,
+    memoryAssignmentStore,
   };
   const resolveUserStores = createUserStoresResolver({
     authEnabled: authConfig.enabled,
@@ -1514,112 +1654,305 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     defaultStores: defaultUserStores,
   });
   const storesFor = (req: express.Request): UserStores => req.rectorStores ?? defaultUserStores;
-
-  const LoginRequestSchema = z.object({
-    username: z.string().min(1),
-    password: z.string().min(1),
+  const assignmentScopeFor = (
+    req: express.Request,
+    workspaceId?: string,
+  ): OrchestrationAssignmentScope => ({
+    ...(authConfig.enabled && req.rectorAuth ? { userId: req.rectorAuth.userId } : {}),
+    ...(workspaceId ? { workspaceId } : {}),
   });
+  const workspaceIdFromQuery = (req: express.Request): string | undefined =>
+    typeof req.query.workspaceId === "string" && req.query.workspaceId.trim().length > 0
+      ? req.query.workspaceId.trim()
+      : undefined;
 
-  app.post("/api/auth/login", (req, res) => {
-    if (!authConfig.enabled) {
-      const outcome = redactOutbound({ authenticated: true, username: "default" });
-      return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-    }
-
-    let body: z.infer<typeof LoginRequestSchema>;
-    try {
-      body = LoginRequestSchema.parse(req.body ?? {});
-    } catch {
-      const outcome = redactOutbound({ error: authErrorMessage("Invalid username or password") });
-      return res.status(400).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-    }
-
-    const username = body.username.trim().toLowerCase();
-    const storedHash = authConfig.users.get(username);
-    if (!storedHash || !verifyPassword(body.password, storedHash)) {
-      const outcome = redactOutbound({ error: authErrorMessage("Invalid username or password") });
-      return res.status(401).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-    }
-
-    const token = createSessionToken(username, username, authConfig.sessionSecret);
-    const maxAgeSec = Math.floor(SESSION_MAX_AGE_MS / 1000);
-    res.setHeader(
-      "Set-Cookie",
-      `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`,
+  const buildOrchestrationModelsPayload = async (
+    req: express.Request,
+    workspaceId?: string,
+  ): Promise<{
+    roles: typeof ORCHESTRATION_ROLE_DESCRIPTORS;
+    assignments: OrchestrationModelAssignment[];
+    effective: EffectiveModelRoute[];
+    providers: ReturnType<typeof providerOptionsFromConfigState>;
+  }> => {
+    const userStores = storesFor(req);
+    const scope = assignmentScopeFor(req, workspaceId);
+    const [assignmentState, providerState] = await Promise.all([
+      userStores.orchestrationAssignmentStore.getState(),
+      userStores.providerConfigStore.getState(),
+    ]);
+    const assignments = assignmentState.assignments.filter(
+      (assignment) => assignment.userId === scope.userId && assignment.workspaceId === scope.workspaceId,
     );
-    const outcome = redactOutbound({ authenticated: true, username });
-    return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-  });
+    return {
+      roles: ORCHESTRATION_ROLE_DESCRIPTORS,
+      assignments,
+      effective: ORCHESTRATION_ROLE_DESCRIPTORS.map((role) =>
+        resolveEffectiveAssignment({
+          role: role.id,
+          assignments: assignmentState.assignments,
+          providerState,
+          scope,
+        }),
+      ),
+      providers: providerOptionsFromConfigState(providerState),
+    };
+  };
 
-  app.post("/api/auth/logout", (_req, res) => {
-    res.setHeader("Set-Cookie", `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
-    const outcome = redactOutbound({ authenticated: false });
-    return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-  });
+  const authMode = securityOptions.authMode ?? parseAuthMode(process.env);
+  const workspaceDirectory = securityOptions.workspaceDirectory ?? createInMemoryWorkspaceDirectory();
+  const auditLog = securityOptions.auditLog ?? createInMemoryAuditLogService();
+  const quotaService = securityOptions.quotaService ?? createInMemoryQuotaService();
+  const deploymentEnv = securityOptions.deploymentEnv ?? process.env;
+  app.locals.authMode = authMode;
+  app.locals.auditLog = auditLog;
+  app.locals.quotaService = quotaService;
+  app.locals.workspaceDirectory = workspaceDirectory;
+  const requestActorId = (req: express.Request): string => req.rectorAuth?.userId ?? "default";
 
-  app.get("/api/auth/session", (req, res) => {
-    if (!authConfig.enabled) {
-      const outcome = redactOutbound({ authenticated: true, username: "default" });
-      return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-    }
-
-    const cookies = (req.header("cookie") ?? "")
-      .split(";")
-      .map((part) => part.trim())
-      .reduce<Record<string, string>>((acc, part) => {
-        const eq = part.indexOf("=");
-        if (eq > 0) acc[part.slice(0, eq)] = part.slice(eq + 1);
-        return acc;
-      }, {});
-    const session = verifySessionToken(cookies[SESSION_COOKIE_NAME], authConfig.sessionSecret);
-    const outcome = redactOutbound(
-      session ? { authenticated: true, username: session.username } : { authenticated: false },
-    );
-    return res.status(outcome.ok ? 200 : 500).json(outcome.ok ? outcome.value : { error: REDACTION_FAILED_ERROR });
-  });
-
-  app.use(createAuthMiddleware(authConfig, resolveUserStores));
-
-  const memoryProviderByUser = new Map<string, MemoryProvider>();
-  const getMemoryProviderForUserStores = async (
-    userId: string,
-    stores: UserStores,
-  ): Promise<MemoryProvider> => {
-    const cached = memoryProviderByUser.get(userId);
-    if (cached) return cached;
-
+  const auditRequest = async (
+    req: express.Request,
+    input: {
+      workspaceId?: string;
+      actorUserId?: string;
+      action: string;
+      targetType: string;
+      targetId?: string;
+      outcome: "success" | "denied" | "failed";
+      reason?: string;
+    },
+  ): Promise<void> => {
     try {
-      const provider = await resolveActiveMemoryProvider(stores.memoryConfigStore, stores.secretStore, {
-        mode: securityOptions.orchestration?.mode,
-        delegateStoreForLocalSqliteMem: isSqlBackedStore(baseStore) ? rectorStore : undefined,
+      await auditLog.record({
+        ...input,
+        actorUserId: input.actorUserId ?? req.rectorAuth?.userId,
+        ipHash: hashAuditValue(req.ip),
+        userAgentHash: hashAuditValue(req.header("user-agent")),
       });
-      memoryProviderByUser.set(userId, provider);
-      return provider;
     } catch {
-      const fallback = createPureLocalMemoryProvider();
-      memoryProviderByUser.set(userId, fallback);
-      return fallback;
+      // Audit logging must never fail the primary request path.
     }
   };
 
-  const getMemoryProviderFor = async (req?: express.Request): Promise<MemoryProvider> => {
-    if (!authConfig.enabled || !req?.rectorAuth) {
-      await resolvePromise;
-      return activeMemoryProvider ?? createPureLocalMemoryProvider();
+  const resolveRequestWorkspace = async (
+    req: express.Request,
+    requestedWorkspaceId?: string,
+  ): Promise<{ ok: true; workspaceId: string; role: WorkspaceRole } | { ok: false; status: 401 | 403; reason: string; workspaceId?: string }> => {
+    if (!authConfig.enabled) {
+      const workspaceId = requestedWorkspaceId ?? "local";
+      req.rectorWorkspace = { workspaceId, role: "owner" };
+      return { ok: true, workspaceId, role: "owner" };
     }
 
-    return getMemoryProviderForUserStores(req.rectorAuth.userId, storesFor(req));
+    const auth = req.rectorAuth;
+    if (!auth) return { ok: false, status: 401, reason: "Authentication required", workspaceId: requestedWorkspaceId };
+    const workspace = requestedWorkspaceId
+      ? await workspaceDirectory.getWorkspace(requestedWorkspaceId)
+      : await workspaceDirectory.getDefaultWorkspaceForUser(auth.userId);
+    if (!workspace) return { ok: false, status: 403, reason: "Workspace not found", workspaceId: requestedWorkspaceId };
+    const membership = await workspaceDirectory.getMembership(auth.userId, workspace.id);
+    if (!membership) {
+      return { ok: false, status: 403, reason: "Workspace access denied", workspaceId: workspace.id };
+    }
+    req.rectorWorkspace = { workspaceId: workspace.id, role: membership.role };
+    return { ok: true, workspaceId: workspace.id, role: membership.role };
+  };
+
+  const authorize = async (
+    req: express.Request,
+    res: express.Response,
+    permission: Permission,
+    options: { workspaceId?: string; targetType?: string; targetId?: string } = {},
+  ): Promise<{ ok: true; workspaceId: string; role: WorkspaceRole } | false> => {
+    const workspace = await resolveRequestWorkspace(req, options.workspaceId);
+    if (!workspace.ok) {
+      await auditRequest(req, {
+        workspaceId: workspace.workspaceId,
+        action: `permission.${permission}`,
+        targetType: options.targetType ?? "permission",
+        targetId: options.targetId,
+        outcome: "denied",
+        reason: workspace.reason,
+      });
+      res.status(workspace.status).json({ error: workspace.reason });
+      return false;
+    }
+
+    const decision = evaluatePermission(
+      { authEnabled: authConfig.enabled, userId: requestActorId(req), workspaceId: workspace.workspaceId, role: workspace.role },
+      permission,
+    );
+    if (!decision.ok) {
+      await auditRequest(req, {
+        workspaceId: workspace.workspaceId,
+        action: `permission.${permission}`,
+        targetType: options.targetType ?? "permission",
+        targetId: options.targetId,
+        outcome: "denied",
+        reason: decision.reason,
+      });
+      sendPermissionDenied(res, decision as PermissionDenial);
+      return false;
+    }
+    return { ok: true, workspaceId: workspace.workspaceId, role: workspace.role };
+  };
+
+  const workspaceIdForConversation = async (conversationId: string): Promise<string | undefined> => {
+    const conversation = await rectorStore.getConversation(conversationId);
+    return conversation?.workspaceId;
+  };
+
+  const workspaceIdForRun = async (runId: string): Promise<string | undefined> => {
+    const run = await rectorStore.getRun(runId);
+    if (!run) return undefined;
+    return workspaceIdForConversation(run.conversationId);
+  };
+
+  const enforceRunQuota = async (
+    req: express.Request,
+    res: express.Response,
+    workspaceId: string,
+  ): Promise<boolean> => {
+    const quota = await quotaService.checkRunCreation(workspaceId);
+    if (quota.allowed) return true;
+    await auditRequest(req, {
+      workspaceId,
+      action: "quota.denied",
+      targetType: "quota",
+      outcome: "denied",
+      reason: quota.reason,
+    });
+    res.status(429).json({ error: "Quota exceeded", reason: quota.reason, quota: { policy: quota.policy, usage: quota.usage } });
+    return false;
+  };
+
+  registerAuthRoutes(app, {
+    authConfig,
+    deploymentEnv,
+    auditRequest,
+  });
+
+  app.use(createAuthMiddleware(authConfig, resolveUserStores));
+  app.use(csrfProtectionMiddleware(authConfig, securityOptions));
+
+  registerCommercialRoutes(app, {
+    authEnabled: authConfig.enabled,
+    workspaceDirectory,
+    auditLog,
+    quotaService,
+    deploymentEnv,
+    authorize,
+    requestActorId,
+    auditRequest,
+    storesFor,
+    sendRedacted,
+    sendRedactedPreservingPresence,
+  });
+
+  const memoryRoleRouterByUser = new Map<string, MemoryRoleRouter>();
+  const makeMemoryRoleRouter = (stores: UserStores): MemoryRoleRouter =>
+    new MemoryRoleRouter({
+      assignmentStore: stores.memoryAssignmentStore,
+      configStore: stores.memoryConfigStore,
+      secrets: stores.secretStore,
+      mode: securityOptions.orchestration?.mode,
+      delegateStoreForLocalSqliteMem: isSqlBackedStore(baseStore) ? rectorStore : undefined,
+    });
+  const defaultMemoryRoleRouter = makeMemoryRoleRouter(defaultUserStores);
+
+  const getMemoryRoleRouterForUserStores = (userId: string, stores: UserStores): MemoryRoleRouter => {
+    if (!authConfig.enabled || userId === "default") return defaultMemoryRoleRouter;
+    const cached = memoryRoleRouterByUser.get(userId);
+    if (cached) return cached;
+    const router = makeMemoryRoleRouter(stores);
+    memoryRoleRouterByUser.set(userId, router);
+    return router;
+  };
+
+  const clearMemoryRoutingCaches = (): void => {
+    defaultMemoryRoleRouter.clearCache();
+    for (const router of memoryRoleRouterByUser.values()) router.clearCache();
+  };
+
+  const memoryRoleContextFor = (req?: express.Request, workspaceId?: string): { userId?: string; workspaceId?: string } => ({
+    userId: authConfig.enabled ? req?.rectorAuth?.userId : undefined,
+    workspaceId,
+  });
+
+  const getMemoryRoleRouterFor = (req?: express.Request): MemoryRoleRouter => {
+    if (!authConfig.enabled || !req?.rectorAuth) return defaultMemoryRoleRouter;
+    return getMemoryRoleRouterForUserStores(req.rectorAuth.userId, storesFor(req));
+  };
+
+  const resolveEffectiveMemoryProviderFor = async (
+    req: express.Request | undefined,
+    role: MemoryRole,
+    workspaceId?: string,
+  ) => {
+    const router = getMemoryRoleRouterFor(req);
+    return router.resolveMemoryProvider(role, {
+      ...memoryRoleContextFor(req, workspaceId),
+      mode: securityOptions.orchestration?.mode,
+    });
+  };
+
+  const getMemoryProviderFor = async (
+    req?: express.Request,
+    role: MemoryRole = "episodicMemory",
+    workspaceId?: string,
+  ): Promise<MemoryProvider> => {
+    const effective = await resolveEffectiveMemoryProviderFor(req, role, workspaceId);
+    if (effective.provider) return effective.provider;
+    await resolvePromise;
+    return activeMemoryProvider ?? createPureLocalMemoryProvider();
   };
 
   const createMemoryProviderResolver = (
     req: express.Request,
+    role: MemoryRole = "reflectionLessons",
   ): (() => Promise<MemoryProvider>) => {
-    if (!authConfig.enabled || !req.rectorAuth) {
-      return () => getMemoryProvider();
-    }
-    const userId = req.rectorAuth.userId;
+    const userId = authConfig.enabled ? req.rectorAuth?.userId : undefined;
     const stores = storesFor(req);
-    return () => getMemoryProviderForUserStores(userId, stores);
+    return () =>
+      getMemoryRoleRouterForUserStores(userId ?? "default", stores)
+        .resolveMemoryProvider(role, { userId, mode: securityOptions.orchestration?.mode })
+        .then((effective) => effective.provider ?? createPureLocalMemoryProvider());
+  };
+
+  const resolveRuntimeModelRouterFor = async (req: express.Request, workspaceId?: string): Promise<ModelRouter | undefined> => {
+    const mode = securityOptions.orchestration?.mode ?? "local";
+    if (mode !== "external") return securityOptions.orchestration?.router;
+    const userStores = storesFor(req);
+    const scope = assignmentScopeFor(req, workspaceId);
+    try {
+      const assignments = await userStores.orchestrationAssignmentStore.listAssignments(scope);
+      if (assignments.length === 0 && securityOptions.orchestration?.router) {
+        // Compatibility path: when no Chunk 043 assignment exists, preserve the injected/startup
+        // ModelRouter exactly. Existing external-mode tests and deployments depend on this router
+        // for BYOK provider selection and provider spies.
+        return securityOptions.orchestration.router;
+      }
+      const baseRouter = await buildConfiguredRouter({
+        store: userStores.providerConfigStore,
+        secrets: userStores.secretStore,
+        mode: "external",
+        enableNetwork: true,
+        fetchImpl: fetch,
+      });
+      return buildConfiguredAssignmentAwareRouter({
+        baseRouter,
+        assignmentStore: userStores.orchestrationAssignmentStore,
+        providerConfigStore: userStores.providerConfigStore,
+        secrets: userStores.secretStore,
+        scope,
+        enableNetwork: true,
+        fetchImpl: fetch,
+      });
+    } catch {
+      // Compatibility fallback: preserve the startup router if dynamic per-user assignment routing
+      // cannot be built. Local mode never reaches this branch.
+      return securityOptions.orchestration?.router;
+    }
   };
 
   // --- Chat routes ---
@@ -1637,9 +1970,15 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return res.status(400).json({ error: "retentionPolicy must be a string" });
       }
 
+      const access = await authorize(req, res, "runs.create", {
+        workspaceId: typeof workspaceId === "string" && workspaceId.trim().length > 0 ? workspaceId.trim() : undefined,
+        targetType: "conversation",
+      });
+      if (!access) return;
+
       const conversation = await rectorStore.createConversation({
         title: nonEmptyOrDefault(title, "New conversation"),
-        workspaceId: nonEmptyOrDefault(workspaceId, "local"),
+        workspaceId: access.workspaceId,
         retentionPolicy: nonEmptyOrDefault(retentionPolicy, "session"),
       });
       res.status(201).json(conversation);
@@ -1651,7 +1990,19 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.get("/api/chat/conversations", async (req, res) => {
     try {
       const workspaceId = typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined;
-      const conversations = await rectorStore.listConversations(workspaceId);
+      if (!authConfig.enabled) {
+        const conversations = await rectorStore.listConversations(workspaceId);
+        return res.json({ conversations });
+      }
+      if (workspaceId) {
+        const access = await authorize(req, res, "runs.read", { workspaceId, targetType: "conversation" });
+        if (!access) return;
+        const conversations = await rectorStore.listConversations(access.workspaceId);
+        return res.json({ conversations });
+      }
+      const memberships = await workspaceDirectory.listWorkspacesForUser(requestActorId(req));
+      const allowedIds = new Set(memberships.map((entry) => entry.workspace.id));
+      const conversations = (await rectorStore.listConversations()).filter((conversation) => allowedIds.has(conversation.workspaceId));
       res.json({ conversations });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1662,6 +2013,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     try {
       const conversation = await rectorStore.getConversation(req.params.id);
       if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+      const access = await authorize(req, res, "runs.read", { workspaceId: conversation.workspaceId, targetType: "conversation", targetId: conversation.id });
+      if (!access) return;
       const messages = await rectorStore.listMessages(conversation.id);
       res.json({ conversation, messages });
     } catch (err: any) {
@@ -1678,6 +2031,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.get("/api/chat/conversations/:id/cost", async (req, res) => {
     try {
       const conversationId = req.params.id;
+      const conversation = await rectorStore.getConversation(conversationId);
+      const access = await authorize(req, res, "runs.read", { workspaceId: conversation?.workspaceId, targetType: "conversation", targetId: conversationId });
+      if (!access) return;
       const runs = await rectorStore.listRuns(conversationId);
       const eventsByRun = new Map<string, RunEvent[]>();
       for (const run of runs) {
@@ -1693,6 +2049,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     try {
       const conversation = await rectorStore.getConversation(req.params.id);
       if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+      const access = await authorize(req, res, "runs.create", { workspaceId: conversation.workspaceId, targetType: "conversation", targetId: conversation.id });
+      if (!access) return;
+      if (!(await enforceRunQuota(req, res, access.workspaceId))) return;
 
       const { content, deepPlanning } = req.body ?? {};
       if (!content || typeof content !== "string") {
@@ -1732,7 +2091,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
           // Now sourced from the resolved active MemoryProvider (pluggable: local-inmemory default,
           // local-sqlite-mem, or external like Mem0). For the default provider this is byte-identical
           // to the pre-34 direct store call, preserving all existing memoryAdvanced / context tests.
-          const memoryProviderInstance = await getMemoryProviderFor(req);
+          const memoryProviderInstance = await getMemoryProviderFor(req, "episodicMemory", conversation.workspaceId);
           const recentMemory = await memoryProviderInstance.searchMemory(undefined, {
             layer: "episodic",
             limit: EPISODIC_MEMORY_SEARCH_LIMIT,
@@ -1747,6 +2106,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             memoryEntries: recentMemory,
           });
         });
+        const runtimeRouter = await resolveRuntimeModelRouterFor(req, conversation.workspaceId);
         const result = await runChat(
           pipelineStore,
           {
@@ -1765,7 +2125,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             // Default to local (provider-free) when no orchestration option is configured so existing
             // behavior and tests are unchanged. enableNetwork is only meaningful in external mode.
             mode: orchestration?.mode ?? "local",
-            router: orchestration?.router,
+            router: runtimeRouter,
             enableNetwork: orchestration?.mode === "external",
             moduleRegistry,
           }
@@ -1835,6 +2195,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
         try {
           const run = await runCreated;
+          await quotaService.recordRunCreated(access.workspaceId, { estimatedUsd: numericField(run.costEstimate, "usd") });
           return res.status(202).json({ runId: run.id, traceId: run.traceId });
         } catch (error) {
           // Run-creation failure: redacted error, no background run persisted, and no stream opened
@@ -1845,6 +2206,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
       // Synchronous (non-stream) path — unchanged behavior, preserved as the streaming fallback.
       const { run, synthesis, observabilitySummary, assistantMessage } = await runChatPipeline(rectorStore);
+      await quotaService.recordRunCreated(access.workspaceId, { estimatedUsd: numericField(run.costEstimate, "usd") });
       await moduleRegistry.invokeOnRunCompleted({
         store: rectorStore,
         run,
@@ -1877,6 +2239,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return sendRedacted(res, 400, { error: "content (string) is required" });
       }
 
+      const noteWorkspaceId = typeof conversationId === "string" ? await workspaceIdForConversation(conversationId) : undefined;
+      const access = await authorize(req, res, "runs.create", { workspaceId: noteWorkspaceId, targetType: "memory" });
+      if (!access) return;
+
       const redacted = redactString(content);
       const now = new Date().toISOString();
 
@@ -1898,7 +2264,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       // resolved pluggable MemoryProvider. For the default local-inmemory provider this is
       // identical to the previous direct rectorStore call (preserves all existing behavior
       // and tests for /api/notes + context injection).
-      const memoryProviderInstance = await getMemoryProviderFor(req);
+      const memoryProviderInstance = await getMemoryProviderFor(req, "episodicMemory");
       const entry = await memoryProviderInstance.createMemoryEntry(entryInput);
 
       // Opportunistic prune on write (keeps memory bounded)
@@ -1914,6 +2280,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // the resolved MemoryProvider — no secrets, no mutation.
   app.get("/api/memory/entries", async (req, res) => {
     try {
+      const access = await authorize(req, res, "workspace.read", { targetType: "memory" });
+      if (!access) return;
       const layerRaw = req.query.layer;
       let layer: MemoryLayer | undefined;
       if (layerRaw !== undefined) {
@@ -1927,7 +2295,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         layer = parsed.data;
       }
 
-      const memoryProviderInstance = await getMemoryProviderFor(req);
+      const browserRole: MemoryRole = layer === "core" ? "semanticMemory" : "episodicMemory";
+      const memoryProviderInstance = await getMemoryProviderFor(req, browserRole);
       const payload = await listMemoryEntriesForApi(memoryProviderInstance, { layer });
       sendRedacted(res, 200, payload);
     } catch (error) {
@@ -1939,6 +2308,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     try {
       const run = await rectorStore.getRun(req.params.id);
       if (!run) return res.status(404).json({ error: "Run not found" });
+      const workspaceId = await workspaceIdForConversation(run.conversationId);
+      const access = await authorize(req, res, "runs.read", { workspaceId, targetType: "run", targetId: run.id });
+      if (!access) return;
       const events = await rectorStore.listEvents(run.id);
       res.json({ run, events });
     } catch (err: any) {
@@ -1949,7 +2321,15 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // Live SSE run stream (ORN-40): catch-up replay of persisted events, then live frames from the
   // broker-wrapped store, with a heartbeat keep-alive and clean teardown. The polling endpoint
   // above is preserved unchanged as the fallback.
-  registerRunStreamRoute(app, { store: rectorStore, broker: runEventBroker });
+  registerRunStreamRoute(app, {
+    store: rectorStore,
+    broker: runEventBroker,
+    authorizeRunRead: async (req, res, runId) => {
+      const workspaceId = await workspaceIdForRun(runId);
+      const access = await authorize(req, res, "runs.read", { workspaceId, targetType: "run", targetId: runId });
+      return Boolean(access);
+    },
+  });
 
   // Per-run cost aggregate (ORN-41, Req 3.6/3.10). Derives the RunCostAggregate from the run's
   // persisted (already-redacted) events. For an UNKNOWN run id we do NOT 404: `listEvents` returns
@@ -1958,6 +2338,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.get("/api/runs/:id/cost", async (req, res) => {
     try {
       const runId = req.params.id;
+      const workspaceId = await workspaceIdForRun(runId);
+      const access = await authorize(req, res, "runs.read", { workspaceId, targetType: "run", targetId: runId });
+      if (!access) return;
       const events = await rectorStore.listEvents(runId);
       res.json(aggregateRunCost(runId, events));
     } catch (err: any) {
@@ -1965,347 +2348,29 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // Run Approval UX decision endpoint (Requirement 9). Records a user's approve/deny decision over a
-  // pending operation and continues the run. `recordApprovalDecision` appends the decision (with the
-  // deciding identity and timestamp) to the Event_Log atomically with the run transition, BEFORE the
-  // operation executes or is cancelled (Req 9.3): an approval resumes to EXECUTING, a denial (or a
-  // 30-minute timeout) resumes to a final answer that excludes the operation (Req 9.5, 9.8). When the
-  // decision cannot be recorded — the run is not awaiting this operation's decision, or the Event_Log
-  // write fails — the run is left pending and a redacted indication is surfaced (Req 9.7). Every
-  // outbound message is routed through `redactString` so no secret substring escapes (Req 9.6/11.3).
-  app.post("/api/runs/:id/decision", async (req, res) => {
-    const runId = req.params.id;
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const { operationId, decision, decidedBy } = body;
-
-    if (typeof operationId !== "string" || operationId.length === 0) {
-      return res.status(400).json({ error: "operationId (string) is required" });
-    }
-    if (decision !== "approve" && decision !== "deny") {
-      return res.status(400).json({ error: "decision must be 'approve' or 'deny'" });
-    }
-    if (typeof decidedBy !== "string" || decidedBy.length === 0) {
-      return res.status(400).json({ error: "decidedBy (string) is required" });
-    }
-
-    try {
-      const record = await recordApprovalDecision(
-        rectorStore,
-        { runId, operationId, decision: decision as ApprovalDecision, decidedBy },
-        {}
-      );
-      // Outbound boundary: route the decision record through the suppression helper so a redaction
-      // failure suppresses the raw record and returns a redaction-failed error (Req 9.6, 11.1, 11.5).
-      return sendRedacted(res, 200, { decisionProcessed: true, record });
-    } catch (error) {
-      if (error instanceof ApprovalProcessingError) {
-        // Req 9.7: do not execute, keep the run in its pending-decision state, and indicate the
-        // decision could not be processed. RUN_NOT_FOUND maps to 404; everything else is a conflict
-        // with the run's current state (409).
-        const httpStatus = error.code === "RUN_NOT_FOUND" ? 404 : 409;
-        return sendRedacted(res, httpStatus, {
-          decisionProcessed: false,
-          code: error.code,
-          error: redactString(error.message),
-        });
-      }
-      return sendRedacted(res, 500, {
-        decisionProcessed: false,
-        error: redactString(error instanceof Error ? error.message : String(error)),
-      });
-    }
+  registerRunApprovalRoutes(app, {
+    store: rectorStore,
+    workspaceIdForRun,
+    authorize,
+    auditRequest,
+    sendRedacted,
   });
 
-  // --- Local-only operator routes for optional Retool console ---
-
-  app.get("/api/operator/runs", async (_req, res) => {
-    try {
-      const runs = await rectorStore.listRuns();
-      res.json(operatorEnvelope({ runs: runs.map(summarizeOperatorRun) }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
+  registerOperatorRoutes(app, {
+    store: rectorStore,
+    authorize,
   });
 
-  app.get("/api/operator/runs/:id", async (req, res) => {
-    try {
-      const run = await rectorStore.getRun(req.params.id);
-      if (!run) return res.status(404).json({ error: "Run not found" });
-
-      const conversation = await rectorStore.getConversation(run.conversationId);
-      const messages = await rectorStore.listMessages(run.conversationId);
-      const events = await rectorStore.listEvents(run.id);
-      const artifactHandles = collectArtifactHandles(events);
-
-      res.json(
-        operatorEnvelope({
-          run,
-          conversation,
-          userMessage: messages.find((message) => message.id === run.userMessageId),
-          assistantMessages: messages.filter((message) => message.role === "assistant" && message.runId === run.id),
-          events,
-          artifactHandles,
-        })
-      );
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/operator/failures", async (_req, res) => {
-    try {
-      const runs = await rectorStore.listRuns();
-      const events = await rectorStore.listEvents();
-      const failures = runs
-        .filter(isOperatorFailureRun)
-        .map((run) => ({
-          ...summarizeOperatorRun(run),
-          lastError: run.lastError,
-          failureEvents: events.filter((event) => event.runId === run.id && isFailureEvent(event)),
-        }));
-
-      res.json(operatorEnvelope({ failures }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/operator/approvals", async (_req, res) => {
-    try {
-      const runs = await rectorStore.listRuns();
-      const approvals = runs
-        .filter((run) => run.phase === "NEEDS_DECISION" || run.decisionRequest !== undefined)
-        .map((run) => ({
-          ...summarizeOperatorRun(run),
-          decisionRequest: run.decisionRequest ?? {},
-        }));
-
-      res.json(operatorEnvelope({ approvals }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/operator/approvals/:runId/decision", async (req, res) => {
-    try {
-      const run = await rectorStore.getRun(req.params.runId);
-      if (!run) return res.status(404).json({ error: "Run not found" });
-      const { decision, note } = req.body ?? {};
-      if (decision === undefined) {
-        return res.status(400).json({ error: "decision is required" });
-      }
-
-      res.status(202).json(
-        operatorEnvelope({
-          status: "placeholder",
-          mutated: false,
-          run: summarizeOperatorRun(run),
-          decision: redactSecrets({ decision, note }),
-          message: "Decision captured as a local-only placeholder; approval resume is not implemented in Chunk 21.",
-        })
-      );
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/operator/costs", async (_req, res) => {
-    try {
-      const runs = await rectorStore.listRuns();
-      res.json(operatorEnvelope({ summary: summarizeOperatorCosts(runs), runs: runs.map(summarizeOperatorRun) }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/operator/runs/:id/retry", async (req, res) => {
-    try {
-      const run = await rectorStore.getRun(req.params.id);
-      if (!run) return res.status(404).json({ error: "Run not found" });
-      res.status(202).json(
-        operatorEnvelope({
-          status: "placeholder",
-          action: "retry",
-          mutated: false,
-          run: summarizeOperatorRun(run),
-          message: "Retry control is a local-only placeholder until real executor resume semantics exist.",
-        })
-      );
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/operator/runs/:id/abort", async (req, res) => {
-    try {
-      const run = await rectorStore.getRun(req.params.id);
-      if (!run) return res.status(404).json({ error: "Run not found" });
-      res.status(202).json(
-        operatorEnvelope({
-          status: "placeholder",
-          action: "abort",
-          mutated: false,
-          run: summarizeOperatorRun(run),
-          message: "Abort control is a local-only placeholder until cancellable execution exists.",
-        })
-      );
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/operator/artifacts/:id", async (req, res) => {
-    try {
-      const artifact = await rectorStore.getArtifact(req.params.id);
-      if (!artifact) return res.status(404).json({ error: "Artifact not found" });
-      res.json(operatorEnvelope({ artifact: artifactMetadataOnly(artifact) }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/operator/linear/issues", async (req, res) => {
-    try {
-      const { runId, title, description } = req.body ?? {};
-      if (runId !== undefined && typeof runId !== "string") {
-        return res.status(400).json({ error: "runId must be a string when provided" });
-      }
-      if (!title || typeof title !== "string") {
-        return res.status(400).json({ error: "title (string) is required" });
-      }
-      if (description !== undefined && typeof description !== "string") {
-        return res.status(400).json({ error: "description must be a string when provided" });
-      }
-      if (runId) {
-        const run = await rectorStore.getRun(runId);
-        if (!run) return res.status(404).json({ error: "Run not found" });
-      }
-
-      res.status(202).json(
-        operatorEnvelope({
-          status: "stubbed",
-          networkCalls: 0,
-          issue: {
-            key: `LOCAL-LINEAR-${stableStubIssueNumber(runId ?? title)}`,
-            title: title.trim(),
-            description: description?.trim() ?? "",
-            runId,
-            url: null,
-          },
-          message: "Linear issue creation is stubbed locally; no network request was made.",
-        })
-      );
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  // --- Task routes ---
-
-  app.post("/api/tasks", (req, res) => {
-    try {
-      const { description } = req.body ?? {};
-      if (!description || typeof description !== "string") {
-        return res.status(400).json({ error: "description (string) is required" });
-      }
-      const task = manager.createTask(description);
-      res.status(201).json(task);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/tasks", async (_req, res) => {
-    try {
-      const tasks = await manager.listTasks();
-      res.json(tasks);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/tasks/:id", async (req, res) => {
-    try {
-      const task = await manager.getTask(req.params.id);
-      if (!task) return res.status(404).json({ error: "Not found" });
-      res.json(task);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // --- Control routes ---
-
-  app.post("/api/tasks/:id/retry", async (req, res) => {
-    try {
-      const task = await manager.getTask(req.params.id);
-      if (!task) return res.status(404).json({ error: "Not found" });
-      if (task.state !== STATES.PAUSED) {
-        return res.status(400).json({ error: `Cannot retry from ${task.state}` });
-      }
-      const updated = await manager.transition(req.params.id, STATES.INTAKE);
-      res.json(updated);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/tasks/:id/pause", async (req, res) => {
-    try {
-      const task = await manager.getTask(req.params.id);
-      if (!task) return res.status(404).json({ error: "Not found" });
-      const updated = await manager.transition(req.params.id, STATES.PAUSED);
-      res.json(updated);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/tasks/:id/approve", async (req, res) => {
-    try {
-      const task = await manager.getTask(req.params.id);
-      if (!task) return res.status(404).json({ error: "Not found" });
-      if (task.state !== STATES.HUMAN_HANDOFF) {
-        return res.status(400).json({ error: `Cannot approve from ${task.state}` });
-      }
-      const approved = await manager.approve(req.params.id);
-      res.json(approved);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/tasks/:id/abort", async (req, res) => {
-    try {
-      const task = await manager.getTask(req.params.id);
-      if (!task) return res.status(404).json({ error: "Not found" });
-      const updated = await manager.transition(req.params.id, STATES.ABORTED);
-      res.json(updated);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  // --- Advance pipeline one step ---
-
-  app.post("/api/tasks/:id/advance", async (req, res) => {
-    try {
-      const task = await manager.advance(req.params.id);
-      res.json(task);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // --- Telemetry ---
-
-  app.get("/api/telemetry", (_req, res) => {
-    res.json(manager.telemetry.getMetrics());
+  registerTaskRoutes(app, {
+    manager,
+    authorize,
   });
 
   // --- Setup checklist ---
 
-  app.get("/api/setup", (_req, res) => {
+  app.get("/api/setup", async (req, res) => {
+    const access = await authorize(req, res, "workspace.read", { targetType: "setup" });
+    if (!access) return;
     res.json(getSetupChecklist());
   });
 
@@ -2348,7 +2413,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // `sendRedacted`, which redacts the outbound body and — if redaction itself fails — suppresses the
   // raw content and returns a redaction-failed error instead (Req 11.5).
   const workspaceSafetyConfig = securityOptions.workspaceSafety ?? resolveWorkspaceSafetyConfig(process.env);
-  app.get("/api/setup/workspace", (_req, res) => {
+  app.get("/api/setup/workspace", async (req, res) => {
+    const access = await authorize(req, res, "workspace.read", { targetType: "setup" });
+    if (!access) return;
     let response: WorkspaceSafetyResponse;
     try {
       response = buildWorkspaceSafetyResponse(workspaceSafetyConfig);
@@ -2364,6 +2431,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // --- Provider connection test (ORN-32) ---
 
   app.post("/api/setup/test-connection", async (req, res) => {
+    const access = await authorize(req, res, "providers.configure", { targetType: "provider" });
+    if (!access) return;
     let request: TestConnectionRequest;
     try {
       request = TestConnectionRequestSchema.parse(req.body ?? {});
@@ -2422,14 +2491,132 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
+  const errorMessageOf = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
+  // --- Orchestration_Model_Assignment_API (Chunk 043) ---
+  // Stores only non-secret role → provider/model/budget assignments. Provider credentials remain in
+  // Secret_Store-backed Provider_Config_Records and are never serialized by these endpoints.
+
+  registerOrchestrationModelRoutes(app, {
+    storesFor,
+    assignmentScopeFor,
+    workspaceIdFromQuery,
+    buildOrchestrationModelsPayload,
+    sendRedacted,
+    requestValidationMessage,
+    runConnectionTest,
+  });
+
+  app.use("/api/providers", async (req, res, next) => {
+    let permission: Permission = "providers.read";
+    if (req.method === "POST" && req.path === "/active") permission = "models.assign";
+    else if (req.method === "POST" && req.path.endsWith("/secret")) permission = "providers.secrets.write";
+    else if (req.method === "POST" && req.path.endsWith("/models/refresh")) permission = "providers.configure";
+    else if (req.method === "POST") permission = "providers.configure";
+    else if (req.method === "DELETE") permission = "providers.configure";
+    const access = await authorize(req, res, permission, { targetType: "provider" });
+    if (!access) return;
+    next();
+  });
+
   // --- Provider_Config_API: BYOK CRUD + selection (design C7, Req 10/11/14) ---
   //
   // Every response is routed through `sendRedacted`/`redactOutbound` so no full or partial secret
   // value can appear in any response (Req 11.4). Secrets are accepted on input, persisted ONLY via
   // the Secret_Store, and never written to the Provider_Config_Store or echoed back (Req 11.6);
   // responses expose a `secretPresent` boolean only (Req 11.2).
-  const errorMessageOf = (error: unknown): string =>
-    error instanceof Error ? error.message : String(error);
+  const requestUserId = (req: express.Request): string | undefined =>
+    authConfig.enabled ? req.rectorAuth?.userId : undefined;
+
+  const resolveSelectedMemoryProviderFor = async (
+    req: express.Request,
+    role: MemoryRole,
+    providerRecordId: string | undefined,
+    workspaceId?: string,
+  ) => {
+    if (!providerRecordId) {
+      return resolveEffectiveMemoryProviderFor(req, role, workspaceId);
+    }
+    const draftStore = createInMemoryMemoryAssignmentStore();
+    const draft = createMemoryRoleAssignment({
+      role,
+      providerRecordId,
+      userId: requestUserId(req),
+      workspaceId,
+      now: new Date().toISOString(),
+    });
+    const saved = await draftStore.upsertAssignment(draft);
+    if (!saved.ok) {
+      return resolveEffectiveMemoryProviderFor(req, role, workspaceId);
+    }
+    const draftRouter = new MemoryRoleRouter({
+      assignmentStore: draftStore,
+      configStore: storesFor(req).memoryConfigStore,
+      secrets: storesFor(req).secretStore,
+      mode: securityOptions.orchestration?.mode,
+      delegateStoreForLocalSqliteMem: isSqlBackedStore(baseStore) ? rectorStore : undefined,
+    });
+    return draftRouter.resolveMemoryProvider(role, {
+      ...memoryRoleContextFor(req, workspaceId),
+      mode: securityOptions.orchestration?.mode,
+    });
+  };
+
+  registerMemoryAssignmentRoutes(app, {
+    storesFor,
+    requestUserId,
+    sendRedacted,
+    requestValidationMessage,
+    clearMemoryRoutingCaches,
+    resolveEffectiveMemoryProviderFor,
+    resolveSelectedMemoryProviderFor,
+    runMemoryProviderConnectionTest,
+  });
+
+  const restoreTemplateSafeFields = (redacted: unknown, original: unknown): unknown => {
+    if (Array.isArray(redacted) && Array.isArray(original)) {
+      return redacted.map((item, index) => restoreTemplateSafeFields(item, original[index]));
+    }
+    if (
+      redacted &&
+      original &&
+      typeof redacted === "object" &&
+      typeof original === "object" &&
+      !Array.isArray(redacted) &&
+      !Array.isArray(original)
+    ) {
+      const out: Record<string, unknown> = { ...(redacted as Record<string, unknown>) };
+      for (const [key, originalValue] of Object.entries(original as Record<string, unknown>)) {
+        if (key === "missingSecrets") {
+          out[key] = originalValue;
+        } else if (key in out) {
+          out[key] = restoreTemplateSafeFields(out[key], originalValue);
+        }
+      }
+      return out;
+    }
+    return redacted;
+  };
+
+  const sendTemplateResponse = (res: express.Response, status: number, payload: unknown): void => {
+    sendRedactedPreservingPresence(res, status, payload, (redacted) => restoreTemplateSafeFields(redacted, payload));
+  };
+
+  const templateServiceFor = (req: express.Request): TemplateService => {
+    const userStores = storesFor(req);
+    return new TemplateService({
+      orchestrationAssignmentStore: userStores.orchestrationAssignmentStore,
+      memoryAssignmentStore: userStores.memoryAssignmentStore,
+      providerConfigStore: userStores.providerConfigStore,
+      memoryConfigStore: userStores.memoryConfigStore,
+      secretStore: userStores.secretStore,
+      moduleConfigStore,
+      userTemplateStore,
+    });
+  };
+
+  const scopeIdFor = (req: express.Request): string => req.rectorAuth?.userId ?? "default";
 
   // GET /api/providers — non-secret records + activeRoutes + per-provider secretPresent (Req 10.4).
   app.get("/api/providers", async (req, res) => {
@@ -2484,6 +2671,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       // Persist a newly supplied secret BEFORE the config upsert so a secret failure leaves both
       // the prior secret and the prior config untouched (Req 11.7).
       if (apiKey !== undefined) {
+        const secretAccess = await authorize(req, res, "providers.secrets.write", { targetType: "provider", targetId: body.id });
+        if (!secretAccess) return;
         const secretResult = await userStores.secretStore.setSecret(secretRef, apiKey);
         if (!secretResult.ok) {
           return sendRedacted(res, 500, { error: redactString(secretResult.error) });
@@ -2504,6 +2693,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return sendRedacted(res, 500, { error: redactString(upsertResult.error) });
       }
 
+      if (apiKey !== undefined) {
+        await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "provider.secret.write", targetType: "provider", targetId: record.id, outcome: "success" });
+      }
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "provider.configure", targetType: "provider", targetId: record.id, outcome: "success" });
       const secretPresent = await userStores.secretStore.hasSecret(secretRef);
       // Re-apply the presence boolean after redaction (the sensitive-key rule
       // would otherwise replace it with `[REDACTED]`), so the response exposes a
@@ -2534,6 +2727,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
       const state = await userStores.providerConfigStore.getState();
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "provider.route.assign", targetType: "provider", targetId: body.providerId ?? body.role, outcome: "success" });
       sendRedacted(res, 200, { activeRoutes: state.activeRoutes });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
@@ -2561,6 +2755,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       if (!result.ok) {
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "provider.secret.write", targetType: "provider", targetId: existing.id, outcome: "success" });
       sendRedactedPreservingPresence(res, 200, { id: existing.id, secretPresent: true }, (redacted) => {
         redacted.secretPresent = true;
         return redacted;
@@ -2592,10 +2787,18 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         }
       }
 
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "provider.delete", targetType: "provider", targetId: existing.id, outcome: "success" });
       sendRedacted(res, 200, { removed: true, id: existing.id });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }
+  });
+
+  app.use("/api/modules", async (req, res, next) => {
+    const permission: Permission = req.method === "GET" ? "workspace.read" : "modules.configure";
+    const access = await authorize(req, res, permission, { targetType: "module" });
+    if (!access) return;
+    next();
   });
 
   const ModuleToggleSchema = z.object({
@@ -2646,6 +2849,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return sendRedacted(res, 500, { error: redactString(persisted.error) });
       }
 
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "module.configure", targetType: "module", targetId: body.moduleId, outcome: "success" });
       sendRedacted(res, 200, {
         moduleId: body.moduleId,
         enabled: body.enabled,
@@ -2655,6 +2859,22 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     } catch (error) {
       sendRedacted(res, 400, { error: redactString(errorMessageOf(error)) });
     }
+  });
+
+  registerTemplateRoutes(app, {
+    templateServiceFor,
+    scopeIdFor,
+    sendRedacted,
+    sendTemplateResponse,
+  });
+
+  app.use("/api/memory-providers", async (req, res, next) => {
+    let permission: Permission = "providers.read";
+    if (req.method === "POST" && req.path.endsWith("/secret")) permission = "providers.secrets.write";
+    else if (req.method === "POST" || req.method === "DELETE") permission = "memory.configure";
+    const access = await authorize(req, res, permission, { targetType: "memory-provider" });
+    if (!access) return;
+    next();
   });
 
   // --- Memory_Provider_API: CRUD + selection (Chunk 36, mirrors Provider_Config_API) ---
@@ -2710,6 +2930,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const secretRef = `memory:${body.id}`;
 
       if (apiKey !== undefined) {
+        const secretAccess = await authorize(req, res, "providers.secrets.write", { targetType: "memory-provider", targetId: body.id });
+        if (!secretAccess) return;
         const secretResult = await userStores.secretStore.setSecret(secretRef, apiKey);
         if (!secretResult.ok) {
           return sendRedacted(res, 500, { error: redactString(secretResult.error) });
@@ -2728,6 +2950,11 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return sendRedacted(res, 500, { error: redactString(upsertResult.error) });
       }
 
+      clearMemoryRoutingCaches();
+      if (apiKey !== undefined) {
+        await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "memory.secret.write", targetType: "memory-provider", targetId: record.id, outcome: "success" });
+      }
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "memory.configure", targetType: "memory-provider", targetId: record.id, outcome: "success" });
       const secretPresent = await userStores.secretStore.hasSecret(secretRef);
       sendRedactedPreservingPresence(
         res,
@@ -2758,7 +2985,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       if (!result.ok) {
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
+      clearMemoryRoutingCaches();
       const state = await userStores.memoryConfigStore.getState();
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "memory.assignment.update", targetType: "memory-provider", targetId: body.providerId ?? "local-inmemory", outcome: "success" });
       sendRedacted(res, 200, { activeMemoryProviderId: state.activeMemoryProviderId });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
@@ -2784,6 +3013,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       if (!result.ok) {
         return sendRedacted(res, 500, { error: redactString(result.error) });
       }
+      clearMemoryRoutingCaches();
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "memory.secret.write", targetType: "memory-provider", targetId: existing.id, outcome: "success" });
       sendRedactedPreservingPresence(res, 200, { id: existing.id, secretPresent: true }, (redacted) => {
         redacted.secretPresent = true;
         return redacted;
@@ -2813,6 +3044,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         }
       }
 
+      clearMemoryRoutingCaches();
+      await auditRequest(req, { workspaceId: req.rectorWorkspace?.workspaceId, action: "memory.delete", targetType: "memory-provider", targetId: existing.id, outcome: "success" });
       sendRedacted(res, 200, { removed: true, id: existing.id });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
@@ -2959,6 +3192,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // header can escape in the response (Req 4.4). A refresh can be requested via `?refresh=1` or a
   // truthy `refresh` body field.
   app.post("/api/config/providers/:id/discover", async (req, res) => {
+    const access = await authorize(req, res, "providers.configure", { targetType: "provider", targetId: req.params.id });
+    if (!access) return;
     const mode = securityOptions.orchestration?.mode ?? "local";
     const body = (req.body ?? {}) as Record<string, unknown>;
     const refresh =
@@ -2984,6 +3219,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // --- Scenario seeding ---
 
   app.post("/api/dev/scenario", async (req, res) => {
+    const access = await authorize(req, res, "operator.manage", { targetType: "dev" });
+    if (!access) return;
     if (process.env.NODE_ENV === "production") {
       return res.status(404).json({ error: "Not found" });
     }
@@ -3005,6 +3242,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // Manual trigger for proactive "alive" behavior (Chunk 28).
   app.post("/api/dev/proactive-trigger", async (req, res) => {
+    const access = await authorize(req, res, "operator.manage", { targetType: "dev" });
+    if (!access) return;
     try {
       const proactiveAgent = getNeuroAliveState().proactiveAgent;
       if (!proactiveAgent) {
@@ -3077,81 +3316,163 @@ function corsMiddleware(options: ApiSecurityOptions): express.RequestHandler {
   };
 }
 
-function chatRateLimitMiddleware(options: ApiSecurityOptions): express.RequestHandler {
-  const windowMs = options.rateLimit?.windowMs ?? numberFromEnv("CHAT_RATE_LIMIT_WINDOW_MS", 60_000);
-  const maxRequests = options.rateLimit?.maxRequests ?? numberFromEnv("CHAT_RATE_LIMIT_MAX", 60);
-
-  const chatBuckets = new Map<string, { resetAt: number; count: number }>();
-  const authBuckets = new Map<string, { resetAt: number; count: number }>();
-  const generalBuckets = new Map<string, { resetAt: number; count: number }>();
-
-  const chatMax = maxRequests;
-  const authMax = Math.max(10, chatMax * 5);
-  const generalMax = Math.max(10, chatMax * 5);
+function csrfProtectionMiddleware(authConfig: ParsedAuthConfig, options: ApiSecurityOptions): express.RequestHandler {
+  const configuredOrigins = new Set([
+    ...(options.corsAllowedOrigins ?? []),
+    ...parseCsvEnv(process.env.CORS_ALLOWED_ORIGINS),
+  ]);
 
   return (req, res, next) => {
-    const now = Date.now();
-    const key = req.ip || req.socket.remoteAddress || "unknown";
-
-    // Clean up expired buckets opportunistically to prevent memory growth
-    for (const [k, b] of chatBuckets.entries()) {
-      if (b.resetAt <= now) chatBuckets.delete(k);
-    }
-    for (const [k, b] of authBuckets.entries()) {
-      if (b.resetAt <= now) authBuckets.delete(k);
-    }
-    for (const [k, b] of generalBuckets.entries()) {
-      if (b.resetAt <= now) generalBuckets.delete(k);
-    }
-
-    const isChatPost = req.method === "POST" && req.path.startsWith("/api/chat/");
-    const isAuth = req.path.startsWith("/api/auth/");
-
-    let buckets: Map<string, { resetAt: number; count: number }>;
-    let limit: number;
-    let errMsg: string;
-
-    if (isChatPost) {
-      buckets = chatBuckets;
-      limit = chatMax;
-      errMsg = "Too many chat requests";
-    } else if (isAuth) {
-      buckets = authBuckets;
-      limit = authMax;
-      errMsg = "Too many authentication requests";
-    } else {
-      buckets = generalBuckets;
-      limit = generalMax;
-      errMsg = "Too many requests";
-    }
-
-    if (limit <= 0) {
+    if (!authConfig.enabled) {
       next();
       return;
     }
-
-    const bucket = buckets.get(key);
-    if (!bucket) {
-      buckets.set(key, { resetAt: now + windowMs, count: 1 });
-      res.setHeader("X-RateLimit-Limit", String(limit));
-      res.setHeader("X-RateLimit-Remaining", String(Math.max(0, limit - 1)));
+    if (["GET", "HEAD", "OPTIONS"].includes(req.method)) {
       next();
       return;
     }
-
-    if (bucket.count >= limit) {
-      res.setHeader("Retry-After", String(Math.ceil((bucket.resetAt - now) / 1000)));
-      res.setHeader("X-RateLimit-Limit", String(limit));
-      res.setHeader("X-RateLimit-Remaining", "0");
-      res.status(429).json({ error: errMsg });
+    const origin = req.header("Origin");
+    if (!origin) {
+      next();
       return;
     }
-
-    bucket.count += 1;
-    res.setHeader("X-RateLimit-Limit", String(limit));
-    res.setHeader("X-RateLimit-Remaining", String(Math.max(0, limit - bucket.count)));
+    const host = req.header("Host");
+    let allowed = configuredOrigins.has(origin) || isDevLocalhostOrigin(origin);
+    if (!allowed && host) {
+      try {
+        const url = new URL(origin);
+        allowed = url.host === host;
+      } catch {
+        allowed = false;
+      }
+    }
+    if (!allowed) {
+      res.status(403).json({ error: "CSRF origin denied" });
+      return;
+    }
     next();
   };
+}
+
+function apiRateLimitMiddleware(
+  options: ApiSecurityOptions,
+  authConfig: ParsedAuthConfig,
+): express.RequestHandler {
+  const policy = createRateLimitPolicy(options.rateLimit, process.env);
+  const limiter = options.rateLimiter ?? new InMemoryRateLimiter(policy);
+
+  return async (req, res, next) => {
+    const route = classifyRateLimitRoute(req.method, req.path);
+    if (!route) {
+      next();
+      return;
+    }
+    const key = rateLimitKeyForRequest(req, authConfig);
+    const now = Date.now();
+
+    try {
+      const checked = await limiter.check(key, route, now);
+      if (checked.disabled) {
+        next();
+        return;
+      }
+      if (!checked.allowed) {
+        sendRateLimitDenied(res, checked, rateLimitErrorMessage(route));
+        return;
+      }
+
+      const committed = await limiter.commit(key, route, now);
+      if (committed.disabled) {
+        next();
+        return;
+      }
+      if (!committed.allowed) {
+        sendRateLimitDenied(res, committed, rateLimitErrorMessage(route));
+        return;
+      }
+
+      writeRateLimitHeaders(res, committed);
+      next();
+    } catch (error) {
+      const rule = rateLimitRuleFor(policy, route);
+      if (!rule.failClosed) {
+        next();
+        return;
+      }
+      sendRedacted(res, 503, {
+        error: "Rate limiter unavailable",
+        message: redactString(error instanceof Error ? error.message : String(error)),
+      });
+    }
+  };
+}
+
+function classifyRateLimitRoute(method: string, requestPath: string): string | undefined {
+  if (method === "POST" && requestPath.startsWith("/api/chat/")) return "chat";
+  if (method === "POST" && requestPath === "/api/auth/login") return "auth-login";
+  if (method === "POST" && requestPath === "/api/setup/test-connection") return "provider-test-connection";
+  if (method === "POST" && /^\/api\/memory-providers\/[^/]+\/test-connection$/.test(requestPath)) {
+    return "memory-provider-test";
+  }
+  return undefined;
+}
+
+function rateLimitKeyForRequest(req: express.Request, authConfig: ParsedAuthConfig): string {
+  if (req.rectorAuth?.userId) return `user:${req.rectorAuth.userId}`;
+
+  if (authConfig.enabled) {
+    const cookies = parseCookieHeader(req.header("cookie"));
+    const session = verifySessionToken(cookies[SESSION_COOKIE_NAME], authConfig.sessionSecret);
+    if (session) return `user:${session.userId}`;
+  }
+
+  return `ip:${req.ip || req.socket.remoteAddress || "unknown"}`;
+}
+
+function parseCookieHeader(header: string | undefined): Record<string, string> {
+  const cookies: Record<string, string> = {};
+  if (!header) return cookies;
+  for (const part of header.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const value = trimmed.slice(eq + 1);
+    try {
+      cookies[key] = decodeURIComponent(value);
+    } catch {
+      cookies[key] = value;
+    }
+  }
+  return cookies;
+}
+
+function sendRateLimitDenied(res: express.Response, decision: RateLimitDecision, message: string): void {
+  writeRateLimitHeaders(res, decision);
+  res.setHeader("Retry-After", String(Math.ceil(decision.retryAfterMs / 1000)));
+  sendRedacted(res, 429, { error: message });
+}
+
+function writeRateLimitHeaders(res: express.Response, decision: RateLimitDecision): void {
+  res.setHeader("X-RateLimit-Limit", String(decision.limit));
+  res.setHeader("X-RateLimit-Remaining", String(Math.max(0, decision.remaining)));
+  res.setHeader("X-RateLimit-Reset", String(Math.ceil(decision.resetAt / 1000)));
+}
+
+function rateLimitErrorMessage(route: string): string {
+  switch (route) {
+    case "chat":
+      return "Too many chat requests";
+    case "auth-login":
+      return "Too many authentication requests";
+    case "provider-test-connection":
+      return "Too many provider test requests";
+    case "memory-provider-test":
+      return "Too many memory provider test requests";
+    default:
+      return "Too many requests";
+  }
 }
 
 function parseCsvEnv(value: string | undefined): string[] {
@@ -3171,159 +3492,12 @@ function isDevLocalhostOrigin(origin: string): boolean {
   }
 }
 
-function numberFromEnv(key: string, fallback: number): number {
-  const value = Number(process.env[key]);
-  return Number.isFinite(value) ? value : fallback;
-}
-
 function nonEmptyOrDefault(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
-}
-
-type OperatorEnvelopePayload = Record<string, unknown>;
-
-type OperatorArtifactHandle = {
-  artifactId: string;
-  kind?: string;
-  uri?: string;
-  summary?: string;
-  hash?: string;
-  sizeBytes?: number;
-  piiState?: string;
-  retentionPolicy?: string;
-};
-
-function operatorEnvelope(payload: OperatorEnvelopePayload): OperatorEnvelopePayload {
-  return {
-    localOnly: true,
-    auth: "local-only-no-auth",
-    surface: "retool-operator-console-api",
-    ...payload,
-  };
-}
-
-function summarizeOperatorRun(run: Run): Record<string, unknown> {
-  return {
-    id: run.id,
-    conversationId: run.conversationId,
-    userMessageId: run.userMessageId,
-    status: run.status,
-    phase: run.phase,
-    route: run.route,
-    complexity: run.complexity,
-    traceId: run.traceId,
-    attempts: run.attempts,
-    healingAttempts: run.healingAttempts,
-    validationAttempts: run.validationAttempts,
-    lastError: run.lastError,
-    dagId: run.dagId,
-    estimatedUsd: numericField(run.costEstimate, "usd"),
-    actualUsd: numericField(run.actualCost, "usd"),
-    estimatedInputTokens: numericField(run.tokenEstimate, "input"),
-    estimatedOutputTokens: numericField(run.tokenEstimate, "output"),
-    actualInputTokens: numericField(run.actualTokens, "input"),
-    actualOutputTokens: numericField(run.actualTokens, "output"),
-    createdAt: run.createdAt,
-    updatedAt: run.updatedAt,
-  };
-}
-
-function summarizeOperatorCosts(runs: Run[]): Record<string, unknown> {
-  return runs.reduce(
-    (summary, run) => ({
-      runCount: summary.runCount + 1,
-      estimatedUsd: summary.estimatedUsd + numericField(run.costEstimate, "usd"),
-      actualUsd: summary.actualUsd + numericField(run.actualCost, "usd"),
-      estimatedInputTokens: summary.estimatedInputTokens + numericField(run.tokenEstimate, "input"),
-      estimatedOutputTokens: summary.estimatedOutputTokens + numericField(run.tokenEstimate, "output"),
-      actualInputTokens: summary.actualInputTokens + numericField(run.actualTokens, "input"),
-      actualOutputTokens: summary.actualOutputTokens + numericField(run.actualTokens, "output"),
-      modelCalls: summary.modelCalls + numericField(run.actualCost, "modelCalls"),
-    }),
-    {
-      runCount: 0,
-      estimatedUsd: 0,
-      actualUsd: 0,
-      estimatedInputTokens: 0,
-      estimatedOutputTokens: 0,
-      actualInputTokens: 0,
-      actualOutputTokens: 0,
-      modelCalls: 0,
-    }
-  );
-}
-
-function isOperatorFailureRun(run: Run): boolean {
-  return run.status === "failed" || run.status === "aborted" || run.status === "needs_decision" || run.lastError !== undefined;
-}
-
-function isFailureEvent(event: RunEvent): boolean {
-  return event.type === "RUN_FAILED" || event.type === "RUN_ABORTED" || event.type === "DECISION_REQUESTED";
-}
-
-function collectArtifactHandles(events: RunEvent[]): OperatorArtifactHandle[] {
-  const handles = new Map<string, OperatorArtifactHandle>();
-  for (const event of events) {
-    collectArtifactHandlesFromValue(event.payload, handles);
-  }
-  return Array.from(handles.values());
-}
-
-function collectArtifactHandlesFromValue(value: unknown, handles: Map<string, OperatorArtifactHandle>): void {
-  if (Array.isArray(value)) {
-    for (const item of value) collectArtifactHandlesFromValue(item, handles);
-    return;
-  }
-
-  if (!isRecord(value)) return;
-
-  if (typeof value.artifactId === "string") {
-    handles.set(value.artifactId, {
-      artifactId: value.artifactId,
-      kind: stringField(value, "kind"),
-      uri: stringField(value, "uri"),
-      summary: stringField(value, "summary"),
-      hash: stringField(value, "hash"),
-      sizeBytes: numberField(value, "sizeBytes"),
-      piiState: stringField(value, "piiState"),
-      retentionPolicy: stringField(value, "retentionPolicy"),
-    });
-  }
-
-  for (const nested of Object.values(value)) {
-    collectArtifactHandlesFromValue(nested, handles);
-  }
-}
-
-function artifactMetadataOnly(artifact: Artifact): Artifact {
-  const { content: _content, ...metadata } = artifact.metadata;
-  return {
-    ...artifact,
-    metadata,
-  };
-}
-
-function stableStubIssueNumber(seed: string): string {
-  const hash = crypto.createHash("sha256").update(seed).digest("hex");
-  return String(Number.parseInt(hash.slice(0, 8), 16) % 1_000_000).padStart(6, "0");
 }
 
 function numericField(value: Record<string, unknown> | undefined, key: string): number {
   if (value === undefined) return 0;
   const field = value[key];
   return typeof field === "number" && Number.isFinite(field) ? field : 0;
-}
-
-function stringField(value: Record<string, unknown>, key: string): string | undefined {
-  const field = value[key];
-  return typeof field === "string" ? field : undefined;
-}
-
-function numberField(value: Record<string, unknown>, key: string): number | undefined {
-  const field = value[key];
-  return typeof field === "number" && Number.isFinite(field) ? field : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

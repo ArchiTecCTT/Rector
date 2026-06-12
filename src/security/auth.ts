@@ -13,6 +13,8 @@ export interface AuthUserRecord {
   passwordHash: string;
 }
 
+export type AuthMode = "local-dev" | "self-hosted" | "external-oidc";
+
 export interface ParsedAuthConfig {
   enabled: boolean;
   sessionSecret: string;
@@ -24,6 +26,15 @@ function truthyEnv(value: string | undefined): boolean {
   if (!value) return false;
   const normalized = value.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+export function parseAuthMode(env: Record<string, string | undefined> = process.env): AuthMode {
+  const explicit = env.RECTOR_AUTH_MODE?.trim();
+  if (explicit === "local-dev" || explicit === "self-hosted" || explicit === "external-oidc") {
+    return explicit;
+  }
+  if (truthyEnv(env.RECTOR_AUTH_ENABLED)) return "self-hosted";
+  return "local-dev";
 }
 
 function normalizeUsername(username: string): string {
@@ -124,6 +135,23 @@ export function createSessionToken(userId: string, username: string, sessionSecr
   const payload = Buffer.from(JSON.stringify({ userId, username, exp }), "utf8").toString("base64url");
   const signature = signPayload(payload, sessionSecret);
   return `${payload}.${signature}`;
+}
+
+export function shouldUseSecureSessionCookie(env: Record<string, string | undefined> = process.env): boolean {
+  if (env.NODE_ENV === "production") return true;
+  const publicUrl = env.PUBLIC_APP_URL ?? env.API_BASE_URL;
+  return typeof publicUrl === "string" && publicUrl.trim().toLowerCase().startsWith("https://");
+}
+
+export function buildSessionCookie(token: string, env: Record<string, string | undefined> = process.env): string {
+  const maxAgeSec = Math.floor(SESSION_MAX_AGE_MS / 1000);
+  const secure = shouldUseSecureSessionCookie(env) ? "; Secure" : "";
+  return `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure}`;
+}
+
+export function buildClearSessionCookie(env: Record<string, string | undefined> = process.env): string {
+  const secure = shouldUseSecureSessionCookie(env) ? "; Secure" : "";
+  return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
 }
 
 /** Verify a session cookie value and return the authenticated user, or null. */

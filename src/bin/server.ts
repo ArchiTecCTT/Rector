@@ -13,7 +13,7 @@ import {
 import { buildModelRouter, FakeLLMProvider, type ModelRouter } from "../providers/llm";
 import { buildConfiguredRouter } from "../providers/configBridge";
 import { WorkspaceSandboxAdapter, type SandboxAdapter } from "../sandbox";
-import { createE2BSandboxAdapter } from "../sandbox/e2bSandboxAdapter";
+import { checkE2BSandboxReadiness, createE2BSandboxAdapter } from "../sandbox/e2bSandboxAdapter";
 import {
   describeRequiredProviderEnvKeys,
   resolveOrchestrationConfig,
@@ -21,8 +21,11 @@ import {
 import { createLocalSecretStore } from "../security/secretStore";
 import { createLocalProviderConfigStore } from "../providers/configStore";
 import { createLocalMemoryConfigStore } from "../providers/memoryConfigStore";
+import { createLocalMemoryAssignmentStore } from "../providers/memoryAssignmentStore";
+import { createLocalOrchestrationAssignmentStore } from "../providers/orchestrationAssignments";
 import { redactString } from "../security/redaction";
 import { parseAuthConfig } from "../security/auth";
+import { createLocalAuditLogService } from "../security/auditLog";
 import {
   PersistenceInitializationError,
   StoreConfigError,
@@ -56,7 +59,10 @@ const manager = new TaskManager({
 const RECTOR_DATA_DIR = ".rector";
 const SECRETS_FILE = `${RECTOR_DATA_DIR}/secrets.enc`;
 const PROVIDER_CONFIG_FILE = `${RECTOR_DATA_DIR}/providers.json`;
+const ORCHESTRATION_ASSIGNMENTS_FILE = `${RECTOR_DATA_DIR}/orchestration-assignments.json`;
+const MEMORY_ASSIGNMENTS_FILE = `${RECTOR_DATA_DIR}/memory-assignments.json`;
 const SECRET_KEY_FILE = `${RECTOR_DATA_DIR}/secret.key`;
+const AUDIT_LOG_FILE = `${RECTOR_DATA_DIR}/audit-events.jsonl`;
 
 /**
  * Resolve the 32-byte AES-256-GCM key the local Secret_Store seals values with. The key must be
@@ -108,6 +114,10 @@ const providerConfigStore = createLocalProviderConfigStore({ filePath: PROVIDER_
 // .rector/memory-providers.json exists yet we get the empty state + default
 // local-inmemory provider (zero-config, identical to pre-34 baseline).
 const memoryConfigStore = createLocalMemoryConfigStore({ filePath: ".rector/memory-providers.json" });
+const orchestrationAssignmentStore = createLocalOrchestrationAssignmentStore({
+  filePath: ORCHESTRATION_ASSIGNMENTS_FILE,
+});
+const memoryAssignmentStore = createLocalMemoryAssignmentStore({ filePath: MEMORY_ASSIGNMENTS_FILE });
 
 /**
  * Build the model router for the resolved orchestration mode (design C6, Req 13.3/14.3).
@@ -187,7 +197,21 @@ async function buildStartupSandboxAdapter(config: OrchestrationConfig): Promise<
   if (config.mode === "external") {
     const apiKey = await resolveE2BApiKey();
     if (apiKey) {
-      return createE2BSandboxAdapter({ apiKey, workspaceRoot: SANDBOX_WORKSPACE_ROOT });
+      const readiness = checkE2BSandboxReadiness({
+        apiKey,
+        networkMode: "external",
+        defaultTimeoutMs: 60_000,
+      });
+      if (!readiness.ready) {
+        console.warn(`E2B sandbox not ready: ${redactString(readiness.message)}`);
+      } else {
+        return createE2BSandboxAdapter({
+          apiKey,
+          networkMode: "external",
+          workspaceRoot: SANDBOX_WORKSPACE_ROOT,
+          defaultTimeoutMs: 60_000,
+        });
+      }
     }
   }
   // Local mode (Req 6.7) — and external mode with no configured E2B key — use the network-free
@@ -262,6 +286,8 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   const authConfig = parseAuthConfig(process.env);
   const secretEncryptionKey = resolveSecretEncryptionKey();
 
+  const auditLog = createLocalAuditLogService({ filePath: AUDIT_LOG_FILE });
+
   const app = createApp(manager, {
     orchestration: { mode: orchestrationConfig.mode, router: orchestrationRouter, sandbox: orchestrationSandbox },
     persistence: deploymentConfig.persistence,
@@ -269,6 +295,9 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
     secretStore,
     providerConfigStore,
     memoryConfigStore,
+    orchestrationAssignmentStore,
+    memoryAssignmentStore,
+    auditLog,
     auth: authConfig,
     secretEncryptionKey,
   });
