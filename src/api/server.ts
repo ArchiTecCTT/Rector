@@ -1127,6 +1127,14 @@ function sendRedacted(res: express.Response, status: number, payload: unknown): 
   res.status(500).json({ error: REDACTION_FAILED_ERROR });
 }
 
+const malformedJsonBodyHandler: express.ErrorRequestHandler = (error, _req, res, next) => {
+  if (error instanceof SyntaxError && typeof error === "object" && error !== null && "body" in error) {
+    sendRedacted(res, 400, { error: "Malformed JSON request body." });
+    return;
+  }
+  next(error);
+};
+
 /**
  * Like {@link sendRedacted}, but re-applies server-computed boolean presence
  * flags that the sensitive-key redaction rule would otherwise clobber.
@@ -1653,6 +1661,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.use(corsMiddleware(securityOptions));
   app.use(apiRateLimitMiddleware(securityOptions, authConfig));
   app.use(express.json());
+  app.use(malformedJsonBodyHandler);
   const publicDir = resolvePublicDir();
   app.use(express.static(publicDir));
   const defaultUserStores: UserStores = {

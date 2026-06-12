@@ -73,9 +73,13 @@ interface ApiResult {
 }
 
 function api(base: string, path: string, opts: { method?: string; body?: unknown } = {}): Promise<ApiResult> {
+  const payload = opts.body === undefined ? undefined : JSON.stringify(opts.body);
+  return apiRaw(base, path, { method: opts.method, body: payload });
+}
+
+function apiRaw(base: string, path: string, opts: { method?: string; body?: string } = {}): Promise<ApiResult> {
   return new Promise((resolve, reject) => {
     const url = new URL(`${base}${path}`);
-    const payload = opts.body === undefined ? undefined : JSON.stringify(opts.body);
     const req = http.request(
       {
         hostname: url.hostname,
@@ -92,7 +96,7 @@ function api(base: string, path: string, opts: { method?: string; body?: unknown
       },
     );
     req.on("error", reject);
-    if (payload !== undefined) req.write(payload);
+    if (opts.body !== undefined) req.write(opts.body);
     req.end();
   });
 }
@@ -151,6 +155,17 @@ describe("Template_API", () => {
 
     expect(res.status).toBe(400);
     expect(res.data.error).toContain("secret-like");
+    expect(res.text).not.toContain("sk-live-1234567890abcdef");
+  });
+
+  it("returns a redacted 400 JSON response for malformed import JSON", async () => {
+    const res = await apiRaw(harness!.base, "/api/templates/import/preview", {
+      method: "POST",
+      body: '{"template":{"description":"sk-live-1234567890abcdef",',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.data.error).toBe("Malformed JSON request body.");
     expect(res.text).not.toContain("sk-live-1234567890abcdef");
   });
 

@@ -5,6 +5,11 @@ import { MemoryRoleSchema } from "../providers/memoryAssignments";
 const NonEmptyStringSchema = z.string().min(1);
 const OptionalNoteSchema = z.string().max(1000).optional();
 
+function isLocalProviderToken(value: string | undefined): boolean {
+  if (!value) return true;
+  return value === "deterministic" || value === "disabled" || value === "local" || value.startsWith("local");
+}
+
 export const TEMPLATE_SCHEMA_VERSION = "rector.template.v1" as const;
 
 export const TemplateRiskLevelSchema = z.enum(["local", "low", "medium", "high"]);
@@ -166,7 +171,7 @@ export const RectorTemplateSchema = z
     }
 
     if (template.riskLevel === "local") {
-      const externalRequirements = template.requiredProviderKinds?.filter((kind) => !kind.startsWith("local")) ?? [];
+      const externalRequirements = template.requiredProviderKinds?.filter((kind) => !isLocalProviderToken(kind)) ?? [];
       if (externalRequirements.length > 0) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -174,6 +179,48 @@ export const RectorTemplateSchema = z
           message: "local templates must not require external providers",
         });
       }
+
+      for (const [index, assignment] of template.orchestrationAssignments.entries()) {
+        if (!isLocalProviderToken(assignment.providerId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["orchestrationAssignments", index, "providerId"],
+            message: "local templates must not assign external orchestration providers",
+          });
+        }
+        if (!isLocalProviderToken(assignment.fallbackProviderId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["orchestrationAssignments", index, "fallbackProviderId"],
+            message: "local templates must not assign external orchestration fallback providers",
+          });
+        }
+      }
+
+      for (const [index, assignment] of template.memoryAssignments.entries()) {
+        if (!isLocalProviderToken(assignment.providerRecordId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["memoryAssignments", index, "providerRecordId"],
+            message: "local templates must not assign external memory providers",
+          });
+        }
+        if (!isLocalProviderToken(assignment.fallbackProviderRecordId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["memoryAssignments", index, "fallbackProviderRecordId"],
+            message: "local templates must not assign external memory fallback providers",
+          });
+        }
+        if (!isLocalProviderToken(assignment.providerKind)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["memoryAssignments", index, "providerKind"],
+            message: "local templates must not assign external memory provider kinds",
+          });
+        }
+      }
+
       if (template.sandboxPolicy?.network !== undefined && template.sandboxPolicy.network !== "disabled") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

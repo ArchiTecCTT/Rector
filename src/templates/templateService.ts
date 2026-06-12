@@ -252,13 +252,52 @@ export function scanTemplateForSecrets(input: unknown): TemplateSecretScanResult
   return { ok: findings.length === 0, findings };
 }
 
+class TemplateMalformedJsonError extends Error {
+  constructor(message = "Template JSON is malformed.") {
+    super(message);
+    this.name = "TemplateMalformedJsonError";
+  }
+}
+
+function parseTemplateJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new TemplateMalformedJsonError();
+  }
+}
+
 function normalizeTemplateInput(input: unknown): unknown {
-  if (typeof input === "string") return JSON.parse(input);
+  if (typeof input === "string") return parseTemplateJson(input);
   if (input && typeof input === "object" && "template" in input) {
     const nested = (input as { template: unknown }).template;
-    return typeof nested === "string" ? JSON.parse(nested) : nested;
+    return typeof nested === "string" ? parseTemplateJson(nested) : nested;
   }
   return input;
+}
+
+function safeNormalizeTemplateInput(input: unknown): { ok: true; value: unknown } | { ok: false; issue: TemplateValidationIssue } {
+  try {
+    return { ok: true, value: normalizeTemplateInput(input) };
+  } catch (error) {
+    if (error instanceof TemplateMalformedJsonError) {
+      return { ok: false, issue: { path: "template", message: error.message } };
+    }
+    throw error;
+  }
+}
+
+function validateNormalizedTemplate(raw: unknown): TemplateValidationResult {
+  const scan = scanTemplateForSecrets(raw);
+  const schemaResult = validateRectorTemplate(raw);
+  if (scan.ok && schemaResult.ok) return { ok: true, issues: [] };
+  return {
+    ok: false,
+    issues: [
+      ...scan.findings.map((finding) => ({ path: finding.path, message: finding.reason })),
+      ...schemaResult.issues,
+    ],
+  };
 }
 
 function cloneTemplate(template: RectorTemplate): RectorTemplate {
@@ -445,6 +484,96 @@ function slugifyTemplateId(value: string): string {
   return slug || "personal-template";
 }
 
+type TemplatePreviewAnalysis = Pick<
+  TemplatePreview,
+  "missingProviderConfigs" | "missingSecrets" | "capabilityMismatches" | "externalNetworkImplications"
+>;
+
+function orchestrationPreviewChanges(
+  template: RectorTemplate,
+  current: CurrentTemplateConfig,
+): Array<TemplatePreviewChange<TemplateOrchestrationAssignment, OrchestrationModelAssignment>> {
+  const existingByRole = new Map(current.orchestrationAssignments.map((assignment) => [assignment.role, assignment]));
+  const templateRoles = new Set(template.orchestrationAssignments.map((assignment) => assignment.role));
+  return [
+    ...template.orchestrationAssignments.map((assignment) => {
+      const existing = existingByRole.get(assignment.role) ?? null;
+      return { role: assignment.role, action: existing ? "replace" as const : "add" as const, from: existing, to: assignment };
+    }),
+    ...current.orchestrationAssignments
+      .filter((assignment) => !templateRoles.has(assignment.role))
+      .map((assignment) => ({ role: assignment.role, action: "preserve" as const, from: assignment, to: null })),
+  ];
+}
+
+function memoryPreviewChanges(
+  template: RectorTemplate,
+  current: CurrentTemplateConfig,
+): Array<TemplatePreviewChange<TemplateMemoryAssignment, MemoryRoleAssignment>> {
+  const existingByRole = new Map(current.memoryAssignments.map((assignment) => [assignment.role, assignment]));
+  const templateRoles = new Set(template.memoryAssignments.map((assignment) => assignment.role));
+  return [
+    ...template.memoryAssignments.map((assignment) => {
+      const existing = existingByRole.get(assignment.role) ?? null;
+      return { role: assignment.role, action: existing ? "replace" as const : "add" as const, from: existing, to: assignment };
+    }),
+    ...current.memoryAssignments
+      .filter((assignment) => !templateRoles.has(assignment.role))
+      .map((assignment) => ({ role: assignment.role, action: "preserve" as const, from: assignment, to: null })),
+  ];
+}
+
+function modulePreviewChanges(
+  template: RectorTemplate,
+  current: CurrentTemplateConfig,
+): Array<TemplatePreviewChange<TemplateModuleToggle, TemplateModuleToggle>> {
+  const existingByModuleId = new Map(current.moduleToggles.map((toggle) => [toggle.moduleId, toggle]));
+  return (template.moduleToggles ?? []).map((toggle) => {
+    const existing = existingByModuleId.get(toggle.moduleId) ?? null;
+    return { role: toggle.moduleId, action: existing ? "replace" as const : "add" as const, from: existing, to: toggle };
+  });
+}
+
+function buildPreviewChanges(template: RectorTemplate, current: CurrentTemplateConfig): TemplatePreview["changes"] {
+  return {
+    orchestrationAssignments: orchestrationPreviewChanges(template, current),
+    memoryAssignments: memoryPreviewChanges(template, current),
+    moduleToggles: modulePreviewChanges(template, current),
+  };
+}
+
+function buildPreviewWarnings(template: RectorTemplate, analysis: TemplatePreviewAnalysis): string[] {
+  return [
+    ...analysis.externalNetworkImplications.map((implication) => `External/network implication: ${implication}`),
+    ...(template.riskLevel === "high" ? ["High-risk template: review costs, sandbox, and provider scopes before applying."] : []),
+    ...(analysis.missingProviderConfigs.length > 0 ? ["Some provider records are not configured yet."] : []),
+    ...(analysis.missingSecrets.length > 0 ? ["Some configured providers are missing required credentials."] : []),
+    ...(analysis.capabilityMismatches.length > 0 ? ["Some required capabilities are not currently satisfiable."] : []),
+  ];
+}
+
+function activeOrchestrationAssignments(template: RectorTemplate): TemplateOrchestrationAssignment[] {
+  return template.orchestrationAssignments.filter((assignment) => assignment.enabled);
+}
+
+function activeMemoryAssignments(template: RectorTemplate): TemplateMemoryAssignment[] {
+  return template.memoryAssignments.filter((assignment) => assignment.enabled);
+}
+
+function uniqueMissingProviderConfigs(items: TemplateMissingProviderConfig[]): TemplateMissingProviderConfig[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.providerKind ?? ""}:${item.providerId ?? ""}:${item.reason}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function moduleSkipReason(moduleId: string, scopeId: string): string {
+  return scopeId === "default" ? `module:${moduleId}` : `module:${moduleId}:scoped-scope`;
+}
+
 export class TemplateService {
   private readonly userTemplateStore: UserTemplateStore;
   private readonly now: () => string;
@@ -467,17 +596,9 @@ export class TemplateService {
   }
 
   validate(template: unknown): TemplateValidationResult {
-    const raw = normalizeTemplateInput(template);
-    const scan = scanTemplateForSecrets(raw);
-    const schemaResult = validateRectorTemplate(raw);
-    if (scan.ok && schemaResult.ok) return { ok: true, issues: [] };
-    return {
-      ok: false,
-      issues: [
-        ...scan.findings.map((finding) => ({ path: finding.path, message: finding.reason })),
-        ...schemaResult.issues,
-      ],
-    };
+    const normalized = safeNormalizeTemplateInput(template);
+    if (!normalized.ok) return { ok: false, issues: [normalized.issue] };
+    return validateNormalizedTemplate(normalized.value);
   }
 
   importTemplate(json: unknown): RectorTemplate {
@@ -492,85 +613,20 @@ export class TemplateService {
     currentConfig?: Partial<CurrentTemplateConfig>,
     scopeId = "default",
   ): Promise<TemplatePreview> {
-    const template = typeof templateOrId === "string" ? await this.requireTemplate(templateOrId, scopeId) : parseRectorTemplate(templateOrId);
+    const template = await this.resolveTemplate(templateOrId, scopeId);
     const validation = this.validate(template);
     const current = await this.currentConfig(scopeId, currentConfig);
-
-    const existingByOrchestrationRole = new Map(current.orchestrationAssignments.map((assignment) => [assignment.role, assignment]));
-    const existingByMemoryRole = new Map(current.memoryAssignments.map((assignment) => [assignment.role, assignment]));
-    const existingModuleToggles = new Map(current.moduleToggles.map((toggle) => [toggle.moduleId, toggle]));
-
-    const orchestrationChanges: Array<TemplatePreviewChange<TemplateOrchestrationAssignment, OrchestrationModelAssignment>> =
-      template.orchestrationAssignments.map((assignment) => {
-        const existing = existingByOrchestrationRole.get(assignment.role) ?? null;
-        return {
-          role: assignment.role,
-          action: existing ? "replace" as const : "add" as const,
-          from: existing,
-          to: assignment,
-        };
-      });
-    const templateOrchestrationRoles = new Set(template.orchestrationAssignments.map((assignment) => assignment.role));
-    for (const existing of current.orchestrationAssignments) {
-      if (!templateOrchestrationRoles.has(existing.role)) {
-        orchestrationChanges.push({ role: existing.role, action: "preserve", from: existing, to: null });
-      }
-    }
-
-    const memoryChanges: Array<TemplatePreviewChange<TemplateMemoryAssignment, MemoryRoleAssignment>> =
-      template.memoryAssignments.map((assignment) => {
-        const existing = existingByMemoryRole.get(assignment.role) ?? null;
-        return {
-          role: assignment.role,
-          action: existing ? "replace" as const : "add" as const,
-          from: existing,
-          to: assignment,
-        };
-      });
-    const templateMemoryRoles = new Set(template.memoryAssignments.map((assignment) => assignment.role));
-    for (const existing of current.memoryAssignments) {
-      if (!templateMemoryRoles.has(existing.role)) {
-        memoryChanges.push({ role: existing.role, action: "preserve", from: existing, to: null });
-      }
-    }
-
-    const moduleChanges = (template.moduleToggles ?? []).map((toggle) => {
-      const existing = existingModuleToggles.get(toggle.moduleId) ?? null;
-      return {
-        role: toggle.moduleId,
-        action: existing ? "replace" as const : "add" as const,
-        from: existing,
-        to: toggle,
-      };
-    });
-
-    const missingProviderConfigs = this.missingProviderConfigs(template, current);
-    const missingSecrets = await this.missingSecretRequirements(template, current);
-    const capabilityMismatches = this.capabilityMismatches(template, current);
-    const externalNetworkImplications = this.externalNetworkImplications(template, current);
-    const warnings = [
-      ...externalNetworkImplications.map((implication) => `External/network implication: ${implication}`),
-      ...(template.riskLevel === "high" ? ["High-risk template: review costs, sandbox, and provider scopes before applying."] : []),
-      ...(missingProviderConfigs.length > 0 ? ["Some provider records are not configured yet."] : []),
-      ...(missingSecrets.length > 0 ? ["Some configured providers are missing required credentials."] : []),
-      ...(capabilityMismatches.length > 0 ? ["Some required capabilities are not currently satisfiable."] : []),
-    ];
+    const changes = buildPreviewChanges(template, current);
+    const analysis = await this.previewAnalysis(template, current);
 
     return {
       template: cloneTemplate(template),
       valid: validation.ok,
       validationIssues: validation.issues,
-      changes: {
-        orchestrationAssignments: orchestrationChanges,
-        memoryAssignments: memoryChanges,
-        moduleToggles: moduleChanges,
-      },
-      missingProviderConfigs,
-      missingSecrets,
-      capabilityMismatches,
-      externalNetworkImplications,
+      changes,
+      ...analysis,
       estimatedCostTier: costTierFromBudget(template.budgets),
-      warnings,
+      warnings: buildPreviewWarnings(template, analysis),
       rollbackSnapshotId: `template-preview:${scopeKey(scopeId)}:${template.id}`,
     };
   }
@@ -578,7 +634,7 @@ export class TemplateService {
   async apply(templateOrId: string | RectorTemplate, options: TemplateApplyOptions = {}): Promise<TemplateApplyResult> {
     const scopeId = scopeKey(options.scopeId);
     const mode = options.mode ?? "mergeMissing";
-    const template = typeof templateOrId === "string" ? await this.requireTemplate(templateOrId, scopeId) : parseRectorTemplate(templateOrId);
+    const template = await this.resolveTemplate(templateOrId, scopeId);
     const preview = await this.preview(template, undefined, scopeId);
     if (!preview.valid) {
       throw new Error(`Template validation failed: ${preview.validationIssues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`);
@@ -597,72 +653,15 @@ export class TemplateService {
       throw new Error("replaceAssignments mode requires confirmReplace: true");
     }
 
-    const now = this.now();
-    let orchestrationChanged = 0;
-    let memoryChanged = 0;
-    let moduleChanged = 0;
     const skipped: string[] = [];
-
-    if (mode === "replaceAssignments") {
-      const orchestrationRecords = template.orchestrationAssignments.map((assignment) =>
-        orchestrationRecordFromTemplate(assignment, scopeId, now),
-      );
-      const memoryRecords = template.memoryAssignments.map((assignment) =>
-        memoryRecordFromTemplate(assignment, scopeId, now),
-      );
-      await this.replaceOrchestrationAssignments(orchestrationRecords, scopeId);
-      await this.replaceMemoryAssignments(memoryRecords, scopeId);
-      orchestrationChanged = orchestrationRecords.length;
-      memoryChanged = memoryRecords.length;
-      moduleChanged = await this.applyModuleToggles(template.moduleToggles ?? []);
-    } else if (mode === "mergeMissing") {
-      const current = await this.currentConfig(scopeId);
-      const existingOrchestrationRoles = new Set(current.orchestrationAssignments.map((assignment) => assignment.role));
-      for (const assignment of template.orchestrationAssignments) {
-        if (existingOrchestrationRoles.has(assignment.role)) {
-          skipped.push(`orchestration:${assignment.role}`);
-          continue;
-        }
-        await this.upsertOrchestrationAssignment(orchestrationRecordFromTemplate(assignment, scopeId, now), scopeId);
-        orchestrationChanged += 1;
-      }
-
-      const existingMemoryRoles = new Set(current.memoryAssignments.map((assignment) => assignment.role));
-      for (const assignment of template.memoryAssignments) {
-        if (existingMemoryRoles.has(assignment.role)) {
-          skipped.push(`memory:${assignment.role}`);
-          continue;
-        }
-        await this.upsertMemoryAssignment(memoryRecordFromTemplate(assignment, scopeId, now));
-        memoryChanged += 1;
-      }
-
-      const existingModuleIds = new Set(current.moduleToggles.map((toggle) => toggle.moduleId));
-      moduleChanged = await this.applyModuleToggles(
-        (template.moduleToggles ?? []).filter((toggle) => {
-          if (existingModuleIds.has(toggle.moduleId)) {
-            skipped.push(`module:${toggle.moduleId}`);
-            return false;
-          }
-          return true;
-        }),
-      );
-    } else {
-      const _exhaustive: never = mode;
-      throw new Error(`Unsupported template apply mode: ${String(_exhaustive)}`);
-    }
-
+    const changed = await this.applyTemplateChanges(template, mode, scopeId, skipped);
     const postApplyPreview = await this.preview(template, undefined, scopeId);
     return {
       applied: true,
       mode,
       template: cloneTemplate(template),
       preview: postApplyPreview,
-      changed: {
-        orchestrationAssignments: orchestrationChanged,
-        memoryAssignments: memoryChanged,
-        moduleToggles: moduleChanged,
-      },
+      changed,
       skipped,
     };
   }
@@ -731,6 +730,111 @@ export class TemplateService {
     return this.userTemplateStore.save(template, scopeKey(options.scopeId));
   }
 
+  private async applyTemplateChanges(
+    template: RectorTemplate,
+    mode: Exclude<TemplateApplyMode, "previewOnly" | "saveAsDraft">,
+    scopeId: string,
+    skipped: string[],
+  ): Promise<TemplateApplyResult["changed"]> {
+    const now = this.now();
+    if (mode === "replaceAssignments") return this.applyReplaceAssignments(template, scopeId, now, skipped);
+    if (mode === "mergeMissing") return this.applyMergeMissing(template, scopeId, now, skipped);
+    const _exhaustive: never = mode;
+    throw new Error(`Unsupported template apply mode: ${String(_exhaustive)}`);
+  }
+
+  private async applyReplaceAssignments(
+    template: RectorTemplate,
+    scopeId: string,
+    now: string,
+    skipped: string[],
+  ): Promise<TemplateApplyResult["changed"]> {
+    const orchestrationRecords = template.orchestrationAssignments.map((assignment) =>
+      orchestrationRecordFromTemplate(assignment, scopeId, now),
+    );
+    const memoryRecords = template.memoryAssignments.map((assignment) =>
+      memoryRecordFromTemplate(assignment, scopeId, now),
+    );
+    await this.replaceOrchestrationAssignments(orchestrationRecords, scopeId);
+    await this.replaceMemoryAssignments(memoryRecords, scopeId);
+    return {
+      orchestrationAssignments: orchestrationRecords.length,
+      memoryAssignments: memoryRecords.length,
+      moduleToggles: await this.applyModuleToggles(template.moduleToggles ?? [], scopeId, skipped),
+    };
+  }
+
+  private async applyMergeMissing(
+    template: RectorTemplate,
+    scopeId: string,
+    now: string,
+    skipped: string[],
+  ): Promise<TemplateApplyResult["changed"]> {
+    const current = await this.currentConfig(scopeId);
+    return {
+      orchestrationAssignments: await this.mergeMissingOrchestrationAssignments(template, current, scopeId, now, skipped),
+      memoryAssignments: await this.mergeMissingMemoryAssignments(template, current, scopeId, now, skipped),
+      moduleToggles: await this.mergeMissingModuleToggles(template, current, scopeId, skipped),
+    };
+  }
+
+  private async mergeMissingOrchestrationAssignments(
+    template: RectorTemplate,
+    current: CurrentTemplateConfig,
+    scopeId: string,
+    now: string,
+    skipped: string[],
+  ): Promise<number> {
+    const existingRoles = new Set(current.orchestrationAssignments.map((assignment) => assignment.role));
+    let changed = 0;
+    for (const assignment of template.orchestrationAssignments) {
+      if (existingRoles.has(assignment.role)) {
+        skipped.push(`orchestration:${assignment.role}`);
+        continue;
+      }
+      await this.upsertOrchestrationAssignment(orchestrationRecordFromTemplate(assignment, scopeId, now), scopeId);
+      changed += 1;
+    }
+    return changed;
+  }
+
+  private async mergeMissingMemoryAssignments(
+    template: RectorTemplate,
+    current: CurrentTemplateConfig,
+    scopeId: string,
+    now: string,
+    skipped: string[],
+  ): Promise<number> {
+    const existingRoles = new Set(current.memoryAssignments.map((assignment) => assignment.role));
+    let changed = 0;
+    for (const assignment of template.memoryAssignments) {
+      if (existingRoles.has(assignment.role)) {
+        skipped.push(`memory:${assignment.role}`);
+        continue;
+      }
+      await this.upsertMemoryAssignment(memoryRecordFromTemplate(assignment, scopeId, now));
+      changed += 1;
+    }
+    return changed;
+  }
+
+  private async mergeMissingModuleToggles(
+    template: RectorTemplate,
+    current: CurrentTemplateConfig,
+    scopeId: string,
+    skipped: string[],
+  ): Promise<number> {
+    const existingIds = new Set(current.moduleToggles.map((toggle) => toggle.moduleId));
+    const missing = (template.moduleToggles ?? []).filter((toggle) => {
+      if (existingIds.has(toggle.moduleId)) {
+        skipped.push(moduleSkipReason(toggle.moduleId, scopeId));
+        return false;
+      }
+      return true;
+    });
+    return this.applyModuleToggles(missing, scopeId, skipped);
+  }
+
   private async upsertOrchestrationAssignment(record: OrchestrationModelAssignment, scopeId: string): Promise<void> {
     const result = await this.deps.orchestrationAssignmentStore.upsertAssignment(
       record.role,
@@ -772,6 +876,18 @@ export class TemplateService {
     return template;
   }
 
+  private async resolveTemplate(templateOrId: string | RectorTemplate, scopeId: string): Promise<RectorTemplate> {
+    return typeof templateOrId === "string" ? this.requireTemplate(templateOrId, scopeId) : parseRectorTemplate(templateOrId);
+  }
+
+  private async previewAnalysis(template: RectorTemplate, current: CurrentTemplateConfig): Promise<TemplatePreviewAnalysis> {
+    const missingProviderConfigs = this.missingProviderConfigs(template, current);
+    const missingSecrets = await this.missingSecretRequirements(template, current);
+    const capabilityMismatches = this.capabilityMismatches(template, current);
+    const externalNetworkImplications = this.externalNetworkImplications(template, current);
+    return { missingProviderConfigs, missingSecrets, capabilityMismatches, externalNetworkImplications };
+  }
+
   private async currentConfig(scopeId: string, overrides: Partial<CurrentTemplateConfig> = {}): Promise<CurrentTemplateConfig> {
     const providerState = await this.deps.providerConfigStore.getState();
     const memoryState = await this.deps.memoryConfigStore.getState();
@@ -798,38 +914,52 @@ export class TemplateService {
   }
 
   private missingProviderConfigs(template: RectorTemplate, current: CurrentTemplateConfig): TemplateMissingProviderConfig[] {
-    const missing: TemplateMissingProviderConfig[] = [];
     const providerIds = new Set(current.providerRecords.map((provider) => provider.id));
     const providerKinds = new Set(current.providerRecords.map((provider) => provider.kind));
     const memoryIds = new Set(current.memoryProviderRecords.map((provider) => provider.id));
     const memoryKinds = new Set(current.memoryProviderRecords.map((provider) => provider.kind));
+    const missing = [
+      ...this.missingRequiredProviderKinds(template, providerKinds, memoryKinds),
+      ...this.missingOrchestrationProviders(template, providerIds),
+      ...this.missingMemoryProviders(template, memoryIds),
+    ];
+    return uniqueMissingProviderConfigs(missing);
+  }
 
-    for (const kind of template.requiredProviderKinds ?? []) {
-      if (!isExternalProviderKind(kind)) continue;
-      if (!providerKinds.has(kind as ProviderConfigRecord["kind"]) && !memoryKinds.has(kind as MemoryProviderRecord["kind"])) {
-        missing.push({ providerKind: kind, reason: "required provider kind is not configured" });
-      }
-    }
+  private missingRequiredProviderKinds(
+    template: RectorTemplate,
+    providerKinds: ReadonlySet<string>,
+    memoryKinds: ReadonlySet<string>,
+  ): TemplateMissingProviderConfig[] {
+    return (template.requiredProviderKinds ?? [])
+      .filter(isExternalProviderKind)
+      .filter((kind) => !providerKinds.has(kind) && !memoryKinds.has(kind))
+      .map((kind) => ({ providerKind: kind, reason: "required provider kind is not configured" }));
+  }
 
-    for (const assignment of template.orchestrationAssignments) {
-      if (isExternalProviderId(assignment.providerId) && !providerIds.has(assignment.providerId)) {
-        missing.push({ providerId: assignment.providerId, reason: `orchestration role ${assignment.role} references an unconfigured provider` });
-      }
-    }
+  private missingOrchestrationProviders(
+    template: RectorTemplate,
+    providerIds: ReadonlySet<string>,
+  ): TemplateMissingProviderConfig[] {
+    return activeOrchestrationAssignments(template)
+      .filter((assignment) => isExternalProviderId(assignment.providerId) && !providerIds.has(assignment.providerId))
+      .map((assignment) => ({
+        providerId: assignment.providerId,
+        reason: `orchestration role ${assignment.role} references an unconfigured provider`,
+      }));
+  }
 
-    for (const assignment of template.memoryAssignments) {
-      if (isExternalProviderId(assignment.providerRecordId) && !memoryIds.has(assignment.providerRecordId)) {
-        missing.push({ providerId: assignment.providerRecordId, providerKind: assignment.providerKind, reason: `memory role ${assignment.role} references an unconfigured provider` });
-      }
-    }
-
-    const seen = new Set<string>();
-    return missing.filter((item) => {
-      const key = `${item.providerKind ?? ""}:${item.providerId ?? ""}:${item.reason}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+  private missingMemoryProviders(
+    template: RectorTemplate,
+    memoryIds: ReadonlySet<string>,
+  ): TemplateMissingProviderConfig[] {
+    return activeMemoryAssignments(template)
+      .filter((assignment) => isExternalProviderId(assignment.providerRecordId) && !memoryIds.has(assignment.providerRecordId))
+      .map((assignment) => ({
+        providerId: assignment.providerRecordId,
+        providerKind: assignment.providerKind,
+        reason: `memory role ${assignment.role} references an unconfigured provider`,
+      }));
   }
 
   private async missingSecretRequirements(
@@ -838,12 +968,12 @@ export class TemplateService {
   ): Promise<TemplateMissingSecretRequirement[]> {
     const requiredKinds = new Set((template.requiredProviderKinds ?? []).filter(isExternalProviderKind));
     const requiredProviderIds = new Set(
-      template.orchestrationAssignments
+      activeOrchestrationAssignments(template)
         .map((assignment) => assignment.providerId)
         .filter(isExternalProviderId),
     );
     const requiredMemoryIds = new Set(
-      template.memoryAssignments
+      activeMemoryAssignments(template)
         .map((assignment) => assignment.providerRecordId)
         .filter(isExternalProviderId),
     );
@@ -891,13 +1021,13 @@ export class TemplateService {
     for (const kind of template.requiredProviderKinds ?? []) {
       if (isExternalProviderKind(kind)) implications.add(`requires external provider kind ${kind}`);
     }
-    for (const assignment of template.orchestrationAssignments) {
+    for (const assignment of activeOrchestrationAssignments(template)) {
       const kind = providerKindForId(assignment.providerId, current.providerRecords);
       if (isExternalProviderId(assignment.providerId)) {
         implications.add(`orchestration role ${assignment.role} may call provider ${assignment.providerId}${kind ? ` (${kind})` : ""}`);
       }
     }
-    for (const assignment of template.memoryAssignments) {
+    for (const assignment of activeMemoryAssignments(template)) {
       const kind = assignment.providerKind ?? memoryKindForId(assignment.providerRecordId, current.memoryProviderRecords);
       if (isExternalProviderId(assignment.providerRecordId) || isExternalProviderKind(kind)) {
         implications.add(`memory role ${assignment.role} may use external provider ${assignment.providerRecordId}${kind ? ` (${kind})` : ""}`);
@@ -918,8 +1048,17 @@ export class TemplateService {
     }
   }
 
-  private async applyModuleToggles(toggles: readonly TemplateModuleToggle[]): Promise<number> {
+  private async applyModuleToggles(
+    toggles: readonly TemplateModuleToggle[],
+    scopeId: string,
+    skipped: string[],
+  ): Promise<number> {
+    if (scopeId !== "default") {
+      skipped.push(...toggles.map((toggle) => moduleSkipReason(toggle.moduleId, scopeId)));
+      return 0;
+    }
     if (!this.deps.moduleConfigStore) return 0;
+
     let changed = 0;
     for (const toggle of toggles) {
       const result = await this.deps.moduleConfigStore.setModuleEnabled(toggle.moduleId, toggle.enabled);
