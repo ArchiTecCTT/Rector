@@ -13,7 +13,7 @@ import {
 import { buildModelRouter, FakeLLMProvider, type ModelRouter } from "../providers/llm";
 import { buildConfiguredRouter } from "../providers/configBridge";
 import { WorkspaceSandboxAdapter, type SandboxAdapter } from "../sandbox";
-import { createE2BSandboxAdapter } from "../sandbox/e2bSandboxAdapter";
+import { checkE2BSandboxReadiness, createE2BSandboxAdapter } from "../sandbox/e2bSandboxAdapter";
 import {
   describeRequiredProviderEnvKeys,
   resolveOrchestrationConfig,
@@ -187,7 +187,21 @@ async function buildStartupSandboxAdapter(config: OrchestrationConfig): Promise<
   if (config.mode === "external") {
     const apiKey = await resolveE2BApiKey();
     if (apiKey) {
-      return createE2BSandboxAdapter({ apiKey, workspaceRoot: SANDBOX_WORKSPACE_ROOT });
+      const readiness = checkE2BSandboxReadiness({
+        apiKey,
+        networkMode: "external",
+        defaultTimeoutMs: 60_000,
+      });
+      if (!readiness.ready) {
+        console.warn(`E2B sandbox not ready: ${redactString(readiness.message)}`);
+      } else {
+        return createE2BSandboxAdapter({
+          apiKey,
+          networkMode: "external",
+          workspaceRoot: SANDBOX_WORKSPACE_ROOT,
+          defaultTimeoutMs: 60_000,
+        });
+      }
     }
   }
   // Local mode (Req 6.7) — and external mode with no configured E2B key — use the network-free

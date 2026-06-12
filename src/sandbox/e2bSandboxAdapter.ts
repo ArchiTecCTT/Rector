@@ -22,6 +22,7 @@ import {
   type SandboxOperationInput,
   type SandboxOperationKind,
   type SandboxOperationResult,
+  type SandboxPolicyInput,
   type SandboxProviderMetadata,
   type WorkspaceFs,
 } from "./index";
@@ -70,6 +71,8 @@ export type E2BClientFactory = (apiKey: string) => E2BClient;
 export interface E2BSandboxOptions {
   /** E2B API key, read transiently from the Secret_Store at construction. */
   apiKey: string;
+  /** Explicit external network mode required by the production startup readiness check. */
+  networkMode?: "external";
   /** Absolute workspace root; the containment boundary for every operation. */
   workspaceRoot: string;
   /** Commands permitted for `RUN_COMMAND` (exact match). Defaults to none. */
@@ -78,6 +81,13 @@ export interface E2BSandboxOptions {
   riskyCommands?: string[];
   /** Explicit approvals authorizing risky writes/commands. */
   approvals?: SandboxApproval[];
+  /** Optional policy override shared with the workspace gateway. */
+  policy?: SandboxPolicyInput;
+  /** Default command timeout for container calls when an operation omits timeoutMs. */
+  defaultTimeoutMs?: number;
+  /** Per-stream capture caps; default to MAX_CAPTURED_STREAM_BYTES. */
+  maxStdoutBytes?: number;
+  maxStderrBytes?: number;
   /**
    * Injectable client factory (Req 6.1). Tests supply a counting/in-memory
    * double; the production default lazily `require`s the optional E2B client
@@ -87,6 +97,35 @@ export interface E2BSandboxOptions {
   now?: () => string;
   /** Injected filesystem surface used only for containment + reads; defaults to `node:fs`. */
   fsImpl?: WorkspaceFs;
+}
+
+export type E2BReadinessReason =
+  | "E2B_API_KEY_MISSING"
+  | "E2B_NETWORK_MODE_NOT_EXTERNAL"
+  | "E2B_TIMEOUT_MISSING";
+
+export interface E2BReadinessCheck {
+  ready: boolean;
+  reasonCodes: E2BReadinessReason[];
+  message: string;
+}
+
+export function checkE2BSandboxReadiness(options: Pick<E2BSandboxOptions, "apiKey" | "networkMode" | "defaultTimeoutMs">): E2BReadinessCheck {
+  const reasonCodes: E2BReadinessReason[] = [];
+  if (typeof options.apiKey !== "string" || options.apiKey.trim().length === 0) {
+    reasonCodes.push("E2B_API_KEY_MISSING");
+  }
+  if (options.networkMode !== "external") {
+    reasonCodes.push("E2B_NETWORK_MODE_NOT_EXTERNAL");
+  }
+  if (typeof options.defaultTimeoutMs !== "number" || !Number.isFinite(options.defaultTimeoutMs) || options.defaultTimeoutMs <= 0) {
+    reasonCodes.push("E2B_TIMEOUT_MISSING");
+  }
+  return {
+    ready: reasonCodes.length === 0,
+    reasonCodes,
+    message: reasonCodes.length === 0 ? "E2B sandbox ready" : redactString(reasonCodes.join(", ")),
+  };
 }
 
 /**
@@ -154,6 +193,9 @@ class E2BSandboxAdapter implements SandboxAdapter {
   private readonly clientFactory: E2BClientFactory;
   private readonly now: () => string;
   private readonly gateway: WorkspaceSandboxAdapter;
+  private readonly defaultTimeoutMs: number;
+  private readonly maxStdoutBytes: number;
+  private readonly maxStderrBytes: number;
   private client: E2BClient | undefined;
 
   constructor(options: E2BSandboxOptions) {
@@ -161,6 +203,9 @@ class E2BSandboxAdapter implements SandboxAdapter {
     this.workspaceRoot = options.workspaceRoot;
     this.clientFactory = options.clientFactory ?? defaultClientFactory;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.defaultTimeoutMs = positiveInt(options.defaultTimeoutMs, WORKSPACE_COMMAND_TIMEOUT_MS, 3_600_000);
+    this.maxStdoutBytes = positiveInt(options.maxStdoutBytes, MAX_CAPTURED_STREAM_BYTES, MAX_CAPTURED_STREAM_BYTES);
+    this.maxStderrBytes = positiveInt(options.maxStderrBytes, MAX_CAPTURED_STREAM_BYTES, MAX_CAPTURED_STREAM_BYTES);
 
     const baseFs = options.fsImpl ?? defaultWorkspaceFs;
     // The gateway runs the identical policy gates as the workspace sandbox, but
@@ -173,6 +218,7 @@ class E2BSandboxAdapter implements SandboxAdapter {
       allowlistedCommands: options.allowlistedCommands,
       riskyCommands: options.riskyCommands,
       approvals: options.approvals,
+      policy: options.policy,
       now: this.now,
       fsImpl: {
         realpathSync: baseFs.realpathSync,
@@ -287,7 +333,7 @@ class E2BSandboxAdapter implements SandboxAdapter {
       };
     }
 
-    const timeoutMs = input.timeoutMs ?? WORKSPACE_COMMAND_TIMEOUT_MS;
+    const timeoutMs = input.timeoutMs ?? this.defaultTimeoutMs;
     let raw: E2BCommandResult;
     try {
       raw = await client.value.runCommand({
@@ -306,8 +352,8 @@ class E2BSandboxAdapter implements SandboxAdapter {
     }
 
     // Capture (Req 6.4) → truncate (Req 6.5) → redact (Req 6.8).
-    const stdoutCapture = truncateStream(raw.stdout ?? "");
-    const stderrCapture = truncateStream(raw.stderr ?? "");
+    const stdoutCapture = truncateStream(raw.stdout ?? "", this.maxStdoutBytes);
+    const stderrCapture = truncateStream(raw.stderr ?? "", this.maxStderrBytes);
     const exitCode = Number.isFinite(raw.exitCode) ? raw.exitCode : 1;
 
     return {
@@ -458,19 +504,26 @@ export function createE2BSandboxAdapter(options: E2BSandboxOptions): SandboxAdap
  * MAX_CAPTURED_STREAM_BYTES, reporting whether truncation occurred so the
  * caller can set the truncation indicator (Req 6.5).
  */
-function truncateStream(value: string): { value: string; truncated: boolean } {
+function truncateStream(value: string, maxBytes: number): { value: string; truncated: boolean } {
+  const cap = positiveInt(maxBytes, MAX_CAPTURED_STREAM_BYTES, MAX_CAPTURED_STREAM_BYTES);
   const encoder = new TextEncoder();
-  if (encoder.encode(value).length <= MAX_CAPTURED_STREAM_BYTES) {
+  if (encoder.encode(value).length <= cap) {
     return { value, truncated: false };
   }
 
   let result = value;
-  while (encoder.encode(result).length > MAX_CAPTURED_STREAM_BYTES && result.length > 0) {
-    const overflowBytes = encoder.encode(result).length - MAX_CAPTURED_STREAM_BYTES;
+  while (encoder.encode(result).length > cap && result.length > 0) {
+    const overflowBytes = encoder.encode(result).length - cap;
     const dropChars = Math.max(1, Math.ceil(overflowBytes / 4));
     result = result.slice(0, Math.max(0, result.length - dropChars));
   }
   return { value: result, truncated: true };
+}
+
+function positiveInt(value: unknown, fallback: number, max: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.min(Math.trunc(value), max)
+    : fallback;
 }
 
 function durationMs(startedAt: string, completedAt: string): number {

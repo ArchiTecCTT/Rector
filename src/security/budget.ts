@@ -19,6 +19,25 @@ export interface BudgetDecision {
   usage: Required<Omit<BudgetUsage, "provider">> & { provider?: string };
 }
 
+export type SafetyReasonCode =
+  | "SANDBOX_RUNTIME_BUDGET_EXCEEDED"
+  | "SANDBOX_RUNTIME_APPROVAL_REQUIRED";
+
+export interface SandboxRuntimeSafetyInput {
+  runtimeMs: number;
+  maxRuntimeMs: number;
+  approvalRequiredAboveMs?: number;
+}
+
+export interface SandboxRuntimeSafetyDecision {
+  status: BudgetDecisionStatus;
+  reasonCodes: SafetyReasonCode[];
+  reasons: string[];
+  runtimeMs: number;
+  maxRuntimeMs: number;
+  approvalRequiredAboveMs: number;
+}
+
 export function evaluateBudget(run: Run, usage: BudgetUsage = {}): BudgetDecision {
   const budget = run.budget;
   const normalized = normalizeUsage(run, usage);
@@ -93,6 +112,51 @@ export function enforceMaxPerRunBudget(
   }
 
   return { status: "allowed", reasons: [], usage: base.usage };
+}
+
+/**
+ * Sandbox runtime safety gate used before local/E2B command execution.
+ * It turns runtime-budget violations into structured decisions/reason codes so
+ * callers can fail closed or request approval instead of throwing from the
+ * command path.
+ */
+export function evaluateSandboxRuntimeSafety(
+  input: SandboxRuntimeSafetyInput,
+): SandboxRuntimeSafetyDecision {
+  const runtimeMs = intFrom(input.runtimeMs, 0);
+  const maxRuntimeMs = intFrom(input.maxRuntimeMs, 0);
+  const approvalRequiredAboveMs = intFrom(input.approvalRequiredAboveMs, 0);
+
+  if (maxRuntimeMs <= 0 || runtimeMs > maxRuntimeMs) {
+    return {
+      status: "denied",
+      reasonCodes: ["SANDBOX_RUNTIME_BUDGET_EXCEEDED"],
+      reasons: [`sandbox runtime ${runtimeMs}ms exceeds maxRuntimeMs ${maxRuntimeMs}ms`],
+      runtimeMs,
+      maxRuntimeMs,
+      approvalRequiredAboveMs,
+    };
+  }
+
+  if (approvalRequiredAboveMs > 0 && runtimeMs > approvalRequiredAboveMs) {
+    return {
+      status: "NEEDS_DECISION",
+      reasonCodes: ["SANDBOX_RUNTIME_APPROVAL_REQUIRED"],
+      reasons: [`sandbox runtime ${runtimeMs}ms requires approval above ${approvalRequiredAboveMs}ms`],
+      runtimeMs,
+      maxRuntimeMs,
+      approvalRequiredAboveMs,
+    };
+  }
+
+  return {
+    status: "allowed",
+    reasonCodes: [],
+    reasons: [],
+    runtimeMs,
+    maxRuntimeMs,
+    approvalRequiredAboveMs,
+  };
 }
 
 function normalizeUsage(run: Run, usage: BudgetUsage): BudgetDecision["usage"] {
