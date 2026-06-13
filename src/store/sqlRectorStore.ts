@@ -97,6 +97,21 @@ import {
   sanitizeCreateMemoryEntryInput,
   sanitizeUpdateMemoryEntryInput,
 } from "../memory/entryUtils";
+import {
+  getConversationLineage as walkConversationLineage,
+  validateParentConversation,
+} from "./lineage";
+import {
+  buildSessionSearchHit,
+  compareSessionSearchHits,
+  keywordSearchConversations,
+  normalizeSessionSearchLimit,
+  normalizeSessionSearchQuery,
+  redactedIndexContent,
+  toFts5Query,
+  type SessionSearchHit,
+  type SessionSearchQuery,
+} from "./sessionSearch";
 
 export interface SqlRectorStoreOptions {
   driver: SqlDriver;
@@ -140,9 +155,15 @@ export class SqlRectorStore implements RectorStore {
 
   async createConversation(input: CreateConversationInput): Promise<Conversation> {
     const now = this.nowFn();
+    const id = this.nextId("conv", "conversations");
+    if (input.parentConversationId) {
+      await validateParentConversation(this, id, input.parentConversationId, {
+        workspaceId: input.workspaceId,
+      });
+    }
     const conversation = ConversationSchema.parse({
       ...structuredClone(input),
-      id: this.nextId("conv", "conversations"),
+      id,
       compressionGeneration: input.compressionGeneration ?? 0,
       createdAt: now,
       updatedAt: now,
@@ -165,6 +186,15 @@ export class SqlRectorStore implements RectorStore {
   ): Promise<Conversation | undefined> {
     const current = await this.getConversation(id);
     if (!current) return undefined;
+    const nextWorkspaceId = patch.workspaceId ?? current.workspaceId;
+    const nextParentConversationId = Object.prototype.hasOwnProperty.call(patch, "parentConversationId")
+      ? patch.parentConversationId
+      : current.parentConversationId;
+    if (nextParentConversationId) {
+      await validateParentConversation(this, current.id, nextParentConversationId, {
+        workspaceId: nextWorkspaceId,
+      });
+    }
     const updated = ConversationSchema.parse({
       ...current,
       ...structuredClone(patch),
@@ -173,11 +203,64 @@ export class SqlRectorStore implements RectorStore {
       updatedAt: this.nowFn(),
     });
     this.updateRow("conversations", updated.id, updated.workspaceId, updated);
+    if (updated.workspaceId !== current.workspaceId) {
+      await this.reindexConversationMessages(updated.id);
+    }
     return updated;
   }
 
   async deleteConversation(id: string): Promise<boolean> {
-    return this.deleteRow("conversations", id);
+    const deleted = this.deleteRow("conversations", id);
+    if (deleted) this.deleteConversationFromSearch(id);
+    return deleted;
+  }
+
+  async searchConversations(query: SessionSearchQuery): Promise<SessionSearchHit[]> {
+    const normalizedQuery = normalizeSessionSearchQuery(query.query);
+    const normalized = { ...query, query: normalizedQuery, limit: normalizeSessionSearchLimit(query.limit) };
+    if (this.driver.dialect !== "sqlite" || !normalizedQuery) {
+      return keywordSearchConversations(this, normalized);
+    }
+
+    const ftsQuery = toFts5Query(normalizedQuery);
+    if (!ftsQuery) return [];
+
+    const rows = this.driver.all<{
+      message_id: string;
+      conversation_id: string;
+      content: string;
+      rank: number | bigint;
+    }>(
+      `SELECT message_id, conversation_id, content, bm25(messages_fts) AS rank
+       FROM messages_fts
+       WHERE messages_fts MATCH ? AND workspace_id = ?
+       ORDER BY rank ASC
+       LIMIT ?`,
+      [ftsQuery, normalized.workspaceId, normalized.limit],
+    );
+
+    const hits: SessionSearchHit[] = [];
+    for (const row of rows) {
+      const conversation = await this.getConversation(row.conversation_id);
+      if (!conversation || conversation.workspaceId !== normalized.workspaceId) continue;
+      const message = await this.getMessage(row.message_id);
+      if (!message) continue;
+      hits.push(
+        buildSessionSearchHit({
+          conversation,
+          message,
+          content: row.content,
+          query: normalizedQuery,
+          baseScore: 2 + 1 / (1 + Math.abs(Number(row.rank ?? 0))),
+        }),
+      );
+    }
+
+    return hits.sort(compareSessionSearchHits).slice(0, normalized.limit);
+  }
+
+  async getConversationLineage(conversationId: string): Promise<Conversation[]> {
+    return walkConversationLineage(this, conversationId);
   }
 
   // --- Messages ------------------------------------------------------------
@@ -189,6 +272,7 @@ export class SqlRectorStore implements RectorStore {
       createdAt: this.nowFn(),
     });
     this.insertRow("messages", message.id, message.conversationId, message);
+    await this.indexMessageForSearch(message);
     return message;
   }
 
@@ -210,11 +294,14 @@ export class SqlRectorStore implements RectorStore {
       createdAt: current.createdAt,
     });
     this.updateRow("messages", updated.id, updated.conversationId, updated);
+    await this.indexMessageForSearch(updated);
     return updated;
   }
 
   async deleteMessage(id: string): Promise<boolean> {
-    return this.deleteRow("messages", id);
+    const deleted = this.deleteRow("messages", id);
+    if (deleted) this.deleteMessageFromSearch(id);
+    return deleted;
   }
 
   // --- Runs ----------------------------------------------------------------
@@ -388,6 +475,18 @@ export class SqlRectorStore implements RectorStore {
     this.driver.exec(table("run_events", "run_id"));
     this.driver.exec(table("artifacts", "kind"));
     this.driver.exec(table("memories", "layer"));
+
+    if (!mysql) {
+      this.driver.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+          message_id UNINDEXED,
+          conversation_id UNINDEXED,
+          workspace_id UNINDEXED,
+          content,
+          tokenize = 'porter'
+        )
+      `);
+    }
   }
 
   /** Map a table name to its indexable filter column. */
@@ -463,6 +562,38 @@ export class SqlRectorStore implements RectorStore {
     if (!this.rowExists(table, id)) return false;
     this.driver.run(`DELETE FROM ${table} WHERE id = ?`, [id]);
     return true;
+  }
+
+  private async indexMessageForSearch(message: Message): Promise<void> {
+    if (this.driver.dialect !== "sqlite") return;
+    const conversation = await this.getConversation(message.conversationId);
+    if (!conversation) {
+      this.deleteMessageFromSearch(message.id);
+      return;
+    }
+    this.deleteMessageFromSearch(message.id);
+    this.driver.run(
+      "INSERT INTO messages_fts (message_id, conversation_id, workspace_id, content) VALUES (?, ?, ?, ?)",
+      [message.id, message.conversationId, conversation.workspaceId, redactedIndexContent(message.content)],
+    );
+  }
+
+  private deleteMessageFromSearch(messageId: string): void {
+    if (this.driver.dialect !== "sqlite") return;
+    this.driver.run("DELETE FROM messages_fts WHERE message_id = ?", [messageId]);
+  }
+
+  private deleteConversationFromSearch(conversationId: string): void {
+    if (this.driver.dialect !== "sqlite") return;
+    this.driver.run("DELETE FROM messages_fts WHERE conversation_id = ?", [conversationId]);
+  }
+
+  private async reindexConversationMessages(conversationId: string): Promise<void> {
+    if (this.driver.dialect !== "sqlite") return;
+    const messages = await this.listMessages(conversationId);
+    for (const message of messages) {
+      await this.indexMessageForSearch(message);
+    }
   }
 
   private readRow<T>(

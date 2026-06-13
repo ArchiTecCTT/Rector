@@ -127,6 +127,14 @@ let phaseCardsAutoExpanded = false;
 const state = {
   conversationId: null,
   conversations: [],
+  conversationSearch: {
+    query: "",
+    hits: [],
+    active: false,
+    loading: false,
+    timer: null,
+    requestSeq: 0,
+  },
   lastResultByMessage: new Map(), // assistantMessageId -> result payload (for trace)
 };
 
@@ -172,9 +180,11 @@ function cacheShellEls() {
   cacheElementIds([
     "conversation-list",
     "conversation-empty",
+    "session-search-input",
     "new-conversation",
     "health-indicator",
     "chat-title",
+    "lineage-breadcrumb",
     "run-status",
     "live-indicator",
     "messages",
@@ -531,6 +541,28 @@ async function loadConversations() {
 function renderConversationList() {
   const list = els["conversation-list"];
   list.innerHTML = "";
+  const search = state.conversationSearch;
+  if (search.active) {
+    if (search.loading) {
+      const loading = document.createElement("p");
+      loading.className = "conversation-list__empty";
+      loading.textContent = "Searching...";
+      list.appendChild(loading);
+      return;
+    }
+    if (!search.hits.length) {
+      const empty = document.createElement("p");
+      empty.className = "conversation-list__empty";
+      empty.textContent = "No matching conversations.";
+      list.appendChild(empty);
+      return;
+    }
+    for (const hit of search.hits) {
+      list.appendChild(renderSearchHitButton(hit));
+    }
+    return;
+  }
+
   if (!state.conversations.length) {
     const empty = document.createElement("p");
     empty.className = "conversation-list__empty";
@@ -539,13 +571,99 @@ function renderConversationList() {
     return;
   }
   for (const conv of state.conversations) {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "conversation-item" + (conv.id === state.conversationId ? " active" : "");
-    item.textContent = conv.title || "Untitled conversation";
-    item.title = conv.title || conv.id;
-    item.addEventListener("click", () => openConversation(conv.id));
-    list.appendChild(item);
+    list.appendChild(renderConversationButton(conv));
+  }
+}
+
+function renderConversationButton(conv) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = "conversation-item" + (conv.id === state.conversationId ? " active" : "");
+  item.title = conv.title || conv.id;
+
+  const row = document.createElement("span");
+  row.className = "conversation-item__row";
+  const title = document.createElement("span");
+  title.className = "conversation-item__title";
+  title.textContent = conv.title || "Untitled conversation";
+  row.appendChild(title);
+  appendGenerationBadge(row, conv.compressionGeneration);
+  item.appendChild(row);
+
+  item.addEventListener("click", () => openConversation(conv.id));
+  return item;
+}
+
+function renderSearchHitButton(hit) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = "conversation-item conversation-item--search" + (hit.conversationId === state.conversationId ? " active" : "");
+  item.title = hit.title || hit.conversationId;
+
+  const row = document.createElement("span");
+  row.className = "conversation-item__row";
+  const title = document.createElement("span");
+  title.className = "conversation-item__title";
+  title.textContent = hit.title || "Untitled conversation";
+  row.appendChild(title);
+  appendGenerationBadge(row, hit.compressionGeneration);
+  item.appendChild(row);
+
+  const snippet = document.createElement("span");
+  snippet.className = "conversation-item__snippet";
+  snippet.textContent = hit.snippet || "";
+  item.appendChild(snippet);
+
+  item.addEventListener("click", () => openConversation(hit.conversationId));
+  return item;
+}
+
+function appendGenerationBadge(parent, generation) {
+  const gen = Number(generation || 0);
+  if (!Number.isFinite(gen) || gen <= 0) return;
+  const badge = document.createElement("span");
+  badge.className = "conversation-item__badge";
+  badge.textContent = `gen-${gen}`;
+  parent.appendChild(badge);
+}
+
+function bindConversationSearch() {
+  const input = els["session-search-input"];
+  if (!input) return;
+  input.addEventListener("input", () => {
+    const query = input.value.trim();
+    state.conversationSearch.query = query;
+    if (state.conversationSearch.timer) clearTimeout(state.conversationSearch.timer);
+    if (!query) {
+      state.conversationSearch.active = false;
+      state.conversationSearch.loading = false;
+      state.conversationSearch.hits = [];
+      renderConversationList();
+      return;
+    }
+    state.conversationSearch.active = true;
+    state.conversationSearch.loading = true;
+    renderConversationList();
+    state.conversationSearch.timer = setTimeout(() => {
+      void runConversationSearch(query);
+    }, 300);
+  });
+}
+
+async function runConversationSearch(query) {
+  const seq = ++state.conversationSearch.requestSeq;
+  try {
+    const data = await api(`/conversations/search?q=${encodeURIComponent(query)}&limit=20&workspaceId=browser`);
+    if (seq !== state.conversationSearch.requestSeq || state.conversationSearch.query !== query) return;
+    state.conversationSearch.hits = data.hits || [];
+  } catch (err) {
+    console.error("Failed to search conversations", err);
+    if (seq === state.conversationSearch.requestSeq) state.conversationSearch.hits = [];
+  } finally {
+    if (seq === state.conversationSearch.requestSeq) {
+      state.conversationSearch.loading = false;
+      renderConversationList();
+    }
   }
 }
 
@@ -564,6 +682,7 @@ async function ensureConversation() {
 function startNewConversation() {
   state.conversationId = null;
   els["chat-title"].textContent = "New conversation";
+  renderLineageBreadcrumb([]);
   setRunStatus("Idle", "status-pill--idle");
   clearMessages(true);
   resetTrace();
@@ -579,6 +698,8 @@ async function openConversation(id) {
   try {
     const data = await api(`/chat/conversations/${id}`);
     els["chat-title"].textContent = data.conversation?.title || "Conversation";
+    renderLineageBreadcrumb([data.conversation].filter(Boolean));
+    void loadConversationLineage(id);
     clearMessages(false);
     const messages = data.messages || [];
     for (const message of messages) {
@@ -593,6 +714,33 @@ async function openConversation(id) {
   } catch (err) {
     console.error("Failed to open conversation", err);
   }
+}
+
+async function loadConversationLineage(id) {
+  try {
+    const data = await api(`/conversations/${id}/lineage`);
+    if (state.conversationId !== id) return;
+    renderLineageBreadcrumb(data.lineage || []);
+  } catch (err) {
+    console.error("Failed to load conversation lineage", err);
+  }
+}
+
+function renderLineageBreadcrumb(lineage) {
+  const el = els["lineage-breadcrumb"];
+  if (!el) return;
+  const current = lineage?.at?.(-1);
+  const generation = Number(current?.compressionGeneration || 0);
+  if (!current || (!current.parentConversationId && generation <= 0 && lineage.length <= 1)) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  const parent = lineage.length > 1 ? lineage[lineage.length - 2] : null;
+  const parentTitle = parent?.title || "Parent";
+  const currentTitle = current.title || "Current";
+  el.textContent = parent ? `${parentTitle} > ${currentTitle} (compressed)` : `gen-${generation}`;
+  el.hidden = false;
 }
 
 // --- Messages ---
@@ -6186,6 +6334,7 @@ function bindSuggestions() {
 // --- Init ---
 function init() {
   cacheEls();
+  bindConversationSearch();
   bindComposer();
   bindRunControls();
   bindDeepPlanning();

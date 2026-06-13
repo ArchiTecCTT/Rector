@@ -32,6 +32,15 @@ import {
   sanitizeCreateMemoryEntryInput,
   sanitizeUpdateMemoryEntryInput,
 } from "../memory/entryUtils";
+import {
+  getConversationLineage as walkConversationLineage,
+  validateParentConversation,
+} from "./lineage";
+import {
+  keywordSearchConversations,
+  type SessionSearchHit,
+  type SessionSearchQuery,
+} from "./sessionSearch";
 
 type IdPrefix = "conv" | "msg" | "run" | "art" | "mem";
 
@@ -62,9 +71,16 @@ export class InMemoryRectorStore implements RectorStore {
 
   async createConversation(input: CreateConversationInput): Promise<Conversation> {
     const now = this.now();
+    const id = this.peekNextId("conv");
+    if (input.parentConversationId) {
+      await validateParentConversation(this, id, input.parentConversationId, {
+        workspaceId: input.workspaceId,
+      });
+    }
+    this.counters.conv += 1;
     const conversation = ConversationSchema.parse({
       ...clone(input),
-      id: this.nextId("conv"),
+      id,
       compressionGeneration: input.compressionGeneration ?? 0,
       createdAt: now,
       updatedAt: now,
@@ -90,6 +106,15 @@ export class InMemoryRectorStore implements RectorStore {
   async updateConversation(id: string, patch: UpdateConversationInput): Promise<Conversation | undefined> {
     const current = this.conversations.get(id);
     if (!current) return undefined;
+    const nextWorkspaceId = patch.workspaceId ?? current.workspaceId;
+    const nextParentConversationId = Object.prototype.hasOwnProperty.call(patch, "parentConversationId")
+      ? patch.parentConversationId
+      : current.parentConversationId;
+    if (nextParentConversationId) {
+      await validateParentConversation(this, current.id, nextParentConversationId, {
+        workspaceId: nextWorkspaceId,
+      });
+    }
 
     const updated = ConversationSchema.parse({
       ...clone(current),
@@ -108,6 +133,14 @@ export class InMemoryRectorStore implements RectorStore {
    */
   async deleteConversation(id: string): Promise<boolean> {
     return this.conversations.delete(id);
+  }
+
+  async searchConversations(query: SessionSearchQuery): Promise<SessionSearchHit[]> {
+    return keywordSearchConversations(this, query);
+  }
+
+  async getConversationLineage(conversationId: string): Promise<Conversation[]> {
+    return walkConversationLineage(this, conversationId);
   }
 
   async createMessage(input: CreateMessageInput): Promise<Message> {
@@ -426,6 +459,10 @@ export class InMemoryRectorStore implements RectorStore {
   private nextId(prefix: IdPrefix): string {
     this.counters[prefix] += 1;
     return `${prefix}-${this.counters[prefix]}`;
+  }
+
+  private peekNextId(prefix: IdPrefix): string {
+    return `${prefix}-${this.counters[prefix] + 1}`;
   }
 
   private cloneFromMap<T>(map: Map<string, T>, id: string): T | undefined {

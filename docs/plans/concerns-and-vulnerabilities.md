@@ -62,6 +62,15 @@
 - **Plan / Mitigations:** Keep skills passive: no automatic execution, no network install, and no file writes from the catalog. Crucible denies unknown skills, enforces a max activation cap, blocks high-risk skills without approval gates, and emits redacted skill activation events. Context injection is limited to approved skill IDs and capped by `maxSkillContextChars`. Future chunks should add stronger provenance/signature checks and skill write-guard scanning before marketplace/import support.
 - **Traceability:** `docs/plans/chunks/047d-procedural-memory-skills.md`, `src/memory/skillsCatalog.ts`, `src/orchestration/crucible.ts`, `src/orchestration/contextBuilder.ts`, `tests/skillsCatalog.test.ts`, `tests/skillCrucible.integration.test.ts`.
 
+### Chunk 047e SQLite FTS search is redacted and workspace-scoped but still a local keyword index
+
+- **Source:** Chunk 047e session search and conversation lineage.
+- **Severity:** Medium for production search quality and retention policy, low for default CI.
+- **Status:** Open / accepted for 047e.
+- **Root cause:** SQLite FTS5 indexes redacted message text for local persistence only. This prevents raw secret substrings from entering or matching the FTS table, but it is still keyword-only, stores redacted copies of message text, and does not cover future TiDB/vector-backed search semantics.
+- **Plan / Mitigations:** Keep `npm test` hermetic with in-memory stores and SQLite `:memory:`. Continue redacting before FTS writes, API egress, and UI snippet rendering. Workspace filters stay mandatory on search routes. Follow-up production hardening should add retention-aware index pruning, TiDB/search-provider parity, and broader fuzz coverage for unusual FTS query syntax.
+- **Traceability:** `docs/plans/chunks/047e-session-search-lineage.md`, `src/store/sessionSearch.ts`, `src/store/sqlRectorStore.ts`, `tests/sessionSearchSqlite.test.ts`, `tests/conversationSearchApi.test.ts`.
+
 ### Chunk 042f reconciliation matrix for known hardening concerns
 
 | Concern | 042f status | Evidence | Remaining follow-up |

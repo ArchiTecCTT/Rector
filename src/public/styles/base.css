@@ -331,6 +331,28 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
   gap: var(--space-1);
 }
 
+.rail__search {
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.rail__search-input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.rail__search-input:focus {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -375,7 +397,9 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
 }
 
 .conversation-item {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   width: 100%;
   text-align: left;
   background: transparent;
@@ -385,10 +409,39 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 13px;
-  white-space: nowrap;
+  overflow: hidden;
+  margin-bottom: 2px;
+}
+
+.conversation-item__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.conversation-item__title {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 2px;
+  white-space: nowrap;
+}
+
+.conversation-item__snippet {
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.35;
+  max-height: 2.7em;
+  overflow: hidden;
+}
+
+.conversation-item__badge {
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  font-size: 10px;
+  padding: 1px 5px;
 }
 
 .conversation-item:hover {
@@ -406,6 +459,20 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
   outline: none;
   box-shadow: var(--focus-ring);
   border-color: var(--accent);
+}
+
+.lineage-breadcrumb {
+  min-width: 0;
+  max-width: 34vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.lineage-breadcrumb[hidden] {
+  display: none;
 }
 
 .rail__foot {

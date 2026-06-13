@@ -22,11 +22,14 @@ import { redactString } from "../security/redaction";
 import { InMemoryRectorStore } from "./inMemoryRectorStore";
 import { SqlRectorStore, createSqliteDriver, type SqlDriver } from "./sqlRectorStore";
 import { createTiDBDriver } from "./tidbRectorStore";
+import type { SessionSearchHit, SessionSearchQuery } from "./sessionSearch";
 
 export * from "./schemas";
 export * from "./inMemoryRectorStore";
 export * from "./sqlRectorStore";
 export * from "./tidbRectorStore";
+export * from "./sessionSearch";
+export * from "./lineage";
 
 /**
  * The store contract shared by every Rector store implementation.
@@ -41,6 +44,8 @@ export interface RectorStore {
   listConversations(workspaceId?: string): Promise<Conversation[]>;
   updateConversation(id: string, patch: UpdateConversationInput): Promise<Conversation | undefined>;
   deleteConversation(id: string): Promise<boolean>;
+  searchConversations?(query: SessionSearchQuery): Promise<SessionSearchHit[]>;
+  getConversationLineage?(conversationId: string): Promise<Conversation[]>;
 
   createMessage(input: CreateMessageInput): Promise<Message>;
   getMessage(id: string): Promise<Message | undefined>;

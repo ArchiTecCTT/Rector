@@ -153,7 +153,12 @@ import {
 } from "../providers/llm";
 import type { OrchestratorMode } from "../deployment";
 import {
+  ConversationLineageError,
+  MAX_SESSION_SEARCH_QUERY_LENGTH,
   createRectorStore,
+  getConversationLineage as walkConversationLineage,
+  normalizeSessionSearchLimit,
+  searchSessions,
   SqlRectorStore,
   type CreateMemoryEntryInput,
   type MemoryEntry,
@@ -2126,6 +2131,52 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       res.json({ conversations });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/conversations/search", async (req, res) => {
+    try {
+      const q = typeof req.query.q === "string" ? req.query.q : "";
+      if (q.length > MAX_SESSION_SEARCH_QUERY_LENGTH) {
+        return sendRedacted(res, 400, { error: `q must be ${MAX_SESSION_SEARCH_QUERY_LENGTH} characters or fewer` });
+      }
+      const limitValue = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+      const workspaceId = typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined;
+      const access = await authorize(req, res, "runs.read", {
+        workspaceId,
+        targetType: "conversation",
+      });
+      if (!access) return;
+
+      const hits = await searchSessions(rectorStore, {
+        query: q,
+        workspaceId: access.workspaceId,
+        limit: normalizeSessionSearchLimit(limitValue),
+      });
+      sendRedacted(res, 200, { hits });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(error instanceof Error ? error.message : String(error)) });
+    }
+  });
+
+  app.get("/api/conversations/:id/lineage", async (req, res) => {
+    try {
+      const conversation = await rectorStore.getConversation(req.params.id);
+      if (!conversation) return sendRedacted(res, 404, { error: "Conversation not found" });
+      const access = await authorize(req, res, "runs.read", {
+        workspaceId: conversation.workspaceId,
+        targetType: "conversation",
+        targetId: conversation.id,
+      });
+      if (!access) return;
+
+      const lineage = rectorStore.getConversationLineage
+        ? await rectorStore.getConversationLineage(conversation.id)
+        : await walkConversationLineage(rectorStore, conversation.id);
+      sendRedacted(res, 200, { lineage });
+    } catch (error) {
+      const status = error instanceof ConversationLineageError ? 400 : 500;
+      sendRedacted(res, status, { error: redactString(error instanceof Error ? error.message : String(error)) });
     }
   });
 
