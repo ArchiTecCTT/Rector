@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createApp } from "../src/api/server";
 import {
   InMemoryRateLimiter,
+  classifyRateLimitRoute,
   createRateLimitPolicy,
   createUnavailableDistributedRateLimiter,
 } from "../src/security/rateLimiter";
@@ -31,6 +32,17 @@ async function postConversation(base: string, title: string): Promise<Response> 
 }
 
 describe("rate limiter hardening", () => {
+  it("classifies API routes into specific and general buckets", () => {
+    expect(classifyRateLimitRoute("POST", "/api/chat/conversations")).toBe("chat");
+    expect(classifyRateLimitRoute("GET", "/api/chat/conversations")).toBe("general");
+    expect(classifyRateLimitRoute("GET", "/api/auth/session")).toBe("auth-login");
+    expect(classifyRateLimitRoute("POST", "/api/setup/test-connection")).toBe("provider-test-connection");
+    expect(classifyRateLimitRoute("POST", "/api/memory-providers/mem0/test-connection")).toBe("memory-provider-test");
+    expect(classifyRateLimitRoute("GET", "/api/setup")).toBe("general");
+    expect(classifyRateLimitRoute("GET", "/api/rbac/permissions")).toBe("general");
+    expect(classifyRateLimitRoute("GET", "/index.html")).toBeUndefined();
+  });
+
   it("keeps deterministic, independent buckets per identity and route", () => {
     const policy = createRateLimitPolicy({
       windowMs: 1_000,
@@ -51,6 +63,27 @@ describe("rate limiter hardening", () => {
     // Clock injection controls reset deterministically.
     expect(limiter.check("user:alice", "chat", now + 999).allowed).toBe(false);
     expect(limiter.check("user:alice", "chat", now + 1_000).allowed).toBe(true);
+  });
+
+  it("rate-limits general API routes independently from chat POST routes", async () => {
+    const app = createApp(new TaskManager(), {
+      rateLimit: {
+        windowMs: 60_000,
+        maxRequests: 1,
+        general: { maxRequests: 1 },
+      },
+    });
+
+    await withServer(app, async (base) => {
+      const firstSetup = await fetch(`${base}/api/setup`);
+      const secondSetup = await fetch(`${base}/api/setup`);
+      const chat = await postConversation(base, "still-allowed");
+
+      expect(firstSetup.status).not.toBe(429);
+      expect(secondSetup.status).toBe(429);
+      expect(await secondSetup.json()).toEqual({ error: "Too many requests" });
+      expect(chat.status).toBe(201);
+    });
   });
 
   it("emits standard rate-limit headers and preserves the legacy chat 429 body", async () => {

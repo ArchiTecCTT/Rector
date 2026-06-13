@@ -18,7 +18,9 @@ import {
 import { redactSecrets, redactString, redactOutbound, REDACTION_FAILED_ERROR } from "../security/redaction";
 import {
   InMemoryRateLimiter,
+  classifyRateLimitRoute,
   createRateLimitPolicy,
+  rateLimitErrorMessage,
   rateLimitRuleFor,
   type RateLimitConfig,
   type RateLimitDecision,
@@ -3864,16 +3866,6 @@ function apiRateLimitMiddleware(
   };
 }
 
-function classifyRateLimitRoute(method: string, requestPath: string): string | undefined {
-  if (method === "POST" && requestPath.startsWith("/api/chat/")) return "chat";
-  if (method === "POST" && requestPath === "/api/auth/login") return "auth-login";
-  if (method === "POST" && requestPath === "/api/setup/test-connection") return "provider-test-connection";
-  if (method === "POST" && /^\/api\/memory-providers\/[^/]+\/test-connection$/.test(requestPath)) {
-    return "memory-provider-test";
-  }
-  return undefined;
-}
-
 function rateLimitKeyForRequest(req: express.Request, authConfig: ParsedAuthConfig): string {
   if (req.rectorAuth?.userId) return `user:${req.rectorAuth.userId}`;
 
@@ -3915,21 +3907,6 @@ function writeRateLimitHeaders(res: express.Response, decision: RateLimitDecisio
   res.setHeader("X-RateLimit-Limit", String(decision.limit));
   res.setHeader("X-RateLimit-Remaining", String(Math.max(0, decision.remaining)));
   res.setHeader("X-RateLimit-Reset", String(Math.ceil(decision.resetAt / 1000)));
-}
-
-function rateLimitErrorMessage(route: string): string {
-  switch (route) {
-    case "chat":
-      return "Too many chat requests";
-    case "auth-login":
-      return "Too many authentication requests";
-    case "provider-test-connection":
-      return "Too many provider test requests";
-    case "memory-provider-test":
-      return "Too many memory provider test requests";
-    default:
-      return "Too many requests";
-  }
 }
 
 function parseCsvEnv(value: string | undefined): string[] {

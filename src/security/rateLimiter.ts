@@ -114,6 +114,35 @@ export function rateLimitRuleFor(policy: RateLimitPolicy, route: string): RateLi
   return policy.routes[route] ?? policy.routes.general;
 }
 
+/** Classify an HTTP request into a rate-limit route bucket. */
+export function classifyRateLimitRoute(method: string, requestPath: string): string | undefined {
+  if (method === "POST" && requestPath.startsWith("/api/chat/")) return "chat";
+  if (requestPath.startsWith("/api/auth/")) return "auth-login";
+  if (method === "POST" && requestPath === "/api/setup/test-connection") return "provider-test-connection";
+  if (method === "POST" && /^\/api\/memory-providers\/[^/]+\/test-connection$/.test(requestPath)) {
+    return "memory-provider-test";
+  }
+  if (requestPath.startsWith("/api/")) return "general";
+  return undefined;
+}
+
+export function rateLimitErrorMessage(route: string): string {
+  switch (route) {
+    case "chat":
+      return "Too many chat requests";
+    case "auth-login":
+      return "Too many authentication requests";
+    case "provider-test-connection":
+      return "Too many provider test requests";
+    case "memory-provider-test":
+      return "Too many memory provider test requests";
+    case "general":
+      return "Too many requests";
+    default:
+      return "Too many requests";
+  }
+}
+
 export class InMemoryRateLimiter implements RateLimiter {
   private readonly buckets = new Map<string, Bucket>();
 
