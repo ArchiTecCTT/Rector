@@ -16,6 +16,7 @@ import { rememberStableTierHashForRun, clearStableTierHashForRun, assemblePrompt
 export { DEFAULT_EXTERNAL_BUDGET, ProviderCallMetadataSchema, phaseObservabilityPayload, runEvent } from "./externalRunSupport";
 export type { ProviderCallMetadata } from "./externalRunSupport";
 import { runLivePlanner, type LivePlannerResult, type PlannerBlocker, type PlannerOutput } from "./planner";
+import { clearRunControl, createAbortSignal, registerRunControl } from "./runControl";
 import { createDecisionRequest, transitionRun } from "./runStateMachine";
 import { reviewPlanWithSkeptic, runLiveSkeptic, type SkepticBlocker, type SkepticReview } from "./skeptic";
 import { type BrainstemSynthesis, type BrainstemSynthesisStatus } from "./synthesizer";
@@ -53,11 +54,13 @@ import {
   NEURO_PLANNING_MODULE_ID,
 } from "../modules/builtin/neuro-planning";
 import { resolveNeuroFeatureFlags, type NeuroFeatureFlags } from "../modules/featureFlags";
+import { IterationBudget, type TurnBudgetConfig } from "./turnBudget";
 
 /** Options that tune executor/healing behaviour for orchestrated runs. */
 export interface ChatRunOptions {
   executorOptions?: ExecutorSimulatorOptions;
   maxHealingAttempts?: number;
+  turnBudget?: Partial<TurnBudgetConfig>;
   /** Opt-in MCTS-style multi-path planning (external mode only). */
   deepPlanning?: boolean;
 }
@@ -200,6 +203,10 @@ export async function runOrchestratedChatRun(
     })
   );
 
+  const runControl = registerRunControl(run.id);
+  const abortSignal = createAbortSignal(runControl);
+  const turnBudget = new IterationBudget(options.turnBudget);
+
   let activeContextPack = contextPack;
   const pressure = evaluateContextPressure(activeContextPack, activeContextPack.contextBudget?.tierBudget);
   await store.appendEvent(
@@ -271,6 +278,7 @@ export async function runOrchestratedChatRun(
         recordSpan: (name, fn) => observability.recordSpan(name, fn),
         addProviderUsage: (currentRun, usage, providerId) =>
           addProviderUsageToRun(store, currentRun, usage, providerId),
+        abortSignal,
       })
     : executePreprocessorPassthrough(run, prompt);
 
@@ -306,6 +314,7 @@ export async function runOrchestratedChatRun(
           budgetRun,
           flags: neuroFlags,
           recordSpan: (name, fn) => observability.recordSpan(name, fn),
+          abortSignal,
         },
         planningPrep,
       )
@@ -321,6 +330,7 @@ export async function runOrchestratedChatRun(
             provider: selection.provider,
             run: budgetRun,
             model: selection.model,
+            abortSignal,
           },
         );
       });
@@ -330,7 +340,10 @@ export async function runOrchestratedChatRun(
       code: "PLANNER_INVALID" as const,
       message: "Planner returned no plan",
     };
-    return resolvePlannerBlocker(store, activeArgs, budgetRun, blocker, deps);
+    const result = await resolvePlannerBlocker(store, activeArgs, budgetRun, blocker, deps);
+    clearRunControl(run.id);
+    clearStableTierHashForRun(run.id);
+    return result;
   }
 
   const plannerOutput = plannerResult.plan;
@@ -365,7 +378,7 @@ export async function runOrchestratedChatRun(
     const skepticResult = await observability.recordSpan("SKEPTIC_REVIEW", () =>
       runLiveSkeptic(
         { plannerOutput, contextPack: activeContextPack, triage },
-        { provider: skepticSelection.provider, run: costedRun, model: skepticSelection.model },
+        { provider: skepticSelection.provider, run: costedRun, model: skepticSelection.model, abortSignal },
       )
     );
     skepticProviderCall = buildProviderCallMetadata(
@@ -382,11 +395,14 @@ export async function runOrchestratedChatRun(
         code: "SKEPTIC_INVALID",
         message: "Skeptic returned no review",
       };
-      return resolveSkepticBlocker(store, activeArgs, skepticCostedRun, blocker, deps, {
+      const result = await resolveSkepticBlocker(store, activeArgs, skepticCostedRun, blocker, deps, {
         plannerOutput,
         planningProviderCall: providerCall,
         skepticProviderCall,
       });
+      clearRunControl(run.id);
+      clearStableTierHashForRun(run.id);
+      return result;
     }
     skepticReview = skepticResult.review;
   } else {
@@ -445,9 +461,13 @@ export async function runOrchestratedChatRun(
       subGoals,
       subGoalGraph,
       pathsExplored: plannerResult.pathsExplored,
+      runControl,
+      abortSignal,
+      turnBudget,
     });
   } finally {
     clearStableTierHashForRun(run.id);
+    clearRunControl(run.id);
   }
 }
 

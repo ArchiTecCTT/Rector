@@ -44,6 +44,15 @@
 - **Plan / Mitigations:** Keep `/api/tools` read-only and builtin-filtered for now, fail closed on unknown/unavailable tools, require middleware approval gates for write/destructive tools, and keep module tools unavailable when their module is disabled. Future chunks should add module tool ACL review, per-tool readiness diagnostics, and E2B network/isolation smoke tests behind explicit configured-product setup.
 - **Traceability:** `docs/plans/chunks/047b-tool-registry-executor.md`, `src/tools/*`, `src/orchestration/sandboxExecutor.ts`, `tests/toolRegistry.test.ts`, `tests/toolMiddleware.test.ts`, `tests/sandboxExecutorRegistry.integration.test.ts`, `tests/toolsApi.test.ts`.
 
+### Chunk 047c run control is in-memory and cooperative
+
+- **Source:** Chunk 047c interrupt, steer, and turn-budget implementation.
+- **Severity:** Medium for hosted/multi-instance deployments; low for current single-process local/product preview.
+- **Status:** Open / accepted for 047c.
+- **Root cause:** Run control state is process-local and cancellation is cooperative. Interrupts trip the registered abort signal and are observed by provider, sandbox, executor, and healing boundaries, but a multi-process deployment would need shared run-control state. Already-spawned local commands may also take a short time to terminate, depending on the command runner and OS behavior.
+- **Plan / Mitigations:** Keep operator and user routes delegated to shared `interruptRun` / `steerRun`, emit `RUN_INTERRUPT_REQUESTED`, `RUN_STEER_ENQUEUED`, and `RUN_BUDGET_EXHAUSTED` events for auditability, and treat stop as best-effort cooperative cancellation until distributed run state and stronger sandbox process supervision land. Future hosted work should back run control with the durable run/event store or a shared coordinator.
+- **Traceability:** `docs/plans/chunks/047c-run-control-budget.md`, `src/orchestration/runControl.ts`, `src/orchestration/turnBudget.ts`, `src/api/routes/runControl.ts`, `src/orchestration/sandboxExecutor.ts`, `src/tools/middleware.ts`, `tests/runControl.test.ts`, `tests/runControlApi.test.ts`, `tests/runInterrupt.integration.test.ts`, `tests/runSteer.integration.test.ts`.
+
 ### Chunk 047d user-supplied skills are prompt material, not trusted code
 
 - **Source:** Chunk 047d procedural memory / skills catalog.

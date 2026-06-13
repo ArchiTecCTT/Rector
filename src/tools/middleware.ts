@@ -36,6 +36,31 @@ export const DEFAULT_TOOL_MIDDLEWARE_ORDER = [
 
 export const budgetMiddleware: ToolMiddleware = async (ctx, next) => {
   ctx.trace.push("budget");
+  const turnBudget = ctx.handlerContext.turnBudget;
+  if (turnBudget && !turnBudget.consumeToolCall()) {
+    const snapshot = turnBudget.snapshot();
+    await ctx.handlerContext.appendRunEvent?.({
+      type: "RUN_BUDGET_EXHAUSTED",
+      phase: ctx.handlerContext.phase ?? "EXECUTING",
+      payload: {
+        source: "tool-registry",
+        nodeId: ctx.handlerContext.nodeId,
+        toolName: redactString(ctx.toolName),
+        reason: "tool_call_budget_exhausted",
+        iterationsUsed: snapshot.iterationsUsed,
+        toolCallsUsed: snapshot.toolCallsUsed,
+        iterationsRemaining: snapshot.iterationsRemaining,
+        toolCallsRemaining: snapshot.toolCallsRemaining,
+      },
+    });
+    return toolError(ctx.toolName, "BUDGET_EXCEEDED", "Tool execution denied because the turn tool-call budget is exhausted", {
+      halt: true,
+      middlewareHalt: true,
+      details: { ...snapshot },
+      metadata: { middleware: "budget", budget: "turn" },
+    });
+  }
+
   const budget = ctx.handlerContext.budget;
   if (budget && budget.maxModelCalls <= 0) {
     return toolError(ctx.toolName, "BUDGET_EXCEEDED", "Tool execution denied because the run budget is exhausted", {

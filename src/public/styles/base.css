@@ -234,6 +234,10 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
   gap: var(--space-2);
 }
 
+.run-stop[hidden] {
+  display: none;
+}
+
 /* Command palette search launcher (Req 2.2 / Design premium improvement) */
 .btn.topbar__search-btn {
   display: flex;
@@ -740,6 +744,40 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
   outline: none;
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
+}
+
+.run-steer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5) 0;
+}
+
+.run-steer[hidden] {
+  display: none;
+}
+
+.run-steer__input {
+  flex: 1;
+  min-width: 10rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.4;
+  padding: var(--space-2) var(--space-3);
+}
+
+.run-steer__input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.run-steer__send {
+  flex-shrink: 0;
 }
 
 /* Quick note capture (Chunk 036 Wave 2B) — composer-adjacent episodic write */
@@ -2395,7 +2433,9 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
 .shell--onboarding-locked #new-conversation,
 .shell--onboarding-locked #open-note-capture,
 .shell--onboarding-locked #composer-input,
-.shell--onboarding-locked #composer-send {
+.shell--onboarding-locked #composer-send,
+.shell--onboarding-locked #run-steer,
+.shell--onboarding-locked #run-stop {
   pointer-events: none;
   opacity: 0.45;
 }
@@ -2403,7 +2443,9 @@ h1, h2, h3, h4, h5, h6, .topbar__title, .brand__name {
 .shell--onboarding-locked #composer-input,
 .shell--onboarding-locked #composer-send,
 .shell--onboarding-locked #new-conversation,
-.shell--onboarding-locked #open-note-capture {
+.shell--onboarding-locked #open-note-capture,
+.shell--onboarding-locked #run-steer,
+.shell--onboarding-locked #run-stop {
   cursor: not-allowed;
 }
 

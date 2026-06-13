@@ -73,7 +73,7 @@ interface ScoredCandidate extends DeepPlanCandidate {
  */
 export async function runDeepPlanner(
   input: PlannerInput & { deepPlanning?: boolean },
-  deps: { provider: LLMProvider; run: Run; model?: string }
+  deps: { provider: LLMProvider; run: Run; model?: string; abortSignal?: AbortSignal }
 ): Promise<LivePlannerResult> {
   const { createFakePlan, runLivePlanner } = await import("./planner");
 

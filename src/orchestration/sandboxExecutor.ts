@@ -15,6 +15,9 @@ import { createDefaultToolRegistry } from "../tools/builtinTools";
 import { runToolWithMiddleware } from "../tools/middleware";
 import type { ToolEventSinkInput, ToolRegistry, ToolResult } from "../tools";
 import type { Budget } from "../store/schemas";
+import type { RunControlState } from "./runControl";
+import { drainSteer } from "./runControl";
+import type { IterationBudget } from "./turnBudget";
 import {
   DagExecutionResultSchema,
   type DagExecutionStatus,
@@ -75,6 +78,9 @@ export interface ExecuteDagThroughSandboxDeps {
   conversationId?: string;
   toolEventPhase?: RunPhase;
   budget?: Budget;
+  turnBudget?: IterationBudget;
+  runControl?: RunControlState;
+  abortSignal?: AbortSignal;
   appendRunEvent?: (event: ToolEventSinkInput) => Promise<void> | void;
   now?: () => string;
   /**
@@ -234,6 +240,13 @@ export async function executeDagThroughSandbox(
   const nodeResults: NodeExecutionResult[] = [];
 
   for (const node of orderedNodes) {
+    if (deps.abortSignal?.aborted || deps.runControl?.interruptRequested) {
+      appendAbortedRemainder(node, orderedNodes, nodeResults, resultsByNode, dependenciesByNode, now, appendEvent);
+      appendEvent("DAG_COMPLETED", { status: dagStatus(nodeResults), error: abortedExecutionError(node.id) });
+      const completedAt = safeNow(now);
+      return buildResult(compiledDag, dagStatus(nodeResults), startedAt, completedAt, nodeResults, events, artifacts, abortedExecutionError(node.id));
+    }
+
     const dependencies = [...(dependenciesByNode.get(node.id) ?? [])].sort();
     const blockedBy = dependencies.filter((dependencyId) => {
       const result = resultsByNode.get(dependencyId);
@@ -275,6 +288,9 @@ export async function executeDagThroughSandbox(
         conversationId: deps.conversationId ?? "unknown-conversation",
         phase: deps.toolEventPhase ?? "EXECUTING",
         budget: deps.budget,
+        turnBudget: deps.turnBudget,
+        runControl: deps.runControl,
+        abortSignal: deps.abortSignal,
         appendRunEvent: deps.appendRunEvent,
       },
       mapNode,
@@ -320,6 +336,9 @@ async function executeNodeThroughSandbox(
     conversationId: string;
     phase: RunPhase;
     budget?: Budget;
+    turnBudget?: IterationBudget;
+    runControl?: RunControlState;
+    abortSignal?: AbortSignal;
     appendRunEvent?: (event: ToolEventSinkInput) => Promise<void> | void;
   },
   mapNode: (node: DagNode) => SandboxOperationInput | undefined,
@@ -367,6 +386,7 @@ async function executeNodeThroughSandbox(
   }
 
   let toolResult: ToolResult;
+  const steerHint = deps.runControl ? drainSteer(deps.runControl) : undefined;
   try {
     toolResult = await runToolWithMiddleware(
       deps.toolRegistry,
@@ -379,6 +399,9 @@ async function executeNodeThroughSandbox(
         phase: deps.phase,
         sandbox: deps.sandbox,
         budget: deps.budget,
+        turnBudget: deps.turnBudget,
+        abortSignal: deps.abortSignal,
+        steerHint,
         toolPermissions: node.toolPermissions,
         toolPolicy: recordFrom(node.metadata?.toolPolicy),
         appendRunEvent: deps.appendRunEvent,
@@ -499,6 +522,7 @@ function nodeResultFromOperation(
     toolName,
     middlewareHalt: toolResult.middlewareHalt,
     approvalGateId: toolResult.approvalGateId ?? toolResult.metadata.approvalGateId,
+    steerGuidance: toolResult.metadata.steerGuidance ?? recordFrom(toolResult.output)?.steerGuidance,
     preview: preview.preview,
     previewTruncated: preview.truncated,
     expectedOutputs: node.expectedOutputs,
@@ -606,6 +630,15 @@ function executionErrorFromToolResult(nodeId: string, result: ToolResult): Execu
  * but its redacted preview is preserved on the node output.
  */
 function executionErrorFromResult(nodeId: string, result: SandboxOperationResult): ExecutionError | undefined {
+  if (result.denialReason === "COMMAND_ABORTED") {
+    return {
+      code: "ABORTED",
+      message: `Sandbox operation for node ${nodeId} was aborted`,
+      nodeId,
+      details: { denialReason: result.denialReason, aborted: true },
+    };
+  }
+
   if (result.denialReason === "COMMAND_TIMEOUT") {
     return {
       code: "TIMEOUT",
@@ -629,6 +662,46 @@ function executionErrorFromResult(nodeId: string, result: SandboxOperationResult
   // status === "FAILED": leave the executor error undefined so the healing loop
   // classifies it as UNKNOWN; the redacted preview is preserved on the output.
   return undefined;
+}
+
+function appendAbortedRemainder(
+  firstNode: DagNode,
+  orderedNodes: DagNode[],
+  nodeResults: NodeExecutionResult[],
+  resultsByNode: Map<string, NodeExecutionResult>,
+  dependenciesByNode: Map<string, Set<string>>,
+  now: () => string,
+  appendEvent: (type: ExecutionEvent["type"], event?: Omit<ExecutionEvent, "sequence" | "type" | "at">) => void,
+): void {
+  const startIndex = orderedNodes.findIndex((candidate) => candidate.id === firstNode.id);
+  const remaining = startIndex >= 0 ? orderedNodes.slice(startIndex) : [firstNode];
+  for (const node of remaining) {
+    const at = safeNow(now);
+    const error = abortedExecutionError(node.id);
+    const result: NodeExecutionResult = {
+      nodeId: node.id,
+      status: "SKIPPED",
+      attempts: 0,
+      startedAt: at,
+      completedAt: at,
+      durationMs: 0,
+      output: { sandbox: false, aborted: true, nodeType: node.type, preview: previewFrom(error.message) },
+      error,
+      dependencies: [...(dependenciesByNode.get(node.id) ?? [])].sort(),
+    };
+    nodeResults.push(result);
+    resultsByNode.set(node.id, result);
+    appendEvent("NODE_SKIPPED", { nodeId: node.id, status: "SKIPPED", error });
+  }
+}
+
+function abortedExecutionError(nodeId?: string): ExecutionError {
+  return {
+    code: "ABORTED",
+    message: nodeId ? `Execution aborted before node ${nodeId}` : "Execution aborted",
+    nodeId,
+    details: { aborted: true },
+  };
 }
 
 function validationNodeResultWithoutSandbox(

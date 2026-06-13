@@ -30,6 +30,7 @@ export interface PreprocessorPhaseInput {
   contextPack: ContextPack;
   triage: TriageResult;
   router: ModelRouter;
+  abortSignal?: AbortSignal;
   recordSpan: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
   addProviderUsage: (run: Run, usage: LLMUsage, providerId: string) => Promise<Run>;
 }
@@ -52,7 +53,7 @@ export async function executePreprocessorPhase(
   const preprocessorResult = await input.recordSpan("PREPROCESSING", () =>
     runSLMPreprocessor(
       { rawPrompt: input.prompt, contextPack: input.contextPack, triage: input.triage },
-      { slmProvider: selection.provider, run: input.run, model: selection.model },
+      { slmProvider: selection.provider, run: input.run, model: selection.model, abortSignal: input.abortSignal },
     ),
   );
 

@@ -110,6 +110,7 @@ export const SandboxDenialReasonSchema = z.enum([
   "COMMAND_NOT_ALLOWLISTED",
   "DESTRUCTIVE_COMMAND_BLOCKED",
   "COMMAND_TIMEOUT",
+  "COMMAND_ABORTED",
   "COMMAND_ARG_REJECTED",
   "CWD_NOT_ALLOWLISTED",
   "NETWORK_DISABLED",
@@ -662,6 +663,7 @@ export type CommandRunner = (input: {
   args: string[];
   cwd: string;
   timeoutMs: number;
+  abortSignal?: AbortSignal;
 }) => Promise<CommandRunResult>;
 
 export interface WorkspaceSandboxOptions {
@@ -694,11 +696,16 @@ export interface WorkspaceSandboxOptions {
  * command that has already cleared every policy gate reports a contained
  * success so the local default never spawns a process or touches the network.
  */
-const defaultCommandRunner: CommandRunner = async ({ command, args }) => ({
-  exitCode: 0,
-  stdout: `${[command, ...args].join(" ").trim()} completed`,
-  stderr: "",
-});
+const defaultCommandRunner: CommandRunner = async ({ command, args, abortSignal }) => {
+  if (abortSignal?.aborted) {
+    return { exitCode: 130, stdout: "", stderr: "command aborted", timedOut: false };
+  }
+  return {
+    exitCode: 0,
+    stdout: `${[command, ...args].join(" ").trim()} completed`,
+    stderr: "",
+  };
+};
 
 const defaultWorkspaceFs: WorkspaceFs = {
   realpathSync: (p) => nodeFs.realpathSync(p),
@@ -735,7 +742,7 @@ export function createSafeLocalProcessRunner(options: SafeLocalProcessRunnerOpti
   const maxStdoutBytes = boundedPositiveInt(options.maxStdoutBytes, MAX_CAPTURED_STREAM_BYTES, MAX_CAPTURED_STREAM_BYTES);
   const maxStderrBytes = boundedPositiveInt(options.maxStderrBytes, MAX_CAPTURED_STREAM_BYTES, MAX_CAPTURED_STREAM_BYTES);
 
-  return async ({ command, args, cwd, timeoutMs }) => {
+  return async ({ command, args, cwd, timeoutMs, abortSignal }) => {
     if (!options.enabled) {
       return { exitCode: 126, stdout: "", stderr: "safe local process runner is disabled" };
     }
@@ -747,6 +754,10 @@ export function createSafeLocalProcessRunner(options: SafeLocalProcessRunnerOpti
 
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       return { exitCode: 126, stdout: "", stderr: "safe local process runner requires a positive timeout", timedOut: true };
+    }
+
+    if (abortSignal?.aborted) {
+      return { exitCode: 130, stdout: "", stderr: "command aborted" };
     }
 
     const env: NodeJS.ProcessEnv = {};
@@ -761,10 +772,12 @@ export function createSafeLocalProcessRunner(options: SafeLocalProcessRunnerOpti
       let stdout = "";
       let stderr = "";
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let abortHandler: (() => void) | undefined;
       const finish = (result: CommandRunResult): void => {
         if (settled) return;
         settled = true;
         if (timer !== undefined) clearTimeout(timer);
+        if (abortHandler) abortSignal?.removeEventListener("abort", abortHandler);
         resolve(result);
       };
 
@@ -780,6 +793,12 @@ export function createSafeLocalProcessRunner(options: SafeLocalProcessRunnerOpti
         timedOut = true;
         child.kill();
       }, timeoutMs);
+
+      abortHandler = () => {
+        child.kill();
+        finish({ exitCode: 130, stdout, stderr: appendBounded(stderr, "command aborted", maxStderrBytes) });
+      };
+      abortSignal?.addEventListener("abort", abortHandler, { once: true });
 
       child.stdout?.on("data", (chunk) => {
         stdout = appendBounded(stdout, String(chunk), maxStdoutBytes);
@@ -881,12 +900,18 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
     });
   }
 
-  async operate(operationInput: SandboxOperationInput): Promise<SandboxOperationResult> {
+  async operate(operationInput: SandboxOperationInput, ctx: SandboxExecutionContext = {}): Promise<SandboxOperationResult> {
     const operation = SandboxOperationSchema.parse(operationInput);
     const startedAt = this.safeNow();
 
+    if (ctx.abortSignal?.aborted) {
+      return this.denied(operation.kind, operation.kind === "RUN_COMMAND" ? "COMMAND_ABORTED" : "POLICY_VIOLATION", startedAt, {
+        aborted: true,
+      });
+    }
+
     if (operation.kind === "RUN_COMMAND") {
-      return this.runCommand(operation, startedAt);
+      return this.runCommand(operation, startedAt, ctx);
     }
 
     // READ_FILE / LIST_DIR / PROPOSE_PATCH share the containment gate.
@@ -972,7 +997,11 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
     });
   }
 
-  private async runCommand(operation: SandboxOperation, startedAt: string): Promise<SandboxOperationResult> {
+  private async runCommand(
+    operation: SandboxOperation,
+    startedAt: string,
+    ctx: SandboxExecutionContext = {},
+  ): Promise<SandboxOperationResult> {
     const command = operation.command ?? "";
     const args = operation.args;
 
@@ -1060,7 +1089,7 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
       });
     }
 
-    const run = await this.commandRunner({ command, args, cwd: this.workspaceRoot, timeoutMs });
+    const run = await this.commandRunner({ command, args, cwd: this.workspaceRoot, timeoutMs, abortSignal: ctx.abortSignal });
     const stdoutCapture = captureStream(run.stdout, this.policy.maxStdoutBytes);
     const stderrCapture = captureStream(run.stderr, this.policy.maxStderrBytes);
     const stdout = redactString(stdoutCapture.value);
@@ -1082,6 +1111,18 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
         stdout,
         stderr,
         metadata: { ...streamMetadata, safetyReasonCode: "COMMAND_TIMEOUT" },
+      });
+    }
+
+    if (ctx.abortSignal?.aborted || run.exitCode === 130) {
+      return this.result({
+        kind: "RUN_COMMAND",
+        status: "DENIED",
+        denialReason: "COMMAND_ABORTED",
+        startedAt,
+        stdout,
+        stderr,
+        metadata: { ...streamMetadata, safetyReasonCode: "COMMAND_ABORTED", aborted: true },
       });
     }
 

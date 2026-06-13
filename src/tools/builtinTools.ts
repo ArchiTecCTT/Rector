@@ -143,17 +143,24 @@ async function runSandboxOperation(
     approvals: ctx.approvals ?? [],
     now: undefined,
   });
-  const result = await sandbox.operate(operation);
+  const result = await sandbox.operate(operation, {
+    runId: ctx.runId,
+    nodeId: ctx.nodeId,
+    workspaceRoot: ctx.workspaceRoot,
+    abortSignal: ctx.abortSignal,
+  });
   return toolSuccess(
     toolName,
     {
       sandboxResult: result,
       operationResult: result,
+      ...(ctx.steerHint ? { steerGuidance: ctx.steerHint } : {}),
     },
     {
       sandboxStatus: result.status,
       denialReason: result.denialReason,
       approvalGateId: result.approvalGates.find((gate) => gate.required)?.id,
+      ...(ctx.steerHint ? { steerGuidance: ctx.steerHint } : {}),
     },
   );
 }

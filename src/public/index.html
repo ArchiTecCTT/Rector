@@ -117,6 +117,9 @@
             <span class="live-badge__dot" aria-hidden="true"></span>
             <span class="live-badge__text">LIVE</span>
           </span>
+          <button class="btn btn--ghost btn--sm run-stop" id="run-stop" type="button" title="Stop active run" hidden>
+            Stop
+          </button>
         </div>
         <div class="topbar__actions">
           <button
@@ -285,6 +288,18 @@
             ></textarea>
             <button class="btn btn--primary composer__send" id="composer-send" type="submit" title="Send">
               Send
+            </button>
+          </form>
+          <form class="run-steer" id="run-steer" aria-label="Steer active run" hidden>
+            <input
+              id="run-steer-input"
+              class="run-steer__input"
+              type="text"
+              placeholder="Steer current run"
+              autocomplete="off"
+            />
+            <button class="btn btn--sm run-steer__send" id="run-steer-send" type="submit" title="Send steer guidance">
+              Steer
             </button>
           </form>
           <p class="composer__hint">

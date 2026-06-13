@@ -6,9 +6,11 @@ import type {
   SandboxApproval,
   SandboxOperationInput,
   SandboxOperationResult,
+  SandboxExecutionContext,
   WorkspaceFs,
 } from "../sandbox";
 import type { Budget } from "../store/schemas";
+import type { IterationBudget } from "../orchestration/turnBudget";
 
 export const ToolRiskSchema = z.enum(["low", "medium", "high", "destructive"]);
 export type ToolRisk = z.infer<typeof ToolRiskSchema>;
@@ -54,11 +56,11 @@ export const ToolResultSchema = z.object({
 export type ToolResult = z.infer<typeof ToolResultSchema>;
 
 export interface SandboxOperationExecutor {
-  operate(operation: SandboxOperationInput): Promise<SandboxOperationResult>;
+  operate(operation: SandboxOperationInput, ctx?: SandboxExecutionContext): Promise<SandboxOperationResult>;
 }
 
 export interface ToolEventSinkInput {
-  type: "TOOL_INVOKED" | "TOOL_COMPLETED";
+  type: "TOOL_INVOKED" | "TOOL_COMPLETED" | "RUN_BUDGET_EXHAUSTED";
   phase: RunPhase;
   payload: Record<string, unknown>;
 }
@@ -77,7 +79,9 @@ export type ToolHandlerContext = {
   commandRunner?: CommandRunner;
   approvals?: SandboxApproval[];
   budget?: Budget;
+  turnBudget?: IterationBudget;
   abortSignal?: AbortSignal;
+  steerHint?: string;
   sandbox?: SandboxOperationExecutor;
   moduleRegistry?: ToolAvailabilityModuleRegistry;
   toolPermissions?: string[];

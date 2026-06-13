@@ -102,7 +102,7 @@ describe("Retool operator console API", () => {
     expect((costs.data as any).summary.actualOutputTokens).toBeGreaterThanOrEqual(0);
   });
 
-  it("keeps retry, abort, and approval decisions as non-mutating placeholders", async () => {
+  it("keeps retry and approval decisions as placeholders while abort delegates to run control", async () => {
     const created = await createRun("Do not mutate placeholder controls");
 
     const retry = await api(`/api/operator/runs/${created.run.id}/retry`, { method: "POST" });
@@ -112,7 +112,8 @@ describe("Retool operator console API", () => {
 
     const abort = await api(`/api/operator/runs/${created.run.id}/abort`, { method: "POST" });
     expect(abort.status).toBe(202);
-    expect((abort.data as any).status).toBe("placeholder");
+    expect((abort.data as any).action).toBe("abort");
+    expect((abort.data as any).status).toBe(created.run.status);
     expect((abort.data as any).mutated).toBe(false);
 
     const decision = await api(`/api/operator/approvals/${created.run.id}/decision`, {

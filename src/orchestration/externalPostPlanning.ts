@@ -4,7 +4,7 @@ import { compileAcceptedPlanToDag, type CompiledDag } from "./dagCompiler";
 import { runLiveDirectAnswer, type LiveDirectAnswerFallback } from "./liveDirectAnswer";
 import type { PlannerOutput } from "./planner";
 import { buildRepairPrompt } from "./prompts";
-import { createDecisionRequest, transitionRun } from "./runStateMachine";
+import { abortRun, createDecisionRequest, transitionRun } from "./runStateMachine";
 import { executeDagThroughSandbox, type ExecutionArtifact, type SandboxDagExecutionResult } from "./sandboxExecutor";
 import type { SkepticReview } from "./skeptic";
 import { executeDecomposedSubGoals, stitchResults, type SubGoalGraph } from "./taskDecomposer";
@@ -33,6 +33,8 @@ import type { RectorStore } from "../store";
 import type { Run } from "../store/schemas";
 import type { ToolEventSinkInput } from "../tools";
 import type { PreprocessorOutput } from "./preprocessor";
+import type { RunControlState } from "./runControl";
+import type { IterationBudget, TurnBudgetSnapshot } from "./turnBudget";
 import { TRIAGE_ROUTES } from "./triage";
 import {
   addProviderUsageToRun,
@@ -61,6 +63,9 @@ export interface ExternalPostPlanningParams {
   subGoalGraph?: SubGoalGraph;
   /** Deep-planner bounded candidate paths explored (trace drawer observability). */
   pathsExplored?: string[];
+  runControl?: RunControlState;
+  abortSignal?: AbortSignal;
+  turnBudget?: IterationBudget;
 }
 
 interface ExternalExecutionPhaseResult {
@@ -140,7 +145,14 @@ export async function runExternalPostPlanningPhases(params: ExternalPostPlanning
   const approvals: SandboxApproval[] = [...(deps.approvals ?? [])];
   const sandbox = createExternalSandbox(deps, approvals);
   let budgetRun = run;
-  const repairAgent = createExternalRepairAgent({ store, deps, approvals, getRun: () => budgetRun, setRun: (next) => { budgetRun = next; } });
+  const repairAgent = createExternalRepairAgent({
+    store,
+    deps,
+    approvals,
+    getRun: () => budgetRun,
+    setRun: (next) => { budgetRun = next; },
+    abortSignal: params.abortSignal,
+  });
 
   const executionPhase = await runExternalExecutionPhase({
     store,
@@ -152,43 +164,65 @@ export async function runExternalPostPlanningPhases(params: ExternalPostPlanning
     crucibleDecision,
     subGoals,
     subGoalGraph,
+    runControl: params.runControl,
+    abortSignal: params.abortSignal,
+    turnBudget: params.turnBudget,
   });
   const { executionResult, decomposedResults, executionArtifacts, executionPayload } = executionPhase;
+  const abortAfterExecution = isInterrupted(params);
 
-  const validationPhase = await runExternalValidationPhase({
-    store,
-    args,
-    deps,
-    sandbox,
-    compiledDag,
-    executionResult,
-    repairAgent,
-    budgetRun,
-    options,
-  });
+  const validationPhase = abortAfterExecution
+    ? { validationHealingResult: undefined, toolEvents: [] }
+    : await runExternalValidationPhase({
+        store,
+        args,
+        deps,
+        sandbox,
+        compiledDag,
+        executionResult,
+        repairAgent,
+        budgetRun,
+        options,
+        runControl: params.runControl,
+        abortSignal: params.abortSignal,
+        turnBudget: params.turnBudget,
+      });
   const { validationHealingResult } = validationPhase;
   const validationPayload = validationHealingResult
     ? { validationHealingResult }
-    : { skippedReason: "Execution skipped or missing; validation and healing skipped" };
+    : { skippedReason: abortAfterExecution ? "Run interrupted; validation and healing skipped" : "Execution skipped or missing; validation and healing skipped" };
 
   const healingStatus = validationHealingResult?.status;
-  const proceedToSynthesis = shouldProceedToSynthesis(healingStatus);
-  const synthesisPhase = await runExternalSynthesisPhase({
-    store,
-    args,
-    deps,
-    budgetRun,
-    plannerOutput,
-    skepticReview,
-    crucibleDecision,
-    compiledDag,
-    executionResult,
-    validationHealingResult,
-    decomposedResults,
-    proceedToSynthesis,
-  });
+  const abortAfterValidation = !abortAfterExecution && isInterrupted(params);
+  const proceedToSynthesis = !abortAfterExecution && !abortAfterValidation && shouldProceedToSynthesis(healingStatus);
+  const synthesisPhase = proceedToSynthesis
+    ? await runExternalSynthesisPhase({
+        store,
+        args,
+        deps,
+        budgetRun,
+        plannerOutput,
+        skepticReview,
+        crucibleDecision,
+        compiledDag,
+        executionResult,
+        validationHealingResult,
+        decomposedResults,
+        proceedToSynthesis,
+        abortSignal: params.abortSignal,
+      })
+    : {
+        synthesis: buildInterruptedSynthesis({
+          args,
+          executionResult,
+          validationHealingResult,
+          reason: params.runControl?.interruptReason,
+        }),
+        budgetRun,
+      };
   budgetRun = synthesisPhase.budgetRun;
   const { synthesis, synthProviderCall, directAnswerFallback } = synthesisPhase;
+  const abortAfterSynthesis = proceedToSynthesis && isInterrupted(params);
 
   const current = await transitionExternalPostPlanningRun({
     params,
@@ -205,6 +239,13 @@ export async function runExternalPostPlanningPhases(params: ExternalPostPlanning
     executionArtifacts,
     executionToolEvents: executionPhase.toolEvents,
     validationToolEvents: validationPhase.toolEvents,
+    abortAfterPhase: abortAfterExecution
+      ? "EXECUTING"
+      : abortAfterValidation
+        ? "VALIDATING"
+        : abortAfterSynthesis
+          ? "SYNTHESIZING"
+          : undefined,
   });
 
   return { run: current, synthesis, observabilitySummary: observability.getSummary() };
@@ -332,6 +373,7 @@ function createExternalRepairAgent(input: {
   approvals: SandboxApproval[];
   getRun(): Run;
   setRun(run: Run): void;
+  abortSignal?: AbortSignal;
 }): LiveRepairAgent {
   const { store, deps, approvals, getRun, setRun } = input;
   const repairSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "repair", run: getRun() });
@@ -343,6 +385,7 @@ function createExternalRepairAgent(input: {
     commitUsage: async (usage, provider) => {
       setRun(await addProviderUsageToRun(store, getRun(), usage, provider));
     },
+    abortSignal: input.abortSignal,
   });
 }
 
@@ -356,6 +399,9 @@ async function runExternalExecutionPhase(input: {
   crucibleDecision: CrucibleDecision;
   subGoals: string[];
   subGoalGraph?: SubGoalGraph;
+  runControl?: RunControlState;
+  abortSignal?: AbortSignal;
+  turnBudget?: IterationBudget;
 }): Promise<ExternalExecutionPhaseResult> {
   const { args, deps, sandbox, budgetRun, compiledDag, crucibleDecision, subGoals, subGoalGraph } = input;
   const { observability } = args;
@@ -367,6 +413,9 @@ async function runExternalExecutionPhase(input: {
           toolRegistry: deps.toolRegistry,
           conversationId: args.conversationId,
           budget: budgetRun.budget,
+          turnBudget: input.turnBudget,
+          runControl: input.runControl,
+          abortSignal: input.abortSignal,
           appendRunEvent: (event) => {
             toolEvents.push(event);
           },
@@ -421,6 +470,9 @@ async function runExternalValidationPhase(input: {
   repairAgent: LiveRepairAgent;
   budgetRun: Run;
   options: ChatRunOptions;
+  runControl?: RunControlState;
+  abortSignal?: AbortSignal;
+  turnBudget?: IterationBudget;
 }): Promise<ExternalValidationPhaseResult> {
   const { args, deps, sandbox, compiledDag, executionResult, repairAgent, budgetRun, options } = input;
   const toolEvents: ToolEventSinkInput[] = [];
@@ -436,6 +488,9 @@ async function runExternalValidationPhase(input: {
               conversationId: args.conversationId,
               toolEventPhase: "VALIDATING",
               budget: budgetRun.budget,
+              turnBudget: input.turnBudget,
+              runControl: input.runControl,
+              abortSignal: input.abortSignal,
               appendRunEvent: (event) => {
                 toolEvents.push(event);
               },
@@ -447,6 +502,12 @@ async function runExternalValidationPhase(input: {
           sandbox,
           contextPack: args.contextPack,
           run: budgetRun,
+          turnBudget: input.turnBudget,
+          runControl: input.runControl,
+          abortSignal: input.abortSignal,
+          onBudgetExhausted: (snapshot) => {
+            toolEvents.push(budgetExhaustedToolEvent("VALIDATING", snapshot, "repair_attempt_budget_exhausted"));
+          },
         })
       : undefined
   );
@@ -455,6 +516,65 @@ async function runExternalValidationPhase(input: {
 
 function shouldProceedToSynthesis(healingStatus: HealingLoopResult["status"] | undefined): boolean {
   return healingStatus === undefined || healingStatus === "VALIDATED" || healingStatus === "HEALED";
+}
+
+function isInterrupted(params: ExternalPostPlanningParams): boolean {
+  return params.abortSignal?.aborted === true || params.runControl?.interruptRequested === true;
+}
+
+function budgetExhaustedToolEvent(
+  phase: "EXECUTING" | "VALIDATING",
+  snapshot: TurnBudgetSnapshot,
+  reason: string,
+): ToolEventSinkInput {
+  return {
+    type: "RUN_BUDGET_EXHAUSTED",
+    phase,
+    payload: {
+      source: "external-orchestrator",
+      reason,
+      iterationsUsed: snapshot.iterationsUsed,
+      toolCallsUsed: snapshot.toolCallsUsed,
+      iterationsRemaining: snapshot.iterationsRemaining,
+      toolCallsRemaining: snapshot.toolCallsRemaining,
+    },
+  };
+}
+
+function buildInterruptedSynthesis(input: {
+  args: ChatRunArgs;
+  executionResult?: SandboxDagExecutionResult;
+  validationHealingResult?: HealingLoopResult;
+  reason?: string;
+}): BrainstemSynthesis {
+  const completed = input.executionResult?.nodeResults
+    .filter((node) => node.status === "SUCCESS" || node.status === "RETRIED")
+    .map((node) => node.nodeId) ?? [];
+  const pending = input.executionResult?.nodeResults
+    .filter((node) => node.status === "SKIPPED")
+    .map((node) => node.nodeId) ?? [];
+  const evidence = [
+    `interrupted${input.reason ? `: ${input.reason}` : ""}`,
+    `completed nodes: ${completed.length}`,
+    `pending nodes: ${pending.length}`,
+  ];
+  if (input.validationHealingResult) {
+    evidence.push(`validation status: ${input.validationHealingResult.status}`);
+  }
+  return {
+    status: "FAILED",
+    route: input.args.triage.route,
+    traceId: input.args.observability.traceId,
+    evidence,
+    providerCalls: 0,
+    observability: input.args.observability.getSummary(),
+    response: [
+      "Run interrupted.",
+      completed.length ? `Completed: ${completed.join(", ")}.` : "Completed: none.",
+      pending.length ? `Pending: ${pending.join(", ")}.` : "Pending: none.",
+      `Trace: ${input.args.observability.traceId}.`,
+    ].join(" "),
+  };
 }
 
 async function runExternalSynthesisPhase(input: {
@@ -470,6 +590,7 @@ async function runExternalSynthesisPhase(input: {
   validationHealingResult?: HealingLoopResult;
   decomposedResults?: string;
   proceedToSynthesis: boolean;
+  abortSignal?: AbortSignal;
 }): Promise<ExternalSynthesisPhaseResult> {
   const synthInput = buildExternalSynthesisInput(input);
   if (!input.proceedToSynthesis) {
@@ -512,12 +633,13 @@ async function runExternalDirectAnswerSynthesis(input: {
   deps: ChatRunnerDeps;
   budgetRun: Run;
   synthInput: BrainstemSynthesisInput;
+  abortSignal?: AbortSignal;
 }): Promise<ExternalSynthesisPhaseResult> {
   const { store, args, deps, synthInput } = input;
   let { budgetRun } = input;
   const directSelection: ModelSelection = deps.router.select({ capability: "cheap", task: "direct-answer", run: budgetRun });
   const directResult = await args.observability.recordSpan("SYNTHESIZING", () =>
-    runLiveDirectAnswer(synthInput, { provider: directSelection.provider, run: budgetRun, model: directSelection.model })
+    runLiveDirectAnswer(synthInput, { provider: directSelection.provider, run: budgetRun, model: directSelection.model, abortSignal: input.abortSignal })
   );
   const base = synthesizeChatBrainstemResponse(synthInput);
   const synthesis = { ...base, response: directResult.response, providerCalls: directResult.providerCalls };
@@ -548,6 +670,7 @@ async function runExternalFlagshipSynthesis(input: {
   deps: ChatRunnerDeps;
   budgetRun: Run;
   synthInput: BrainstemSynthesisInput;
+  abortSignal?: AbortSignal;
 }): Promise<ExternalSynthesisPhaseResult> {
   const { store, args, deps, synthInput } = input;
   let { budgetRun } = input;
@@ -559,7 +682,7 @@ async function runExternalFlagshipSynthesis(input: {
   }
 
   const synthResult = await args.observability.recordSpan("SYNTHESIZING", () =>
-    runLiveSynthesizer(synthInput, { provider: synthSelection.provider, run: budgetRun, model: synthSelection.model })
+    runLiveSynthesizer(synthInput, { provider: synthSelection.provider, run: budgetRun, model: synthSelection.model, abortSignal: input.abortSignal })
   );
   const synthProviderCall = buildProviderCallMetadata(
     synthSelection,
@@ -588,6 +711,7 @@ async function transitionExternalPostPlanningRun(input: {
   executionArtifacts: ExecutionArtifact[];
   executionToolEvents: ToolEventSinkInput[];
   validationToolEvents: ToolEventSinkInput[];
+  abortAfterPhase?: ExternalPrefixPhase | "SYNTHESIZING";
 }): Promise<Run> {
   const { params } = input;
   let current = params.run;
@@ -599,6 +723,9 @@ async function transitionExternalPostPlanningRun(input: {
     }
     if (phase === "VALIDATING") {
       await appendDeferredToolEvents(params.store, current, input.validationToolEvents);
+    }
+    if (input.abortAfterPhase === phase) {
+      return transitionExternalAborted(current, input);
     }
   }
   return finishExternalPostPlanningRun(current, input);
@@ -685,14 +812,21 @@ async function transitionExternalSynthesisDone(
 ): Promise<Run> {
   const { params } = input;
   let next = current;
-  for (const phase of ["SYNTHESIZING", "DONE"] as const) {
-    const result = await transitionRun(params.store, next.id, phase, {
-      traceId: params.args.observability.traceId,
-      now: params.deps.now,
-      payload: externalCompletionPayload(phase, input),
-    });
-    next = result.run;
+  const synth = await transitionRun(params.store, next.id, "SYNTHESIZING", {
+    traceId: params.args.observability.traceId,
+    now: params.deps.now,
+    payload: externalCompletionPayload("SYNTHESIZING", input),
+  });
+  next = synth.run;
+  if (input.abortAfterPhase === "SYNTHESIZING") {
+    return transitionExternalAborted(next, input);
   }
+  const done = await transitionRun(params.store, next.id, "DONE", {
+    traceId: params.args.observability.traceId,
+    now: params.deps.now,
+    payload: externalCompletionPayload("DONE", input),
+  });
+  next = done.run;
   return next;
 }
 
@@ -763,6 +897,30 @@ async function transitionExternalFailed(
   return failed.run;
 }
 
+async function transitionExternalAborted(
+  current: Run,
+  input: Parameters<typeof transitionExternalPostPlanningRun>[0],
+): Promise<Run> {
+  const { params } = input;
+  const aborted = await abortRun(params.store, current.id, {
+    traceId: params.args.observability.traceId,
+    now: params.deps.now,
+    lastError: params.runControl?.interruptReason ?? "Run interrupted by request",
+    payload: {
+      source: "external-orchestrator",
+      note: "Run interrupted by request",
+      runControl: {
+        interruptRequested: params.runControl?.interruptRequested === true,
+        interruptReason: params.runControl?.interruptReason,
+      },
+      executionArtifacts: input.executionArtifacts,
+      synthesis: input.synthesis,
+      observability: phaseObservabilityPayload(params.args.observability, "ABORTED"),
+    },
+  });
+  return aborted.run;
+}
+
 function externalPhasePayloadBase(params: ExternalPostPlanningParams, phase: string, note: string): Record<string, unknown> {
   return {
     source: "external-orchestrator",
@@ -818,8 +976,9 @@ function createLiveRepairAgent(deps: {
   approvals: SandboxApproval[];
   getRun?: () => Run;
   commitUsage?: (usage: LLMUsage, provider: string) => Promise<void>;
+  abortSignal?: AbortSignal;
 }): LiveRepairAgent {
-  return async ({ failure, failedOutput, contextPack, run, symbolicHints }) => {
+  return async ({ failure, failedOutput, contextPack, run, symbolicHints, abortSignal }) => {
     try {
       const messages = buildRepairPrompt({
         classification: failure.classification,
@@ -857,7 +1016,7 @@ function createLiveRepairAgent(deps: {
 
       let response: LLMResponse;
       try {
-        response = await invokeWithBudget(deps.provider, request, currentRun);
+        response = await invokeWithBudget(deps.provider, request, currentRun, { abortSignal: abortSignal ?? deps.abortSignal });
       } catch {
         return undefined;
       }

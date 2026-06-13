@@ -155,6 +155,8 @@ const liveRun = {
   source: null, // EventSource
   pollTimer: null,
   closed: true,
+  interruptPending: false,
+  steerPending: false,
 };
 
 // --- DOM refs ---
@@ -181,6 +183,10 @@ function cacheShellEls() {
     "composer",
     "composer-input",
     "composer-send",
+    "run-stop",
+    "run-steer",
+    "run-steer-input",
+    "run-steer-send",
     "deep-planning-wrap",
     "deep-planning-toggle",
     "open-command-palette",
@@ -462,6 +468,24 @@ function setRunStatus(label, pillClass) {
   els["run-status"].className = `status-pill ${pillClass}`;
 }
 
+function setRunControls(active) {
+  const stop = els["run-stop"];
+  const steer = els["run-steer"];
+  const steerInput = els["run-steer-input"];
+  const steerSend = els["run-steer-send"];
+
+  if (stop) {
+    stop.hidden = !active;
+    stop.disabled = !active || liveRun.interruptPending;
+  }
+  if (steer) steer.hidden = !active;
+  if (steerInput) {
+    steerInput.disabled = !active || liveRun.steerPending;
+    if (!active) steerInput.value = "";
+  }
+  if (steerSend) steerSend.disabled = !active || liveRun.steerPending;
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -657,8 +681,11 @@ function beginLiveRun({ runId, traceId }) {
   liveRun.source = null;
   liveRun.pollTimer = null;
   liveRun.closed = false;
+  liveRun.interruptPending = false;
+  liveRun.steerPending = false;
   resetCostPanel(); // a fresh run must never show the previous run's totals
   resetPhaseCards(); // a fresh run starts with no expand state seeded
+  setRunControls(true);
 }
 
 // Close the EventSource and clear the poll timer so neither transport keeps running. Idempotent.
@@ -676,6 +703,9 @@ function teardownLiveRun() {
     liveRun.pollTimer = null;
   }
   liveRun.closed = true;
+  liveRun.interruptPending = false;
+  liveRun.steerPending = false;
+  setRunControls(false);
   setLiveIndicator("off");
 }
 
@@ -6083,6 +6113,61 @@ function bindComposer() {
   });
 }
 
+async function requestRunInterrupt() {
+  if (!liveRun.runId || liveRun.closed || liveRun.interruptPending) return;
+  liveRun.interruptPending = true;
+  setRunControls(true);
+  setRunStatus("Stopping...", "status-pill--running");
+  try {
+    await api(`/runs/${liveRun.runId}/interrupt`, {
+      method: "POST",
+      body: JSON.stringify({ reason: "user stop requested" }),
+    });
+  } catch (err) {
+    liveRun.interruptPending = false;
+    setRunControls(!liveRun.closed);
+    setRunStatus("Stop failed", "status-pill--failed");
+    console.error("Failed to interrupt run", err);
+  }
+}
+
+async function submitRunSteer(message) {
+  const trimmed = message.trim();
+  if (!trimmed || !liveRun.runId || liveRun.closed || liveRun.steerPending) return;
+  liveRun.steerPending = true;
+  setRunControls(true);
+  try {
+    await api(`/runs/${liveRun.runId}/steer`, {
+      method: "POST",
+      body: JSON.stringify({ message: trimmed }),
+    });
+    if (els["run-steer-input"]) els["run-steer-input"].value = "";
+  } catch (err) {
+    console.error("Failed to steer run", err);
+  } finally {
+    liveRun.steerPending = false;
+    setRunControls(!liveRun.closed);
+  }
+}
+
+function bindRunControls() {
+  const stop = els["run-stop"];
+  if (stop) {
+    stop.addEventListener("click", () => {
+      void requestRunInterrupt();
+    });
+  }
+
+  const steer = els["run-steer"];
+  const steerInput = els["run-steer-input"];
+  if (steer && steerInput) {
+    steer.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void submitRunSteer(steerInput.value);
+    });
+  }
+}
+
 function bindSuggestions() {
   const messages = els["messages"];
   if (!messages) {
@@ -6102,6 +6187,7 @@ function bindSuggestions() {
 function init() {
   cacheEls();
   bindComposer();
+  bindRunControls();
   bindDeepPlanning();
   bindNoteCapture();
   bindSuggestions();

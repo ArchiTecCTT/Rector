@@ -16,6 +16,7 @@ export const ExecutionErrorCodeSchema = z.enum([
   "SANDBOX_OPERATION_FAILED",
   "TIMEOUT",
   "VALIDATION_FAILED",
+  "ABORTED",
 ]);
 export type ExecutionErrorCode = z.infer<typeof ExecutionErrorCodeSchema>;
 
@@ -90,6 +91,7 @@ export interface ExecutorSimulatorOptions {
   simulatedOutputByNodeId?: Record<string, Record<string, unknown>>;
   validationFailuresByNodeId?: Record<string, string>;
   allowUnsafeShell?: boolean;
+  abortSignal?: AbortSignal;
   /**
    * When true, FILE_OPERATION and SHELL_COMMAND nodes fail instead of simulating SUCCESS.
    * Used for CODE_EDIT honesty when no real sandbox is configured.
@@ -171,6 +173,22 @@ export function executeCompiledDagSync(compiledDag: Dag, options: ExecutorSimula
   const nodeResults: NodeExecutionResult[] = [];
 
   for (const node of orderedNodes) {
+    if (options.abortSignal?.aborted) {
+      appendAbortedRemainder(node, orderedNodes, nodeResults, resultsByNode, dependenciesByNode, cursorMs, appendEvent);
+      appendEvent("DAG_COMPLETED", { status: "PARTIAL", error: abortExecutionError(node.id) });
+      return DagExecutionResultSchema.parse({
+        dagId: dag.id,
+        runId: dag.runId,
+        status: dagStatus(nodeResults),
+        startedAt: iso(startedAtMs),
+        completedAt: iso(cursorMs),
+        durationMs: cursorMs - startedAtMs,
+        nodeResults,
+        events,
+        error: abortExecutionError(node.id),
+      });
+    }
+
     const dependencies = [...(dependenciesByNode.get(node.id) ?? [])].sort();
     const blockedBy = dependencies.filter((dependencyId) => {
       const result = resultsByNode.get(dependencyId);
@@ -221,6 +239,45 @@ export function executeCompiledDagSync(compiledDag: Dag, options: ExecutorSimula
     nodeResults,
     events,
   });
+}
+
+function appendAbortedRemainder(
+  firstNode: DagNode,
+  orderedNodes: DagNode[],
+  nodeResults: NodeExecutionResult[],
+  resultsByNode: Map<string, NodeExecutionResult>,
+  dependenciesByNode: Map<string, Set<string>>,
+  cursorMs: number,
+  appendEvent: (type: ExecutionEvent["type"], event?: Omit<ExecutionEvent, "sequence" | "type" | "at">) => void,
+): void {
+  const startIndex = orderedNodes.findIndex((candidate) => candidate.id === firstNode.id);
+  const remaining = startIndex >= 0 ? orderedNodes.slice(startIndex) : [firstNode];
+  for (const node of remaining) {
+    const at = iso(cursorMs);
+    const error = abortExecutionError(node.id);
+    const result: NodeExecutionResult = {
+      nodeId: node.id,
+      status: "SKIPPED",
+      attempts: 0,
+      startedAt: at,
+      completedAt: at,
+      durationMs: 0,
+      error,
+      dependencies: [...(dependenciesByNode.get(node.id) ?? [])].sort(),
+    };
+    nodeResults.push(result);
+    resultsByNode.set(node.id, result);
+    appendEvent("NODE_SKIPPED", { nodeId: node.id, status: "SKIPPED", error });
+  }
+}
+
+function abortExecutionError(nodeId?: string): ExecutionError {
+  return {
+    code: "ABORTED",
+    message: nodeId ? `Execution aborted before node ${nodeId}` : "Execution aborted",
+    nodeId,
+    details: { aborted: true },
+  };
 }
 
 function executeNode(

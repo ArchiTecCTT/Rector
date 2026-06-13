@@ -32,6 +32,7 @@ export interface PlanningPhaseInput {
   router: ModelRouter;
   budgetRun: Run;
   flags: NeuroFeatureFlags;
+  abortSignal?: AbortSignal;
   recordSpan: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
 }
 
@@ -85,7 +86,7 @@ export async function executePlanningPhase(
             messageContent: input.effectiveMessageContent,
             deepPlanning: true,
           },
-          { provider: selection.provider, run: input.budgetRun, model: selection.model },
+          { provider: selection.provider, run: input.budgetRun, model: selection.model, abortSignal: input.abortSignal },
         )
       : runLivePlanner(
           {
@@ -93,7 +94,7 @@ export async function executePlanningPhase(
             contextPack: prep.plannerContextPack,
             messageContent: input.effectiveMessageContent,
           },
-          { provider: selection.provider, run: input.budgetRun, model: selection.model },
+          { provider: selection.provider, run: input.budgetRun, model: selection.model, abortSignal: input.abortSignal },
         ),
   );
 }

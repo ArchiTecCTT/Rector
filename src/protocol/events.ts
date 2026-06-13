@@ -25,6 +25,9 @@ export const RUN_EVENT_TYPES = [
   "SKILL_ACTIVATION_DECIDED",
   "TOOL_INVOKED",
   "TOOL_COMPLETED",
+  "RUN_INTERRUPT_REQUESTED",
+  "RUN_STEER_ENQUEUED",
+  "RUN_BUDGET_EXHAUSTED",
 ] as const;
 
 export const RunEventTypeSchema = z.enum(RUN_EVENT_TYPES);

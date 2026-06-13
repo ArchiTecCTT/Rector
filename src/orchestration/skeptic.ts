@@ -414,6 +414,7 @@ export interface LiveSkepticDeps {
   run: Run;
   /** Optional concrete model/deployment selected by the orchestration assignment router. */
   model?: string;
+  abortSignal?: AbortSignal;
   buildPrompt?: typeof buildSkepticPrompt;
   buildRepairPrompt?: typeof buildSkepticRepairPrompt;
   /**
@@ -503,7 +504,7 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
     }
 
     // Req 1.8: bound the single invocation to a 60s timeout; a timeout counts as this attempt.
-    const outcome = await invokeBounded(invokeWithBudget(provider, request, run), timeoutMs);
+    const outcome = await invokeBounded(invokeWithBudget(provider, request, run, { abortSignal: deps.abortSignal }), timeoutMs);
 
     if (outcome.kind === "timeout") {
       // Req 1.8/1.9: a timed-out invocation is a transport-level failure -> PROVIDER_ERROR, no

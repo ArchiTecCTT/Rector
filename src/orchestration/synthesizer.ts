@@ -277,6 +277,7 @@ export interface LiveSynthesizerDeps {
   run: Run;
   /** Optional concrete model/deployment selected by the orchestration assignment router. */
   model?: string;
+  abortSignal?: AbortSignal;
   buildPrompt?: typeof buildSynthesizerPrompt;
   buildRepairPrompt?: typeof buildSynthesizerRepairPrompt;
 }
@@ -454,7 +455,7 @@ export async function runLiveSynthesizer(
 
     let response: LLMResponse;
     try {
-      response = await invokeWithBudget(provider, request, run);
+      response = await invokeWithBudget(provider, request, run, { abortSignal: deps.abortSignal });
     } catch {
       // Req 2.5 / 6.4: any provider error -> deterministic fallback; the raw provider body never
       // reaches the result. Usage stays at whatever was accumulated before the failing call.

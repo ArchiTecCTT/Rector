@@ -169,6 +169,7 @@ import { registerMemoryAssignmentRoutes } from "./routes/memoryAssignments";
 import { registerOrchestrationModelRoutes } from "./routes/orchestrationModels";
 import { registerTemplateRoutes } from "./routes/templates";
 import { registerRunApprovalRoutes } from "./routes/runApprovals";
+import { registerRunControlRoutes } from "./routes/runControl";
 import { registerOperatorRoutes } from "./routes/operator";
 import { registerTaskRoutes } from "./routes/tasks";
 import { createDefaultToolRegistry, type ToolRegistry } from "../tools";
@@ -2545,6 +2546,14 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   });
 
   registerRunApprovalRoutes(app, {
+    store: rectorStore,
+    workspaceIdForRun,
+    authorize,
+    auditRequest,
+    sendRedacted,
+  });
+
+  registerRunControlRoutes(app, {
     store: rectorStore,
     workspaceIdForRun,
     authorize,

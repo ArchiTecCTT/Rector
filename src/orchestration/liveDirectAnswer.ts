@@ -35,6 +35,7 @@ export interface LiveDirectAnswerDeps {
   model?: string;
   /** The run whose budget gates the call. Required to evaluate the budget preflight. */
   run: Run;
+  abortSignal?: AbortSignal;
   /** Budget preflight, injectable for tests; defaults to the real {@link evaluateBudget}. */
   evaluateBudget?: typeof evaluateBudget;
   /** Outbound redaction, injectable for tests; defaults to the real {@link redactOutbound}. */
@@ -114,7 +115,7 @@ export async function runLiveDirectAnswer(
 
   let response: LLMResponse;
   try {
-    response = await provider.invoke(request);
+    response = await provider.invoke(request, { abortSignal: deps.abortSignal });
   } catch {
     // Req 8.1: any provider error → deterministic fallback; the raw provider body never reaches
     // the result. providerCalls stays 0 for this step.

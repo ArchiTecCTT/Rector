@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Application, Request, Response } from "express";
 import { redactSecrets } from "../../security/redaction";
 import type { Permission } from "../../security/rbac";
+import { interruptRun } from "../../orchestration/runControl";
 import type { RectorStore } from "../../store";
 import type { Artifact, Run, RunEvent } from "../../store/schemas";
 
@@ -149,15 +150,17 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
 
   app.post("/api/operator/runs/:id/abort", async (req, res) => {
     try {
-      const run = await store.getRun(req.params.id);
-      if (!run) return res.status(404).json({ error: "Run not found" });
+      const result = await interruptRun(store, req.params.id, "operator abort requested");
+      if (!result.ok) return res.status(404).json({ error: "Run not found" });
       res.status(202).json(
         operatorEnvelope({
-          status: "placeholder",
+          status: result.status === "already_terminal" ? result.run.status : "aborting",
           action: "abort",
-          mutated: false,
-          run: summarizeOperatorRun(run),
-          message: "Abort control is a local-only placeholder until cancellable execution exists.",
+          mutated: result.mutated,
+          run: summarizeOperatorRun(result.run),
+          message: result.status === "already_terminal"
+            ? "Run is already terminal; no abort mutation was applied."
+            : "Abort requested; the active run will stop cooperatively.",
         }),
       );
     } catch (err: any) {

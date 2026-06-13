@@ -15,6 +15,8 @@ import {
   type ExecutorSimulatorOptions,
   type NodeExecutionResult,
 } from "./executorSimulator";
+import type { RunControlState } from "./runControl";
+import type { IterationBudget, TurnBudgetSnapshot } from "./turnBudget";
 
 export const ValidationFailureClassificationSchema = z.enum([
   "TRANSIENT",
@@ -107,6 +109,7 @@ export type LiveRepairAgent = (input: {
   contextPack: ContextPack;
   run: Run;
   symbolicHints?: string[];
+  abortSignal?: AbortSignal;
 }) => Promise<RepairPatchProposal | undefined>;
 
 export interface ValidateAndHealExecutionInput {
@@ -119,6 +122,10 @@ export interface ValidateAndHealExecutionInput {
   sandbox?: WorkspaceSandboxAdapter;
   contextPack?: ContextPack;
   run?: Run;
+  turnBudget?: IterationBudget;
+  runControl?: RunControlState;
+  abortSignal?: AbortSignal;
+  onBudgetExhausted?: (snapshot: TurnBudgetSnapshot) => Promise<void> | void;
 }
 
 const DEFAULT_MAX_HEALING_ATTEMPTS = 2;
@@ -146,6 +153,10 @@ export async function validateAndHealExecution(input: ValidateAndHealExecutionIn
   }
 
   while (true) {
+    if (isAbortRequested(input)) {
+      return parseResult({ status: "FAILED", attempts, failures: observedFailures, actions, finalExecutionResult: current });
+    }
+
     const failures = classifyExecutionFailures(input.compiledDag, current);
     appendFailures(observedFailures, failures);
 
@@ -191,6 +202,14 @@ export async function validateAndHealExecution(input: ValidateAndHealExecutionIn
           reason: `Max healing attempts (${maxHealingAttempts}) exhausted for ${failure.nodeId ?? "DAG"}`,
         });
       }
+      return parseResult({ status: "FAILED", attempts, failures: observedFailures, actions, finalExecutionResult: current });
+    }
+
+    if (!(await consumeRepairAttemptBudget(input))) {
+      actions.push({
+        type: "FAIL_RUN",
+        reason: "Turn iteration budget exhausted before repair attempt",
+      });
       return parseResult({ status: "FAILED", attempts, failures: observedFailures, actions, finalExecutionResult: current });
     }
 
@@ -245,6 +264,10 @@ async function healWithLiveRepair(
   }
 
   for (;;) {
+    if (isAbortRequested(input)) {
+      return parseResult({ status: "FAILED", attempts, failures: observedFailures, actions, finalExecutionResult: current, rounds });
+    }
+
     const failures = classifyExecutionFailures(input.compiledDag, current);
     appendFailures(observedFailures, failures);
 
@@ -290,6 +313,14 @@ async function healWithLiveRepair(
       return parseResult({ status: "FAILED", attempts, failures: observedFailures, actions, finalExecutionResult: current, rounds });
     }
 
+    if (!(await consumeRepairAttemptBudget(input))) {
+      actions.push({
+        type: "FAIL_RUN",
+        reason: "Turn iteration budget exhausted before live repair attempt",
+      });
+      return parseResult({ status: "FAILED", attempts, failures: observedFailures, actions, finalExecutionResult: current, rounds });
+    }
+
     const target = actionable[0] ?? failures[0];
     attempts += 1;
 
@@ -301,6 +332,7 @@ async function healWithLiveRepair(
       contextPack: input.contextPack as ContextPack,
       run: input.run as Run,
       symbolicHints,
+      abortSignal: input.abortSignal,
     });
 
     let repairApplied = false;
@@ -317,6 +349,9 @@ async function healWithLiveRepair(
         content: proposal.content,
         approvalId: `approval:file-write:${proposal.path}`,
         metadata: { healingRound: attempts },
+      }, {
+        runId: input.run?.id,
+        abortSignal: input.abortSignal,
       });
       patchArtifactId = patchResult.artifacts[0]?.id;
       repairApplied = patchResult.status === "SUCCEEDED";
@@ -400,6 +435,20 @@ async function healWithLiveRepair(
   }
 }
 
+async function consumeRepairAttemptBudget(input: ValidateAndHealExecutionInput): Promise<boolean> {
+  if (!input.turnBudget) return true;
+  const allowed = input.turnBudget.consumeIteration();
+  if (!allowed) {
+    input.turnBudget.grantGraceCall();
+    await input.onBudgetExhausted?.(input.turnBudget.snapshot());
+  }
+  return allowed;
+}
+
+function isAbortRequested(input: ValidateAndHealExecutionInput): boolean {
+  return input.abortSignal?.aborted === true || input.runControl?.interruptRequested === true;
+}
+
 /** Collects symbolic suggest:* hints from failure facts for the repair prompt. */
 export function collectSymbolicHealingHints(failure: ValidationFailure, failedOutput: string): string[] {
   const engine = getSymbolicEngine();
@@ -440,6 +489,7 @@ async function safeProposeRepair(
     contextPack: ContextPack;
     run: Run;
     symbolicHints?: string[];
+    abortSignal?: AbortSignal;
   },
 ): Promise<RepairPatchProposal | undefined> {
   try {
@@ -527,6 +577,7 @@ const FAILURE_CLASSIFICATION_BY_ERROR_CODE: Partial<Record<ExecutionError["code"
   VALIDATION_FAILED: "VALIDATION",
   OPERATION_MAPPING_FAILED: "VALIDATION",
   SANDBOX_OPERATION_FAILED: "UNKNOWN",
+  ABORTED: "UNKNOWN",
 };
 
 function classifyError(error: ExecutionError | undefined): ValidationFailureClassification {

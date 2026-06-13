@@ -552,6 +552,7 @@ export interface LivePlannerDeps {
   run: Run;
   /** Optional concrete model/deployment selected by the orchestration assignment router. */
   model?: string;
+  abortSignal?: AbortSignal;
   buildPrompt?: typeof buildPlannerPrompt;
   buildRepairPrompt?: typeof buildPlannerRepairPrompt;
 }
@@ -622,7 +623,7 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
     let response: LLMResponse;
     try {
       // Double-gated: invokeWithBudget re-checks the budget before the network call.
-      response = await invokeWithBudget(provider, request, run);
+      response = await invokeWithBudget(provider, request, run, { abortSignal: deps.abortSignal });
     } catch (error) {
       // Req 4.11: map any provider error/exception to a redacted PROVIDER_ERROR blocker.
       const rawMessage = error instanceof ProviderError || error instanceof Error ? error.message : String(error);

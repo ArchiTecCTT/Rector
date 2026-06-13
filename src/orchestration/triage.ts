@@ -415,6 +415,7 @@ export interface LiveTriageResult {
 export interface LiveTriageDeps {
   provider: LLMProvider;
   run: Run;
+  abortSignal?: AbortSignal;
   buildPrompt?: (content: string, baseline: TriageResult) => LLMRequest["messages"];
   buildRepairPrompt?: (content: string, baseline: TriageResult, priorContent: string, errorSummary: string) => LLMRequest["messages"];
 }
@@ -454,7 +455,7 @@ export async function runLiveTriage(content: string, deps: LiveTriageDeps): Prom
       );
     }
 
-    const response = await invokeLiveTriageAttempt(provider, request, run);
+    const response = await invokeLiveTriageAttempt(provider, request, run, deps.abortSignal);
     if (!response.ok) {
       return fallbackResult(
         baseline,
@@ -537,9 +538,10 @@ async function invokeLiveTriageAttempt(
   provider: LLMProvider,
   request: LLMRequest,
   run: Run,
+  abortSignal?: AbortSignal,
 ): Promise<TriageInvocationResult> {
   try {
-    return { ok: true, value: await invokeWithBudget(provider, request, run) };
+    return { ok: true, value: await invokeWithBudget(provider, request, run, { abortSignal }) };
   } catch (error) {
     return { ok: false, message: error instanceof ProviderError || error instanceof Error ? error.message : String(error) };
   }
