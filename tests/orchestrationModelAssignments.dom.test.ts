@@ -133,9 +133,9 @@ describe("Orchestration model assignment UI", () => {
     expect(parsed.body).toMatchObject({
       providerId: "deterministic",
       enabled: true,
-      fallbackProviderId: "deterministic",
       modelId: "deterministic-local",
     });
+    expect(parsed.body).not.toHaveProperty("fallbackProviderId");
     expect(JSON.stringify(parsed.body)).not.toContain("apiKey");
   });
 

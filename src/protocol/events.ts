@@ -28,6 +28,9 @@ export const RUN_EVENT_TYPES = [
   "RUN_INTERRUPT_REQUESTED",
   "RUN_STEER_ENQUEUED",
   "RUN_BUDGET_EXHAUSTED",
+  "PROVIDER_RETRY",
+  "PROVIDER_SUBSTITUTED",
+  "CREDENTIAL_ROTATED",
 ] as const;
 
 export const RunEventTypeSchema = z.enum(RUN_EVENT_TYPES);

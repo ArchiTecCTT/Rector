@@ -51,6 +51,7 @@ import {
   LLMUsageSchema,
   ProviderCapabilityMetadataSchema,
   type LLMProvider,
+  type LLMInvokeOptions,
   type LLMRequest,
   type LLMResponse,
   type LLMUsage,
@@ -339,6 +340,7 @@ export interface SpyProviderOptions {
   responses?: Array<string | ScriptedResponse>;
   /** When set, `validateConfig()` throws this error. */
   validateConfigError?: Error;
+  invokeDelayMs?: number;
   /** Behaviour when invoked more times than there are scripted responses. */
   onOverflow?: "throw" | "repeat-last";
 }
@@ -366,6 +368,7 @@ export class SpyLLMProvider implements LLMProvider {
   private readonly responses: Array<string | ScriptedResponse>;
   private readonly estimate?: LLMUsage | ((request: LLMRequest) => LLMUsage);
   private readonly validateConfigError?: Error;
+  private readonly invokeDelayMs: number;
   private readonly onOverflow: "throw" | "repeat-last";
 
   constructor(options: SpyProviderOptions = {}) {
@@ -385,6 +388,7 @@ export class SpyLLMProvider implements LLMProvider {
     this.responses = options.responses ?? [];
     this.estimate = options.estimate;
     this.validateConfigError = options.validateConfigError;
+    this.invokeDelayMs = options.invokeDelayMs ?? 0;
     this.onOverflow = options.onOverflow ?? "throw";
   }
 
@@ -399,7 +403,11 @@ export class SpyLLMProvider implements LLMProvider {
     return DEFAULT_SPY_USAGE;
   }
 
-  async invoke(request: LLMRequest): Promise<LLMResponse> {
+  async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
+    if (options.abortSignal?.aborted) throw abortError();
+    if (this.invokeDelayMs > 0) {
+      await delayWithAbort(this.invokeDelayMs, options.abortSignal);
+    }
     this.requests.push(request);
     const index = this.invokeCount;
     this.invokeCount += 1;
@@ -432,6 +440,28 @@ export class SpyLLMProvider implements LLMProvider {
     }
     throw new Error(`SpyLLMProvider: no scripted response for invoke #${index + 1}`);
   }
+}
+
+function abortError(): Error {
+  const error = new Error("SpyLLMProvider invocation aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function delayWithAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(done, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    function done(): void {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 // ---------------------------------------------------------------------------

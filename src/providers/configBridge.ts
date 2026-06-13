@@ -15,6 +15,7 @@ import {
 import type { ProviderConfigRecord, ProviderModelRole } from "./config";
 import type { ProviderConfigStore } from "./configStore";
 import { getLlmProviderRegistry } from "../modules/builtin/llmProviderModules";
+import { CredentialPool, type CredentialPoolEntry } from "./credentialPool";
 
 /**
  * Config_Bridge (design section C5/C6).
@@ -160,6 +161,38 @@ export async function resolveProviderEnv(
   return effective;
 }
 
+export function buildCredentialPoolFromProviderRecords(records: readonly ProviderConfigRecord[]): CredentialPool {
+  const entries: CredentialPoolEntry[] = [];
+  for (const record of records) {
+    entries.push({ providerId: record.id, secretRef: record.secretRef, label: record.label });
+    for (const secretRef of record.additionalSecretRefs ?? []) {
+      entries.push({ providerId: record.id, secretRef, label: record.label });
+    }
+  }
+  return new CredentialPool(entries);
+}
+
+export async function buildCredentialPoolFromProviderStore(
+  store: ProviderConfigStore,
+  secrets: SecretStore,
+  options: ResolveProviderOptions = {},
+): Promise<CredentialPool> {
+  const state = await store.getState();
+  const entries: CredentialPoolEntry[] = [];
+  for (const record of state.providers) {
+    for (const secretRef of [record.secretRef, ...(record.additionalSecretRefs ?? [])]) {
+      const secret = await readSecretValue(secrets, secretRef);
+      entries.push({
+        providerId: record.id,
+        secretRef,
+        label: record.label,
+        provider: buildProviderFromRecord(record, secret, options),
+      });
+    }
+  }
+  return new CredentialPool(entries);
+}
+
 /**
  * Construct a single {@link LLMProvider} from one persisted record and its
  * (already-resolved) secret. Shared by {@link resolveTestProvider} and
@@ -246,6 +279,7 @@ function selectionFor(provider: LLMProvider, route: ModelRoute, role: ProviderMo
   const model = provider.metadata.models[route] ?? provider.metadata.models.fast ?? provider.metadata.models.fake;
   return {
     provider,
+    providerId: recordId,
     modelRoute: route,
     model,
     reason: `active route ${role} -> ${recordId}`,

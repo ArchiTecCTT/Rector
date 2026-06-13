@@ -74,7 +74,7 @@ import {
   ProviderModelRoleSchema,
   type ProviderConfigRecord,
 } from "../providers/config";
-import { buildConfiguredRouter, resolveTestProvider } from "../providers/configBridge";
+import { buildConfiguredRouter, buildCredentialPoolFromProviderStore, resolveTestProvider } from "../providers/configBridge";
 import {
   ORCHESTRATION_ROLE_DESCRIPTORS,
   OrchestrationAssignmentUpsertSchema,
@@ -2292,6 +2292,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
           throw new Error("Orchestration requires configured router");
         }
         const runtimeSettings = await runtimeSettingsStore.get();
+        const userStores = storesFor(req);
+        const credentialPool = await buildCredentialPoolFromProviderStore(
+          userStores.providerConfigStore,
+          userStores.secretStore,
+          { enableNetwork: true, fetchImpl: fetch },
+        );
         const result = await runChat(
           pipelineStore,
           {
@@ -2322,6 +2328,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             skillsCatalog,
             contextCompressionEnabled: runtimeSettings.contextCompressionEnabled,
             contextCompressionMaxGeneration: runtimeSettings.contextCompressionMaxGeneration,
+            providerResilienceEnabled: runtimeSettings.providerResilienceEnabled,
+            credentialPool,
           }
         );
         const assistantMessage = await pipelineStore.createMessage({

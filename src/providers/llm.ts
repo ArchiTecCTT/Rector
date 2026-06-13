@@ -734,9 +734,16 @@ export interface ModelRouterInput {
 
 export interface ModelSelection {
   provider: LLMProvider;
+  providerId?: string;
   modelRoute: ModelRoute;
   model: string;
   reason: string;
+  fallback?: {
+    provider: LLMProvider;
+    providerId?: string;
+    model: string;
+    reason: string;
+  };
 }
 
 export interface ModelRouter {
@@ -1019,7 +1026,7 @@ function providerBudgetUsage(provider: string, estimate: LLMUsage, run: Run): Bu
 
 function selection(provider: LLMProvider, modelRoute: ModelRoute, reason: string): ModelSelection {
   const model = provider.metadata.models[modelRoute] ?? provider.metadata.models.fake ?? provider.metadata.models.fast;
-  return { provider, modelRoute, model, reason };
+  return { provider, providerId: provider.metadata.id, modelRoute, model, reason };
 }
 
 function inferModelRoute(input: ModelRouterInput): ModelRoute {

@@ -4,6 +4,9 @@ export * from "./configStore";
 export * from "./configBridge";
 export * from "./orchestrationConfig";
 export * from "./orchestrationAssignments";
+export * from "./credentialPool";
+export * from "./turnRetryState";
+export * from "./failover";
 
 // Chunk 34 — pluggable memory providers (config layer + bridge)
 export * from "./memoryConfig";

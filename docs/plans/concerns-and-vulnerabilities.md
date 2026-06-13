@@ -531,6 +531,13 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 - **Fix:** Removed superseded local-MVP and cloud-heavy planning docs, then updated `docs/README.md`, `docs/architecture/rector-0.1.0-architecture.md`, and `.kiro/steering/docs.md` so current source-of-truth docs are the only active guidance.
 - **Status:** Closed.
 
+### Provider resilience retries can add provider spend beyond the initial preflight
+
+- **Source:** Chunk 047f implementation.
+- **Severity:** Medium provider/budget risk.
+- **Concern:** The resilience wrapper preflights through the existing `invokeWithBudget` call before the first provider invocation, then may perform a bounded 429 retry, auth retry, or fallback substitution inside that call site. Those extra attempts are traced and bounded, but per-attempt budget preflight/accounting should be tightened in a follow-up so retry/fallback spend is projected before each recovery call.
+- **Status:** Open follow-up before public alpha billing/quotas.
+
 ### Open-source project lacked license/community scaffolding
 
 - **Source:** Chunk 1 scope.

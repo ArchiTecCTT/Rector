@@ -3026,6 +3026,14 @@ function createOrchestrationModelRow(role) {
   }
   fallbackSelect.value = fallbackProviderId;
   fallbackCell.appendChild(fallbackSelect);
+  const fallbackModelSelect = document.createElement("select");
+  fallbackModelSelect.className = "orchestration-model-fallback-model";
+  populateOrchestrationModelSelect(
+    fallbackModelSelect,
+    fallbackProviderId,
+    assignment?.fallbackModelId || effective?.fallbackModelId || "",
+  );
+  fallbackCell.appendChild(fallbackModelSelect);
   row.appendChild(fallbackCell);
 
   const budgetCell = document.createElement("td");
@@ -3085,7 +3093,11 @@ function createOrchestrationModelRow(role) {
     populateOrchestrationModelSelect(modelSelect, providerSelect.value, "");
     markDirty();
   });
-  for (const input of [modelSelect, fallbackSelect, usd, tokens]) {
+  fallbackSelect.addEventListener("change", () => {
+    populateOrchestrationModelSelect(fallbackModelSelect, fallbackSelect.value, "");
+    markDirty();
+  });
+  for (const input of [modelSelect, fallbackModelSelect, usd, tokens]) {
     input.addEventListener("change", markDirty);
     input.addEventListener("input", markDirty);
   }
@@ -3100,14 +3112,16 @@ function readOrchestrationModelRow(row) {
   const providerId = row.querySelector(".orchestration-model-provider")?.value || "deterministic";
   const modelId = row.querySelector(".orchestration-model-model")?.value || "";
   const fallbackProviderId = row.querySelector(".orchestration-model-fallback")?.value || "deterministic";
+  const fallbackModelId = row.querySelector(".orchestration-model-fallback-model")?.value || "";
   const usdRaw = row.querySelector(".orchestration-model-budget-usd")?.value || "";
   const tokensRaw = row.querySelector(".orchestration-model-budget-tokens")?.value || "";
   const body = {
     providerId,
     enabled: providerId !== "disabled",
-    fallbackProviderId,
   };
+  if (fallbackProviderId && fallbackProviderId !== providerId) body.fallbackProviderId = fallbackProviderId;
   if (modelId) body.modelId = modelId;
+  if (fallbackProviderId && fallbackProviderId !== providerId && fallbackModelId) body.fallbackModelId = fallbackModelId;
   if (usdRaw) body.maxUsdPerCall = Number(usdRaw);
   if (tokensRaw) body.maxTokens = Number.parseInt(tokensRaw, 10);
   return { role, body };

@@ -1034,24 +1034,41 @@ function providerModelForRoute(provider: LLMProvider, route: ModelRoute, preferr
 function fakeSelection(role: OrchestrationRole, effective: EffectiveModelRoute, provider: LLMProvider): ModelSelection {
   return {
     provider,
+    providerId: effective.providerId,
     modelRoute: "fake",
     model: effective.modelId ?? provider.metadata.models.fake,
     reason: `orchestration assignment ${role} uses ${effective.providerId}`,
   };
 }
 
-function assignedProviderSelection(role: OrchestrationRole, effective: EffectiveModelRoute, provider: LLMProvider): ModelSelection {
+function assignedProviderSelection(
+  role: OrchestrationRole,
+  effective: EffectiveModelRoute,
+  provider: LLMProvider,
+  fallbackProvider?: LLMProvider,
+): ModelSelection {
+  const fallback = fallbackProvider && effective.fallbackProviderId && effective.fallbackProviderId !== effective.providerId
+    ? {
+        provider: fallbackProvider,
+        providerId: effective.fallbackProviderId,
+        model: providerModelForRoute(fallbackProvider, effective.modelRoute, effective.fallbackModelId),
+        reason: `orchestration assignment ${role} fallback -> ${effective.fallbackProviderId}`,
+      }
+    : undefined;
   return {
     provider,
+    providerId: effective.providerId,
     modelRoute: effective.modelRoute,
     model: providerModelForRoute(provider, effective.modelRoute, effective.modelId),
     reason: `orchestration assignment ${role} -> ${effective.providerId}`,
+    ...(fallback ? { fallback } : {}),
   };
 }
 
 function fallbackProviderSelection(role: OrchestrationRole, effective: EffectiveModelRoute, provider: LLMProvider): ModelSelection {
   return {
     provider,
+    providerId: effective.fallbackProviderId,
     modelRoute: effective.modelRoute,
     model: providerModelForRoute(provider, effective.modelRoute, effective.fallbackModelId),
     reason: `orchestration assignment ${role} fallback -> ${effective.fallbackProviderId}`,
@@ -1072,7 +1089,11 @@ export function buildAssignmentAwareModelRouter(input: BuildAssignmentAwareRoute
         return fakeSelection(role, effective, fakeProvider);
       }
       const assignedProvider = input.providersByRole?.[role];
-      if (assignedProvider) return assignedProviderSelection(role, effective, assignedProvider);
+      if (assignedProvider) {
+        const fallbackProvider = input.fallbackProvidersByRole?.[role]
+          ?? (effective.fallbackProviderId === "deterministic" ? fakeProvider : undefined);
+        return assignedProviderSelection(role, effective, assignedProvider, fallbackProvider);
+      }
       const fallbackProvider = input.fallbackProvidersByRole?.[role];
       if (fallbackProvider) return fallbackProviderSelection(role, effective, fallbackProvider);
       return input.baseRouter.select(routerInput);

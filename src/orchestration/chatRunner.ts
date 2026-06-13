@@ -33,6 +33,8 @@ import {
   type ModelRouter,
   type ModelSelection,
 } from "../providers/llm";
+import { buildResilientModelRouter, type ProviderCallSite } from "../providers/failover";
+import type { CredentialPool } from "../providers/credentialPool";
 import {
   type CommandRunner,
   type SandboxApproval,
@@ -114,6 +116,9 @@ export interface ChatRunnerDeps {
   neuroFlags?: Partial<NeuroFeatureFlags>;
   contextCompressionEnabled?: boolean;
   contextCompressionMaxGeneration?: number;
+  providerResilienceEnabled?: boolean;
+  providerRetryDelayMs?: number;
+  credentialPool?: CredentialPool;
   /** Procedural memory catalog. Planner requests are policy-gated by crucible before injection. */
   skillsCatalog?: SkillContextCatalog;
 }
@@ -203,6 +208,22 @@ export async function runOrchestratedChatRun(
     })
   );
 
+  const activeRouter = buildResilientModelRouter({
+    inner: deps.router,
+    credentialPool: deps.credentialPool,
+    providerResilienceEnabled: deps.providerResilienceEnabled,
+    retryDelayMs: deps.providerRetryDelayMs,
+    emitEvent: async (event) => {
+      await store.appendEvent(
+        runEvent(run, event.type, phaseForProviderCallSite(event.site), {
+          source: "provider-resilience",
+          ...event.payload,
+        }),
+      );
+    },
+  });
+  const activeDeps: ChatRunnerDeps = { ...deps, router: activeRouter };
+
   const runControl = registerRunControl(run.id);
   const abortSignal = createAbortSignal(runControl);
   const turnBudget = new IterationBudget(options.turnBudget);
@@ -252,9 +273,9 @@ export async function runOrchestratedChatRun(
         prompt,
         triage,
         contextPack: activeContextPack,
-        router: deps.router,
+        router: activeDeps.router,
       },
-      deps.mode ?? "external",
+      activeDeps.mode ?? "external",
     );
     if (hookResult.contextPack) {
       activeContextPack = hookResult.contextPack;
@@ -274,7 +295,7 @@ export async function runOrchestratedChatRun(
         prompt,
         contextPack: activeContextPack,
         triage,
-        router: deps.router,
+        router: activeDeps.router,
         recordSpan: (name, fn) => observability.recordSpan(name, fn),
         addProviderUsage: (currentRun, usage, providerId) =>
           addProviderUsageToRun(store, currentRun, usage, providerId),
@@ -294,7 +315,7 @@ export async function runOrchestratedChatRun(
         contextPack: activeContextPack,
         effectiveMessageContent,
         deepPlanning: options.deepPlanning === true,
-        router: deps.router,
+        router: activeDeps.router,
         budgetRun,
         flags: neuroFlags,
         recordSpan: (name, fn) => observability.recordSpan(name, fn),
@@ -310,7 +331,7 @@ export async function runOrchestratedChatRun(
           contextPack: activeContextPack,
           effectiveMessageContent,
           deepPlanning: options.deepPlanning === true,
-          router: deps.router,
+          router: activeDeps.router,
           budgetRun,
           flags: neuroFlags,
           recordSpan: (name, fn) => observability.recordSpan(name, fn),
@@ -319,7 +340,7 @@ export async function runOrchestratedChatRun(
         planningPrep,
       )
     : await observability.recordSpan("PLANNING", () => {
-        const selection = deps.router.select({
+        const selection = activeDeps.router.select({
           capability: "flagship",
           task: "planner",
           run: budgetRun,
@@ -355,7 +376,7 @@ export async function runOrchestratedChatRun(
   const costedRun = await addProviderUsageToRun(store, budgetRun, usage, plannerResult.provider);
 
   // Provider/model/cost metadata recorded on the PLANNING event (Req 3.5).
-  const plannerSelection = deps.router.select({
+  const plannerSelection = activeDeps.router.select({
     capability: "flagship",
     task: "planner",
     run: budgetRun,
@@ -369,7 +390,7 @@ export async function runOrchestratedChatRun(
   );
 
   // --- SKEPTIC STEP (ORN-35): live when router selects a non-fake provider; deterministic otherwise.
-  const skepticSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "skeptic", run: costedRun });
+  const skepticSelection: ModelSelection = activeDeps.router.select({ capability: "flagship", task: "skeptic", run: costedRun });
   let skepticReview: SkepticReview;
   let skepticProviderCall: ProviderCallMetadata;
   let skepticCostedRun = costedRun;
@@ -395,7 +416,7 @@ export async function runOrchestratedChatRun(
         code: "SKEPTIC_INVALID",
         message: "Skeptic returned no review",
       };
-      const result = await resolveSkepticBlocker(store, activeArgs, skepticCostedRun, blocker, deps, {
+      const result = await resolveSkepticBlocker(store, activeArgs, skepticCostedRun, blocker, activeDeps, {
         plannerOutput,
         planningProviderCall: providerCall,
         skepticProviderCall,
@@ -456,7 +477,7 @@ export async function runOrchestratedChatRun(
       crucibleDecision,
       planningProviderCall: providerCall,
       skepticProviderCall,
-      deps,
+      deps: activeDeps,
       preprocessorOutput,
       subGoals,
       subGoalGraph,
@@ -468,6 +489,21 @@ export async function runOrchestratedChatRun(
   } finally {
     clearStableTierHashForRun(run.id);
     clearRunControl(run.id);
+  }
+}
+
+function phaseForProviderCallSite(site: ProviderCallSite): Run["phase"] {
+  switch (site) {
+    case "planner":
+      return "PLANNING";
+    case "skeptic":
+      return "SKEPTIC_REVIEW";
+    case "synthesizer":
+      return "SYNTHESIZING";
+    case "repair":
+      return "HEALING";
+    case "triage":
+      return "TRIAGE";
   }
 }
 

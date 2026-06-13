@@ -27,6 +27,7 @@ export const RuntimeSettingsSchema = z.object({
   sandboxEnvironment: SandboxEnvironmentKindSchema.default("stub"),
   contextCompressionEnabled: z.boolean().default(true),
   contextCompressionMaxGeneration: z.number().int().positive().default(3),
+  providerResilienceEnabled: z.boolean().default(true),
   updatedAt: z.string().datetime(),
 });
 export type RuntimeSettings = z.infer<typeof RuntimeSettingsSchema>;
@@ -35,6 +36,7 @@ export const RuntimeSettingsPatchSchema = z
   .object({
     orchestrationProfile: OrchestrationProfileSchema.optional(),
     sandboxEnvironment: SandboxEnvironmentKindSchema.optional(),
+    providerResilienceEnabled: z.boolean().optional(),
   })
   .strict();
 export type RuntimeSettingsPatch = z.infer<typeof RuntimeSettingsPatchSchema>;
@@ -100,6 +102,7 @@ export function defaultRuntimeSettings(now: string = new Date().toISOString()): 
     sandboxEnvironment: "stub",
     contextCompressionEnabled: true,
     contextCompressionMaxGeneration: 3,
+    providerResilienceEnabled: true,
     updatedAt: now,
   };
 }
@@ -134,6 +137,7 @@ export function migrateRuntimeSettingsFromEnv(
     sandboxEnvironment: "stub",
     contextCompressionEnabled: true,
     contextCompressionMaxGeneration: 3,
+    providerResilienceEnabled: true,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -150,6 +154,7 @@ export function redactRuntimeSettingsForEgress(settings: RuntimeSettings): Runti
     sandboxEnvironment: settings.sandboxEnvironment,
     contextCompressionEnabled: settings.contextCompressionEnabled,
     contextCompressionMaxGeneration: settings.contextCompressionMaxGeneration,
+    providerResilienceEnabled: settings.providerResilienceEnabled,
     updatedAt: settings.updatedAt,
   };
 }

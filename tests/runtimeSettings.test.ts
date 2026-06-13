@@ -49,6 +49,7 @@ describe("runtime settings defaults", () => {
       sandboxEnvironment: "stub",
       contextCompressionEnabled: true,
       contextCompressionMaxGeneration: 3,
+      providerResilienceEnabled: true,
       updatedAt: FIXED_TS,
     });
   });
@@ -107,6 +108,7 @@ describe("RuntimeSettingsStore persistence", () => {
       sandboxEnvironment: "stub",
       contextCompressionEnabled: true,
       contextCompressionMaxGeneration: 3,
+      providerResilienceEnabled: true,
       updatedAt: FIXED_TS,
     };
 
