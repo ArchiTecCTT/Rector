@@ -17,13 +17,8 @@ import {
 } from "../observability";
 import { redactSecrets, redactString, redactOutbound, REDACTION_FAILED_ERROR } from "../security/redaction";
 import {
-  InMemoryRateLimiter,
-  classifyRateLimitRoute,
-  createRateLimitPolicy,
-  rateLimitErrorMessage,
-  rateLimitRuleFor,
+  createApiRateLimitMiddleware,
   type RateLimitConfig,
-  type RateLimitDecision,
   type RateLimiter,
 } from "../security/rateLimiter";
 import {
@@ -1007,7 +1002,6 @@ export function registerRunStreamRoute(
     authorizeRunRead?: (req: express.Request, res: express.Response, runId: string) => Promise<boolean>;
   }
 ): void {
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/runs/:id/stream", async (req, res) => {
     if (deps.authorizeRunRead && !(await deps.authorizeRunRead(req, res, req.params.id))) return;
     void handleRunStream({
@@ -1809,7 +1803,20 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.locals.neuroAliveState = getNeuroAliveState;
   app.use(securityHeadersMiddleware);
   app.use(corsMiddleware(securityOptions));
-  app.use(apiRateLimitMiddleware(securityOptions, authConfig));
+  app.use(
+    createApiRateLimitMiddleware({
+      rateLimit: securityOptions.rateLimit,
+      rateLimiter: securityOptions.rateLimiter,
+      env: process.env,
+      resolveKey: (req) => rateLimitKeyForRequest(req, authConfig),
+      onStoreFailure: (res, error) => {
+        sendRedacted(res, 503, {
+          error: "Rate limiter unavailable",
+          message: redactString(error instanceof Error ? error.message : String(error)),
+        });
+      },
+    }),
+  );
   app.use(express.json());
   app.use(malformedJsonBodyHandler);
   const publicDir = resolvePublicDir();
@@ -2059,7 +2066,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     auditRequest,
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.use(createAuthMiddleware(authConfig, resolveUserStores));
   app.use(csrfProtectionMiddleware(authConfig, securityOptions));
 
@@ -2169,7 +2175,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // --- Chat routes ---
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/chat/conversations", async (req, res) => {
     try {
       const { title, workspaceId, retentionPolicy } = req.body ?? {};
@@ -2210,7 +2215,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/chat/conversations", async (req, res) => {
     try {
       const workspaceId = typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined;
@@ -2233,7 +2237,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/conversations/search", async (req, res) => {
     try {
       const q = typeof req.query.q === "string" ? req.query.q : "";
@@ -2259,7 +2262,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/conversations/:id/lineage", async (req, res) => {
     try {
       const conversation = await rectorStore.getConversation(req.params.id);
@@ -2281,7 +2283,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/chat/conversations/:id", async (req, res) => {
     try {
       const conversation = await rectorStore.getConversation(req.params.id);
@@ -2301,7 +2302,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // aggregate (runCount 0, all numeric totals 0, empty `runs`), exactly as Requirement 3.10 wants.
   // The extra `/cost` segment means this never shadows (and is never shadowed by) the
   // `GET /api/chat/conversations/:id` route above.
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/chat/conversations/:id/cost", async (req, res) => {
     try {
       const conversationId = req.params.id;
@@ -2319,7 +2319,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/chat/conversations/:id/messages", async (req, res) => {
     try {
       const conversation = await rectorStore.getConversation(req.params.id);
@@ -2538,7 +2537,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // Quick-capture notes (Chunk 27 / neuro-symbolic Step 2)
   // Writes to episodic memory layer with time-awareness. Content is redacted.
   // Local mode only for alpha; future auth + workspace scoping.
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/notes", async (req, res) => {
     try {
       const { content, tags, conversationId } = req.body ?? {};
@@ -2585,7 +2583,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // Read-only memory browser list (Chunk 36 stretch). Returns redacted episodic/core entries from
   // the resolved MemoryProvider — no secrets, no mutation.
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/memory/entries", async (req, res) => {
     try {
       const access = await authorize(req, res, "workspace.read", { targetType: "memory" });
@@ -2612,7 +2609,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.use("/api/skills", async (req, res, next) => {
     const access = await authorize(req, res, "workspace.read", { targetType: "skill" });
     if (!access) return;
@@ -2653,7 +2649,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/tools", async (req, res) => {
     const access = await authorize(req, res, "workspace.read", { targetType: "tool" });
     if (!access) return;
@@ -2668,7 +2663,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/runs/:id/events", async (req, res) => {
     try {
       const run = await rectorStore.getRun(req.params.id);
@@ -2700,7 +2694,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // persisted (already-redacted) events. For an UNKNOWN run id we do NOT 404: `listEvents` returns
   // `[]`, so `aggregateRunCost` yields a schema-valid all-zero aggregate (the requested runId, all
   // numeric totals 0, empty provider/model lists), exactly as Requirement 3.10 specifies.
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/runs/:id/cost", async (req, res) => {
     try {
       const runId = req.params.id;
@@ -2742,14 +2735,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // --- Setup checklist ---
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/setup", async (req, res) => {
     const access = await authorize(req, res, "workspace.read", { targetType: "setup" });
     if (!access) return;
     res.json(getSetupChecklist());
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/runtime-settings", async (req, res) => {
     const access = await authorize(req, res, "workspace.read", { targetType: "runtime-settings" });
     if (!access) return;
@@ -2761,7 +2752,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.patch("/api/runtime-settings", async (req, res) => {
     const access = await authorize(req, res, "providers.configure", { targetType: "runtime-settings" });
     if (!access) return;
@@ -2834,7 +2824,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/setup/onboarding", async (req, res) => {
     try {
       const access = await authorize(req, res, "workspace.read", { targetType: "setup" });
@@ -2846,7 +2835,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/setup/activate", async (req, res) => {
     try {
       const access = await authorize(req, res, "providers.configure", { targetType: "setup" });
@@ -2892,7 +2880,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // `sendRedacted`, which redacts the outbound body and — if redaction itself fails — suppresses the
   // raw content and returns a redaction-failed error instead (Req 11.5).
   const workspaceSafetyConfig = securityOptions.workspaceSafety ?? resolveWorkspaceSafetyConfig(process.env);
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/setup/workspace", async (req, res) => {
     const access = await authorize(req, res, "workspace.read", { targetType: "setup" });
     if (!access) return;
@@ -2910,7 +2897,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // --- Provider connection test (ORN-32) ---
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/setup/test-connection", async (req, res) => {
     const access = await authorize(req, res, "providers.configure", { targetType: "provider" });
     if (!access) return;
@@ -2989,7 +2975,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     runConnectionTest,
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.use("/api/providers", async (req, res, next) => {
     let permission: Permission = "providers.read";
     if (req.method === "POST" && req.path === "/active") permission = "models.assign";
@@ -3132,7 +3117,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // Secret_Store then STRIPPED from the stored config (Req 10.5, 11.6). Write-once UX: when no
   // `apiKey` is supplied any existing secret is retained unchanged (Req 11.3). If persisting the
   // secret fails, the prior secret is left intact and the config is NOT upserted (Req 11.7).
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/providers", async (req, res) => {
     let body: UpsertProviderRequest;
     try {
@@ -3277,7 +3261,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.use("/api/modules", async (req, res, next) => {
     const permission: Permission = req.method === "GET" ? "workspace.read" : "modules.configure";
     const access = await authorize(req, res, permission, { targetType: "module" });
@@ -3352,7 +3335,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     sendTemplateResponse,
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.use("/api/memory-providers", async (req, res, next) => {
     let permission: Permission = "providers.read";
     if (req.method === "POST" && req.path.endsWith("/secret")) permission = "providers.secrets.write";
@@ -3398,7 +3380,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   });
 
   // POST /api/memory-providers — upsert a non-secret record; optional `apiKey` to Secret_Store first.
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/memory-providers", async (req, res) => {
     let body: UpsertMemoryProviderRequest;
     try {
@@ -3677,7 +3658,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // The full DiscoveryResult is sent through `sendRedacted`, so no secret value or authorization
   // header can escape in the response (Req 4.4). A refresh can be requested via `?refresh=1` or a
   // truthy `refresh` body field.
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/config/providers/:id/discover", async (req, res) => {
     const access = await authorize(req, res, "providers.configure", { targetType: "provider", targetId: req.params.id });
     if (!access) return;
@@ -3705,7 +3685,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // --- Scenario seeding ---
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/dev/scenario", async (req, res) => {
     const access = await authorize(req, res, "operator.manage", { targetType: "dev" });
     if (!access) return;
@@ -3729,7 +3708,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   });
 
   // Manual trigger for proactive "alive" behavior (Chunk 28).
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/dev/proactive-trigger", async (req, res) => {
     const access = await authorize(req, res, "operator.manage", { targetType: "dev" });
     if (!access) return;
@@ -3843,59 +3821,6 @@ function csrfProtectionMiddleware(authConfig: ParsedAuthConfig, options: ApiSecu
   };
 }
 
-function apiRateLimitMiddleware(
-  options: ApiSecurityOptions,
-  authConfig: ParsedAuthConfig,
-): express.RequestHandler {
-  const policy = createRateLimitPolicy(options.rateLimit, process.env);
-  const limiter = options.rateLimiter ?? new InMemoryRateLimiter(policy);
-
-  return async (req, res, next) => {
-    const route = classifyRateLimitRoute(req.method, req.path);
-    if (!route) {
-      next();
-      return;
-    }
-    const key = rateLimitKeyForRequest(req, authConfig);
-    const now = Date.now();
-
-    try {
-      const checked = await limiter.check(key, route, now);
-      if (checked.disabled) {
-        next();
-        return;
-      }
-      if (!checked.allowed) {
-        sendRateLimitDenied(res, checked, rateLimitErrorMessage(route));
-        return;
-      }
-
-      const committed = await limiter.commit(key, route, now);
-      if (committed.disabled) {
-        next();
-        return;
-      }
-      if (!committed.allowed) {
-        sendRateLimitDenied(res, committed, rateLimitErrorMessage(route));
-        return;
-      }
-
-      writeRateLimitHeaders(res, committed);
-      next();
-    } catch (error) {
-      const rule = rateLimitRuleFor(policy, route);
-      if (!rule.failClosed) {
-        next();
-        return;
-      }
-      sendRedacted(res, 503, {
-        error: "Rate limiter unavailable",
-        message: redactString(error instanceof Error ? error.message : String(error)),
-      });
-    }
-  };
-}
-
 function rateLimitKeyForRequest(req: express.Request, authConfig: ParsedAuthConfig): string {
   if (req.rectorAuth?.userId) return `user:${req.rectorAuth.userId}`;
 
@@ -3925,18 +3850,6 @@ function parseCookieHeader(header: string | undefined): Record<string, string> {
     }
   }
   return cookies;
-}
-
-function sendRateLimitDenied(res: express.Response, decision: RateLimitDecision, message: string): void {
-  writeRateLimitHeaders(res, decision);
-  res.setHeader("Retry-After", String(Math.ceil(decision.retryAfterMs / 1000)));
-  sendRedacted(res, 429, { error: message });
-}
-
-function writeRateLimitHeaders(res: express.Response, decision: RateLimitDecision): void {
-  res.setHeader("X-RateLimit-Limit", String(decision.limit));
-  res.setHeader("X-RateLimit-Remaining", String(Math.max(0, decision.remaining)));
-  res.setHeader("X-RateLimit-Reset", String(Math.ceil(decision.resetAt / 1000)));
 }
 
 function parseCsvEnv(value: string | undefined): string[] {

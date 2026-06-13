@@ -34,7 +34,6 @@ export interface RunControlRoutesDeps {
 export function registerRunControlRoutes(app: Application, deps: RunControlRoutesDeps): void {
   const { store, workspaceIdForRun, authorize, auditRequest, sendRedacted } = deps;
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/runs/:runId/interrupt", async (req, res) => {
     const runId = req.params.runId;
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -66,7 +65,6 @@ export function registerRunControlRoutes(app: Application, deps: RunControlRoute
     }
   });
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/runs/:runId/steer", async (req, res) => {
     const runId = req.params.runId;
     const body = (req.body ?? {}) as Record<string, unknown>;

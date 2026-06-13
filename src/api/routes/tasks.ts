@@ -20,7 +20,6 @@ export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void
 
   // --- Task routes ---
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.use("/api/tasks", async (req, res, next) => {
     let permission: Permission = "runs.read";
     if (req.method === "POST" && req.path === "/") permission = "runs.create";
@@ -129,7 +128,6 @@ export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void
 
   // --- Telemetry ---
 
-  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/telemetry", async (req, res) => {
     const access = await authorize(req, res, "operator.read", { targetType: "telemetry" });
     if (!access) return;

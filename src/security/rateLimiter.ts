@@ -1,3 +1,6 @@
+import rateLimit, { type IncrementResponse, type Store } from "express-rate-limit";
+import type { NextFunction, Request, RequestHandler, Response } from "express";
+
 export type RateLimitRoute =
   | "chat"
   | "auth-login"
@@ -141,6 +144,96 @@ export function rateLimitErrorMessage(route: string): string {
     default:
       return "Too many requests";
   }
+}
+
+export function rateLimitBucketKey(route: string, identity: string): string {
+  return `${route}\u0000${identity}`;
+}
+
+function parseRateLimitBucketKey(key: string): { route: string; identity: string } {
+  const index = key.indexOf("\u0000");
+  if (index < 0) return { route: "general", identity: key };
+  return { route: key.slice(0, index), identity: key.slice(index + 1) };
+}
+
+class RectorRateLimitStore implements Store {
+  readonly localKeys = true;
+
+  constructor(
+    private readonly limiter: RateLimiter,
+    private readonly policy: RateLimitPolicy,
+  ) {}
+
+  async increment(key: string): Promise<IncrementResponse> {
+    const { route, identity } = parseRateLimitBucketKey(key);
+    const committed = await this.limiter.commit(identity, route, Date.now());
+    if (committed.disabled) {
+      return { totalHits: 0, resetTime: undefined };
+    }
+    if (!committed.allowed) {
+      return { totalHits: committed.limit + 1, resetTime: new Date(committed.resetAt) };
+    }
+    return {
+      totalHits: committed.limit - committed.remaining,
+      resetTime: new Date(committed.resetAt),
+    };
+  }
+
+  async decrement(_key: string): Promise<void> {}
+
+  async resetKey(key: string): Promise<void> {
+    const { route, identity } = parseRateLimitBucketKey(key);
+    await this.limiter.reset?.(identity, route);
+  }
+}
+
+export interface ApiRateLimitMiddlewareOptions {
+  rateLimit?: RateLimitConfig;
+  rateLimiter?: RateLimiter;
+  env?: Record<string, string | undefined>;
+  resolveKey: (req: Request) => string;
+  onStoreFailure?: (res: Response, error: unknown, route: string) => void;
+}
+
+export function createApiRateLimitMiddleware(options: ApiRateLimitMiddlewareOptions): RequestHandler {
+  const policy = createRateLimitPolicy(options.rateLimit, options.env);
+  const limiter = options.rateLimiter ?? new InMemoryRateLimiter(policy);
+  const store = new RectorRateLimitStore(limiter, policy);
+  const resolveRoute = (req: Request): string => classifyRateLimitRoute(req.method, req.path) ?? "general";
+
+  const limiterMiddleware = rateLimit({
+    windowMs: policy.routes.general.windowMs,
+    limit: (req) => rateLimitRuleFor(policy, resolveRoute(req)).maxRequests,
+    keyGenerator: (req) => rateLimitBucketKey(resolveRoute(req), options.resolveKey(req)),
+    skip: (req) => classifyRateLimitRoute(req.method, req.path) === undefined,
+    store,
+    standardHeaders: false,
+    legacyHeaders: true,
+    handler: (req, res) => {
+      res.status(429).json({ error: rateLimitErrorMessage(resolveRoute(req)) });
+    },
+    passOnStoreError: false,
+  });
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    limiterMiddleware(req, res, (error?: unknown) => {
+      if (!error) {
+        next();
+        return;
+      }
+      const route = resolveRoute(req);
+      const rule = rateLimitRuleFor(policy, route);
+      if (!rule.failClosed) {
+        next();
+        return;
+      }
+      if (options.onStoreFailure) {
+        options.onStoreFailure(res, error, route);
+        return;
+      }
+      res.status(503).json({ error: "Rate limiter unavailable" });
+    });
+  };
 }
 
 export class InMemoryRateLimiter implements RateLimiter {
