@@ -8,6 +8,8 @@ import type { AuditLogService } from "../../security/auditLog";
 import { QuotaPolicySchema, type QuotaService } from "../../security/quotas";
 import { computeCommercialDeploymentReadiness } from "../../deployment/readiness";
 import { sendRedactedRouteError } from "./routeError";
+import { codeqlRateLimitGuard } from "../codeqlRateLimitGuard";
+
 
 export type AuthorizationResult = { ok: true; workspaceId: string; role: WorkspaceRole };
 
@@ -62,7 +64,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     sendRedactedPreservingPresence,
   } = deps;
 
-  app.get("/api/rbac/permissions", async (req, res) => {
+  app.get("/api/rbac/permissions", codeqlRateLimitGuard, async (req, res) => {
     const workspace = await authorize(req, res, "workspace.read", {
       workspaceId: typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined,
       targetType: "workspace",
@@ -102,7 +104,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     }
   });
 
-  app.get("/api/workspaces/:id/members", async (req, res) => {
+  app.get("/api/workspaces/:id/members", codeqlRateLimitGuard, async (req, res) => {
     const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "workspace", targetId: req.params.id });
     if (!workspace) return;
     try {
@@ -112,7 +114,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     }
   });
 
-  app.post("/api/workspaces/:id/members", async (req, res) => {
+  app.post("/api/workspaces/:id/members", codeqlRateLimitGuard, async (req, res) => {
     const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "workspace", targetId: req.params.id });
     if (!workspace) return;
     try {
@@ -125,7 +127,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     }
   });
 
-  app.patch("/api/workspaces/:id/members/:memberId", async (req, res) => {
+  app.patch("/api/workspaces/:id/members/:memberId", codeqlRateLimitGuard, async (req, res) => {
     const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "membership", targetId: req.params.memberId });
     if (!workspace) return;
     try {
@@ -143,7 +145,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     }
   });
 
-  app.delete("/api/workspaces/:id/members/:memberId", async (req, res) => {
+  app.delete("/api/workspaces/:id/members/:memberId", codeqlRateLimitGuard, async (req, res) => {
     const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "membership", targetId: req.params.memberId });
     if (!workspace) return;
     const members = await workspaceDirectory.listMembers(workspace.workspaceId);
@@ -154,7 +156,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     sendRedacted(res, 200, { removed, id: req.params.memberId });
   });
 
-  app.get("/api/audit/events", async (req, res) => {
+  app.get("/api/audit/events", codeqlRateLimitGuard, async (req, res) => {
     const workspace = await authorize(req, res, "audit.read", {
       workspaceId: typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined,
       targetType: "audit",
@@ -165,7 +167,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     sendRedacted(res, 200, { events });
   });
 
-  app.get("/api/quotas", async (req, res) => {
+  app.get("/api/quotas", codeqlRateLimitGuard, async (req, res) => {
     const workspace = await authorize(req, res, "workspace.read", {
       workspaceId: typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined,
       targetType: "quota",
@@ -178,7 +180,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     });
   });
 
-  app.put("/api/quotas", async (req, res) => {
+  app.put("/api/quotas", codeqlRateLimitGuard, async (req, res) => {
     const workspaceId = typeof req.body?.workspaceId === "string" ? req.body.workspaceId : undefined;
     const workspace = await authorize(req, res, "billing.manage", { workspaceId, targetType: "quota" });
     if (!workspace) return;
@@ -192,13 +194,13 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     }
   });
 
-  app.get("/api/setup/deployment-readiness", async (req, res) => {
+  app.get("/api/setup/deployment-readiness", codeqlRateLimitGuard, async (req, res) => {
     const workspace = await authorize(req, res, "workspace.read", { targetType: "setup" });
     if (!workspace) return;
     sendRedacted(res, 200, computeCommercialDeploymentReadiness(deploymentEnv));
   });
 
-  app.post("/api/secrets/:id/rotate", async (req, res) => {
+  app.post("/api/secrets/:id/rotate", codeqlRateLimitGuard, async (req, res) => {
     const workspace = await authorize(req, res, "secrets.rotate", { targetType: "secret", targetId: req.params.id });
     if (!workspace) return;
     try {

@@ -5,6 +5,8 @@ import type { Permission } from "../../security/rbac";
 import { interruptRun } from "../../orchestration/runControl";
 import type { RectorStore } from "../../store";
 import type { Artifact, Run, RunEvent } from "../../store/schemas";
+import { codeqlRateLimitGuard } from "../codeqlRateLimitGuard";
+
 
 type Authorize = (
   req: Request,
@@ -23,7 +25,7 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
 
   // --- Local-only operator routes for optional Retool console ---
 
-  app.use("/api/operator", async (req, res, next) => {
+  app.use("/api/operator", codeqlRateLimitGuard, async (req, res, next) => {
     const permission: Permission = req.method === "GET" ? "operator.read" : "operator.manage";
     const access = await authorize(req, res, permission, { targetType: "operator" });
     if (!access) return;

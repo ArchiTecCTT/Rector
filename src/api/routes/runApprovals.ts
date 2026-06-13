@@ -7,6 +7,7 @@ import {
   recordApprovalDecision,
   type ApprovalDecision,
 } from "../approvalFlow";
+import { codeqlRateLimitGuard } from "../codeqlRateLimitGuard";
 
 type Authorize = (
   req: Request,
@@ -48,7 +49,7 @@ export interface RunApprovalRoutesDeps {
 export function registerRunApprovalRoutes(app: Application, deps: RunApprovalRoutesDeps): void {
   const { store, workspaceIdForRun, authorize, auditRequest, sendRedacted } = deps;
 
-  app.post("/api/runs/:id/decision", async (req, res) => {
+  app.post("/api/runs/:id/decision", codeqlRateLimitGuard, async (req, res) => {
     const runId = req.params.id;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const { operationId, decision, decidedBy } = body;

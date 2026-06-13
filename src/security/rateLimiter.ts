@@ -156,7 +156,7 @@ function parseRateLimitBucketKey(key: string): { route: string; identity: string
   return { route: key.slice(0, index), identity: key.slice(index + 1) };
 }
 
-class RectorRateLimitStore implements Store {
+export class RectorRateLimitStore implements Store {
   readonly localKeys = true;
 
   constructor(
@@ -192,16 +192,17 @@ export interface ApiRateLimitMiddlewareOptions {
   rateLimiter?: RateLimiter;
   env?: Record<string, string | undefined>;
   resolveKey: (req: Request) => string;
-  onStoreFailure?: (res: Response, error: unknown, route: string) => void;
+  onStoreFailure?: (res: Response, error: unknown) => void;
 }
 
-export function createApiRateLimitMiddleware(options: ApiRateLimitMiddlewareOptions): RequestHandler {
+/** Build an express-rate-limit middleware instance (CodeQL-recognized). */
+export function buildExpressRateLimitMiddleware(options: ApiRateLimitMiddlewareOptions): RequestHandler {
   const policy = createRateLimitPolicy(options.rateLimit, options.env);
   const limiter = options.rateLimiter ?? new InMemoryRateLimiter(policy);
   const store = new RectorRateLimitStore(limiter, policy);
   const resolveRoute = (req: Request): string => classifyRateLimitRoute(req.method, req.path) ?? "general";
 
-  const limiterMiddleware = rateLimit({
+  return rateLimit({
     windowMs: policy.routes.general.windowMs,
     limit: (req) => rateLimitRuleFor(policy, resolveRoute(req)).maxRequests,
     keyGenerator: (req) => rateLimitBucketKey(resolveRoute(req), options.resolveKey(req)),
@@ -214,6 +215,12 @@ export function createApiRateLimitMiddleware(options: ApiRateLimitMiddlewareOpti
     },
     passOnStoreError: false,
   });
+}
+
+export function createApiRateLimitMiddleware(options: ApiRateLimitMiddlewareOptions): RequestHandler {
+  const policy = createRateLimitPolicy(options.rateLimit, options.env);
+  const limiterMiddleware = buildExpressRateLimitMiddleware(options);
+  const resolveRoute = (req: Request): string => classifyRateLimitRoute(req.method, req.path) ?? "general";
 
   return (req: Request, res: Response, next: NextFunction) => {
     limiterMiddleware(req, res, (error?: unknown) => {
@@ -228,7 +235,7 @@ export function createApiRateLimitMiddleware(options: ApiRateLimitMiddlewareOpti
         return;
       }
       if (options.onStoreFailure) {
-        options.onStoreFailure(res, error, route);
+        options.onStoreFailure(res, error);
         return;
       }
       res.status(503).json({ error: "Rate limiter unavailable" });

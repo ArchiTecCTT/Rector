@@ -3,6 +3,8 @@ import type { Permission } from "../../security/rbac";
 import { redactString } from "../../security/redaction";
 import type { RectorStore } from "../../store";
 import { interruptRun, steerRun } from "../../orchestration/runControl";
+import { codeqlRateLimitGuard } from "../codeqlRateLimitGuard";
+
 
 type Authorize = (
   req: Request,
@@ -34,7 +36,7 @@ export interface RunControlRoutesDeps {
 export function registerRunControlRoutes(app: Application, deps: RunControlRoutesDeps): void {
   const { store, workspaceIdForRun, authorize, auditRequest, sendRedacted } = deps;
 
-  app.post("/api/runs/:runId/interrupt", async (req, res) => {
+  app.post("/api/runs/:runId/interrupt", codeqlRateLimitGuard, async (req, res) => {
     const runId = req.params.runId;
     const body = (req.body ?? {}) as Record<string, unknown>;
     if (body.reason !== undefined && typeof body.reason !== "string") {
@@ -65,7 +67,7 @@ export function registerRunControlRoutes(app: Application, deps: RunControlRoute
     }
   });
 
-  app.post("/api/runs/:runId/steer", async (req, res) => {
+  app.post("/api/runs/:runId/steer", codeqlRateLimitGuard, async (req, res) => {
     const runId = req.params.runId;
     const body = (req.body ?? {}) as Record<string, unknown>;
     if (typeof body.message !== "string" || body.message.trim().length === 0) {

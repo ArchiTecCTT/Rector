@@ -11,6 +11,7 @@ import {
   verifySessionToken,
   type ParsedAuthConfig,
 } from "../../security/auth";
+import { codeqlRateLimitGuard } from "../codeqlRateLimitGuard";
 
 interface AuthAuditInput {
   actorUserId?: string;
@@ -42,7 +43,7 @@ export function registerAuthRoutes(app: Application, deps: AuthRoutesDeps): void
   const { authConfig, deploymentEnv, auditRequest } = deps;
   const loginAttempts = new Map<string, LoginAttempt>();
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", codeqlRateLimitGuard, async (req, res) => {
     if (!authConfig.enabled) return sendAuthResponse(res, 200, { authenticated: true, username: "default" });
 
     const parsed = parseLoginRequest(req.body);
@@ -72,7 +73,7 @@ export function registerAuthRoutes(app: Application, deps: AuthRoutesDeps): void
     return sendAuthResponse(res, 200, { authenticated: true, username });
   });
 
-  app.post("/api/auth/logout", async (req, res) => {
+  app.post("/api/auth/logout", codeqlRateLimitGuard, async (req, res) => {
     res.setHeader("Set-Cookie", buildClearSessionCookie(deploymentEnv));
     await auditRequest(req, {
       action: "auth.logout",
@@ -82,7 +83,7 @@ export function registerAuthRoutes(app: Application, deps: AuthRoutesDeps): void
     return sendAuthResponse(res, 200, { authenticated: false });
   });
 
-  app.get("/api/auth/session", (req, res) => {
+  app.get("/api/auth/session", codeqlRateLimitGuard, (req, res) => {
     if (!authConfig.enabled) return sendAuthResponse(res, 200, { authenticated: true, username: "default" });
 
     const cookies = parseAuthCookieHeader(req.header("cookie"));

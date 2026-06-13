@@ -2,6 +2,8 @@ import type { Application, Request, Response } from "express";
 import { STATES } from "../../domain/states";
 import type { Permission } from "../../security/rbac";
 import type { TaskManager } from "../../thalamus/router";
+import { codeqlRateLimitGuard } from "../codeqlRateLimitGuard";
+
 
 type Authorize = (
   req: Request,
@@ -20,7 +22,7 @@ export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void
 
   // --- Task routes ---
 
-  app.use("/api/tasks", async (req, res, next) => {
+  app.use("/api/tasks", codeqlRateLimitGuard, async (req, res, next) => {
     let permission: Permission = "runs.read";
     if (req.method === "POST" && req.path === "/") permission = "runs.create";
     else if (req.method === "POST" && req.path.endsWith("/approve")) permission = "runs.approve";
@@ -128,7 +130,7 @@ export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void
 
   // --- Telemetry ---
 
-  app.get("/api/telemetry", async (req, res) => {
+  app.get("/api/telemetry", codeqlRateLimitGuard, async (req, res) => {
     const access = await authorize(req, res, "operator.read", { targetType: "telemetry" });
     if (!access) return;
     res.json(manager.telemetry.getMetrics());

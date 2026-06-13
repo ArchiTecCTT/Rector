@@ -176,6 +176,8 @@ import { registerRunControlRoutes } from "./routes/runControl";
 import { registerOperatorRoutes } from "./routes/operator";
 import { registerTaskRoutes } from "./routes/tasks";
 import { createDefaultToolRegistry, type ToolRegistry } from "../tools";
+import { codeqlRateLimitGuard } from "./codeqlRateLimitGuard";
+
 
 export interface ApiSecurityOptions {
   corsAllowedOrigins?: string[];
@@ -1002,7 +1004,7 @@ export function registerRunStreamRoute(
     authorizeRunRead?: (req: express.Request, res: express.Response, runId: string) => Promise<boolean>;
   }
 ): void {
-  app.get("/api/runs/:id/stream", async (req, res) => {
+  app.get("/api/runs/:id/stream", codeqlRateLimitGuard, async (req, res) => {
     if (deps.authorizeRunRead && !(await deps.authorizeRunRead(req, res, req.params.id))) return;
     void handleRunStream({
       runId: req.params.id,
@@ -2066,7 +2068,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     auditRequest,
   });
 
-  app.use(createAuthMiddleware(authConfig, resolveUserStores));
+  app.use(codeqlRateLimitGuard, createAuthMiddleware(authConfig, resolveUserStores));
   app.use(csrfProtectionMiddleware(authConfig, securityOptions));
 
   registerCommercialRoutes(app, {
@@ -2175,7 +2177,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // --- Chat routes ---
 
-  app.post("/api/chat/conversations", async (req, res) => {
+  app.post("/api/chat/conversations", codeqlRateLimitGuard, async (req, res) => {
     try {
       const { title, workspaceId, retentionPolicy } = req.body ?? {};
       if (title !== undefined && typeof title !== "string") {
@@ -2215,7 +2217,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  app.get("/api/chat/conversations", async (req, res) => {
+  app.get("/api/chat/conversations", codeqlRateLimitGuard, async (req, res) => {
     try {
       const workspaceId = typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined;
       if (!authConfig.enabled) {
@@ -2237,7 +2239,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  app.get("/api/conversations/search", async (req, res) => {
+  app.get("/api/conversations/search", codeqlRateLimitGuard, async (req, res) => {
     try {
       const q = typeof req.query.q === "string" ? req.query.q : "";
       if (q.length > MAX_SESSION_SEARCH_QUERY_LENGTH) {
@@ -2262,7 +2264,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  app.get("/api/conversations/:id/lineage", async (req, res) => {
+  app.get("/api/conversations/:id/lineage", codeqlRateLimitGuard, async (req, res) => {
     try {
       const conversation = await rectorStore.getConversation(req.params.id);
       if (!conversation) return sendRedacted(res, 404, { error: "Conversation not found" });
@@ -2283,7 +2285,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  app.get("/api/chat/conversations/:id", async (req, res) => {
+  app.get("/api/chat/conversations/:id", codeqlRateLimitGuard, async (req, res) => {
     try {
       const conversation = await rectorStore.getConversation(req.params.id);
       if (!conversation) return res.status(404).json({ error: "Conversation not found" });
@@ -2302,7 +2304,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // aggregate (runCount 0, all numeric totals 0, empty `runs`), exactly as Requirement 3.10 wants.
   // The extra `/cost` segment means this never shadows (and is never shadowed by) the
   // `GET /api/chat/conversations/:id` route above.
-  app.get("/api/chat/conversations/:id/cost", async (req, res) => {
+  app.get("/api/chat/conversations/:id/cost", codeqlRateLimitGuard, async (req, res) => {
     try {
       const conversationId = req.params.id;
       const conversation = await rectorStore.getConversation(conversationId);
@@ -2319,7 +2321,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  app.post("/api/chat/conversations/:id/messages", async (req, res) => {
+  app.post("/api/chat/conversations/:id/messages", codeqlRateLimitGuard, async (req, res) => {
     try {
       const conversation = await rectorStore.getConversation(req.params.id);
       if (!conversation) return res.status(404).json({ error: "Conversation not found" });
@@ -2537,7 +2539,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // Quick-capture notes (Chunk 27 / neuro-symbolic Step 2)
   // Writes to episodic memory layer with time-awareness. Content is redacted.
   // Local mode only for alpha; future auth + workspace scoping.
-  app.post("/api/notes", async (req, res) => {
+  app.post("/api/notes", codeqlRateLimitGuard, async (req, res) => {
     try {
       const { content, tags, conversationId } = req.body ?? {};
       if (!content || typeof content !== "string") {
@@ -2583,7 +2585,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // Read-only memory browser list (Chunk 36 stretch). Returns redacted episodic/core entries from
   // the resolved MemoryProvider — no secrets, no mutation.
-  app.get("/api/memory/entries", async (req, res) => {
+  app.get("/api/memory/entries", codeqlRateLimitGuard, async (req, res) => {
     try {
       const access = await authorize(req, res, "workspace.read", { targetType: "memory" });
       if (!access) return;
@@ -2609,13 +2611,13 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  app.use("/api/skills", async (req, res, next) => {
+  app.use("/api/skills", codeqlRateLimitGuard, async (req, res, next) => {
     const access = await authorize(req, res, "workspace.read", { targetType: "skill" });
     if (!access) return;
     next();
   });
 
-  app.get("/api/skills", async (req, res) => {
+  app.get("/api/skills", codeqlRateLimitGuard, async (req, res) => {
     try {
       const tags = typeof req.query.tags === "string"
         ? req.query.tags.split(",").map((tag) => tag.trim()).filter(Boolean)
@@ -2649,7 +2651,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  app.get("/api/tools", async (req, res) => {
+  app.get("/api/tools", codeqlRateLimitGuard, async (req, res) => {
     const access = await authorize(req, res, "workspace.read", { targetType: "tool" });
     if (!access) return;
     try {
@@ -2663,7 +2665,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  app.get("/api/runs/:id/events", async (req, res) => {
+  app.get("/api/runs/:id/events", codeqlRateLimitGuard, async (req, res) => {
     try {
       const run = await rectorStore.getRun(req.params.id);
       if (!run) return res.status(404).json({ error: "Run not found" });
@@ -2694,7 +2696,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // persisted (already-redacted) events. For an UNKNOWN run id we do NOT 404: `listEvents` returns
   // `[]`, so `aggregateRunCost` yields a schema-valid all-zero aggregate (the requested runId, all
   // numeric totals 0, empty provider/model lists), exactly as Requirement 3.10 specifies.
-  app.get("/api/runs/:id/cost", async (req, res) => {
+  app.get("/api/runs/:id/cost", codeqlRateLimitGuard, async (req, res) => {
     try {
       const runId = req.params.id;
       const workspaceId = await workspaceIdForRun(runId);
@@ -2735,13 +2737,13 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // --- Setup checklist ---
 
-  app.get("/api/setup", async (req, res) => {
+  app.get("/api/setup", codeqlRateLimitGuard, async (req, res) => {
     const access = await authorize(req, res, "workspace.read", { targetType: "setup" });
     if (!access) return;
     res.json(getSetupChecklist());
   });
 
-  app.get("/api/runtime-settings", async (req, res) => {
+  app.get("/api/runtime-settings", codeqlRateLimitGuard, async (req, res) => {
     const access = await authorize(req, res, "workspace.read", { targetType: "runtime-settings" });
     if (!access) return;
     try {
@@ -2752,7 +2754,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  app.patch("/api/runtime-settings", async (req, res) => {
+  app.patch("/api/runtime-settings", codeqlRateLimitGuard, async (req, res) => {
     const access = await authorize(req, res, "providers.configure", { targetType: "runtime-settings" });
     if (!access) return;
     try {
@@ -2824,7 +2826,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  app.get("/api/setup/onboarding", async (req, res) => {
+  app.get("/api/setup/onboarding", codeqlRateLimitGuard, async (req, res) => {
     try {
       const access = await authorize(req, res, "workspace.read", { targetType: "setup" });
       if (!access) return;
@@ -2835,7 +2837,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  app.post("/api/setup/activate", async (req, res) => {
+  app.post("/api/setup/activate", codeqlRateLimitGuard, async (req, res) => {
     try {
       const access = await authorize(req, res, "providers.configure", { targetType: "setup" });
       if (!access) return;
@@ -2880,7 +2882,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // `sendRedacted`, which redacts the outbound body and — if redaction itself fails — suppresses the
   // raw content and returns a redaction-failed error instead (Req 11.5).
   const workspaceSafetyConfig = securityOptions.workspaceSafety ?? resolveWorkspaceSafetyConfig(process.env);
-  app.get("/api/setup/workspace", async (req, res) => {
+  app.get("/api/setup/workspace", codeqlRateLimitGuard, async (req, res) => {
     const access = await authorize(req, res, "workspace.read", { targetType: "setup" });
     if (!access) return;
     let response: WorkspaceSafetyResponse;
@@ -2897,7 +2899,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // --- Provider connection test (ORN-32) ---
 
-  app.post("/api/setup/test-connection", async (req, res) => {
+  app.post("/api/setup/test-connection", codeqlRateLimitGuard, async (req, res) => {
     const access = await authorize(req, res, "providers.configure", { targetType: "provider" });
     if (!access) return;
     let request: TestConnectionRequest;
@@ -2975,7 +2977,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     runConnectionTest,
   });
 
-  app.use("/api/providers", async (req, res, next) => {
+  app.use("/api/providers", codeqlRateLimitGuard, async (req, res, next) => {
     let permission: Permission = "providers.read";
     if (req.method === "POST" && req.path === "/active") permission = "models.assign";
     else if (req.method === "POST" && req.path.endsWith("/secret")) permission = "providers.secrets.write";
@@ -3117,7 +3119,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // Secret_Store then STRIPPED from the stored config (Req 10.5, 11.6). Write-once UX: when no
   // `apiKey` is supplied any existing secret is retained unchanged (Req 11.3). If persisting the
   // secret fails, the prior secret is left intact and the config is NOT upserted (Req 11.7).
-  app.post("/api/providers", async (req, res) => {
+  app.post("/api/providers", codeqlRateLimitGuard, async (req, res) => {
     let body: UpsertProviderRequest;
     try {
       body = UpsertProviderRequestSchema.parse(req.body ?? {});
@@ -3261,7 +3263,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
-  app.use("/api/modules", async (req, res, next) => {
+  app.use("/api/modules", codeqlRateLimitGuard, async (req, res, next) => {
     const permission: Permission = req.method === "GET" ? "workspace.read" : "modules.configure";
     const access = await authorize(req, res, permission, { targetType: "module" });
     if (!access) return;
@@ -3335,7 +3337,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     sendTemplateResponse,
   });
 
-  app.use("/api/memory-providers", async (req, res, next) => {
+  app.use("/api/memory-providers", codeqlRateLimitGuard, async (req, res, next) => {
     let permission: Permission = "providers.read";
     if (req.method === "POST" && req.path.endsWith("/secret")) permission = "providers.secrets.write";
     else if (req.method === "POST" || req.method === "DELETE") permission = "memory.configure";
@@ -3380,7 +3382,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   });
 
   // POST /api/memory-providers — upsert a non-secret record; optional `apiKey` to Secret_Store first.
-  app.post("/api/memory-providers", async (req, res) => {
+  app.post("/api/memory-providers", codeqlRateLimitGuard, async (req, res) => {
     let body: UpsertMemoryProviderRequest;
     try {
       body = UpsertMemoryProviderRequestSchema.parse(req.body ?? {});
@@ -3658,7 +3660,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // The full DiscoveryResult is sent through `sendRedacted`, so no secret value or authorization
   // header can escape in the response (Req 4.4). A refresh can be requested via `?refresh=1` or a
   // truthy `refresh` body field.
-  app.post("/api/config/providers/:id/discover", async (req, res) => {
+  app.post("/api/config/providers/:id/discover", codeqlRateLimitGuard, async (req, res) => {
     const access = await authorize(req, res, "providers.configure", { targetType: "provider", targetId: req.params.id });
     if (!access) return;
     const mode = securityOptions.orchestration?.mode ?? "local";
@@ -3685,7 +3687,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
 
   // --- Scenario seeding ---
 
-  app.post("/api/dev/scenario", async (req, res) => {
+  app.post("/api/dev/scenario", codeqlRateLimitGuard, async (req, res) => {
     const access = await authorize(req, res, "operator.manage", { targetType: "dev" });
     if (!access) return;
     if (process.env.NODE_ENV === "production") {
@@ -3708,7 +3710,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   });
 
   // Manual trigger for proactive "alive" behavior (Chunk 28).
-  app.post("/api/dev/proactive-trigger", async (req, res) => {
+  app.post("/api/dev/proactive-trigger", codeqlRateLimitGuard, async (req, res) => {
     const access = await authorize(req, res, "operator.manage", { targetType: "dev" });
     if (!access) return;
     try {
@@ -3736,7 +3738,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // (Placed late so it doesn't interfere with earlier routes during registration.)
   // Note: duplicate safety - the real one is registered earlier; this is a no-op guard.
   if (false) {
-    app.post("/api/dev/proactive-trigger", async (_req, res) => res.json({}));
+    app.post("/api/dev/proactive-trigger", codeqlRateLimitGuard, async (_req, res) => res.json({}));
   }
 
   return app;
