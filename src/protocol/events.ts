@@ -19,6 +19,9 @@ export const RUN_EVENT_TYPES = [
   "RUN_ABORTED",
   "BUDGET_CHECKED",
   "ARTIFACT_CREATED",
+  "CONTEXT_BUDGET_EVALUATED",
+  "CONTEXT_COMPRESSED",
+  "STABLE_TIER_MUTATION_BLOCKED",
 ] as const;
 
 export const RunEventTypeSchema = z.enum(RUN_EVENT_TYPES);

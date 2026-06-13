@@ -5,6 +5,7 @@ import { ContextPackSchema, type ContextPack } from "./contextBuilder";
 import { TriageResultSchema, type TriageResult } from "./triage";
 import type { BrainstemSynthesisInput } from "./synthesizer";
 import { redactSecrets, redactString } from "../security/redaction";
+import { assemblePromptTiers, joinPromptTiers } from "./promptTiers";
 
 const MEMORY_CONTEXT_MAX_ENTRIES = 8;
 const MEMORY_CONTEXT_MAX_CHARS_PER_LINE = 200;
@@ -98,8 +99,14 @@ Hard invariants (the control plane rejects any plan that violates these):
  */
 export function buildPlannerPrompt(input: PlannerInput): LLMMessage[] {
   const parsed = PlannerInputSchema.parse(input);
+  const tiers = assemblePromptTiers({
+    stable: { role: "planner", systemRules: PLANNER_SYSTEM_RULES, jsonContract: PLANNER_JSON_CONTRACT },
+    context: { contextPack: parsed.contextPack, contextText: buildContextMessage(parsed) },
+    volatile: { phase: "PLANNING", task: "planner" },
+    tierBudget: parsed.contextPack.contextBudget?.tierBudget,
+  });
   return [
-    { role: "system", content: `${PLANNER_SYSTEM_RULES}\n\n${PLANNER_JSON_CONTRACT}` },
+    { role: "system", content: joinPromptTiers(tiers) },
     { role: "user", content: buildContextMessage(parsed) },
   ];
 }
@@ -250,8 +257,14 @@ export type SkepticPromptInput = z.infer<typeof SkepticPromptInputSchema>;
  */
 export function buildSkepticPrompt(input: SkepticPromptInput): LLMMessage[] {
   const parsed = SkepticPromptInputSchema.parse(input);
+  const tiers = assemblePromptTiers({
+    stable: { role: "skeptic", systemRules: SKEPTIC_SYSTEM_RULES, jsonContract: SKEPTIC_JSON_CONTRACT },
+    context: { contextPack: parsed.contextPack, contextText: buildSkepticContextMessage(parsed) },
+    volatile: { phase: "SKEPTIC_REVIEW", task: "skeptic" },
+    tierBudget: parsed.contextPack.contextBudget?.tierBudget,
+  });
   return [
-    { role: "system", content: `${SKEPTIC_SYSTEM_RULES}\n\n${SKEPTIC_JSON_CONTRACT}` },
+    { role: "system", content: joinPromptTiers(tiers) },
     { role: "user", content: buildSkepticContextMessage(parsed) },
   ];
 }
@@ -466,8 +479,14 @@ export const SynthesizerPromptInputSchema = z.object({
  */
 export function buildSynthesizerPrompt(input: SynthesizerPromptInput): LLMMessage[] {
   SynthesizerPromptInputSchema.parse(input);
+  const tiers = assemblePromptTiers({
+    stable: { role: "synthesizer", systemRules: SYNTHESIZER_SYSTEM_RULES, jsonContract: SYNTHESIZER_JSON_CONTRACT },
+    context: { contextPack: input.contextPack, contextText: buildSynthesizerContextMessage(input) },
+    volatile: { phase: "SYNTHESIZING", task: "synthesizer" },
+    tierBudget: input.contextPack.contextBudget?.tierBudget,
+  });
   return [
-    { role: "system", content: `${SYNTHESIZER_SYSTEM_RULES}\n\n${SYNTHESIZER_JSON_CONTRACT}` },
+    { role: "system", content: joinPromptTiers(tiers) },
     { role: "user", content: buildSynthesizerContextMessage(input) },
   ];
 }
@@ -691,18 +710,26 @@ export function buildRepairPrompt(input: RepairPromptInput): LLMMessage[] {
     symbolicHints: input.symbolicHints ?? [],
   });
 
+  const userContent = [
+    "Propose a single patch that fixes the failed execution step below.",
+    "",
+    "FAILURE AND CONTEXT (JSON):",
+    JSON.stringify(payload, null, 2),
+    "",
+    "Respond with ONLY the patch JSON object described in the system instructions.",
+  ].join("\n");
+  const tiers = assemblePromptTiers({
+    stable: { role: "repair", systemRules: REPAIR_SYSTEM_RULES, jsonContract: REPAIR_JSON_CONTRACT },
+    context: { contextPack: input.contextPack, contextText: userContent },
+    volatile: { phase: "HEALING", task: "repair" },
+    tierBudget: input.contextPack.contextBudget?.tierBudget,
+  });
+
   return [
-    { role: "system", content: `${REPAIR_SYSTEM_RULES}\n\n${REPAIR_JSON_CONTRACT}` },
+    { role: "system", content: joinPromptTiers(tiers) },
     {
       role: "user",
-      content: [
-        "Propose a single patch that fixes the failed execution step below.",
-        "",
-        "FAILURE AND CONTEXT (JSON):",
-        JSON.stringify(payload, null, 2),
-        "",
-        "Respond with ONLY the patch JSON object described in the system instructions.",
-      ].join("\n"),
+      content: userContent,
     },
   ];
 }

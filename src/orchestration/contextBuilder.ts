@@ -6,6 +6,12 @@ import { truthItemToArtifactHandle, type TruthLibraryReader, type TruthSearchRes
 import type { MemoryEntry } from "../store";
 import { redactString } from "../security/redaction";
 import { TriageResultSchema, type TriageResult } from "./triage";
+import {
+  PromptTierBundleSchema,
+  PromptTierBudgetSchema,
+  assemblePromptTiers,
+  measureContextTierChars,
+} from "./promptTiers";
 
 const DEFAULT_ARTIFACT_THRESHOLD_BYTES = 4096;
 const USER_INTENT_MAX_CHARS = 240;
@@ -33,6 +39,8 @@ export const ContextBudgetSchema = z.object({
   maxArtifactHandles: z.number().int().nonnegative(),
   maxProviderNotes: z.number().int().nonnegative(),
   maxToolNotes: z.number().int().nonnegative(),
+  tierBudget: PromptTierBudgetSchema.optional(),
+  maxStableInlineChars: z.number().int().positive().optional(),
 });
 export type ContextBudget = z.infer<typeof ContextBudgetSchema>;
 
@@ -109,6 +117,8 @@ export const ContextPackSchema = z.object({
   artifactHandles: z.array(ArtifactHandleSchema),
   inlineContext: z.array(InlineContextSchema),
   contextBudget: ContextBudgetSchema.optional(),
+  promptTiers: PromptTierBundleSchema.optional(),
+  compressionRecommended: z.boolean().optional(),
   /** Time-aware summaries from memory (Chunk 27). */
   memoryContext: z.array(z.string()).optional(),
   /** Decomposed sub-goals for high-complexity external runs (Chunk 32 / Step 7). */
@@ -194,6 +204,7 @@ export type BuildContextPackInput = {
   contextBudget?: Partial<ContextBudget>;
   /** Time-aware memory entries from episodic/core for injection (Chunk 27). */
   memoryEntries?: MemoryEntry[];
+  includePromptTiers?: boolean;
 };
 
 export async function buildContextPack(
@@ -262,7 +273,26 @@ export async function buildContextPack(
     ...(memoryContext.length > 0 ? { memoryContext } : {}),
   };
 
-  return ContextPackSchema.parse(pack);
+  const parsed = ContextPackSchema.parse(pack);
+  const tierBudget = budget.tierBudget;
+  const contextChars = measureContextTierChars({ contextPack: parsed, tierBudget });
+  return ContextPackSchema.parse({
+    ...parsed,
+    ...(input.includePromptTiers
+      ? {
+          promptTiers: assemblePromptTiers({
+            stable: {
+              role: "context-builder",
+              systemRules: "Rector stable context-building contract.",
+            },
+            context: { contextPack: parsed, tierBudget },
+            volatile: { phase: "CONTEXT_BUILDING", task: "context-builder" },
+            tierBudget,
+          }),
+        }
+      : {}),
+    compressionRecommended: tierBudget ? contextChars > PromptTierBudgetSchema.parse(tierBudget).maxContextChars : false,
+  });
 }
 
 export function summarize(content: string, maxChars = 160): string {

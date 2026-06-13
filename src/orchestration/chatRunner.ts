@@ -1,4 +1,5 @@
 import type { ContextPack } from "./contextBuilder";
+import { compressContextLineage, evaluateContextPressure } from "./contextCompression";
 import { arbitratePlanWithCrucible, type CrucibleDecision } from "./crucible";
 
 import type { ExecutorSimulatorOptions } from "./executorSimulator";
@@ -11,6 +12,7 @@ import {
   runEvent,
   type ProviderCallMetadata,
 } from "./externalRunSupport";
+import { rememberStableTierHashForRun, clearStableTierHashForRun, assemblePromptTiers } from "./promptTiers";
 export { DEFAULT_EXTERNAL_BUDGET, ProviderCallMetadataSchema, phaseObservabilityPayload, runEvent } from "./externalRunSupport";
 export type { ProviderCallMetadata } from "./externalRunSupport";
 import { runLivePlanner, type LivePlannerResult, type PlannerBlocker, type PlannerOutput } from "./planner";
@@ -104,6 +106,8 @@ export interface ChatRunnerDeps {
   /** Optional module registry (Chunk 038+). */
   moduleRegistry?: ModuleRegistry;
   neuroFlags?: Partial<NeuroFeatureFlags>;
+  contextCompressionEnabled?: boolean;
+  contextCompressionMaxGeneration?: number;
 }
 
 export interface ChatRunResult {
@@ -155,7 +159,7 @@ export async function runOrchestratedChatRun(
   const budget = deps.budget ?? DEFAULT_EXTERNAL_BUDGET;
 
   // The run is created first so its budget is available to the planner preflight.
-  const run = await store.createRun({
+  let run = await store.createRun({
     conversationId,
     userMessageId,
     status: "running",
@@ -192,6 +196,42 @@ export async function runOrchestratedChatRun(
   );
 
   let activeContextPack = contextPack;
+  const pressure = evaluateContextPressure(activeContextPack, activeContextPack.contextBudget?.tierBudget);
+  await store.appendEvent(
+    runEvent(run, "CONTEXT_BUDGET_EVALUATED", "CHAT_RECEIVED", {
+      tier: pressure.tier,
+      usedChars: pressure.usedChars,
+      capChars: pressure.capChars,
+      exceeded: pressure.exceeded,
+    })
+  );
+  const contextCompressionEnabled = deps.contextCompressionEnabled ?? true;
+  const maxCompressionGeneration = deps.contextCompressionMaxGeneration ?? 3;
+  const generation = activeContextPack.conversationRef.id === conversationId
+    ? ((await store.getConversation(conversationId))?.compressionGeneration ?? 0)
+    : 0;
+  if (activeContextPack.compressionRecommended === true && contextCompressionEnabled && generation < maxCompressionGeneration) {
+    const compression = await compressContextLineage({
+      conversationId,
+      runId: run.id,
+      contextPack: activeContextPack,
+      store,
+      now: deps.now,
+      tierBudget: activeContextPack.contextBudget?.tierBudget,
+    });
+    activeContextPack = compression.newContextPack;
+    run = (await store.updateRun(run.id, {
+      conversationId: compression.childConversationId,
+      contextCompressionApplied: true,
+    })) ?? run;
+  }
+  const initialTiers = assemblePromptTiers({
+    stable: { role: "run", systemRules: "Rector stable run contract." },
+    context: { contextPack: activeContextPack },
+    volatile: { phase: "CONTEXT_BUILDING", task: "run" },
+    tierBudget: activeContextPack.contextBudget?.tierBudget,
+  });
+  rememberStableTierHashForRun(run.id, initialTiers.stableHash);
   if (deps.moduleRegistry) {
     const hookResult = await deps.moduleRegistry.invokeOnExternalRunStart(
       {
@@ -208,6 +248,7 @@ export async function runOrchestratedChatRun(
       activeContextPack = hookResult.contextPack;
     }
   }
+  const activeArgs: ChatRunArgs = { ...args, conversationId: run.conversationId, contextPack: activeContextPack };
 
   const neuroFlags = resolveNeuroFeatureFlags(deps.neuroFlags);
   const preprocessEnabled =
@@ -284,7 +325,7 @@ export async function runOrchestratedChatRun(
       code: "PLANNER_INVALID" as const,
       message: "Planner returned no plan",
     };
-    return resolvePlannerBlocker(store, args, budgetRun, blocker, deps);
+    return resolvePlannerBlocker(store, activeArgs, budgetRun, blocker, deps);
   }
 
   const plannerOutput = plannerResult.plan;
@@ -318,7 +359,7 @@ export async function runOrchestratedChatRun(
   if (isLiveLLMProvider(skepticSelection.provider)) {
     const skepticResult = await observability.recordSpan("SKEPTIC_REVIEW", () =>
       runLiveSkeptic(
-        { plannerOutput, contextPack, triage },
+        { plannerOutput, contextPack: activeContextPack, triage },
         { provider: skepticSelection.provider, run: costedRun, model: skepticSelection.model },
       )
     );
@@ -336,7 +377,7 @@ export async function runOrchestratedChatRun(
         code: "SKEPTIC_INVALID",
         message: "Skeptic returned no review",
       };
-      return resolveSkepticBlocker(store, args, skepticCostedRun, blocker, deps, {
+      return resolveSkepticBlocker(store, activeArgs, skepticCostedRun, blocker, deps, {
         plannerOutput,
         planningProviderCall: providerCall,
         skepticProviderCall,
@@ -345,7 +386,7 @@ export async function runOrchestratedChatRun(
     skepticReview = skepticResult.review;
   } else {
     skepticReview = await observability.recordSpan("SKEPTIC_REVIEW", () =>
-      reviewPlanWithSkeptic(plannerOutput, contextPack)
+      reviewPlanWithSkeptic(plannerOutput, activeContextPack)
     );
     skepticProviderCall = buildProviderCallMetadata(
       skepticSelection,
@@ -360,23 +401,27 @@ export async function runOrchestratedChatRun(
   );
 
   const enrichedArgs =
-    subGoals.length > 0 ? { ...args, contextPack: plannerContextPack } : args;
+    { ...activeArgs, contextPack: subGoals.length > 0 ? plannerContextPack : activeContextPack };
 
-  return runExternalPostPlanningPhases({
-    store,
-    args: enrichedArgs,
-    run: skepticCostedRun,
-    plannerOutput,
-    skepticReview,
-    crucibleDecision,
-    planningProviderCall: providerCall,
-    skepticProviderCall,
-    deps,
-    preprocessorOutput,
-    subGoals,
-    subGoalGraph,
-    pathsExplored: plannerResult.pathsExplored,
-  });
+  try {
+    return await runExternalPostPlanningPhases({
+      store,
+      args: enrichedArgs,
+      run: skepticCostedRun,
+      plannerOutput,
+      skepticReview,
+      crucibleDecision,
+      planningProviderCall: providerCall,
+      skepticProviderCall,
+      deps,
+      preprocessorOutput,
+      subGoals,
+      subGoalGraph,
+      pathsExplored: plannerResult.pathsExplored,
+    });
+  } finally {
+    clearStableTierHashForRun(run.id);
+  }
 }
 
 /**

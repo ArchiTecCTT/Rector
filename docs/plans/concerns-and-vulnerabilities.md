@@ -17,6 +17,24 @@
 >
 > 2026-06-12 042f stitch note: Chunks 042a-046 are merged on `work/042-046-stitch`; verification passed with `npm run build`, `npm test` (265 files / 1575 tests passed, 5 skipped), and `npm audit` (0 vulnerabilities). The table below supersedes older historical statuses where they conflict.
 
+### Chunk 047a deterministic compression is safe for CI but lossy for production-quality context reduction
+
+- **Source:** Chunk 047a tiered prompt assembly and compression lineage.
+- **Severity:** Medium for long, high-context production conversations; low for deterministic spy CI.
+- **Status:** Open / accepted for 047a.
+- **Root cause:** Oversized context is summarized by deterministic truncation/bullet extraction so `npm test` stays network-free with `SpyLLMProvider` and in-memory stores. This preserves redaction and lineage but can drop nuance that a configured live summarizer may retain.
+- **Plan / Mitigations:** Keep deterministic summarization as the default test-safe path. Add a configured, budget-aware live summarizer only after provider resilience and run-control semantics are in place; never call it in default CI. Chunk 047e should make compression lineage visible in the conversation UI so users can inspect parent/child context boundaries.
+- **Traceability:** `docs/plans/chunks/047a-tiered-prompt-assembly.md`, `src/orchestration/contextCompression.ts`, `src/orchestration/promptTiers.ts`, `tests/contextCompression.test.ts`, `tests/promptTiers.test.ts`.
+
+### Chunk 047a prompt tier stability is run-scoped, not assignment-scoped
+
+- **Source:** Chunk 047a stable/context/volatile prompt assembly.
+- **Severity:** Low/medium.
+- **Status:** Open / expected behavior.
+- **Root cause:** Stable tier hashes are enforced within a single run. A future model/template/assignment change between runs can legitimately change the stable tier contract, but there is not yet a product UX indicator explaining that distinction.
+- **Plan / Mitigations:** Treat mid-run stable tier mutation as blocked. Record tier budget/compression events in traces, and add assignment/lineage visibility in later 047 chunks so operators can tell whether a prompt contract changed because of a deliberate configured assignment change.
+- **Traceability:** `src/orchestration/promptTiers.ts`, `src/orchestration/prompts.ts`, `src/orchestration/chatRunner.ts`, `tests/promptTiers.test.ts`.
+
 ### Chunk 042f reconciliation matrix for known hardening concerns
 
 | Concern | 042f status | Evidence | Remaining follow-up |
@@ -452,7 +470,7 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 
 - **Source:** `npm audit` during branch setup and Gemini final audit; remediated by the `dependency-security-triage` spec.
 - **Severity:** Moderate (CVSS 5.3, CWE-346) — esbuild dev server allowed any website to send requests and read responses (DNS-rebinding-style exposure). Dev/test tooling only; never shipped in the `dist` runtime.
-- **Fix:** Added an additive npm `overrides` entry to `package.json` forcing `esbuild >=0.25.0`, then regenerated the lockfile with `npm install` (no `npm audit fix --force`, no runtime dependency change). `npm ls esbuild` now resolves every entry to `esbuild@0.28.0` (via both `tsx` and `vitest > vite`), and `npm audit` no longer reports GHSA-67mh-4wv8-2f99. The full verification baseline stayed green after the change: `npm test` 28 files / 278 tests (29 files / 280 tests with the added `tests/dependencySecurity.test.ts` override regression guard), `npm run build` and `npm run check` both succeeded.
+- **Fix:** Added an additive npm `overrides` entry to `package.json` forcing `esbuild >=0.28.1`, then regenerated the lockfile with `npm install` (no `npm audit fix --force`, no runtime dependency change). `npm ls esbuild` now resolves every entry to `esbuild@0.28.1` (via both `tsx` and `vitest > vite`), and `npm audit` no longer reports GHSA-67mh-4wv8-2f99. The full verification baseline stayed green after the change: `npm test` 28 files / 278 tests (29 files / 280 tests with the added `tests/dependencySecurity.test.ts` override regression guard), `npm run build` and `npm run check` both succeeded. Chunk 047a reconfirmed the override with `npm test` (260 files / 1624 tests passed, 5 skipped), `npm run build`, and `npm audit` (0 vulnerabilities).
 - **Status:** Closed / Mitigated for the esbuild advisory. The remaining `vitest`/`vite`/`@vitest/mocker`/`vite-node` findings (which require a forced `vitest@4` major upgrade) are tracked separately under `## Open` and deferred for maintainer approval.
 - **Traceability:** `docs/security/dependency-audit-2026-06-04.md`.
 

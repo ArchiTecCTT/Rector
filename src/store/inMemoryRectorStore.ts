@@ -65,6 +65,7 @@ export class InMemoryRectorStore implements RectorStore {
     const conversation = ConversationSchema.parse({
       ...clone(input),
       id: this.nextId("conv"),
+      compressionGeneration: input.compressionGeneration ?? 0,
       createdAt: now,
       updatedAt: now,
     });

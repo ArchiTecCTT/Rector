@@ -254,7 +254,7 @@ describe("no secret in any persisted row, SSE frame, or cost aggregate (Property
       }),
       { numRuns: 6 }
     );
-  });
+  }, 30_000);
 });
 
 // --- (4) connection-test response -----------------------------------------

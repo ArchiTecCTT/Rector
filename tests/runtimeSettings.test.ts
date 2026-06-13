@@ -46,6 +46,8 @@ describe("runtime settings defaults", () => {
       schemaVersion: "rector.runtime.v1",
       orchestrationProfile: "unconfigured",
       requireProvidersForChat: true,
+      contextCompressionEnabled: true,
+      contextCompressionMaxGeneration: 3,
       updatedAt: FIXED_TS,
     });
   });
@@ -101,6 +103,8 @@ describe("RuntimeSettingsStore persistence", () => {
       orchestrationProfile: "configured",
       activeTemplateId: "template:default",
       requireProvidersForChat: true,
+      contextCompressionEnabled: true,
+      contextCompressionMaxGeneration: 3,
       updatedAt: FIXED_TS,
     };
 

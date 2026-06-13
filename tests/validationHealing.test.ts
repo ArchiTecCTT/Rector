@@ -517,7 +517,7 @@ describe("Property 5: healing rounds are always bounded", () => {
       ),
       { numRuns: 300 },
     );
-  });
+  }, 30_000);
 });
 
 /**

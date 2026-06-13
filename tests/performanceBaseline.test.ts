@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { PERFORMANCE_BASELINE_SECTIONS } from "../scripts/performance-baseline";
@@ -38,7 +39,8 @@ describe("performance baseline script", () => {
       if (!(key in DECOY_SECRETS)) delete env[key];
     }
 
-    const output = execFileSync("npm", ["run", "benchmark:performance"], {
+    const tsxCli = join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
+    const output = execFileSync(process.execPath, [tsxCli, "scripts/performance-baseline.ts"], {
       cwd: process.cwd(),
       encoding: "utf8",
       env,

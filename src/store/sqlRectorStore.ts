@@ -143,6 +143,7 @@ export class SqlRectorStore implements RectorStore {
     const conversation = ConversationSchema.parse({
       ...structuredClone(input),
       id: this.nextId("conv", "conversations"),
+      compressionGeneration: input.compressionGeneration ?? 0,
       createdAt: now,
       updatedAt: now,
     });

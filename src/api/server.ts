@@ -2213,6 +2213,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         if (!runtimeRouter) {
           throw new Error("Orchestration requires configured router");
         }
+        const runtimeSettings = await runtimeSettingsStore.get();
         const result = await runChat(
           pipelineStore,
           {
@@ -2239,10 +2240,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             allowlistedCommands: orchestrationRuntime.allowlistedCommands,
             approvals: orchestrationRuntime.approvals,
             moduleRegistry,
+            contextCompressionEnabled: runtimeSettings.contextCompressionEnabled,
+            contextCompressionMaxGeneration: runtimeSettings.contextCompressionMaxGeneration,
           }
         );
         const assistantMessage = await pipelineStore.createMessage({
-          conversationId: conversation.id,
+          conversationId: result.run.conversationId,
           role: "assistant",
           content: result.synthesis.response,
           status: "completed",
