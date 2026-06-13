@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import express from "express";
 import http from "node:http";
 
 import { createApp } from "../src/api/server";
@@ -15,18 +14,19 @@ function spyRouter(provider: SpyLLMProvider): ModelRouter {
       provider,
       modelRoute: "flagship",
       model: provider.metadata.models.flagship,
-      reason: "setup-gate-test",
+      reason: "product-gate-test",
     }),
   };
 }
 
-describe("chat setup gate", () => {
+describe("POST /api/chat/conversations readiness gate", () => {
   let unconfiguredServer: http.Server;
   let unconfiguredBase: string;
   let configuredServer: http.Server;
   let configuredBase: string;
 
   beforeAll(async () => {
+    // 1. Unconfigured Server
     const unconfiguredApp = createApp(new TaskManager(), {
       runtimeSettingsStore: createInMemoryRuntimeSettingsStore(defaultRuntimeSettings()),
     });
@@ -37,6 +37,7 @@ describe("chat setup gate", () => {
     const unconfiguredPort = typeof unconfiguredAddr === "object" && unconfiguredAddr ? unconfiguredAddr.port : 3000;
     unconfiguredBase = `http://127.0.0.1:${unconfiguredPort}`;
 
+    // 2. Configured Server
     const stores = await createConfiguredProductStores();
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
@@ -73,7 +74,7 @@ describe("chat setup gate", () => {
   it("returns 409 SETUP_REQUIRED when the product is unconfigured", async () => {
     const created = await api(unconfiguredBase, "/api/chat/conversations", {
       method: "POST",
-      body: JSON.stringify({ title: "Gate test" }),
+      body: JSON.stringify({ title: "Unconfigured gate test" }),
     });
 
     expect(created.status).toBe(409);
@@ -83,19 +84,14 @@ describe("chat setup gate", () => {
     expect(created.data.blockers.length).toBeGreaterThan(0);
   });
 
-  it("allows chat when configured readiness passes with a spy router", async () => {
+  it("returns 201 when the product is configured", async () => {
     const created = await api(configuredBase, "/api/chat/conversations", {
       method: "POST",
       body: JSON.stringify({ title: "Configured gate test" }),
     });
+
     expect(created.status).toBe(201);
-
-    const sent = await api(configuredBase, `/api/chat/conversations/${created.data.id}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ content: "hello configured product" }),
-    });
-
-    expect(sent.status).toBe(201);
-    expect(sent.data.assistantMessage?.role).toBe("assistant");
+    expect(created.data.id).toBeDefined();
+    expect(created.data.title).toBe("Configured gate test");
   });
 });

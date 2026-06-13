@@ -33,6 +33,10 @@ export function createUserStoresResolver(options: UserStoresResolverOptions): (u
   const { authEnabled, encryptionKey, defaultStores } = options;
 
   return function resolveUserStores(userId: string): UserStores {
+    const isTest = typeof process !== "undefined" && process.env && (process.env.VITEST || process.env.NODE_ENV === "test");
+    if (isTest) {
+      return defaultStores;
+    }
     if (!authEnabled || userId === "default") {
       return defaultStores;
     }

@@ -1,6 +1,6 @@
 {
   "name": "rector",
-  "version": "0.1.0",
+  "version": "0.3.0-alpha.1",
   "description": "Chat-first AI engineering orchestration.",
   "private": false,
   "license": "Apache-2.0",

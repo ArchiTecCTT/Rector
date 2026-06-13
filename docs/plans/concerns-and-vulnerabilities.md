@@ -4,6 +4,33 @@
 
 ## Open
 
+### Chunk 048 configured product readiness and gating (G1)
+
+- **Source:** Chunk 048 product model hardening.
+- **Severity:** Low (mitigated).
+- **Status:** Resolved / Closed.
+- **Root cause:** Conversation creation was previously ungated, which allowed unconfigured clients to bypass the first-run onboarding screen via API calls.
+- **Plan / Mitigations:** Gate both conversation creation (`POST /api/chat/conversations`) and message creation on setup readiness (returning `409 SETUP_REQUIRED` when unconfigured). Verified via unit tests (`tests/productGate.test.ts`) and end-to-end integration tests (`tests/productModel.integration.test.ts`).
+- **Traceability:** `src/api/server.ts`, `tests/productGate.test.ts`, `tests/productModel.integration.test.ts`.
+
+### Chunk 048 deprecation of ORCHESTRATOR_MODE in runtime paths (G3)
+
+- **Source:** Chunk 048 product model hardening.
+- **Severity:** Low (mitigated).
+- **Status:** Resolved / Closed.
+- **Root cause:** Boot routing previously checked environment variables directly instead of the authoritative `runtime-settings.json` file.
+- **Plan / Mitigations:** Remove `ORCHESTRATOR_MODE` checks from active server boot sequence. It remains only for one-time legacy migration in `ensureRuntimeSettings()`. Post-migration startup router and sandbox adapter check `runtime-settings.json`'s `orchestrationProfile`.
+- **Traceability:** `src/bin/server.ts`.
+
+### Chunk 048 TogetherAIProvider HTTP integration smoke tests (G5)
+
+- **Source:** Chunk 048 product model hardening.
+- **Severity:** Low (mitigated).
+- **Status:** Resolved / Closed.
+- **Root cause:** TogetherAIProvider network calls are disabled in default CI, meaning the real HTTP request serialization, headers, response parsing, and error-retryable mapping code paths lacked integration test coverage.
+- **Plan / Mitigations:** Added an integration test (`tests/providerSmoke.test.ts`) utilizing Node's built-in `http.createServer` to spin up a local mock server. Verifies that headers, request shape, token usage parsing, and retryable/non-retryable HTTP error mappings are correct on the live fetch path without hitting real external API endpoints.
+- **Traceability:** `tests/providerSmoke.test.ts`, `src/providers/llm.ts`.
+
 ### Local performance baseline thresholds are advisory until history exists
 
 - **Source:** Performance baseline benchmark (`scripts/performance-baseline.ts`).

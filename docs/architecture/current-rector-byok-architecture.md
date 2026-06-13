@@ -1,8 +1,8 @@
 # Current Rector BYOK Architecture
 
-> **STALE — pre-v0.3.0.** This document describes the local/external dual-mode product model.  
-> **Canonical architecture:** [`configured-product-architecture.md`](./configured-product-architecture.md)  
-> Retained for historical reference during the v0.3.0 transition.
+> ⚠️ **STALE** — This document describes the pre-v0.3.0 local/external model.
+> The canonical product model is now [configured-product-architecture.md](./configured-product-architecture.md).
+> Retain for historical reference only.
 
 > Status: ~~current~~ **superseded** architecture guide after BYOK Alpha Phase 3 and the budget/sandbox hardening pass.  
 > Audience: humans and implementing agents who need to understand what Rector is now.  

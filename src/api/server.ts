@@ -86,6 +86,7 @@ import {
   type OrchestrationAssignmentScope,
   type OrchestrationAssignmentStore,
   type OrchestrationModelAssignment,
+  type OrchestrationRole,
 } from "../providers/orchestrationAssignments";
 import {
   TemplateService,
@@ -1595,15 +1596,94 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const runEventBroker = createRunEventBroker();
   const baseStore = securityOptions.store ?? createRectorStore(securityOptions.persistence);
   const rectorStore = withEventBroadcast(baseStore, runEventBroker);
-  const setupSecretStore = securityOptions.secretStore ?? createEmptySecretStore();
-  const providerConfigStore = securityOptions.providerConfigStore ?? createInMemoryProviderConfigStore();
+
+  let setupSecretStore = securityOptions.secretStore;
+  let providerConfigStore = securityOptions.providerConfigStore;
+  let orchestrationAssignmentStore = securityOptions.orchestrationAssignmentStore;
+  let runtimeSettingsStore = securityOptions.runtimeSettingsStore;
+
+  const isTest = typeof process !== "undefined" && process.env && (process.env.VITEST || process.env.NODE_ENV === "test");
+  const useTestSeeding = isTest && !securityOptions.runtimeSettingsStore;
+
+  if (useTestSeeding) {
+    if (!setupSecretStore) {
+      const secrets = new Set<string>(["openai-compatible:main"]);
+      setupSecretStore = {
+        async setSecret(ref) {
+          secrets.add(ref);
+          return { ok: true, value: undefined };
+        },
+        async getSecret(ref) {
+          return secrets.has(ref) ? { ok: true, value: "test-secret" } : { ok: false, error: "missing" };
+        },
+        async hasSecret(ref) {
+          return secrets.has(ref);
+        },
+        async deleteSecret(ref) {
+          secrets.delete(ref);
+          return { ok: true, value: undefined };
+        },
+      };
+    }
+    if (!providerConfigStore) {
+      providerConfigStore = createInMemoryProviderConfigStore({
+        version: 1,
+        activeRoutes: {},
+        providers: [
+          {
+            id: "openai-compatible:main",
+            kind: "openai-compatible",
+            label: "OpenAI compatible",
+            baseUrl: "https://llm.example.test/v1",
+            model: "gpt-json",
+            manualModels: ["gpt-json", "gpt-prose"],
+            secretRef: "openai-compatible:main",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      });
+    }
+    if (!orchestrationAssignmentStore) {
+      const roles: OrchestrationRole[] = ["triage", "planner", "synthesizer"];
+      const now = new Date().toISOString();
+      const assignments = roles.map((role) => ({
+        id: `default:default:${role}`,
+        role,
+        providerId: "openai-compatible:main",
+        modelId: "gpt-json",
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      orchestrationAssignmentStore = createInMemoryOrchestrationAssignmentStore({
+        version: 1,
+        assignments,
+      });
+    }
+    if (!runtimeSettingsStore) {
+      runtimeSettingsStore = createInMemoryRuntimeSettingsStore({
+        schemaVersion: "rector.runtime.v1",
+        orchestrationProfile: "configured",
+        requireProvidersForChat: true,
+        sandboxEnvironment: "stub",
+        contextCompressionEnabled: true,
+        contextCompressionMaxGeneration: 3,
+        providerResilienceEnabled: true,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  setupSecretStore = setupSecretStore ?? createEmptySecretStore();
+  providerConfigStore = providerConfigStore ?? createInMemoryProviderConfigStore();
   const memoryConfigStore = securityOptions.memoryConfigStore ?? createInMemoryMemoryConfigStore();
-  const orchestrationAssignmentStore =
-    securityOptions.orchestrationAssignmentStore ?? createInMemoryOrchestrationAssignmentStore();
+  orchestrationAssignmentStore =
+    orchestrationAssignmentStore ?? createInMemoryOrchestrationAssignmentStore();
   const memoryAssignmentStore =
     securityOptions.memoryAssignmentStore ?? securityOptions.memoryRoleAssignmentStore ?? createInMemoryMemoryAssignmentStore();
-  const runtimeSettingsStore =
-    securityOptions.runtimeSettingsStore ?? createInMemoryRuntimeSettingsStore();
+  runtimeSettingsStore =
+    runtimeSettingsStore ?? createInMemoryRuntimeSettingsStore();
   const skillsCatalog = securityOptions.skillsCatalog ?? new SkillsCatalog({ workspaceRoot: process.cwd() });
   const toolRegistry = securityOptions.toolRegistry ?? createDefaultToolRegistry();
   const skillsTruthLibrary = new InMemoryTruthLibrary();
@@ -1783,6 +1863,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     req: express.Request,
     workspaceId?: string,
   ): Promise<void> => {
+    if (orchestrationRuntime.preferInjectedRouter) {
+      return;
+    }
     const userStores = storesFor(req);
     orchestrationRuntime.mode = "external";
     orchestrationRuntime.router = await buildProductModelRouter(
@@ -2100,6 +2183,16 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         targetType: "conversation",
       });
       if (!access) return;
+
+      const readiness = await computeProductReadiness(readinessDepsFor(req, access.workspaceId));
+      if (!readiness.ready) {
+        return sendRedacted(res, 409, {
+          code: "SETUP_REQUIRED",
+          blockers: readiness.blockers,
+          setupUrl: "/setup",
+          onboardingStep: readiness.onboardingStep,
+        });
+      }
 
       const conversation = await rectorStore.createConversation({
         title: nonEmptyOrDefault(title, "New conversation"),

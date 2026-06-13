@@ -57,7 +57,7 @@ const host = process.env.HOST?.trim() || "127.0.0.1";
 // reason — an ORCHESTRATOR_MODE value that is neither `local` nor `external` (Req 1.6) — and that
 // hard-exit is handled in `resolveStartupOrchestrationConfig`. The binding is assigned once during
 // bootstrap and exported for downstream consumers/tests.
-let orchestrationConfig: OrchestrationConfig;
+let orchestrationConfig: OrchestrationConfig = { mode: "external", configuredProviders: [] };
 
 const telemetry = new LocalTelemetry();
 const manager = new TaskManager({
@@ -144,6 +144,7 @@ async function ensureRuntimeSettings(): Promise<RuntimeSettings> {
       providerConfigStore,
       secretStore,
     });
+    orchestrationConfig = orchestration;
     const migrated = migrateRuntimeSettingsFromEnv(
       process.env,
       orchestration.configuredProviders.length,
@@ -229,15 +230,30 @@ async function resolveE2BApiKey(): Promise<string | undefined> {
  *
  * No container is contacted at startup — the adapter only initializes its client lazily on first use.
  */
+async function countStoreConfiguredProviders(): Promise<number> {
+  try {
+    const state = await providerConfigStore.getState();
+    let count = 0;
+    for (const record of state.providers) {
+      if (await secretStore.hasSecret(record.secretRef)) {
+        count++;
+      }
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
 async function buildStartupSandboxAdapter(
-  config: OrchestrationConfig,
+  profile: RuntimeSettings["orchestrationProfile"],
   kind: SandboxEnvironmentKind,
 ): Promise<SandboxAdapter> {
   if (kind === "stub") {
     return createE2BSandboxAdapterStub();
   }
 
-  if (kind === "e2b" && config.mode === "external") {
+  if (kind === "e2b" && profile === "configured") {
     const apiKey = await resolveE2BApiKey();
     if (apiKey) {
       const readiness = checkE2BSandboxReadiness({
@@ -302,14 +318,15 @@ async function resolveStartupOrchestrationConfig(): Promise<OrchestrationConfig>
  */
 async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>; server: http.Server; gracefulShutdown: ReturnType<typeof createGracefulShutdownHandler> }> {
   const runtimeSettings = await ensureRuntimeSettings();
-  orchestrationConfig = await resolveStartupOrchestrationConfig();
+
+  const storeProviderCount = await countStoreConfiguredProviders();
 
   // Req 1.4 / 1.5 / 1.7: configured profile with no configured provider warns and serves (rather
   // than crashing) so the operator can open the configuration panel. The warning names every
   // supported provider's required environment-variable keys and contains no secret value.
   if (
     runtimeSettings.orchestrationProfile === "configured" &&
-    orchestrationConfig.configuredProviders.length === 0
+    storeProviderCount === 0
   ) {
     console.warn(
       redactString(
@@ -324,7 +341,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   const orchestrationMode =
     runtimeSettings.orchestrationProfile === "configured" ? "external" : "local";
   const orchestrationSandbox = await buildStartupSandboxAdapter(
-    orchestrationConfig,
+    runtimeSettings.orchestrationProfile,
     runtimeSettings.sandboxEnvironment,
   );
 
