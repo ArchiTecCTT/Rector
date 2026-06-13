@@ -55,6 +55,9 @@ export const ExecutionEventSchema = z.object({
   sequence: z.number().int().min(1),
   type: z.enum(["DAG_STARTED", "NODE_STARTED", "NODE_RETRIED", "NODE_COMPLETED", "NODE_FAILED", "NODE_SKIPPED", "DAG_COMPLETED"]),
   nodeId: z.string().min(1).optional(),
+  toolName: z.string().min(1).optional(),
+  middlewareHalt: z.boolean().optional(),
+  approvalGateId: z.string().min(1).optional(),
   status: z.union([DagExecutionStatusSchema, NodeExecutionStatusSchema]).optional(),
   attempt: z.number().int().min(1).optional(),
   error: ExecutionErrorSchema.optional(),
@@ -232,7 +235,8 @@ function executeNode(
   const perAttemptDurationMs = simulatedDurationMs(node, options);
   const startedAt = iso(startedAtMs);
 
-  appendEvent("NODE_STARTED", { nodeId: node.id, attempt: 1 });
+  const toolName = simulatedToolNameForNode(node);
+  appendEvent("NODE_STARTED", { nodeId: node.id, toolName, middlewareHalt: false, attempt: 1 });
 
   const permissionError = unsafeShellError(node, options);
   if (permissionError) {
@@ -254,7 +258,7 @@ function executeNode(
     const firstError = injectedFailureError(node, 1, options);
     const retryable = isRetryableExecutionError(firstError, policy);
     if (!retryable) {
-      appendEvent("NODE_FAILED", { nodeId: node.id, status: "FAILED", attempt: 1, error: firstError });
+      appendEvent("NODE_FAILED", { nodeId: node.id, toolName, middlewareHalt: firstError.code === "PERMISSION_DENIED", status: "FAILED", attempt: 1, error: firstError });
       return {
         nodeId: node.id,
         status: "FAILED",
@@ -272,13 +276,15 @@ function executeNode(
       for (let attempt = 1; attempt < policy.maxAttempts; attempt += 1) {
         appendEvent("NODE_RETRIED", {
           nodeId: node.id,
+          toolName,
+          middlewareHalt: false,
           status: "RETRIED",
           attempt,
           error: injectedFailureError(node, attempt, options),
         });
       }
       const error = injectedFailureError(node, policy.maxAttempts, options);
-      appendEvent("NODE_FAILED", { nodeId: node.id, status: "FAILED", attempt: policy.maxAttempts, error });
+      appendEvent("NODE_FAILED", { nodeId: node.id, toolName, middlewareHalt: error.code === "PERMISSION_DENIED", status: "FAILED", attempt: policy.maxAttempts, error });
       return {
         nodeId: node.id,
         status: "FAILED",
@@ -294,6 +300,8 @@ function executeNode(
     for (let attempt = 1; attempt <= boundedFailureAttempts; attempt += 1) {
       appendEvent("NODE_RETRIED", {
         nodeId: node.id,
+        toolName,
+        middlewareHalt: false,
         status: "RETRIED",
         attempt,
         error: injectedFailureError(node, attempt, options),
@@ -302,7 +310,7 @@ function executeNode(
 
     const attempts = boundedFailureAttempts + 1;
     const status: NodeExecutionStatus = "RETRIED";
-    appendEvent("NODE_COMPLETED", { nodeId: node.id, status, attempt: attempts });
+    appendEvent("NODE_COMPLETED", { nodeId: node.id, toolName, middlewareHalt: false, status, attempt: attempts });
     return successfulNodeResult(node, dependencies, startedAtMs, perAttemptDurationMs, attempts, status, options, resultsByNode);
   }
 
@@ -311,7 +319,7 @@ function executeNode(
     return failedNodeResult(node, dependencies, startedAtMs, perAttemptDurationMs, validationError, policy, appendEvent);
   }
 
-  appendEvent("NODE_COMPLETED", { nodeId: node.id, status: "SUCCESS", attempt: 1 });
+  appendEvent("NODE_COMPLETED", { nodeId: node.id, toolName, middlewareHalt: false, status: "SUCCESS", attempt: 1 });
   return successfulNodeResult(node, dependencies, startedAtMs, perAttemptDurationMs, 1, "SUCCESS", options, resultsByNode);
 }
 
@@ -349,13 +357,14 @@ function failedNodeResult(
 ): NodeExecutionResult {
   const retryable = isRetryableExecutionError(error, policy);
   const attempts = retryable ? policy.maxAttempts : 1;
+  const toolName = simulatedToolNameForNode(node);
 
   for (let attempt = 1; attempt < attempts; attempt += 1) {
-    appendEvent("NODE_RETRIED", { nodeId: node.id, status: "RETRIED", attempt, error: { ...error, details: { ...(error.details ?? {}), attempt } } });
+    appendEvent("NODE_RETRIED", { nodeId: node.id, toolName, middlewareHalt: error.code === "PERMISSION_DENIED", status: "RETRIED", attempt, error: { ...error, details: { ...(error.details ?? {}), attempt } } });
   }
 
   const finalError = attempts === 1 ? error : { ...error, details: { ...(error.details ?? {}), attempt: attempts } };
-  appendEvent("NODE_FAILED", { nodeId: node.id, status: "FAILED", attempt: attempts, error: finalError });
+  appendEvent("NODE_FAILED", { nodeId: node.id, toolName, middlewareHalt: finalError.code === "PERMISSION_DENIED", status: "FAILED", attempt: attempts, error: finalError });
 
   const durationMs = perAttemptDurationMs * attempts;
   return {
@@ -393,6 +402,8 @@ function simulatedOutputFor(
   const base: Record<string, unknown> = {
     simulated: true,
     nodeType: node.type,
+    toolName: simulatedToolNameForNode(node),
+    middlewareHalt: false,
     expectedOutputs: node.expectedOutputs,
   };
 
@@ -407,6 +418,21 @@ function simulatedOutputFor(
   }
 
   return { ...base, ...override };
+}
+
+function simulatedToolNameForNode(node: DagNode): string {
+  const input = recordFrom(node.input);
+  const metadata = recordFrom(node.metadata);
+  const hint = recordFrom(input?.sandboxOperation) ?? recordFrom(metadata?.sandboxOperation) ?? input ?? metadata;
+  const kind = typeof hint?.kind === "string" ? hint.kind : typeof hint?.operationKind === "string" ? hint.operationKind : undefined;
+  if (kind === "READ_FILE") return "workspace.read_file";
+  if (kind === "LIST_DIR") return "workspace.list_dir";
+  if (kind === "PROPOSE_PATCH") return "workspace.apply_patch";
+  if (kind === "RUN_COMMAND") return "sandbox.execute";
+  if (node.type === "FILE_OPERATION") return "workspace.apply_patch";
+  if (node.type === "VALIDATION") return "workspace.validate";
+  if (node.type === "SHELL_COMMAND") return "sandbox.execute";
+  return "simulator.echo";
 }
 
 function validationErrorFor(
@@ -425,6 +451,10 @@ function validationErrorFor(
       nodeId: node.id,
       details: { reason: explicitFailure },
     };
+  }
+
+  if (validationHasExecutableSandboxHint(node)) {
+    return undefined;
   }
 
   const input = recordFrom(node.input);
@@ -468,6 +498,24 @@ function validationErrorFor(
   }
 
   return undefined;
+}
+
+function validationHasExecutableSandboxHint(node: DagNode): boolean {
+  if (node.type !== "VALIDATION") return false;
+  const input = recordFrom(node.input);
+  const metadata = recordFrom(node.metadata);
+  return hasRunnableSandboxHint(input) || hasRunnableSandboxHint(metadata);
+}
+
+function hasRunnableSandboxHint(value: Record<string, unknown> | undefined): boolean {
+  if (!value) return false;
+  const sandboxOperation = recordFrom(value.sandboxOperation);
+  const hint = sandboxOperation ?? value;
+  return (
+    hint.kind === "RUN_COMMAND" ||
+    hint.operationKind === "RUN_COMMAND" ||
+    (typeof hint.command === "string" && hint.command.length > 0)
+  );
 }
 
 function explicitValidationFailureMessage(node: DagNode): string | undefined {

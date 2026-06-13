@@ -3,12 +3,18 @@ import { z } from "zod";
 import {
   SandboxOperationKindSchema,
   SandboxExecutionStatusSchema,
+  SandboxOperationResultSchema,
   WorkspaceSandboxAdapter,
   type SandboxOperationInput,
   type SandboxOperationResult,
 } from "../sandbox";
 import { redactString } from "../security/redaction";
 import { DagSchema, validateDag, type Dag, type DagNode } from "../protocol/dag";
+import type { RunPhase } from "../protocol/phases";
+import { createDefaultToolRegistry } from "../tools/builtinTools";
+import { runToolWithMiddleware } from "../tools/middleware";
+import type { ToolEventSinkInput, ToolRegistry, ToolResult } from "../tools";
+import type { Budget } from "../store/schemas";
 import {
   DagExecutionResultSchema,
   type DagExecutionStatus,
@@ -21,11 +27,11 @@ import {
 // DAG-to-sandbox execution bridge (ORN-37)
 //
 // This module is the ONLY bridge between the executor phase and real file /
-// command I/O. It maps each DAG node to a `SandboxOperationInput` and drives it
-// through `WorkspaceSandboxAdapter.operate`, which enforces workspace
-// containment, the command allowlist / destructive denylist, approval gates,
-// and redaction. The local `executorSimulator` remains the default for local
-// (provider-free) mode; this bridge is wired into the external path only.
+// command I/O. It maps each DAG node to a ToolRegistry dispatch, and builtin
+// tool handlers delegate to the selected sandbox adapter, which enforces
+// workspace containment, the command allowlist / destructive denylist, approval
+// gates, and redaction. The local `executorSimulator` remains the default for
+// deterministic CI-style execution; this bridge is wired into configured runs.
 // ---------------------------------------------------------------------------
 
 /**
@@ -65,6 +71,11 @@ export interface SandboxDagExecutionResult extends z.infer<typeof DagExecutionRe
 export interface ExecuteDagThroughSandboxDeps {
   /** The only bridge to real I/O; enforces containment, allowlist, redaction. */
   sandbox: WorkspaceSandboxAdapter;
+  toolRegistry?: ToolRegistry;
+  conversationId?: string;
+  toolEventPhase?: RunPhase;
+  budget?: Budget;
+  appendRunEvent?: (event: ToolEventSinkInput) => Promise<void> | void;
   now?: () => string;
   /**
    * Optional override mapping a node to a sandbox operation. Returning
@@ -72,6 +83,12 @@ export interface ExecuteDagThroughSandboxDeps {
    * {@link mapDagNodeToOperation}.
    */
   mapNodeToOperation?: (node: DagNode) => SandboxOperationInput | undefined;
+}
+
+export interface DagNodeToolCall {
+  toolName: string;
+  args: Record<string, unknown>;
+  operation: SandboxOperationInput;
 }
 
 /** Reads a structured operation hint from a node's `input` then `metadata`. */
@@ -84,17 +101,14 @@ function readOperationHint(node: DagNode): Record<string, unknown> {
 
 /** Default sandbox operation kind for a node type, when no explicit hint exists. */
 function defaultOperationKind(node: DagNode): z.infer<typeof SandboxOperationKindSchema> | undefined {
-  switch (node.type) {
-    case "FILE_OPERATION":
-      return "PROPOSE_PATCH";
-    case "VALIDATION":
-    case "SHELL_COMMAND":
-      return "RUN_COMMAND";
-    default:
-      // LLM_EXECUTION / MERGE / CONDITIONAL carry no real workspace I/O.
-      return undefined;
-  }
+  return DEFAULT_OPERATION_KIND_BY_NODE_TYPE[node.type];
 }
+
+const DEFAULT_OPERATION_KIND_BY_NODE_TYPE: Partial<Record<DagNode["type"], z.infer<typeof SandboxOperationKindSchema>>> = {
+  FILE_OPERATION: "PROPOSE_PATCH",
+  VALIDATION: "RUN_COMMAND",
+  SHELL_COMMAND: "RUN_COMMAND",
+};
 
 /**
  * Maps a DAG node to a `SandboxOperationInput`, or `undefined` when the node
@@ -146,6 +160,27 @@ export function mapDagNodeToOperation(node: DagNode): SandboxOperationInput | un
   };
 }
 
+export function mapSandboxOperationToToolName(operation: SandboxOperationInput): string {
+  const kind = operation.kind;
+  if (kind === "RUN_COMMAND") return "sandbox.execute";
+  if (kind === "READ_FILE") return "workspace.read_file";
+  if (kind === "LIST_DIR") return "workspace.list_dir";
+  return "workspace.apply_patch";
+}
+
+export function mapDagNodeToToolCall(
+  node: DagNode,
+  mapNode: (node: DagNode) => SandboxOperationInput | undefined = mapDagNodeToOperation,
+): DagNodeToolCall | undefined {
+  const operation = mapNode(node);
+  if (!operation) return undefined;
+  return {
+    toolName: mapSandboxOperationToToolName(operation),
+    args: { operation },
+    operation,
+  };
+}
+
 /**
  * Executes a compiled DAG by driving each node's mapped sandbox operation
  * through {@link WorkspaceSandboxAdapter.operate}. Denied / needs-approval /
@@ -160,6 +195,7 @@ export async function executeDagThroughSandbox(
 ): Promise<SandboxDagExecutionResult> {
   const now = options.now ?? deps.now ?? (() => new Date().toISOString());
   const mapNode = deps.mapNodeToOperation ?? mapDagNodeToOperation;
+  const toolRegistry = deps.toolRegistry ?? createDefaultToolRegistry();
   const events: ExecutionEvent[] = [];
   const artifacts: ExecutionArtifact[] = [];
   const startedAt = safeNow(now);
@@ -228,14 +264,44 @@ export async function executeDagThroughSandbox(
       continue;
     }
 
-    appendEvent("NODE_STARTED", { nodeId: node.id });
-    const result = await executeNodeThroughSandbox(node, dependencies, deps.sandbox, mapNode, now, artifacts, resultsByNode);
+    const nodeToolCall = mapDagNodeToToolCall(node, mapNode);
+    appendEvent("NODE_STARTED", { nodeId: node.id, toolName: nodeToolCall?.toolName, middlewareHalt: false });
+    const result = await executeNodeThroughSandbox(
+      node,
+      dependencies,
+      {
+        sandbox: deps.sandbox,
+        toolRegistry,
+        conversationId: deps.conversationId ?? "unknown-conversation",
+        phase: deps.toolEventPhase ?? "EXECUTING",
+        budget: deps.budget,
+        appendRunEvent: deps.appendRunEvent,
+      },
+      mapNode,
+      now,
+      artifacts,
+      resultsByNode,
+      dag.runId,
+    );
     nodeResults.push(result);
     resultsByNode.set(node.id, result);
     if (result.status === "FAILED") {
-      appendEvent("NODE_FAILED", { nodeId: node.id, status: "FAILED", error: result.error });
+      appendEvent("NODE_FAILED", {
+        nodeId: node.id,
+        toolName: nodeToolCall?.toolName,
+        middlewareHalt: recordFrom(result.output)?.middlewareHalt === true,
+        approvalGateId: stringOrUndefined(recordFrom(result.output)?.approvalGateId),
+        status: "FAILED",
+        error: result.error,
+      });
     } else {
-      appendEvent("NODE_COMPLETED", { nodeId: node.id, status: result.status });
+      appendEvent("NODE_COMPLETED", {
+        nodeId: node.id,
+        toolName: nodeToolCall?.toolName,
+        middlewareHalt: false,
+        approvalGateId: stringOrUndefined(recordFrom(result.output)?.approvalGateId),
+        status: result.status,
+      });
     }
   }
 
@@ -248,17 +314,25 @@ export async function executeDagThroughSandbox(
 async function executeNodeThroughSandbox(
   node: DagNode,
   dependencies: string[],
-  sandbox: WorkspaceSandboxAdapter,
+  deps: {
+    sandbox: WorkspaceSandboxAdapter;
+    toolRegistry: ToolRegistry;
+    conversationId: string;
+    phase: RunPhase;
+    budget?: Budget;
+    appendRunEvent?: (event: ToolEventSinkInput) => Promise<void> | void;
+  },
   mapNode: (node: DagNode) => SandboxOperationInput | undefined,
   now: () => string,
   artifacts: ExecutionArtifact[],
   resultsByNode: Map<string, NodeExecutionResult>,
+  runId: string,
 ): Promise<NodeExecutionResult> {
-  const operation = mapNode(node);
+  const toolCall = mapDagNodeToToolCall(node, mapNode);
 
   // Nodes with no workspace I/O (LLM_EXECUTION / MERGE / CONDITIONAL, or any node
   // the mapping declined) are recorded as no-op successes — no sandbox call.
-  if (!operation) {
+  if (!toolCall) {
     const at = safeNow(now);
     const validationResult = !hasExplicitSandboxOperationHint(node)
       ? validationNodeResultWithoutSandbox(node, dependencies, resultsByNode, at)
@@ -292,13 +366,28 @@ async function executeNodeThroughSandbox(
     };
   }
 
-  let operationResult: SandboxOperationResult;
+  let toolResult: ToolResult;
   try {
-    operationResult = await sandbox.operate(operation);
+    toolResult = await runToolWithMiddleware(
+      deps.toolRegistry,
+      toolCall.toolName,
+      toolCall.args,
+      {
+        runId,
+        nodeId: node.id,
+        conversationId: deps.conversationId,
+        phase: deps.phase,
+        sandbox: deps.sandbox,
+        budget: deps.budget,
+        toolPermissions: node.toolPermissions,
+        toolPolicy: recordFrom(node.metadata?.toolPolicy),
+        appendRunEvent: deps.appendRunEvent,
+      },
+    );
   } catch (error) {
-    // The sandbox is contracted never to throw for policy denials; a thrown
-    // error here is unexpected, so surface it as a structured node failure
-    // rather than letting it escape the bridge.
+    // The registry/middleware path is contracted never to throw for policy
+    // denials. A thrown error here is unexpected, so surface it as a structured
+    // node failure rather than letting it escape the bridge.
     const at = safeNow(now);
     const message = redactString(stringifyError(error));
     return {
@@ -319,8 +408,13 @@ async function executeNodeThroughSandbox(
     };
   }
 
+  const operationResult = sandboxResultFromToolResult(toolResult);
+  if (!operationResult) {
+    return nodeResultFromToolResult(node, dependencies, toolCall.toolName, toolResult, safeNow(now));
+  }
+
   recordArtifacts(node.id, operationResult, artifacts);
-  return nodeResultFromOperation(node, dependencies, operationResult);
+  return nodeResultFromOperation(node, dependencies, operationResult, toolCall.toolName, toolResult);
 }
 
 /** Records the redacted, length-bounded artifacts for one sandbox operation. */
@@ -389,6 +483,8 @@ function nodeResultFromOperation(
   node: DagNode,
   dependencies: string[],
   result: SandboxOperationResult,
+  toolName: string,
+  toolResult: ToolResult,
 ): NodeExecutionResult {
   const startedAt = result.startedAt;
   const completedAt = result.completedAt;
@@ -400,6 +496,9 @@ function nodeResultFromOperation(
     operationId: operationIdFor(node.id, result.kind),
     operationKind: result.kind,
     sandboxStatus: result.status,
+    toolName,
+    middlewareHalt: toolResult.middlewareHalt,
+    approvalGateId: toolResult.approvalGateId ?? toolResult.metadata.approvalGateId,
     preview: preview.preview,
     previewTruncated: preview.truncated,
     expectedOutputs: node.expectedOutputs,
@@ -431,6 +530,71 @@ function nodeResultFromOperation(
     output: { ...baseOutput, denialReason: result.denialReason },
     error,
     dependencies,
+  };
+}
+
+function sandboxResultFromToolResult(result: ToolResult): SandboxOperationResult | undefined {
+  const output = recordFrom(result.output);
+  const candidate = output?.sandboxResult ?? output?.operationResult;
+  const parsed = SandboxOperationResultSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function nodeResultFromToolResult(
+  node: DagNode,
+  dependencies: string[],
+  toolName: string,
+  result: ToolResult,
+  at: string,
+): NodeExecutionResult {
+  const error = executionErrorFromToolResult(node.id, result);
+  const errorDetails = recordFrom(result.error?.details);
+  const previewMessage =
+    stringOrUndefined(errorDetails?.message) ??
+    result.error?.message ??
+    "Tool completed without sandbox operation output";
+  return {
+    nodeId: node.id,
+    status: result.ok ? "SUCCESS" : "FAILED",
+    attempts: 1,
+    startedAt: at,
+    completedAt: at,
+    durationMs: 0,
+    output: {
+      sandbox: true,
+      nodeType: node.type,
+      toolName,
+      toolResult: {
+        ok: result.ok,
+        halt: result.halt,
+        middlewareHalt: result.middlewareHalt,
+        approvalGateId: result.approvalGateId,
+        error: result.error,
+      },
+      preview: previewFrom(previewMessage),
+    },
+    error,
+    dependencies,
+  };
+}
+
+function executionErrorFromToolResult(nodeId: string, result: ToolResult): ExecutionError | undefined {
+  if (result.ok) return undefined;
+  const code = result.error?.code === "PERMISSION_DENIED" || result.error?.code === "POLICY_DENIED"
+    ? "PERMISSION_DENIED"
+    : result.error?.code === "VALIDATION_FAILED"
+      ? "VALIDATION_FAILED"
+      : result.error?.code === "TOOL_NOT_FOUND" || result.error?.code === "TOOL_UNAVAILABLE"
+        ? "OPERATION_MAPPING_FAILED"
+        : "SANDBOX_OPERATION_FAILED";
+  return {
+    code,
+    message: result.error?.message ?? `Tool result for node ${nodeId} failed`,
+    nodeId,
+    details: {
+      toolErrorCode: result.error?.code,
+      ...(result.error?.details ?? {}),
+    },
   };
 }
 

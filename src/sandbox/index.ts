@@ -235,6 +235,23 @@ export interface SandboxAdapter {
   execute(command: SandboxCommandInput): Promise<SandboxExecutionResult>;
 }
 
+export const SandboxEnvironmentKindSchema = z.enum(["stub", "local", "e2b"]);
+export type SandboxEnvironmentKind = z.infer<typeof SandboxEnvironmentKindSchema>;
+
+export interface SandboxExecutionContext {
+  runId?: string;
+  nodeId?: string;
+  workspaceRoot?: string;
+  abortSignal?: AbortSignal;
+}
+
+export interface SandboxEnvironment {
+  readonly kind: SandboxEnvironmentKind;
+  readonly supportsArbitraryShell: boolean;
+  execute(command: SandboxCommandInput, ctx?: SandboxExecutionContext): Promise<SandboxExecutionResult>;
+  operate(operation: SandboxOperationInput, ctx?: SandboxExecutionContext): Promise<SandboxOperationResult>;
+}
+
 export interface SafeLocalSandboxAdapterOptions {
   now?: () => string;
 }
@@ -1149,6 +1166,117 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
     const value = this.now();
     return Number.isFinite(Date.parse(value)) ? value : new Date().toISOString();
   }
+}
+
+export interface SandboxEnvironmentOptions extends WorkspaceSandboxOptions {
+  adapter?: SandboxAdapter & { operate?: (operation: SandboxOperationInput) => Promise<SandboxOperationResult> };
+}
+
+export class StubSandboxEnvironment implements SandboxEnvironment {
+  readonly kind = "stub" as const;
+  readonly supportsArbitraryShell = false;
+  private readonly adapter: SandboxAdapter;
+
+  constructor(options: SandboxStubOptions = {}) {
+    this.adapter = createE2BSandboxAdapterStub(options);
+  }
+
+  async execute(command: SandboxCommandInput): Promise<SandboxExecutionResult> {
+    return this.adapter.execute(command);
+  }
+
+  async operate(operation: SandboxOperationInput): Promise<SandboxOperationResult> {
+    const parsed = SandboxOperationSchema.parse(operation);
+    const startedAt = new Date().toISOString();
+    return SandboxOperationResultSchema.parse({
+      kind: parsed.kind,
+      status: "DENIED",
+      denialReason: "POLICY_VIOLATION",
+      stdout: "",
+      stderr: "Stub sandbox environment does not execute workspace operations.",
+      networkCalls: 0,
+      startedAt,
+      completedAt: startedAt,
+      metadata: { sandboxEnvironment: this.kind, stub: true },
+    });
+  }
+}
+
+export class LocalSandboxEnvironment implements SandboxEnvironment {
+  readonly kind = "local" as const;
+  readonly supportsArbitraryShell = false;
+  private readonly adapter: WorkspaceSandboxAdapter;
+
+  constructor(options: WorkspaceSandboxOptions) {
+    this.adapter = new WorkspaceSandboxAdapter(options);
+  }
+
+  async execute(command: SandboxCommandInput): Promise<SandboxExecutionResult> {
+    return this.adapter.execute(command);
+  }
+
+  async operate(operation: SandboxOperationInput): Promise<SandboxOperationResult> {
+    return this.adapter.operate(operation);
+  }
+}
+
+export class AdapterSandboxEnvironment implements SandboxEnvironment {
+  readonly supportsArbitraryShell = false;
+
+  constructor(
+    readonly kind: SandboxEnvironmentKind,
+    private readonly adapter: SandboxAdapter & { operate?: (operation: SandboxOperationInput) => Promise<SandboxOperationResult> },
+  ) {}
+
+  async execute(command: SandboxCommandInput): Promise<SandboxExecutionResult> {
+    return this.adapter.execute(command);
+  }
+
+  async operate(operation: SandboxOperationInput): Promise<SandboxOperationResult> {
+    if (this.adapter.operate) return this.adapter.operate(operation);
+    const parsed = SandboxOperationSchema.parse(operation);
+    if (parsed.kind !== "RUN_COMMAND") {
+      const startedAt = new Date().toISOString();
+      return SandboxOperationResultSchema.parse({
+        kind: parsed.kind,
+        status: "DENIED",
+        denialReason: "POLICY_VIOLATION",
+        stdout: "",
+        stderr: "Selected sandbox adapter does not support workspace operations.",
+        networkCalls: 0,
+        startedAt,
+        completedAt: startedAt,
+        metadata: { sandboxEnvironment: this.kind },
+      });
+    }
+    const execution = await this.adapter.execute({
+      kind: parsed.metadata.kind === "shell" ? "shell" : "local",
+      command: parsed.command ?? "",
+      args: parsed.args,
+      timeoutMs: parsed.timeoutMs ?? WORKSPACE_COMMAND_TIMEOUT_MS,
+    });
+    return SandboxOperationResultSchema.parse({
+      kind: "RUN_COMMAND",
+      status: execution.status,
+      stdout: execution.stdout,
+      stderr: execution.stderr,
+      artifacts: execution.artifacts,
+      approvalGates: execution.approvalGates,
+      networkCalls: 0,
+      startedAt: execution.startedAt,
+      completedAt: execution.completedAt,
+      metadata: execution.metadata,
+    });
+  }
+}
+
+export function createSandboxEnvironment(
+  kind: SandboxEnvironmentKind,
+  options: SandboxEnvironmentOptions,
+): SandboxEnvironment {
+  if (kind === "stub") return new StubSandboxEnvironment({ now: options.now });
+  if (kind === "e2b" && options.adapter) return new AdapterSandboxEnvironment("e2b", options.adapter);
+  return new LocalSandboxEnvironment(options);
 }
 
 // Characters/operators that imply shell interpretation when present in command/argv tokens.

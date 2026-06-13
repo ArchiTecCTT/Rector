@@ -41,6 +41,7 @@ import type { OrchestratorMode } from "../deployment";
 import type { RectorStore } from "../store";
 import type { Budget, Run } from "../store/schemas";
 import type { ModuleRegistry } from "../modules";
+import type { ToolRegistry } from "../tools";
 import {
   executePreprocessorPassthrough,
   executePreprocessorPhase,
@@ -105,6 +106,8 @@ export interface ChatRunnerDeps {
   repairAgent?: LiveRepairAgent;
   /** Optional module registry (Chunk 038+). */
   moduleRegistry?: ModuleRegistry;
+  /** Central tool dispatch registry (Chunk 047b). */
+  toolRegistry?: ToolRegistry;
   neuroFlags?: Partial<NeuroFeatureFlags>;
   contextCompressionEnabled?: boolean;
   contextCompressionMaxGeneration?: number;

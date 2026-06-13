@@ -171,6 +171,7 @@ import { registerTemplateRoutes } from "./routes/templates";
 import { registerRunApprovalRoutes } from "./routes/runApprovals";
 import { registerOperatorRoutes } from "./routes/operator";
 import { registerTaskRoutes } from "./routes/tasks";
+import { createDefaultToolRegistry, type ToolRegistry } from "../tools";
 
 export interface ApiSecurityOptions {
   corsAllowedOrigins?: string[];
@@ -337,6 +338,9 @@ export interface ApiSecurityOptions {
 
   /** Optional procedural memory catalog. Defaults to workspace `skills/` + `.rector/skills/`. */
   skillsCatalog?: SkillsCatalog;
+
+  /** Central tool registry for executor dispatch and read-only tool metadata. */
+  toolRegistry?: ToolRegistry;
 
   /** Env map consumed by deployment-readiness checks. Defaults to process.env. */
   deploymentEnv?: Record<string, string | undefined>;
@@ -1595,6 +1599,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const runtimeSettingsStore =
     securityOptions.runtimeSettingsStore ?? createInMemoryRuntimeSettingsStore();
   const skillsCatalog = securityOptions.skillsCatalog ?? new SkillsCatalog({ workspaceRoot: process.cwd() });
+  const toolRegistry = securityOptions.toolRegistry ?? createDefaultToolRegistry();
   const skillsTruthLibrary = new InMemoryTruthLibrary();
   try {
     syncSkillsToTruthLibrary(skillsCatalog, skillsTruthLibrary);
@@ -1677,6 +1682,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
           store: rectorStore,
           router: orchestration?.router,
           getMemoryProvider: getMemoryProvider,
+          toolRegistry,
         });
         moduleBootReady = true;
       })().catch((error) => {
@@ -1693,6 +1699,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.locals.moduleConfigStore = moduleConfigStore;
   app.locals.runtimeSettingsStore = runtimeSettingsStore;
   app.locals.orchestrationRuntime = orchestrationRuntime;
+  app.locals.toolRegistry = toolRegistry;
   app.locals.skillsCatalog = skillsCatalog;
   app.locals.skillsTruthLibrary = skillsTruthLibrary;
   app.locals.ensureModuleBoot = ensureModuleBoot;
@@ -2259,6 +2266,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             allowlistedCommands: orchestrationRuntime.allowlistedCommands,
             approvals: orchestrationRuntime.approvals,
             moduleRegistry,
+            toolRegistry,
             skillsCatalog,
             contextCompressionEnabled: runtimeSettings.contextCompressionEnabled,
             contextCompressionMaxGeneration: runtimeSettings.contextCompressionMaxGeneration,
@@ -2478,6 +2486,20 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     }
   });
 
+  app.get("/api/tools", async (req, res) => {
+    const access = await authorize(req, res, "workspace.read", { targetType: "tool" });
+    if (!access) return;
+    try {
+      const tools = [...toolRegistry.snapshot().values()]
+        .filter((entry) => entry.source === "builtin")
+        .map((entry) => entry.definition)
+        .sort((a, b) => a.name.localeCompare(b.name));
+      sendRedacted(res, 200, { tools, count: tools.length });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
   app.get("/api/runs/:id/events", async (req, res) => {
     try {
       const run = await rectorStore.getRun(req.params.id);
@@ -2564,13 +2586,14 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     if (!access) return;
     try {
       const patch = RuntimeSettingsPatchSchema.parse(req.body ?? {});
-      if (patch.orchestrationProfile === undefined) {
-        return sendRedacted(res, 400, { error: "orchestrationProfile is required" });
+      if (patch.orchestrationProfile === undefined && patch.sandboxEnvironment === undefined) {
+        return sendRedacted(res, 400, { error: "runtime settings patch is empty" });
       }
       const current = await runtimeSettingsStore.get();
       const next = {
         ...current,
-        orchestrationProfile: patch.orchestrationProfile,
+        ...(patch.orchestrationProfile ? { orchestrationProfile: patch.orchestrationProfile } : {}),
+        ...(patch.sandboxEnvironment ? { sandboxEnvironment: patch.sandboxEnvironment } : {}),
         updatedAt: new Date().toISOString(),
       };
       const persisted = await runtimeSettingsStore.upsert(next);

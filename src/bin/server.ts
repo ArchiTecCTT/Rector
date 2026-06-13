@@ -18,7 +18,12 @@ import {
 import type { ModelRouter } from "../providers/llm";
 import { buildConfiguredRouter } from "../providers/configBridge";
 import { buildConfiguredAssignmentAwareRouter } from "../providers/orchestrationAssignments";
-import { WorkspaceSandboxAdapter, type SandboxAdapter } from "../sandbox";
+import {
+  WorkspaceSandboxAdapter,
+  createE2BSandboxAdapterStub,
+  type SandboxAdapter,
+  type SandboxEnvironmentKind,
+} from "../sandbox";
 import { checkE2BSandboxReadiness, createE2BSandboxAdapter } from "../sandbox/e2bSandboxAdapter";
 import {
   describeRequiredProviderEnvKeys,
@@ -39,6 +44,7 @@ import {
   type RectorStore,
 } from "../store";
 import { TaskManager } from "../thalamus/router";
+import { createDefaultToolRegistry } from "../tools";
 
 const deploymentConfig = parseDeploymentEnvironment();
 const port = deploymentConfig.port;
@@ -223,8 +229,15 @@ async function resolveE2BApiKey(): Promise<string | undefined> {
  *
  * No container is contacted at startup — the adapter only initializes its client lazily on first use.
  */
-async function buildStartupSandboxAdapter(config: OrchestrationConfig): Promise<SandboxAdapter> {
-  if (config.mode === "external") {
+async function buildStartupSandboxAdapter(
+  config: OrchestrationConfig,
+  kind: SandboxEnvironmentKind,
+): Promise<SandboxAdapter> {
+  if (kind === "stub") {
+    return createE2BSandboxAdapterStub();
+  }
+
+  if (kind === "e2b" && config.mode === "external") {
     const apiKey = await resolveE2BApiKey();
     if (apiKey) {
       const readiness = checkE2BSandboxReadiness({
@@ -310,7 +323,10 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   const orchestrationRouter = await buildStartupRouter(runtimeSettings.orchestrationProfile);
   const orchestrationMode =
     runtimeSettings.orchestrationProfile === "configured" ? "external" : "local";
-  const orchestrationSandbox = await buildStartupSandboxAdapter(orchestrationConfig);
+  const orchestrationSandbox = await buildStartupSandboxAdapter(
+    orchestrationConfig,
+    runtimeSettings.sandboxEnvironment,
+  );
 
   const persistenceDriver = deploymentConfig.persistence?.driver;
   let bootstrappedStore: RectorStore | undefined;
@@ -322,6 +338,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   const secretEncryptionKey = resolveSecretEncryptionKey();
 
   const auditLog = createLocalAuditLogService({ filePath: AUDIT_LOG_FILE });
+  const toolRegistry = createDefaultToolRegistry();
 
   const app = createApp(manager, {
     orchestration: { mode: orchestrationMode, router: orchestrationRouter, sandbox: orchestrationSandbox },
@@ -334,6 +351,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
     memoryAssignmentStore,
     runtimeSettingsStore,
     auditLog,
+    toolRegistry,
     auth: authConfig,
     secretEncryptionKey,
   });

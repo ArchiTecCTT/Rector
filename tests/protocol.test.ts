@@ -184,6 +184,8 @@ describe("protocol run events", () => {
     expect(RUN_EVENT_TYPES).toContain("RUN_COMPLETED");
     expect(RUN_EVENT_TYPES).toContain("DAG_NODE_STARTED");
     expect(RUN_EVENT_TYPES).toContain("VALIDATION_PASSED");
+    expect(RUN_EVENT_TYPES).toContain("TOOL_INVOKED");
+    expect(RUN_EVENT_TYPES).toContain("TOOL_COMPLETED");
   });
 
   it("accepts a valid run event", () => {

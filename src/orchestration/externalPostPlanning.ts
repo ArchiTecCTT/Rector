@@ -31,6 +31,7 @@ import {
 import { PatchOperationSchema, WorkspaceSandboxAdapter, type SandboxApproval } from "../sandbox";
 import type { RectorStore } from "../store";
 import type { Run } from "../store/schemas";
+import type { ToolEventSinkInput } from "../tools";
 import type { PreprocessorOutput } from "./preprocessor";
 import { TRIAGE_ROUTES } from "./triage";
 import {
@@ -38,6 +39,7 @@ import {
   buildProviderCallMetadata,
   committedRunNumber,
   phaseObservabilityPayload,
+  runEvent,
   type ProviderCallMetadata,
 } from "./externalRunSupport";
 
@@ -66,6 +68,12 @@ interface ExternalExecutionPhaseResult {
   decomposedResults?: string;
   executionArtifacts: ExecutionArtifact[];
   executionPayload: Record<string, unknown>;
+  toolEvents: ToolEventSinkInput[];
+}
+
+interface ExternalValidationPhaseResult {
+  validationHealingResult?: HealingLoopResult;
+  toolEvents: ToolEventSinkInput[];
 }
 
 interface ExternalSynthesisPhaseResult {
@@ -135,6 +143,7 @@ export async function runExternalPostPlanningPhases(params: ExternalPostPlanning
   const repairAgent = createExternalRepairAgent({ store, deps, approvals, getRun: () => budgetRun, setRun: (next) => { budgetRun = next; } });
 
   const executionPhase = await runExternalExecutionPhase({
+    store,
     args,
     deps,
     sandbox,
@@ -146,7 +155,8 @@ export async function runExternalPostPlanningPhases(params: ExternalPostPlanning
   });
   const { executionResult, decomposedResults, executionArtifacts, executionPayload } = executionPhase;
 
-  const validationHealingResult = await runExternalValidationPhase({
+  const validationPhase = await runExternalValidationPhase({
+    store,
     args,
     deps,
     sandbox,
@@ -156,6 +166,7 @@ export async function runExternalPostPlanningPhases(params: ExternalPostPlanning
     budgetRun,
     options,
   });
+  const { validationHealingResult } = validationPhase;
   const validationPayload = validationHealingResult
     ? { validationHealingResult }
     : { skippedReason: "Execution skipped or missing; validation and healing skipped" };
@@ -192,6 +203,8 @@ export async function runExternalPostPlanningPhases(params: ExternalPostPlanning
     directAnswerFallback,
     decomposedResults,
     executionArtifacts,
+    executionToolEvents: executionPhase.toolEvents,
+    validationToolEvents: validationPhase.toolEvents,
   });
 
   return { run: current, synthesis, observabilitySummary: observability.getSummary() };
@@ -334,6 +347,7 @@ function createExternalRepairAgent(input: {
 }
 
 async function runExternalExecutionPhase(input: {
+  store: RectorStore;
   args: ChatRunArgs;
   deps: ChatRunnerDeps;
   sandbox: WorkspaceSandboxAdapter;
@@ -345,8 +359,20 @@ async function runExternalExecutionPhase(input: {
 }): Promise<ExternalExecutionPhaseResult> {
   const { args, deps, sandbox, budgetRun, compiledDag, crucibleDecision, subGoals, subGoalGraph } = input;
   const { observability } = args;
+  const toolEvents: ToolEventSinkInput[] = [];
   const executionResult = await observability.recordSpan("EXECUTING", () =>
-    compiledDag ? executeDagThroughSandbox(compiledDag, { sandbox, now: deps.now }) : undefined
+    compiledDag
+      ? executeDagThroughSandbox(compiledDag, {
+          sandbox,
+          toolRegistry: deps.toolRegistry,
+          conversationId: args.conversationId,
+          budget: budgetRun.budget,
+          appendRunEvent: (event) => {
+            toolEvents.push(event);
+          },
+          now: deps.now,
+        })
+      : undefined
   );
   const decomposedResults = await runExternalDecomposedExecution({
     args,
@@ -361,7 +387,7 @@ async function runExternalExecutionPhase(input: {
   const executionPayload = executionResult
     ? { executionResult, executionArtifacts }
     : { skippedReason: "Execution skipped because no compiled DAG exists" };
-  return { executionResult, decomposedResults, executionArtifacts, executionPayload };
+  return { executionResult, decomposedResults, executionArtifacts, executionPayload, toolEvents };
 }
 
 async function runExternalDecomposedExecution(input: {
@@ -386,6 +412,7 @@ function shouldRunDecomposedExecution(args: ChatRunArgs, crucibleDecision: Cruci
 }
 
 async function runExternalValidationPhase(input: {
+  store: RectorStore;
   args: ChatRunArgs;
   deps: ChatRunnerDeps;
   sandbox: WorkspaceSandboxAdapter;
@@ -394,14 +421,26 @@ async function runExternalValidationPhase(input: {
   repairAgent: LiveRepairAgent;
   budgetRun: Run;
   options: ChatRunOptions;
-}): Promise<HealingLoopResult | undefined> {
+}): Promise<ExternalValidationPhaseResult> {
   const { args, deps, sandbox, compiledDag, executionResult, repairAgent, budgetRun, options } = input;
-  return args.observability.recordSpan("VALIDATING", () =>
+  const toolEvents: ToolEventSinkInput[] = [];
+  const validationHealingResult = await args.observability.recordSpan("VALIDATING", () =>
     compiledDag && executionResult
       ? validateAndHealExecution({
           compiledDag,
           executionResult,
-          executor: (dag) => executeDagThroughSandbox(dag, { sandbox, now: deps.now }),
+          executor: (dag) =>
+            executeDagThroughSandbox(dag, {
+              sandbox,
+              toolRegistry: deps.toolRegistry,
+              conversationId: args.conversationId,
+              toolEventPhase: "VALIDATING",
+              budget: budgetRun.budget,
+              appendRunEvent: (event) => {
+                toolEvents.push(event);
+              },
+              now: deps.now,
+            }),
           executorOptions: options.executorOptions,
           maxHealingAttempts: options.maxHealingAttempts,
           repairAgent,
@@ -411,6 +450,7 @@ async function runExternalValidationPhase(input: {
         })
       : undefined
   );
+  return { validationHealingResult, toolEvents };
 }
 
 function shouldProceedToSynthesis(healingStatus: HealingLoopResult["status"] | undefined): boolean {
@@ -546,14 +586,32 @@ async function transitionExternalPostPlanningRun(input: {
   directAnswerFallback?: LiveDirectAnswerFallback;
   decomposedResults?: string;
   executionArtifacts: ExecutionArtifact[];
+  executionToolEvents: ToolEventSinkInput[];
+  validationToolEvents: ToolEventSinkInput[];
 }): Promise<Run> {
   const { params } = input;
   let current = params.run;
   for (const phase of EXTERNAL_PREFIX_PHASES) {
     const result = await transitionRun(params.store, current.id, phase, externalPrefixTransitionInput(phase, input));
     current = result.run;
+    if (phase === "EXECUTING") {
+      await appendDeferredToolEvents(params.store, current, input.executionToolEvents);
+    }
+    if (phase === "VALIDATING") {
+      await appendDeferredToolEvents(params.store, current, input.validationToolEvents);
+    }
   }
   return finishExternalPostPlanningRun(current, input);
+}
+
+async function appendDeferredToolEvents(
+  store: RectorStore,
+  run: Run,
+  events: ToolEventSinkInput[],
+): Promise<void> {
+  for (const event of events) {
+    await store.appendEvent(runEvent(run, event.type, event.phase, event.payload));
+  }
 }
 
 function externalPrefixTransitionInput(phase: ExternalPrefixPhase, input: Parameters<typeof transitionExternalPostPlanningRun>[0]) {

@@ -31,12 +31,17 @@ export const ModuleManifestSchema = z.object({
   hooks: z.array(ModuleHookNameSchema).default([]),
   /** Maps to Chunk 020 extension capability points when applicable. */
   capabilities: z.array(ExtensionCapabilitySchema).default([]),
+  /** Tool names this module may register during onBoot. Metadata only; registration happens through ModuleBootContext.toolRegistry. */
+  providesTools: z.array(z.string().min(1)).default([]),
   /** Whether the module is on by default when registered. */
   defaultEnabled: z.boolean().default(true),
   /** External-mode only modules skip invocation in local deterministic baseline. */
   externalModeOnly: z.boolean().default(false),
 });
-export type ModuleManifest = z.infer<typeof ModuleManifestSchema>;
+export type ParsedModuleManifest = z.infer<typeof ModuleManifestSchema>;
+export type ModuleManifest = Omit<ParsedModuleManifest, "providesTools"> & {
+  providesTools?: ParsedModuleManifest["providesTools"];
+};
 
 export type ModuleManifestCompatibilityResult =
   | { compatible: true; errors: []; manifest: ModuleManifest }

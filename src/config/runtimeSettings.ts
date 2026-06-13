@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { z } from "zod";
 
 import { redactString } from "../security/redaction";
+import { SandboxEnvironmentKindSchema } from "../sandbox";
 
 /**
  * Runtime settings persisted under `.rector/runtime-settings.json`.
@@ -23,6 +24,7 @@ export const RuntimeSettingsSchema = z.object({
   orchestrationProfile: OrchestrationProfileSchema,
   activeTemplateId: z.string().min(1).optional(),
   requireProvidersForChat: z.boolean(),
+  sandboxEnvironment: SandboxEnvironmentKindSchema.default("stub"),
   contextCompressionEnabled: z.boolean().default(true),
   contextCompressionMaxGeneration: z.number().int().positive().default(3),
   updatedAt: z.string().datetime(),
@@ -32,6 +34,7 @@ export type RuntimeSettings = z.infer<typeof RuntimeSettingsSchema>;
 export const RuntimeSettingsPatchSchema = z
   .object({
     orchestrationProfile: OrchestrationProfileSchema.optional(),
+    sandboxEnvironment: SandboxEnvironmentKindSchema.optional(),
   })
   .strict();
 export type RuntimeSettingsPatch = z.infer<typeof RuntimeSettingsPatchSchema>;
@@ -94,6 +97,7 @@ export function defaultRuntimeSettings(now: string = new Date().toISOString()): 
     schemaVersion: RUNTIME_SETTINGS_SCHEMA_VERSION,
     orchestrationProfile: "unconfigured",
     requireProvidersForChat: true,
+    sandboxEnvironment: "stub",
     contextCompressionEnabled: true,
     contextCompressionMaxGeneration: 3,
     updatedAt: now,
@@ -127,6 +131,7 @@ export function migrateRuntimeSettingsFromEnv(
     schemaVersion: RUNTIME_SETTINGS_SCHEMA_VERSION,
     orchestrationProfile,
     requireProvidersForChat: true,
+    sandboxEnvironment: "stub",
     contextCompressionEnabled: true,
     contextCompressionMaxGeneration: 3,
     updatedAt: new Date().toISOString(),
@@ -142,6 +147,7 @@ export function redactRuntimeSettingsForEgress(settings: RuntimeSettings): Runti
       ? { activeTemplateId: redactString(settings.activeTemplateId) }
       : {}),
     requireProvidersForChat: settings.requireProvidersForChat,
+    sandboxEnvironment: settings.sandboxEnvironment,
     contextCompressionEnabled: settings.contextCompressionEnabled,
     contextCompressionMaxGeneration: settings.contextCompressionMaxGeneration,
     updatedAt: settings.updatedAt,

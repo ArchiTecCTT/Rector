@@ -35,6 +35,15 @@
 - **Plan / Mitigations:** Treat mid-run stable tier mutation as blocked. Record tier budget/compression events in traces, and add assignment/lineage visibility in later 047 chunks so operators can tell whether a prompt contract changed because of a deliberate configured assignment change.
 - **Traceability:** `src/orchestration/promptTiers.ts`, `src/orchestration/prompts.ts`, `src/orchestration/chatRunner.ts`, `tests/promptTiers.test.ts`.
 
+### Chunk 047b tool registry centralizes dispatch but still needs production ACL and sandbox readiness hardening
+
+- **Source:** Chunk 047b tool registry and executor middleware.
+- **Severity:** Medium for production extensibility and sandbox execution; low for current builtin-only CI coverage.
+- **Status:** Open / accepted for 047b.
+- **Root cause:** The builtin registry is an explicit TypeScript list, so new executor tools require manual catalog updates. Module-provided tools can register through `ModuleBootContext.toolRegistry`, but their ACL/review model is still minimal. The sandbox environment selector defaults to the safe `stub` path, while real `local`/`e2b` execution still depends on readiness checks, approvals, and future UI configuration polish.
+- **Plan / Mitigations:** Keep `/api/tools` read-only and builtin-filtered for now, fail closed on unknown/unavailable tools, require middleware approval gates for write/destructive tools, and keep module tools unavailable when their module is disabled. Future chunks should add module tool ACL review, per-tool readiness diagnostics, and E2B network/isolation smoke tests behind explicit configured-product setup.
+- **Traceability:** `docs/plans/chunks/047b-tool-registry-executor.md`, `src/tools/*`, `src/orchestration/sandboxExecutor.ts`, `tests/toolRegistry.test.ts`, `tests/toolMiddleware.test.ts`, `tests/sandboxExecutorRegistry.integration.test.ts`, `tests/toolsApi.test.ts`.
+
 ### Chunk 047d user-supplied skills are prompt material, not trusted code
 
 - **Source:** Chunk 047d procedural memory / skills catalog.

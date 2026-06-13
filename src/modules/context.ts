@@ -5,6 +5,7 @@ import type { MemoryProvider } from "../memory/provider";
 import type { ModelRouter } from "../providers/llm";
 import type { RectorStore } from "../store";
 import type { Run } from "../store/schemas";
+import type { ToolRegistry } from "../tools";
 
 /** Dependencies available to modules at boot. */
 export interface ModuleBootContext {
@@ -12,6 +13,7 @@ export interface ModuleBootContext {
   store: RectorStore;
   router?: ModelRouter;
   getMemoryProvider?: () => Promise<MemoryProvider>;
+  toolRegistry?: ToolRegistry;
 }
 
 /** Context passed before external-run neuro phases (preprocessor, etc.). */
