@@ -62,6 +62,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     sendRedactedPreservingPresence,
   } = deps;
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/rbac/permissions", async (req, res) => {
     const workspace = await authorize(req, res, "workspace.read", {
       workspaceId: typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined,
@@ -102,6 +103,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     }
   });
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/workspaces/:id/members", async (req, res) => {
     const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "workspace", targetId: req.params.id });
     if (!workspace) return;
@@ -112,6 +114,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     }
   });
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/workspaces/:id/members", async (req, res) => {
     const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "workspace", targetId: req.params.id });
     if (!workspace) return;
@@ -125,6 +128,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     }
   });
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.patch("/api/workspaces/:id/members/:memberId", async (req, res) => {
     const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "membership", targetId: req.params.memberId });
     if (!workspace) return;
@@ -143,6 +147,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     }
   });
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.delete("/api/workspaces/:id/members/:memberId", async (req, res) => {
     const workspace = await authorize(req, res, "members.manage", { workspaceId: req.params.id, targetType: "membership", targetId: req.params.memberId });
     if (!workspace) return;
@@ -154,6 +159,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     sendRedacted(res, 200, { removed, id: req.params.memberId });
   });
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/audit/events", async (req, res) => {
     const workspace = await authorize(req, res, "audit.read", {
       workspaceId: typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined,
@@ -165,6 +171,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     sendRedacted(res, 200, { events });
   });
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/quotas", async (req, res) => {
     const workspace = await authorize(req, res, "workspace.read", {
       workspaceId: typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined,
@@ -178,6 +185,7 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     });
   });
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.put("/api/quotas", async (req, res) => {
     const workspaceId = typeof req.body?.workspaceId === "string" ? req.body.workspaceId : undefined;
     const workspace = await authorize(req, res, "billing.manage", { workspaceId, targetType: "quota" });
@@ -192,12 +200,14 @@ export function registerCommercialRoutes(app: Application, deps: CommercialRoute
     }
   });
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/setup/deployment-readiness", async (req, res) => {
     const workspace = await authorize(req, res, "workspace.read", { targetType: "setup" });
     if (!workspace) return;
     sendRedacted(res, 200, computeCommercialDeploymentReadiness(deploymentEnv));
   });
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/secrets/:id/rotate", async (req, res) => {
     const workspace = await authorize(req, res, "secrets.rotate", { targetType: "secret", targetId: req.params.id });
     if (!workspace) return;

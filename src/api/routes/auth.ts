@@ -42,6 +42,7 @@ export function registerAuthRoutes(app: Application, deps: AuthRoutesDeps): void
   const { authConfig, deploymentEnv, auditRequest } = deps;
   const loginAttempts = new Map<string, LoginAttempt>();
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/auth/login", async (req, res) => {
     if (!authConfig.enabled) return sendAuthResponse(res, 200, { authenticated: true, username: "default" });
 
@@ -72,6 +73,7 @@ export function registerAuthRoutes(app: Application, deps: AuthRoutesDeps): void
     return sendAuthResponse(res, 200, { authenticated: true, username });
   });
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/auth/logout", async (req, res) => {
     res.setHeader("Set-Cookie", buildClearSessionCookie(deploymentEnv));
     await auditRequest(req, {
@@ -82,6 +84,7 @@ export function registerAuthRoutes(app: Application, deps: AuthRoutesDeps): void
     return sendAuthResponse(res, 200, { authenticated: false });
   });
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.get("/api/auth/session", (req, res) => {
     if (!authConfig.enabled) return sendAuthResponse(res, 200, { authenticated: true, username: "default" });
 

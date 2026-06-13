@@ -48,6 +48,7 @@ export interface RunApprovalRoutesDeps {
 export function registerRunApprovalRoutes(app: Application, deps: RunApprovalRoutesDeps): void {
   const { store, workspaceIdForRun, authorize, auditRequest, sendRedacted } = deps;
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.post("/api/runs/:id/decision", async (req, res) => {
     const runId = req.params.id;
     const body = (req.body ?? {}) as Record<string, unknown>;

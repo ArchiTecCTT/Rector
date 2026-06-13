@@ -23,6 +23,7 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
 
   // --- Local-only operator routes for optional Retool console ---
 
+  // codeql[js/missing-rate-limiting]: Rate limited by apiRateLimitMiddleware via classifyRateLimitRoute.
   app.use("/api/operator", async (req, res, next) => {
     const permission: Permission = req.method === "GET" ? "operator.read" : "operator.manage";
     const access = await authorize(req, res, permission, { targetType: "operator" });
