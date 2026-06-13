@@ -5,7 +5,7 @@ import type { ArtifactHandle } from "../orchestration/contextBuilder";
 export const TruthStatus = z.enum(["TRUSTED", "UNVERIFIED", "REJECTED"]);
 export type TruthStatus = z.infer<typeof TruthStatus>;
 
-export const TruthItemKindSchema = z.enum(["memory", "doc"]);
+export const TruthItemKindSchema = z.enum(["memory", "doc", "skill"]);
 export type TruthItemKind = z.infer<typeof TruthItemKindSchema>;
 
 export const ProvenanceSourceTypeSchema = z.enum(["user", "system", "file", "web", "provider", "manual"]);

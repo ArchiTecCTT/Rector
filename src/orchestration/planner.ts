@@ -69,6 +69,7 @@ export const PlannerOutputSchema = z
     validation: PlannerValidationSchema,
     riskLevel: PlannerRiskLevelSchema,
     approvalGates: z.array(ApprovalGateSchema),
+    requestedSkills: z.array(z.string().min(1)).optional(),
   })
   .superRefine((plan, ctx) => {
     const taskIds = new Set<string>();
@@ -427,6 +428,7 @@ export function normalizePlannerOutput(output: PlannerOutput): PlannerOutput {
       ...gate,
       taskIds: uniqueStrings(gate.taskIds).sort(),
     })),
+    ...(output.requestedSkills ? { requestedSkills: uniqueStrings(output.requestedSkills).sort() } : {}),
   };
 
   return PlannerOutputSchema.parse(normalized);

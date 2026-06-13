@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { RectorStore } from "../store";
 import type { Artifact, Conversation, Message } from "../store/schemas";
 import { truthItemToArtifactHandle, type TruthLibraryReader, type TruthSearchResult } from "../memory";
+import { skillRiskOf, skillTagsOf, type SkillManifest } from "../memory/skillSchema";
 import type { MemoryEntry } from "../store";
 import { redactString } from "../security/redaction";
 import { TriageResultSchema, type TriageResult } from "./triage";
@@ -16,6 +17,9 @@ import {
 const DEFAULT_ARTIFACT_THRESHOLD_BYTES = 4096;
 const USER_INTENT_MAX_CHARS = 240;
 const MEMORY_CONTEXT_MAX_CHARS = 140;
+const DEFAULT_MAX_SKILL_CONTEXT_CHARS = 6_000;
+const DEFAULT_MAX_SKILL_PARTIAL_CHARS = 2_000;
+const DEFAULT_SKILL_BODY_PREVIEW_CHARS = 500;
 
 export const ContextCitationSchema = z.object({
   title: z.string().min(1).optional(),
@@ -41,6 +45,8 @@ export const ContextBudgetSchema = z.object({
   maxToolNotes: z.number().int().nonnegative(),
   tierBudget: PromptTierBudgetSchema.optional(),
   maxStableInlineChars: z.number().int().positive().optional(),
+  maxSkillContextChars: z.number().int().positive().default(DEFAULT_MAX_SKILL_CONTEXT_CHARS),
+  maxSkillPartialChars: z.number().int().positive().default(DEFAULT_MAX_SKILL_PARTIAL_CHARS),
 });
 export type ContextBudget = z.infer<typeof ContextBudgetSchema>;
 
@@ -50,6 +56,8 @@ export const DEFAULT_CONTEXT_BUDGET: ContextBudget = ContextBudgetSchema.parse({
   maxArtifactHandles: 12,
   maxProviderNotes: 8,
   maxToolNotes: 8,
+  maxSkillContextChars: DEFAULT_MAX_SKILL_CONTEXT_CHARS,
+  maxSkillPartialChars: DEFAULT_MAX_SKILL_PARTIAL_CHARS,
 });
 
 export const ArtifactHandleSchema = z.object({
@@ -123,8 +131,16 @@ export const ContextPackSchema = z.object({
   memoryContext: z.array(z.string()).optional(),
   /** Decomposed sub-goals for high-complexity external runs (Chunk 32 / Step 7). */
   subGoals: z.array(z.string().min(1)).optional(),
+  /** Crucible-approved skill ids whose procedural context was allowed into this context pack. */
+  approvedSkillIds: z.array(z.string().min(1)).optional(),
 });
 export type ContextPack = z.infer<typeof ContextPackSchema>;
+
+export interface SkillContextCatalog {
+  get(id: string): SkillManifest | undefined;
+  readSkillBody(manifestOrId: SkillManifest | string): string;
+  readSkillReference?(manifest: SkillManifest, relativePath: string): string | undefined;
+}
 
 export type ContextMaterial = {
   artifactHandle?: ArtifactHandle;
@@ -205,6 +221,8 @@ export type BuildContextPackInput = {
   /** Time-aware memory entries from episodic/core for injection (Chunk 27). */
   memoryEntries?: MemoryEntry[];
   includePromptTiers?: boolean;
+  skillsCatalog?: SkillContextCatalog;
+  approvedSkillIds?: string[];
 };
 
 export async function buildContextPack(
@@ -273,7 +291,13 @@ export async function buildContextPack(
     ...(memoryContext.length > 0 ? { memoryContext } : {}),
   };
 
-  const parsed = ContextPackSchema.parse(pack);
+  const parsedBase = ContextPackSchema.parse(pack);
+  const parsed = appendApprovedSkillContextToPack(parsedBase, {
+    skillsCatalog: input.skillsCatalog,
+    approvedSkillIds: input.approvedSkillIds,
+    maxSkillContextChars: budget.maxSkillContextChars,
+    maxSkillPartialChars: budget.maxSkillPartialChars,
+  });
   const tierBudget = budget.tierBudget;
   const contextChars = measureContextTierChars({ contextPack: parsed, tierBudget });
   return ContextPackSchema.parse({
@@ -354,6 +378,104 @@ async function boundContextMaterials(
   };
 }
 
+export function appendApprovedSkillContextToPack(
+  pack: ContextPack,
+  input: {
+    skillsCatalog?: SkillContextCatalog;
+    approvedSkillIds?: string[];
+    maxSkillContextChars?: number;
+    maxSkillPartialChars?: number;
+    partialReferencePath?: string;
+  }
+): ContextPack {
+  const approvedSkillIds = uniqueNonEmpty(input.approvedSkillIds ?? []);
+  if (!input.skillsCatalog || approvedSkillIds.length === 0) {
+    return ContextPackSchema.parse(pack);
+  }
+
+  const maxSkillContextChars = Math.max(1, Math.trunc(input.maxSkillContextChars ?? DEFAULT_MAX_SKILL_CONTEXT_CHARS));
+  const maxSkillPartialChars = Math.max(1, Math.trunc(input.maxSkillPartialChars ?? DEFAULT_MAX_SKILL_PARTIAL_CHARS));
+  const skillContexts: InlineContext[] = [];
+  const injectedIds: string[] = [];
+  let usedChars = 0;
+
+  for (const skillId of approvedSkillIds) {
+    const manifest = input.skillsCatalog.get(skillId);
+    if (!manifest) continue;
+    const rawContext = buildSkillContext(manifest, {
+      body: input.skillsCatalog.readSkillBody(manifest),
+      partialReference:
+        input.partialReferencePath && input.skillsCatalog.readSkillReference
+          ? input.skillsCatalog.readSkillReference(manifest, input.partialReferencePath)
+          : undefined,
+      maxSkillPartialChars,
+    });
+    const remaining = maxSkillContextChars - usedChars;
+    if (remaining <= 0) break;
+    const boundedContext = rawContext.content.length > remaining
+      ? rehashInlineContext(rawContext, truncateInline(rawContext.content, remaining))
+      : rawContext;
+    skillContexts.push(boundedContext);
+    injectedIds.push(manifest.id);
+    usedChars += boundedContext.content.length;
+  }
+
+  if (skillContexts.length === 0) {
+    return ContextPackSchema.parse(pack);
+  }
+
+  return ContextPackSchema.parse({
+    ...pack,
+    inlineContext: [...pack.inlineContext, ...skillContexts],
+    approvedSkillIds: injectedIds,
+  });
+}
+
+export function buildSkillContext(
+  manifest: SkillManifest,
+  options: {
+    body?: string;
+    bodyPreviewChars?: number;
+    partialReference?: string;
+    maxSkillPartialChars?: number;
+  } = {}
+): InlineContext {
+  const tags = skillTagsOf(manifest);
+  const risk = skillRiskOf(manifest);
+  const bodyPreview = truncateInline(
+    redactString(options.body ?? ""),
+    Math.max(1, Math.trunc(options.bodyPreviewChars ?? DEFAULT_SKILL_BODY_PREVIEW_CHARS)),
+  );
+  const partial = options.partialReference
+    ? truncateInline(redactString(options.partialReference), Math.max(1, Math.trunc(options.maxSkillPartialChars ?? DEFAULT_MAX_SKILL_PARTIAL_CHARS)))
+    : undefined;
+  const content = [
+    `Skill ID: ${redactString(manifest.id)}`,
+    `Name: ${redactString(manifest.frontmatter.name)}`,
+    `Description: ${redactString(manifest.frontmatter.description)}`,
+    `Risk: ${risk}`,
+    tags.length > 0 ? `Tags: ${tags.map(redactString).join(", ")}` : undefined,
+    bodyPreview.length > 0 ? `SKILL.md preview:\n${bodyPreview}` : undefined,
+    partial ? `Reference partial:\n${partial}` : undefined,
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+
+  const safeContent = redactString(content);
+  return InlineContextSchema.parse({
+    kind: "skill",
+    summary: redactString(`Skill ${manifest.id}: ${manifest.frontmatter.description}`),
+    content: safeContent,
+    hash: sha256(safeContent),
+    sizeBytes: Buffer.byteLength(safeContent, "utf8"),
+    provenance: {
+      source: `skill://catalog/${encodeURIComponent(manifest.id)}`,
+      sourceType: "file",
+    },
+    citations: [{ title: `${manifest.id}/SKILL.md`, uri: `skill://catalog/${encodeURIComponent(manifest.id)}` }],
+  });
+}
+
 function redactInlineContext(inline: InlineContext): InlineContext {
   const content = redactString(inline.content);
   const summary = redactString(inline.summary);
@@ -363,6 +485,16 @@ function redactInlineContext(inline: InlineContext): InlineContext {
     content,
     hash: sha256(content),
     sizeBytes: Buffer.byteLength(content, "utf8"),
+  });
+}
+
+function rehashInlineContext(inline: InlineContext, content: string): InlineContext {
+  const safeContent = redactString(content);
+  return InlineContextSchema.parse({
+    ...inline,
+    content: safeContent,
+    hash: sha256(safeContent),
+    sizeBytes: Buffer.byteLength(safeContent, "utf8"),
   });
 }
 
@@ -591,6 +723,24 @@ function defaultConstraints(): string[] {
     "Do not include raw oversized content in context packs",
     "Use artifact handles for oversized context material",
   ];
+}
+
+function uniqueNonEmpty(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function truncateInline(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  if (maxChars <= 3) return value.slice(0, maxChars);
+  return `${value.slice(0, maxChars - 3)}...`;
 }
 
 function sha256(content: string): string {

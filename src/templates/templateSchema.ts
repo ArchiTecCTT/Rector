@@ -124,6 +124,14 @@ export const TemplateBudgetPolicySchema = z
   });
 export type TemplateBudgetPolicy = z.infer<typeof TemplateBudgetPolicySchema>;
 
+export const TemplateSkillPolicySchema = z
+  .object({
+    enabledTags: z.array(NonEmptyStringSchema).default([]),
+    plannerGuidance: OptionalNoteSchema,
+  })
+  .strict();
+export type TemplateSkillPolicy = z.infer<typeof TemplateSkillPolicySchema>;
+
 export const RectorTemplateSchema = z
   .object({
     schemaVersion: z.literal(TEMPLATE_SCHEMA_VERSION),
@@ -139,6 +147,7 @@ export const RectorTemplateSchema = z
     moduleToggles: z.array(TemplateModuleToggleSchema).optional(),
     sandboxPolicy: TemplateSandboxPolicySchema.optional(),
     budgets: TemplateBudgetPolicySchema.optional(),
+    skillPolicy: TemplateSkillPolicySchema.optional(),
     requiredProviderKinds: z.array(NonEmptyStringSchema).optional(),
     requiredCapabilities: z.array(NonEmptyStringSchema).optional(),
     createdAt: z.string().datetime().optional(),

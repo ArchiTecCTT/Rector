@@ -94,6 +94,10 @@ const testProfile: RectorTemplate = {
     maxUsdPerMonth: 0,
     maxPonderUsdPerDay: 0,
   },
+  skillPolicy: {
+    enabledTags: [],
+    plannerGuidance: "Catalog is visible for inspection; tests should not request product skills by default.",
+  },
   requiredProviderKinds: [],
   requiredCapabilities: [],
   createdAt: BUILTIN_TIMESTAMP,
@@ -148,6 +152,10 @@ const cheapByok: RectorTemplate = {
     maxUsdPerDay: 3,
     maxUsdPerMonth: 50,
     maxPonderUsdPerDay: 0.25,
+  },
+  skillPolicy: {
+    enabledTags: [],
+    plannerGuidance: "Skills catalog is available, but low-cost planning should request skills only when explicitly useful.",
   },
   requiredProviderKinds: ["openai-compatible"],
   requiredCapabilities: ["text", "jsonMode"],
@@ -208,6 +216,10 @@ const premiumEngineering: RectorTemplate = {
     maxUsdPerMonth: 400,
     maxPonderUsdPerDay: 1,
   },
+  skillPolicy: {
+    enabledTags: ["engineering"],
+    plannerGuidance: "Engineering skills may be requested when they match the task and pass crucible policy.",
+  },
   requiredProviderKinds: ["azure-openai", "openai-compatible", "mem0", "chroma", "tidb-memory"],
   requiredCapabilities: ["text", "jsonMode", "toolCalling", "streaming", "reasoning", "vectorSearch"],
   createdAt: BUILTIN_TIMESTAMP,
@@ -248,6 +260,10 @@ const privacyFirst: RectorTemplate = {
     maxUsdPerMonth: 0,
     maxPonderUsdPerDay: 0,
     notes: "External services disabled by default.",
+  },
+  skillPolicy: {
+    enabledTags: [],
+    plannerGuidance: "Skills catalog is available for inspection; planner skill activation is discouraged unless the user configures it.",
   },
   requiredProviderKinds: [],
   requiredCapabilities: [],

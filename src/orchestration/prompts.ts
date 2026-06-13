@@ -67,6 +67,7 @@ export const PLANNER_JSON_CONTRACT = `Output a JSON object with this exact shape
     "checks": string[]                  // at least one non-empty plan-level check
   },
   "riskLevel": "low" | "medium" | "high" | "destructive",
+  "requestedSkills": string[],          // optional; skill catalog ids to request from the crucible
   "approvalGates": [
     {
       "id": string,                     // non-empty
@@ -85,6 +86,7 @@ Hard invariants (the control plane rejects any plan that violates these):
 - Every approval gate "taskIds" entry must reference an existing task "id".
 - Every task must carry at least one concrete validation check.
 - Every task with "risk" of "high"/"destructive" must set "approvalRequired": true.
+- Only request skills by catalog id when the context provides enough evidence that the skill exists.
 - If ANY task has "approvalRequired": true or "risk" of "high"/"destructive", OR the top-level
   "riskLevel" is "high"/"destructive", then every such unsafe task must be covered by a required
   approval gate (a gate with "required": true whose "taskIds" include the task), or there must be a
@@ -322,6 +324,7 @@ function buildSkepticContextMessage(input: SkepticPromptInput): string {
       })),
       dependencies: plannerOutput.dependencies,
       validation: plannerOutput.validation,
+      requestedSkills: plannerOutput.requestedSkills ?? [],
       approvalGates: plannerOutput.approvalGates,
     },
     triage: {

@@ -1,8 +1,17 @@
 import { z } from "zod";
 import { PlannerOutputSchema, type PlannerOutput } from "./planner";
+import type { ContextPack } from "./contextBuilder";
 import { SkepticFindingSchema, SkepticReviewSchema, type SkepticFinding, type SkepticReview } from "./skeptic";
+import { redactString } from "../security/redaction";
+import {
+  SkillActivationDecisionSchema,
+  skillRiskOf,
+  type SkillActivationDecision,
+  type SkillManifest,
+} from "../memory/skillSchema";
 
 export const CRUCIBLE_MAX_ROUNDS = 2;
+export const DEFAULT_MAX_SKILLS_PER_RUN = 5;
 
 export const CrucibleVerdictSchema = z.enum(["ACCEPTED", "NEEDS_REVISION", "ESCALATED", "BLOCKED"]);
 export type CrucibleVerdict = z.infer<typeof CrucibleVerdictSchema>;
@@ -28,6 +37,7 @@ export const CrucibleReasonCodeSchema = z.enum([
   "REPAIRABLE_FINDINGS_REVISION",
   "HUMAN_DECISION_ESCALATED",
   "MAX_ROUNDS_ESCALATED",
+  "SKILL_POLICY_REVISION",
 ]);
 export type CrucibleReasonCode = z.infer<typeof CrucibleReasonCodeSchema>;
 
@@ -38,6 +48,7 @@ export const CrucibleDecisionTraceSchema = z.object({
   repairable: z.boolean(),
   humanDecisionRequired: z.boolean(),
   exhaustedRounds: z.boolean(),
+  skillActivation: z.array(SkillActivationDecisionSchema).default([]),
 });
 export type CrucibleDecisionTrace = z.infer<typeof CrucibleDecisionTraceSchema>;
 
@@ -84,12 +95,28 @@ export const CrucibleDecisionSchema = z.object({
 });
 export type CrucibleDecision = z.infer<typeof CrucibleDecisionSchema>;
 
+export interface SkillCatalogReader {
+  get(id: string): SkillManifest | undefined;
+}
+
+export interface SkillActivationPolicyContext {
+  catalog?: SkillCatalogReader;
+  contextPack?: ContextPack;
+  maxSkills?: number;
+  allowlistedCommands?: string[];
+  availableEnvVars?: string[];
+  platform?: string;
+}
+
 export type CrucibleInput = {
   plannerOutput: PlannerOutput;
   skepticReview: SkepticReview;
   round?: number;
   priorRounds?: number;
   now?: () => string;
+  skillsCatalog?: SkillCatalogReader;
+  contextPack?: ContextPack;
+  skillPolicy?: Omit<SkillActivationPolicyContext, "catalog" | "contextPack">;
 };
 
 export function arbitratePlanWithCrucible(input: CrucibleInput): CrucibleDecision {
@@ -97,6 +124,12 @@ export function arbitratePlanWithCrucible(input: CrucibleInput): CrucibleDecisio
   const skepticReview = SkepticReviewSchema.parse(input.skepticReview);
   const round = boundedRound(input);
   const createdAt = input.now?.() ?? new Date().toISOString();
+  const skillActivation = evaluateSkillActivations(plannerOutput, {
+    catalog: input.skillsCatalog,
+    contextPack: input.contextPack,
+    ...(input.skillPolicy ?? {}),
+  });
+  const skillRevisionFindings = skillFindingsFor(skillActivation);
 
   const blockerFindings = skepticReview.findings.filter((finding) => finding.severity === "BLOCKER");
   if (skepticReview.verdict === "BLOCKED" || blockerFindings.length > 0) {
@@ -115,11 +148,11 @@ export function arbitratePlanWithCrucible(input: CrucibleInput): CrucibleDecisio
         repairable: false,
         humanDecisionRequired: false,
         exhaustedRounds: round >= CRUCIBLE_MAX_ROUNDS,
-      }),
+      }, skillActivation),
     });
   }
 
-  if (skepticReview.verdict === "SOUND") {
+  if (skepticReview.verdict === "SOUND" && skillRevisionFindings.length === 0) {
     return CrucibleDecisionSchema.parse({
       verdict: "ACCEPTED",
       reason: "Crucible accepted the plan because the skeptic review found it SOUND.",
@@ -132,14 +165,15 @@ export function arbitratePlanWithCrucible(input: CrucibleInput): CrucibleDecisio
         repairable: false,
         humanDecisionRequired: false,
         exhaustedRounds: false,
-      }),
+      }, skillActivation),
     });
   }
 
-  const revisionFindings = skepticReview.findings.filter(
+  const skepticRevisionFindings = skepticReview.findings.filter(
     (finding) => finding.severity === "MAJOR" || finding.severity === "MINOR"
   );
-  const humanDecisionFindings = revisionFindings.filter(requiresHumanDecision);
+  const revisionFindings = [...skillRevisionFindings, ...skepticRevisionFindings];
+  const humanDecisionFindings = skepticRevisionFindings.filter(requiresHumanDecision);
 
   if (humanDecisionFindings.length > 0) {
     const reason = `Crucible escalated because ${humanDecisionFindings.length} finding(s) require an explicit human/operator decision.`;
@@ -159,11 +193,12 @@ export function arbitratePlanWithCrucible(input: CrucibleInput): CrucibleDecisio
         repairable: false,
         humanDecisionRequired: true,
         exhaustedRounds: false,
-      }),
+      }, skillActivation),
     });
   }
 
   if (revisionFindings.length > 0 && round < CRUCIBLE_MAX_ROUNDS) {
+    const reasonCode = skillRevisionFindings.length > 0 ? "SKILL_POLICY_REVISION" : "REPAIRABLE_FINDINGS_REVISION";
     return CrucibleDecisionSchema.parse({
       verdict: "NEEDS_REVISION",
       reason: `Crucible requests targeted planner revision for ${revisionFindings.length} MAJOR/MINOR finding(s).`,
@@ -175,11 +210,11 @@ export function arbitratePlanWithCrucible(input: CrucibleInput): CrucibleDecisio
       round,
       maxRounds: CRUCIBLE_MAX_ROUNDS,
       createdAt,
-      trace: traceDecision("REPAIRABLE_FINDINGS_REVISION", revisionFindings, {
+      trace: traceDecision(reasonCode, revisionFindings, {
         repairable: true,
         humanDecisionRequired: false,
         exhaustedRounds: false,
-      }),
+      }, skillActivation),
     });
   }
 
@@ -201,7 +236,7 @@ export function arbitratePlanWithCrucible(input: CrucibleInput): CrucibleDecisio
         repairable: false,
         humanDecisionRequired: false,
         exhaustedRounds: true,
-      }),
+      }, skillActivation),
     });
   }
 
@@ -217,8 +252,53 @@ export function arbitratePlanWithCrucible(input: CrucibleInput): CrucibleDecisio
       repairable: false,
       humanDecisionRequired: false,
       exhaustedRounds: false,
-    }),
+    }, skillActivation),
   });
+}
+
+export function evaluateSkillActivations(
+  plan: PlannerOutput,
+  context: SkillActivationPolicyContext = {},
+): SkillActivationDecision[] {
+  const requested = uniqueRequestedSkillIds(plan.requestedSkills ?? []);
+  if (requested.length === 0) return [];
+
+  const maxSkills = Math.max(1, Math.trunc(context.maxSkills ?? DEFAULT_MAX_SKILLS_PER_RUN));
+  const decisions: SkillActivationDecision[] = [];
+
+  for (const [index, skillId] of requested.entries()) {
+    if (index >= maxSkills) {
+      decisions.push(skillDecision(skillId, "denied", `Skill cap exceeded: at most ${maxSkills} skill(s) may be activated per run.`));
+      continue;
+    }
+
+    const manifest = context.catalog?.get(skillId);
+    if (!manifest) {
+      decisions.push(skillDecision(skillId, "denied", "Unknown skill id requested by planner."));
+      continue;
+    }
+
+    if (skillRiskOf(manifest) === "high" && !planHasRequiredApprovalGate(plan)) {
+      decisions.push(skillDecision(skillId, "denied", "High-risk skill requires an explicit required approval gate in the plan."));
+      continue;
+    }
+
+    const prerequisiteDecision = evaluatePrerequisites(manifest, context);
+    if (prerequisiteDecision) {
+      decisions.push(skillDecision(skillId, prerequisiteDecision.decision, prerequisiteDecision.reason));
+      continue;
+    }
+
+    decisions.push(skillDecision(skillId, "approved", "Skill exists and policy prerequisites are satisfied."));
+  }
+
+  return decisions;
+}
+
+export function approvedSkillIdsFromDecision(decision: CrucibleDecision): string[] {
+  return (decision.trace?.skillActivation ?? [])
+    .filter((activation) => activation.decision === "approved")
+    .map((activation) => activation.skillId);
 }
 
 function boundedRound(input: Pick<CrucibleInput, "round" | "priorRounds">): number {
@@ -241,12 +321,126 @@ function requiresHumanDecision(finding: SkepticFinding): boolean {
 function traceDecision(
   reasonCode: CrucibleReasonCode,
   findings: SkepticFinding[],
-  flags: Pick<CrucibleDecisionTrace, "repairable" | "humanDecisionRequired" | "exhaustedRounds">
+  flags: Pick<CrucibleDecisionTrace, "repairable" | "humanDecisionRequired" | "exhaustedRounds">,
+  skillActivation: SkillActivationDecision[] = [],
 ): CrucibleDecisionTrace {
   return CrucibleDecisionTraceSchema.parse({
     reasonCode,
-    policy: "accepted only without blockers; repairable findings revise before max rounds; human decisions escalate; exhausted rounds escalate",
+    policy: "accepted only without blockers; skill policy denials revise; repairable findings revise before max rounds; human decisions escalate; exhausted rounds escalate",
     targetedFindingIds: findings.map((finding) => finding.id),
+    skillActivation,
     ...flags,
   });
+}
+
+function evaluatePrerequisites(
+  manifest: SkillManifest,
+  context: SkillActivationPolicyContext,
+): { decision: "denied" | "deferred"; reason: string } | undefined {
+  const prerequisites = manifest.frontmatter.prerequisites;
+  if (!prerequisites) return undefined;
+
+  const platform = context.platform ?? process.platform;
+  const platforms = prerequisites.platforms ?? [];
+  if (platforms.length > 0 && !platforms.some((candidate) => platformMatches(candidate, platform))) {
+    return {
+      decision: "denied",
+      reason: `Skill platform prerequisite is not satisfied for ${platform}.`,
+    };
+  }
+
+  const commands = prerequisites.commands ?? [];
+  if (commands.length > 0) {
+    if (context.allowlistedCommands === undefined) {
+      return {
+        decision: "deferred",
+        reason: "Command prerequisites require sandbox allowlist data that is not available for this run.",
+      };
+    }
+    const missing = commands.filter((command) => !commandAllowed(command, context.allowlistedCommands ?? []));
+    if (missing.length > 0) {
+      return {
+        decision: "denied",
+        reason: `Command prerequisites are not allowed by sandbox policy: ${missing.join(", ")}.`,
+      };
+    }
+  }
+
+  const envVars = prerequisites.env_vars ?? [];
+  if (envVars.length > 0) {
+    if (context.availableEnvVars === undefined) {
+      return {
+        decision: "deferred",
+        reason: "Environment prerequisites require UI-managed readiness data that is not available for this run.",
+      };
+    }
+    const available = new Set(context.availableEnvVars);
+    const missing = envVars.filter((name) => !available.has(name));
+    if (missing.length > 0) {
+      return {
+        decision: "denied",
+        reason: `Environment prerequisites are not marked ready: ${missing.join(", ")}.`,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function skillFindingsFor(decisions: SkillActivationDecision[]): SkepticFinding[] {
+  return decisions
+    .filter((decision) => decision.decision === "denied")
+    .map((decision, index) =>
+      SkepticFindingSchema.parse({
+        id: `skill.policy.${index + 1}`,
+        severity: "MAJOR",
+        category: "skill",
+        message: redactString(`Requested skill ${decision.skillId} was denied by crucible skill policy.`),
+        evidence: redactString(`requestedSkills included ${decision.skillId}; policy reason: ${decision.reason}`),
+        recommendation: "Remove the skill request, request a known lower-risk skill, or satisfy the required approval/prerequisite gate.",
+      })
+    );
+}
+
+function skillDecision(
+  skillId: string,
+  decision: SkillActivationDecision["decision"],
+  reason: string,
+): SkillActivationDecision {
+  return SkillActivationDecisionSchema.parse({
+    skillId: redactString(skillId),
+    decision,
+    reason: redactString(reason),
+  });
+}
+
+function uniqueRequestedSkillIds(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+function planHasRequiredApprovalGate(plan: PlannerOutput): boolean {
+  return plan.approvalGates.some((gate) => gate.required) || plan.tasks.some((task) => task.approvalRequired);
+}
+
+function commandAllowed(command: string, allowlistedCommands: string[]): boolean {
+  const firstToken = command.trim().split(/\s+/)[0] ?? command;
+  return allowlistedCommands.includes(command) || allowlistedCommands.includes(firstToken);
+}
+
+function platformMatches(candidate: string, current: string): boolean {
+  const normalized = candidate.trim().toLowerCase();
+  const platform = current.toLowerCase();
+  if (normalized === platform) return true;
+  if (normalized === "windows" && platform === "win32") return true;
+  if (normalized === "macos" && platform === "darwin") return true;
+  if (normalized === "linux" && platform === "linux") return true;
+  return false;
 }

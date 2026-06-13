@@ -35,6 +35,15 @@
 - **Plan / Mitigations:** Treat mid-run stable tier mutation as blocked. Record tier budget/compression events in traces, and add assignment/lineage visibility in later 047 chunks so operators can tell whether a prompt contract changed because of a deliberate configured assignment change.
 - **Traceability:** `src/orchestration/promptTiers.ts`, `src/orchestration/prompts.ts`, `src/orchestration/chatRunner.ts`, `tests/promptTiers.test.ts`.
 
+### Chunk 047d user-supplied skills are prompt material, not trusted code
+
+- **Source:** Chunk 047d procedural memory / skills catalog.
+- **Severity:** Medium for prompt-injection and stale-procedure risk; low for bundled low-risk skills.
+- **Status:** Open / accepted for 047d.
+- **Root cause:** `.rector/skills/` files are user-supplied procedural text. The catalog is read-only and crucible-gated, but approved skill bodies still become prompt context and can contain stale or adversarial instructions.
+- **Plan / Mitigations:** Keep skills passive: no automatic execution, no network install, and no file writes from the catalog. Crucible denies unknown skills, enforces a max activation cap, blocks high-risk skills without approval gates, and emits redacted skill activation events. Context injection is limited to approved skill IDs and capped by `maxSkillContextChars`. Future chunks should add stronger provenance/signature checks and skill write-guard scanning before marketplace/import support.
+- **Traceability:** `docs/plans/chunks/047d-procedural-memory-skills.md`, `src/memory/skillsCatalog.ts`, `src/orchestration/crucible.ts`, `src/orchestration/contextBuilder.ts`, `tests/skillsCatalog.test.ts`, `tests/skillCrucible.integration.test.ts`.
+
 ### Chunk 042f reconciliation matrix for known hardening concerns
 
 | Concern | 042f status | Evidence | Remaining follow-up |

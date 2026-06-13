@@ -1,6 +1,6 @@
-import type { ContextPack } from "./contextBuilder";
+import { appendApprovedSkillContextToPack, type ContextPack, type SkillContextCatalog } from "./contextBuilder";
 import { compressContextLineage, evaluateContextPressure } from "./contextCompression";
-import { arbitratePlanWithCrucible, type CrucibleDecision } from "./crucible";
+import { approvedSkillIdsFromDecision, arbitratePlanWithCrucible, type CrucibleDecision } from "./crucible";
 
 import type { ExecutorSimulatorOptions } from "./executorSimulator";
 import { runExternalPostPlanningPhases } from "./externalPostPlanning";
@@ -108,6 +108,8 @@ export interface ChatRunnerDeps {
   neuroFlags?: Partial<NeuroFeatureFlags>;
   contextCompressionEnabled?: boolean;
   contextCompressionMaxGeneration?: number;
+  /** Procedural memory catalog. Planner requests are policy-gated by crucible before injection. */
+  skillsCatalog?: SkillContextCatalog;
 }
 
 export interface ChatRunResult {
@@ -397,11 +399,33 @@ export async function runOrchestratedChatRun(
     );
   }
   const crucibleDecision = await observability.recordSpan("CRUCIBLE", () =>
-    arbitratePlanWithCrucible({ plannerOutput, skepticReview })
+    arbitratePlanWithCrucible({
+      plannerOutput,
+      skepticReview,
+      contextPack: activeContextPack,
+      skillsCatalog: deps.skillsCatalog,
+      skillPolicy: {
+        allowlistedCommands: deps.allowlistedCommands,
+      },
+    })
   );
+  if ((crucibleDecision.trace?.skillActivation ?? []).length > 0) {
+    await store.appendEvent(
+      runEvent(skepticCostedRun, "SKILL_ACTIVATION_DECIDED", "CRUCIBLE", {
+        source: "crucible-skill-policy",
+        skillActivation: crucibleDecision.trace?.skillActivation ?? [],
+      })
+    );
+  }
 
-  const enrichedArgs =
-    { ...activeArgs, contextPack: subGoals.length > 0 ? plannerContextPack : activeContextPack };
+  const postCrucibleBaseContext = subGoals.length > 0 ? plannerContextPack : activeContextPack;
+  const approvedSkillContextPack = appendApprovedSkillContextToPack(postCrucibleBaseContext, {
+    skillsCatalog: deps.skillsCatalog,
+    approvedSkillIds: approvedSkillIdsFromDecision(crucibleDecision),
+    maxSkillContextChars: postCrucibleBaseContext.contextBudget?.maxSkillContextChars,
+    maxSkillPartialChars: postCrucibleBaseContext.contextBudget?.maxSkillPartialChars,
+  });
+  const enrichedArgs = { ...activeArgs, contextPack: approvedSkillContextPack };
 
   try {
     return await runExternalPostPlanningPhases({

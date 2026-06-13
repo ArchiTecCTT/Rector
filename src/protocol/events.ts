@@ -22,6 +22,7 @@ export const RUN_EVENT_TYPES = [
   "CONTEXT_BUDGET_EVALUATED",
   "CONTEXT_COMPRESSED",
   "STABLE_TIER_MUTATION_BLOCKED",
+  "SKILL_ACTIVATION_DECIDED",
 ] as const;
 
 export const RunEventTypeSchema = z.enum(RUN_EVENT_TYPES);

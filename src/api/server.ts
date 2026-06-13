@@ -92,6 +92,12 @@ import {
   createInMemoryUserTemplateStore,
   type UserTemplateStore,
 } from "../templates";
+import {
+  InMemoryTruthLibrary,
+  SkillsCatalog,
+  syncSkillsToTruthLibrary,
+  type SkillManifest,
+} from "../memory";
 
 // Chunk 34 memory providers (config + resolution). The runtime MemoryProvider + Local impl
 // live in src/memory/provider.ts. We resolve once per app and use for neuro memory paths.
@@ -328,6 +334,9 @@ export interface ApiSecurityOptions {
    * with the unconfigured product default.
    */
   runtimeSettingsStore?: RuntimeSettingsStore;
+
+  /** Optional procedural memory catalog. Defaults to workspace `skills/` + `.rector/skills/`. */
+  skillsCatalog?: SkillsCatalog;
 
   /** Env map consumed by deployment-readiness checks. Defaults to process.env. */
   deploymentEnv?: Record<string, string | undefined>;
@@ -1585,6 +1594,13 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     securityOptions.memoryAssignmentStore ?? securityOptions.memoryRoleAssignmentStore ?? createInMemoryMemoryAssignmentStore();
   const runtimeSettingsStore =
     securityOptions.runtimeSettingsStore ?? createInMemoryRuntimeSettingsStore();
+  const skillsCatalog = securityOptions.skillsCatalog ?? new SkillsCatalog({ workspaceRoot: process.cwd() });
+  const skillsTruthLibrary = new InMemoryTruthLibrary();
+  try {
+    syncSkillsToTruthLibrary(skillsCatalog, skillsTruthLibrary);
+  } catch {
+    // Skill sync is a boot-time enrichment; catalog/API calls still scan live and fail closed.
+  }
 
   // Chunk 34 (pluggable memory providers): resolve the active MemoryProvider for neuro/agent
   // memory (notes, episodic context for contextBuilder/preprocessor/planner, prune, etc.).
@@ -1677,6 +1693,8 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.locals.moduleConfigStore = moduleConfigStore;
   app.locals.runtimeSettingsStore = runtimeSettingsStore;
   app.locals.orchestrationRuntime = orchestrationRuntime;
+  app.locals.skillsCatalog = skillsCatalog;
+  app.locals.skillsTruthLibrary = skillsTruthLibrary;
   app.locals.ensureModuleBoot = ensureModuleBoot;
 
   app.use(async (_req, res, next) => {
@@ -2207,6 +2225,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             triage,
             materials: [contextMaterial],
             memoryEntries: recentMemory,
+            skillsCatalog,
           });
         });
         const runtimeRouter = await resolveRuntimeModelRouterFor(req, conversation.workspaceId);
@@ -2240,6 +2259,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
             allowlistedCommands: orchestrationRuntime.allowlistedCommands,
             approvals: orchestrationRuntime.approvals,
             moduleRegistry,
+            skillsCatalog,
             contextCompressionEnabled: runtimeSettings.contextCompressionEnabled,
             contextCompressionMaxGeneration: runtimeSettings.contextCompressionMaxGeneration,
           }
@@ -2413,6 +2433,46 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const memoryProviderInstance = await getMemoryProviderFor(req, browserRole);
       const payload = await listMemoryEntriesForApi(memoryProviderInstance, { layer });
       sendRedacted(res, 200, payload);
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.use("/api/skills", async (req, res, next) => {
+    const access = await authorize(req, res, "workspace.read", { targetType: "skill" });
+    if (!access) return;
+    next();
+  });
+
+  app.get("/api/skills", async (req, res) => {
+    try {
+      const tags = typeof req.query.tags === "string"
+        ? req.query.tags.split(",").map((tag) => tag.trim()).filter(Boolean)
+        : undefined;
+      const bundledOnly = req.query.bundledOnly === "1" || req.query.bundledOnly === "true";
+      const skills = skillsCatalog
+        .list({ tags, bundledOnly })
+        .map((manifest) => skillsCatalog.toApiSummary(manifest));
+      sendRedacted(res, 200, { skills, count: skills.length });
+    } catch (error) {
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+    }
+  });
+
+  app.get("/api/skills/:id", async (req, res) => {
+    try {
+      const manifest = skillsCatalog.get(req.params.id);
+      if (!manifest) {
+        return sendRedacted(res, 404, { error: "Skill not found" });
+      }
+      sendRedacted(res, 200, {
+        manifest: skillsCatalog.toApiManifest(manifest),
+        summary: skillsCatalog.toApiSummary(manifest),
+        prerequisitesResolved: skillPrerequisitesResolved(manifest, {
+          allowlistedCommands: orchestrationRuntime.allowlistedCommands,
+          platform: process.platform,
+        }),
+      });
     } catch (error) {
       sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
     }
@@ -3707,6 +3767,45 @@ function isDevLocalhostOrigin(origin: string): boolean {
 
 function nonEmptyOrDefault(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
+}
+
+function skillPrerequisitesResolved(
+  manifest: SkillManifest,
+  context: { allowlistedCommands?: string[]; platform: string },
+): boolean {
+  const prerequisites = manifest.frontmatter.prerequisites;
+  if (!prerequisites) return true;
+
+  const platforms = prerequisites.platforms ?? [];
+  if (platforms.length > 0 && !platforms.some((platform) => apiPlatformMatches(platform, context.platform))) {
+    return false;
+  }
+
+  const commands = prerequisites.commands ?? [];
+  if (commands.length > 0) {
+    if (!context.allowlistedCommands) return false;
+    if (!commands.every((command) => apiCommandAllowed(command, context.allowlistedCommands ?? []))) return false;
+  }
+
+  // Env-var readiness is intentionally not inferred from process.env here; product state is
+  // UI-managed and secret values must not be consulted for catalog egress.
+  if ((prerequisites.env_vars ?? []).length > 0) return false;
+
+  return true;
+}
+
+function apiCommandAllowed(command: string, allowlistedCommands: string[]): boolean {
+  const firstToken = command.trim().split(/\s+/)[0] ?? command;
+  return allowlistedCommands.includes(command) || allowlistedCommands.includes(firstToken);
+}
+
+function apiPlatformMatches(candidate: string, current: string): boolean {
+  const normalized = candidate.trim().toLowerCase();
+  const platform = current.toLowerCase();
+  if (normalized === platform) return true;
+  if (normalized === "windows" && platform === "win32") return true;
+  if (normalized === "macos" && platform === "darwin") return true;
+  return normalized === "linux" && platform === "linux";
 }
 
 function numericField(value: Record<string, unknown> | undefined, key: string): number {
