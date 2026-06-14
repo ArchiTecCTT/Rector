@@ -1,6 +1,20 @@
 # Provider-Free Local Quickstart
 
-Use this path for first-time development and documentation/testing work. It should not require paid model, sandbox, database, or telemetry credentials.
+> **REDIRECT — pre-v0.3.0.** This quickstart described the provider-free local demo as the default product path.  
+> **Use instead:** [`first-run-setup.md`](./first-run-setup.md) for guided setup and the configured product model.  
+> **Canonical architecture:** [`../architecture/configured-product-architecture.md`](../architecture/configured-product-architecture.md)
+
+---
+
+## Historical note
+
+Before v0.3.0, contributors could run Rector without API keys using `ORCHESTRATOR_MODE=local` and a deterministic fake pipeline. That path is **no longer the product default**.
+
+- **Product:** configured orchestration with mandatory first-run onboarding.
+- **CI/tests:** `SpyLLMProvider` doubles only — see `npm test`.
+- **Env knob:** `ORCHESTRATOR_MODE` is deprecated; use UI setup and `runtime-settings.json`.
+
+The commands below still work for **test verification** but do not represent the user-facing product.
 
 ## Prerequisites
 
@@ -13,33 +27,23 @@ Use this path for first-time development and documentation/testing work. It shou
 npm install
 ```
 
-## Verify
+## Verify (CI / test doubles)
 
 ```bash
 npm test
 npm run build
 ```
 
-## Run locally
+## Run locally (legacy)
 
 ```bash
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Without completing UI setup, you will see the mandatory onboarding overlay (v0.3.0+), not a provider-free chat demo.
 
 ## Environment files
 
-A `.env` file is optional for provider-free work. If you need one, copy the example and keep credentials blank unless you are intentionally testing a live provider:
+A `.env` file is optional for test verification. Do not commit `.env` or secrets.
 
-```bash
-cp .env.example .env
-```
-
-Do not commit `.env` or secrets.
-
-## Provider-free expectations
-
-Contributions should keep this workflow working. Missing provider credentials should not break basic local development, tests, or TypeScript builds unless a test explicitly covers live provider setup and is opt-in.
-
-When adding integration points, prefer adapters with safe local defaults, clear missing-credential behavior, and focused tests.
+For normal use, configure providers through the web UI. See [`first-run-setup.md`](./first-run-setup.md).

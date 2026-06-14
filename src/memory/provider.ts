@@ -5,6 +5,14 @@ import type {
   UpdateMemoryEntryInput,
 } from "../store/schemas";
 import { MemoryEntrySchema } from "../store/schemas";
+import {
+  compareMemoryPruneCandidates,
+  compareMemorySearchResults,
+  memoryPruneScore,
+  normalizeMemorySearchLimit,
+  sanitizeCreateMemoryEntryInput,
+  sanitizeUpdateMemoryEntryInput,
+} from "./entryUtils";
 
 /**
  * MemoryProvider (Chunk 34 runtime interface).
@@ -120,18 +128,19 @@ export class LocalMemoryProvider implements MemoryProvider {
   }
 
   async createMemoryEntry(input: CreateMemoryEntryInput): Promise<MemoryEntry> {
+    const sanitized = sanitizeCreateMemoryEntryInput(input);
     if (this.delegateStore) {
-      return this.delegateStore.createMemoryEntry(input);
+      return this.delegateStore.createMemoryEntry(sanitized);
     }
     const now = this.nowFn();
     const entry = MemoryEntrySchema.parse({
-      ...this.clone(input),
+      ...this.clone(sanitized),
       id: this.nextId("mem"),
-      accessCount: input.accessCount ?? 0,
-      lastMentioned: input.lastMentioned ?? now,
-      timestamp: input.timestamp ?? now,
-      tags: input.tags ?? [],
-      metadata: input.metadata ?? {},
+      accessCount: sanitized.accessCount ?? 0,
+      lastMentioned: sanitized.lastMentioned ?? now,
+      timestamp: sanitized.timestamp ?? now,
+      tags: sanitized.tags ?? [],
+      metadata: sanitized.metadata ?? {},
     });
     this.memories.set(entry.id, this.clone(entry));
     return this.clone(entry);
@@ -156,7 +165,7 @@ export class LocalMemoryProvider implements MemoryProvider {
     if (!current) return undefined;
     const updated = MemoryEntrySchema.parse({
       ...this.clone(current),
-      ...this.clone(patch),
+      ...this.clone(sanitizeUpdateMemoryEntryInput(patch)),
       id: current.id,
     });
     this.memories.set(id, this.clone(updated));
@@ -174,7 +183,8 @@ export class LocalMemoryProvider implements MemoryProvider {
   ): Promise<MemoryEntry[]> {
     if (this.delegateStore) return this.delegateStore.searchMemory(query, options);
 
-    const { layer, limit = 20 } = options;
+    const { layer } = options;
+    const limit = normalizeMemorySearchLimit(options.limit);
     let results = Array.from(this.memories.values());
 
     if (layer) results = results.filter((e) => e.layer === layer);
@@ -189,12 +199,7 @@ export class LocalMemoryProvider implements MemoryProvider {
       );
     }
 
-    // Same scoring as the original inmem impl (recency + access + user-note bonus)
-    results.sort((a, b) => {
-      const scoreA = a.accessCount * 2 + (Date.parse(a.lastMentioned) || 0);
-      const scoreB = b.accessCount * 2 + (Date.parse(b.lastMentioned) || 0);
-      return scoreB - scoreA;
-    });
+    results.sort(compareMemorySearchResults);
 
     return results.slice(0, limit).map((e) => this.clone(e));
   }
@@ -212,17 +217,10 @@ export class LocalMemoryProvider implements MemoryProvider {
       return { pruned: 0, summarized: 0 };
     }
 
-    const now = Date.now();
-    const scored = layerEntries.map((entry) => {
-      const ageMs = now - (Date.parse(entry.timestamp) || now);
-      const recency = Math.max(0, 100 - Math.floor(ageMs / (1000 * 60 * 60 * 24)));
-      const accessBonus = Math.min(entry.accessCount * 3, 50);
-      const noteBonus = entry.source === "user-note" || entry.tags.includes("note") ? 30 : 0;
-      const score = recency + accessBonus + noteBonus;
-      return { entry, score };
-    });
+    const pruneNow = this.nowFn();
+    const scored = layerEntries.map((entry) => ({ entry, score: memoryPruneScore(entry, pruneNow) }));
 
-    scored.sort((a, b) => a.score - b.score); // lowest first (most prunable)
+    scored.sort(compareMemoryPruneCandidates); // lowest first (most prunable)
 
     let pruned = 0;
     let summarized = 0;

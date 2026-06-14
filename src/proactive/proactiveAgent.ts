@@ -12,23 +12,26 @@ import type { OrchestratorMode } from "../deployment";
  * Makes Rector feel "alive". It can initiate check-ins using the existing
  * chat pipeline with a synthetic prompt and a warmer "proactive-companion" route.
  *
- * All LLM calls (if any) go through budget + redaction + the symbolic control plane.
- * In local mode, the agent is never auto-started.
+ * All LLM calls go through budget + redaction + the symbolic control plane via
+ * the unified orchestrated runner. Requires a configured router.
  */
 export class ProactiveAgent {
   private readonly store: RectorStore;
-  private readonly router?: ModelRouter;
-  private readonly mode: OrchestratorMode;
+  private readonly router: ModelRouter;
+  private readonly mode?: OrchestratorMode;
   private timer?: ReturnType<typeof setInterval>;
 
   constructor(deps: {
     store: RectorStore;
-    router?: ModelRouter;
+    router: ModelRouter;
     mode?: OrchestratorMode;
   }) {
     this.store = deps.store;
+    if (!deps.router) {
+      throw new Error("ProactiveAgent requires a configured router");
+    }
     this.router = deps.router;
-    this.mode = deps.mode ?? "local";
+    this.mode = deps.mode;
   }
 
   /**
@@ -95,7 +98,7 @@ export class ProactiveAgent {
     const runnerDeps: ChatRunnerDeps = {
       mode: this.mode,
       router: this.router,
-      enableNetwork: this.mode === "external",
+      enableNetwork: this.mode !== "local",
     };
 
     const result = await runChat(this.store, runArgs, runnerDeps);
@@ -124,14 +127,9 @@ export class ProactiveAgent {
   }
 
   /**
-   * Start a simple timer for demo "alive" behavior (only in external mode by default).
-   * In real usage this could be driven by events (long NEEDS_DECISION, idle, etc.).
+   * Start a simple timer for demo "alive" behavior when a router is configured.
    */
   startTimer(intervalMs = 1000 * 60 * 60 * 4 /* 4h demo interval */) {
-    if (this.mode !== "external") {
-      // Never auto-start timers in local/provider-free mode
-      return;
-    }
     if (this.timer) return;
 
     this.timer = setInterval(async () => {
@@ -158,7 +156,7 @@ export class ProactiveAgent {
 
 export function createProactiveAgent(deps: {
   store: RectorStore;
-  router?: ModelRouter;
+  router: ModelRouter;
   mode?: OrchestratorMode;
 }) {
   return new ProactiveAgent(deps);

@@ -1,0 +1,47 @@
+$schema: https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+      - rector-0.1.0
+      - rector-0.2.0
+  path_filters:
+    - "!dist/**"
+    - "!node_modules/**"
+    - "!coverage/**"
+    - "!package-lock.json"
+    - "src/**"
+    - "tests/**"
+    - "docs/plans/**"
+    - ".github/**"
+  path_instructions:
+    - path: "src/orchestration/**"
+      instructions: >-
+        Focus on deterministic local-mode fallbacks, schema validation, redaction before traces,
+        bounded retries/repair loops, and preservation of the Rector pipeline contracts.
+    - path: "src/security/**"
+      instructions: >-
+        Focus on secret handling, redaction, authorization boundaries, budget gates,
+        and fail-closed behavior. Secrets must never be returned or logged.
+    - path: "src/sandbox/**"
+      instructions: >-
+        Focus on path containment, command allowlists/denylists, approval gates,
+        stream truncation, timeout/cancellation behavior, and no arbitrary shell by default.
+    - path: "src/memory/**"
+      instructions: >-
+        Focus on optional dependency safety, local zero-config behavior, metadata/provenance
+        preservation, redaction, and external provider error classification.
+    - path: "tests/**"
+      instructions: >-
+        Check that tests preserve local/provider-free invariants and do not require live cloud
+        credentials unless explicitly skipped behind environment flags.

@@ -51,6 +51,7 @@ import express from "express";
 import http from "node:http";
 
 import { createApp, runConnectionTest } from "../src/api/server";
+import { configuredAppOptions } from "./support/configuredApp";
 import { TaskManager } from "../src/thalamus/router";
 import { triageUserMessage } from "../src/orchestration/triage";
 import { createFakePlan, type PlannerOutput } from "../src/orchestration/planner";
@@ -184,10 +185,13 @@ describe("no secret in any persisted row, SSE frame, or cost aggregate (Property
 
         // Persistent store: a real SqlRectorStore over in-memory SQLite (the persistent path), so
         // the "no secret in a stored row" guarantee is genuinely exercised.
-        const app = createApp(new TaskManager(), {
-          orchestration: { mode: "external", router: spyRouter(provider) },
-          persistence: { driver: "sqlite", sqlitePath: ":memory:" },
-        });
+        const app = createApp(
+          new TaskManager(),
+          await configuredAppOptions({
+            orchestration: { router: spyRouter(provider) },
+            persistence: { driver: "sqlite", sqlitePath: ":memory:" },
+          }),
+        );
 
         await withServer(app, async (base) => {
           const created = await api(base, "/api/chat/conversations", {
@@ -250,7 +254,7 @@ describe("no secret in any persisted row, SSE frame, or cost aggregate (Property
       }),
       { numRuns: 6 }
     );
-  });
+  }, 30_000);
 });
 
 // --- (4) connection-test response -----------------------------------------

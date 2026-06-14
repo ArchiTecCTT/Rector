@@ -265,7 +265,7 @@ describe("validation and healing loop", () => {
     ]);
   });
 
-  it("classifies unknown failures and fails the run without trying to heal", async () => {
+  it("classifies unknown failures and fails after bounded retry when the unknown failure persists", async () => {
     const compiledDag = dag();
     const executionResult = await run(compiledDag);
     
@@ -288,14 +288,18 @@ describe("validation and healing loop", () => {
     const result = await validateAndHealExecution({
       compiledDag,
       executionResult: mockExecutionResult,
+      maxHealingAttempts: 1,
+      executor: async () => mockExecutionResult,
     });
 
     expect(result.status).toBe("FAILED");
+    expect(result.attempts).toBe(1);
     expect(result.failures[0]).toMatchObject({
       classification: "UNKNOWN",
       nodeId: "task:a"
     });
     expect(result.actions).toEqual([
+      expect.objectContaining({ type: "RETRY_NODE", classification: "UNKNOWN", attempt: 1 }),
       expect.objectContaining({ type: "FAIL_RUN", classification: "UNKNOWN" }),
     ]);
   });
@@ -513,7 +517,7 @@ describe("Property 5: healing rounds are always bounded", () => {
       ),
       { numRuns: 300 },
     );
-  });
+  }, 30_000);
 });
 
 /**

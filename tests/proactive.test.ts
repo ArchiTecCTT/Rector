@@ -87,14 +87,7 @@ describe("proactive alive layer", () => {
     expect(proactiveOne).toBeDefined();
   });
 
-  it("does not auto-start timer in local mode", () => {
-    const agent = createProactiveAgent({
-      store,
-      mode: "local",
-    });
-    // Should not throw and timer should be undefined
-    agent.startTimer(100);
-    // no way to easily assert private, but no crash + local guard is in code
-    expect(true).toBe(true);
+  it("requires a configured router at construction time", () => {
+    expect(() => createProactiveAgent({ store } as never)).toThrow(/configured router/i);
   });
 });

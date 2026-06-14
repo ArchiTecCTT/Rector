@@ -76,4 +76,36 @@ describe("backgroundHooks", () => {
     expect(() => vi.runOnlyPendingTimers()).not.toThrow();
     vi.useRealTimers();
   });
+
+  it("records contradictions from completed runs instead of gating on an impossible running status", async () => {
+    const memory = createPureLocalMemoryProvider();
+    await memory.createMemoryEntry({
+      layer: "episodic",
+      content: "We should never deploy automatically from this service.",
+      timestamp: "2026-06-12T00:00:00.000Z",
+      tags: ["note"],
+      source: "user-note",
+      metadata: {},
+    });
+    await memory.createMemoryEntry({
+      layer: "episodic",
+      content: "We should always deploy automatically from this service.",
+      timestamp: "2026-06-12T00:01:00.000Z",
+      tags: ["note"],
+      source: "user-note",
+      metadata: {},
+    });
+    const hooks = createNeuroBackgroundHooks({
+      getMemoryProvider: async () => memory,
+      mode: "external",
+      store: new InMemoryRectorStore(),
+      now: () => "2026-06-12T00:02:00.000Z",
+    });
+
+    hooks.onRunCompleted(makeCompletedRun());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const core = await memory.listMemoryEntries("core");
+    expect(core.some((entry) => entry.tags.includes("subconscious-contradiction"))).toBe(true);
+  });
 });

@@ -60,15 +60,105 @@ export const PlannerInputSchema = z.object({
 });
 export type PlannerInput = z.infer<typeof PlannerInputSchema>;
 
-export const PlannerOutputSchema = z.object({
-  goal: z.string().min(1),
-  assumptions: z.array(z.string().min(1)),
-  tasks: z.array(PlannerTaskSchema),
-  dependencies: z.array(PlannerDependencySchema),
-  validation: PlannerValidationSchema,
-  riskLevel: PlannerRiskLevelSchema,
-  approvalGates: z.array(ApprovalGateSchema),
-});
+export const PlannerOutputSchema = z
+  .object({
+    goal: z.string().min(1),
+    assumptions: z.array(z.string().min(1)),
+    tasks: z.array(PlannerTaskSchema),
+    dependencies: z.array(PlannerDependencySchema),
+    validation: PlannerValidationSchema,
+    riskLevel: PlannerRiskLevelSchema,
+    approvalGates: z.array(ApprovalGateSchema),
+    requestedSkills: z.array(z.string().min(1)).optional(),
+  })
+  .superRefine((plan, ctx) => {
+    const taskIds = new Set<string>();
+    for (const [index, taskItem] of plan.tasks.entries()) {
+      if (taskIds.has(taskItem.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Planner task IDs must be unique: ${taskItem.id}`,
+          path: ["tasks", index, "id"],
+        });
+      }
+      taskIds.add(taskItem.id);
+    }
+
+    for (const [index, dependency] of plan.dependencies.entries()) {
+      if (!taskIds.has(dependency.from)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Planner dependency references missing source task: ${dependency.from}`,
+          path: ["dependencies", index, "from"],
+        });
+      }
+      if (!taskIds.has(dependency.to)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Planner dependency references missing target task: ${dependency.to}`,
+          path: ["dependencies", index, "to"],
+        });
+      }
+    }
+
+    for (const [taskIndex, taskItem] of plan.tasks.entries()) {
+      for (const [dependencyIndex, dependencyId] of taskItem.dependencies.entries()) {
+        if (!taskIds.has(dependencyId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Planner task ${taskItem.id} references missing dependency: ${dependencyId}`,
+            path: ["tasks", taskIndex, "dependencies", dependencyIndex],
+          });
+        }
+      }
+      if ((taskItem.risk === "high" || taskItem.risk === "destructive") && !taskItem.approvalRequired) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Planner task ${taskItem.id} is ${taskItem.risk} risk and must require approval`,
+          path: ["tasks", taskIndex, "approvalRequired"],
+        });
+      }
+    }
+
+    for (const [gateIndex, gate] of plan.approvalGates.entries()) {
+      for (const [taskIndex, taskId] of gate.taskIds.entries()) {
+        if (!taskIds.has(taskId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Planner approval gate ${gate.id} references missing task: ${taskId}`,
+            path: ["approvalGates", gateIndex, "taskIds", taskIndex],
+          });
+        }
+      }
+    }
+
+    const unsafeTaskIds = plan.tasks
+      .filter((taskItem) => taskItem.approvalRequired || taskItem.risk === "high" || taskItem.risk === "destructive")
+      .map((taskItem) => taskItem.id);
+    const unsafePlan = plan.riskLevel === "high" || plan.riskLevel === "destructive" || unsafeTaskIds.length > 0;
+    if (unsafePlan) {
+      const requiredGates = plan.approvalGates.filter((gate) => gate.required);
+      const hasPlanLevelGate = requiredGates.some((gate) => gate.taskIds.length === 0);
+      const gatedTaskIds = new Set(requiredGates.flatMap((gate) => gate.taskIds));
+      const allUnsafeTasksGated = unsafeTaskIds.every((taskId) => gatedTaskIds.has(taskId));
+      const planRiskCovered = plan.riskLevel === "high" || plan.riskLevel === "destructive" ? hasPlanLevelGate || unsafeTaskIds.length > 0 : true;
+
+      if (!hasPlanLevelGate && !allUnsafeTasksGated) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Unsafe planner output requires an approval gate for every high-risk task",
+          path: ["approvalGates"],
+        });
+      }
+      if (!planRiskCovered) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "High-risk planner output requires a required plan-level approval gate",
+          path: ["approvalGates"],
+        });
+      }
+    }
+  });
 export type PlannerOutput = z.infer<typeof PlannerOutputSchema>;
 
 export function createFakePlan(input: PlannerInput): PlannerOutput {
@@ -314,40 +404,34 @@ export function createFakePlan(input: PlannerInput): PlannerOutput {
 
 export function validatePlannerOutput(output: unknown): PlannerOutput {
   const parsed = PlannerOutputSchema.parse(output);
+  return normalizePlannerOutput(parsed);
+}
 
-  for (const dependency of parsed.dependencies) {
-    if (!parsed.tasks.some((taskItem) => taskItem.id === dependency.from)) {
-      throw new Error(`Planner dependency references missing source task: ${dependency.from}`);
-    }
-    if (!parsed.tasks.some((taskItem) => taskItem.id === dependency.to)) {
-      throw new Error(`Planner dependency references missing target task: ${dependency.to}`);
-    }
-  }
+export function normalizePlannerOutput(output: PlannerOutput): PlannerOutput {
+  const normalized: PlannerOutput = {
+    ...output,
+    assumptions: uniqueStrings(output.assumptions),
+    tasks: output.tasks.map((taskItem) => ({
+      ...taskItem,
+      dependencies: uniqueStrings(taskItem.dependencies).sort(),
+      expectedArtifacts: uniqueStrings(taskItem.expectedArtifacts),
+      validation: uniqueStrings(taskItem.validation),
+    })),
+    dependencies: uniqueDependencies(output.dependencies).sort((left, right) =>
+      `${left.from}\u0000${left.to}\u0000${left.reason ?? ""}`.localeCompare(`${right.from}\u0000${right.to}\u0000${right.reason ?? ""}`)
+    ),
+    validation: {
+      ...output.validation,
+      checks: uniqueStrings(output.validation.checks),
+    },
+    approvalGates: output.approvalGates.map((gate) => ({
+      ...gate,
+      taskIds: uniqueStrings(gate.taskIds).sort(),
+    })),
+    ...(output.requestedSkills ? { requestedSkills: uniqueStrings(output.requestedSkills).sort() } : {}),
+  };
 
-  for (const taskItem of parsed.tasks) {
-    for (const dependencyId of taskItem.dependencies) {
-      if (!parsed.tasks.some((candidate) => candidate.id === dependencyId)) {
-        throw new Error(`Planner task ${taskItem.id} references missing dependency: ${dependencyId}`);
-      }
-    }
-  }
-
-  const unsafeTaskIds = parsed.tasks
-    .filter((taskItem) => taskItem.approvalRequired || taskItem.risk === "high" || taskItem.risk === "destructive")
-    .map((taskItem) => taskItem.id);
-  const unsafePlan = parsed.riskLevel === "high" || parsed.riskLevel === "destructive" || unsafeTaskIds.length > 0;
-
-  if (unsafePlan) {
-    const gatedTaskIds = new Set(parsed.approvalGates.filter((gate) => gate.required).flatMap((gate) => gate.taskIds));
-    const hasPlanLevelGate = parsed.approvalGates.some((gate) => gate.required && gate.taskIds.length === 0);
-    const allUnsafeTasksGated = unsafeTaskIds.every((taskId) => gatedTaskIds.has(taskId));
-
-    if (!hasPlanLevelGate && !allUnsafeTasksGated) {
-      throw new Error("Unsafe planner output requires an approval gate for every high-risk task");
-    }
-  }
-
-  return parsed;
+  return PlannerOutputSchema.parse(normalized);
 }
 
 function basePlan(intent: string, triage: TriageResult, contextPack: ContextPack): PlannerOutput {
@@ -363,6 +447,22 @@ function basePlan(intent: string, triage: TriageResult, contextPack: ContextPack
     riskLevel: riskFromTriage(triage),
     approvalGates: [],
   };
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function uniqueDependencies(values: PlannerDependency[]): PlannerDependency[] {
+  const seen = new Set<string>();
+  const unique: PlannerDependency[] = [];
+  for (const dependency of values) {
+    const key = `${dependency.from}\u0000${dependency.to}\u0000${dependency.reason ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(dependency);
+  }
+  return unique;
 }
 
 function task(input: {
@@ -436,14 +536,23 @@ export interface LivePlannerResult {
   provider: string;
   model: string;
   attempts: number;
-  /** MCTS / deep-planning candidate goals explored before selection (Chunk 30). */
+  /** Traceable reason that explains why live planning fell back or blocked. */
+  fallbackReason?: string;
+  /** Deterministic safe fallback plan for callers that explicitly choose to continue locally. */
+  fallbackPlan?: PlannerOutput;
+  /** Bounded deep-planning candidate trace lines explored before selection (Chunk 042c). */
   pathsExplored?: string[];
+  /** Structured deep-planning trace for observability; provider-free and redacted by callers before persistence. */
+  deepPlanningTrace?: unknown[];
 }
 
 /** Dependencies for {@link runLivePlanner}. The provider is mocked in tests. */
 export interface LivePlannerDeps {
   provider: LLMProvider;
   run: Run;
+  /** Optional concrete model/deployment selected by the orchestration assignment router. */
+  model?: string;
+  abortSignal?: AbortSignal;
   buildPrompt?: typeof buildPlannerPrompt;
   buildRepairPrompt?: typeof buildPlannerRepairPrompt;
 }
@@ -473,7 +582,7 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
   const { provider, run } = deps;
   const buildPrompt = deps.buildPrompt ?? buildPlannerPrompt;
   const buildRepairPrompt = deps.buildRepairPrompt ?? buildPlannerRepairPrompt;
-  const model = plannerModel(provider);
+  const model = deps.model ?? plannerModel(provider);
 
   let totalUsage = ZERO_USAGE;
   let messages = buildPrompt(parsedInput);
@@ -484,6 +593,7 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
     const request: LLMRequest = {
       messages,
       modelRoute: "flagship",
+      ...(deps.model ? { model: deps.model } : {}),
       responseFormat: { type: "json_object" },
       task: "planner",
     };
@@ -504,14 +614,16 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
         totalUsage,
         provider,
         model,
-        attempt - 1
+        attempt - 1,
+        "budget preflight denied live planner; deterministic fallback plan attached",
+        createFakePlan(parsedInput)
       );
     }
 
     let response: LLMResponse;
     try {
       // Double-gated: invokeWithBudget re-checks the budget before the network call.
-      response = await invokeWithBudget(provider, request, run);
+      response = await invokeWithBudget(provider, request, run, { abortSignal: deps.abortSignal });
     } catch (error) {
       // Req 4.11: map any provider error/exception to a redacted PROVIDER_ERROR blocker.
       const rawMessage = error instanceof ProviderError || error instanceof Error ? error.message : String(error);
@@ -520,7 +632,9 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
         totalUsage,
         provider,
         model,
-        attempt
+        attempt,
+        "provider error during live planner; deterministic fallback plan attached",
+        createFakePlan(parsedInput)
       );
     }
 
@@ -553,8 +667,10 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
     makeBlocker("PLANNER_INVALID", plannerInvalidMessage(lastFailure.issuePaths), { issues: lastFailure.issuePaths }),
     totalUsage,
     provider,
-    plannerModel(provider),
-    2
+    model,
+    2,
+    "live planner invalid after one repair; deterministic fallback plan attached",
+    createFakePlan(parsedInput)
   );
 }
 
@@ -695,7 +811,9 @@ function blockedResult(
   usage: LLMUsage,
   provider: LLMProvider,
   model: string,
-  attempts: number
+  attempts: number,
+  fallbackReason?: string,
+  fallbackPlan?: PlannerOutput
 ): LivePlannerResult {
   return {
     status: "blocked",
@@ -704,6 +822,8 @@ function blockedResult(
     provider: provider.metadata.id,
     model,
     attempts,
+    ...(fallbackReason ? { fallbackReason } : {}),
+    ...(fallbackPlan ? { fallbackPlan } : {}),
   };
 }
 

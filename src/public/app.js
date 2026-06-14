@@ -127,12 +127,27 @@ let phaseCardsAutoExpanded = false;
 const state = {
   conversationId: null,
   conversations: [],
+  conversationSearch: {
+    query: "",
+    hits: [],
+    active: false,
+    loading: false,
+    timer: null,
+    requestSeq: 0,
+  },
   lastResultByMessage: new Map(), // assistantMessageId -> result payload (for trace)
 };
 
-// Orchestration mode derived from GET /api/setup/status (local until a valid status loads).
+// Product readiness derived from GET /api/setup/status (configured unlocks chat).
 const orchestration = {
-  mode: "local",
+  configured: false,
+};
+
+const productReadiness = {
+  ready: false,
+  orchestrationProfile: "unconfigured",
+  onboardingStep: 1,
+  blockers: [],
 };
 
 // --- Live run state (SSE stream with polling fallback, ORN-40) ---
@@ -148,35 +163,58 @@ const liveRun = {
   source: null, // EventSource
   pollTimer: null,
   closed: true,
+  interruptPending: false,
+  steerPending: false,
 };
 
 // --- DOM refs ---
 const els = {};
 
-function cacheEls() {
-  const ids = [
+function cacheElementIds(ids) {
+  for (const id of ids) {
+    els[id] = document.getElementById(id);
+  }
+}
+
+function cacheShellEls() {
+  cacheElementIds([
     "conversation-list",
     "conversation-empty",
+    "session-search-input",
     "new-conversation",
     "health-indicator",
     "chat-title",
+    "lineage-breadcrumb",
     "run-status",
     "live-indicator",
-    "toggle-trace",
-    "close-trace",
     "messages",
     "empty-state",
     "suggestions",
     "composer",
     "composer-input",
     "composer-send",
-    "note-capture-form",
-    "note-capture-input",
-    "note-capture-save",
-    "note-capture-status",
-    "open-note-capture",
+    "run-stop",
+    "run-steer",
+    "run-steer-input",
+    "run-steer-send",
     "deep-planning-wrap",
     "deep-planning-toggle",
+    "open-command-palette",
+    "command-palette",
+    "command-palette-backdrop",
+    "command-palette-input",
+    "command-palette-list",
+    "open-settings-menu",
+    "settings-menu",
+    "settings-menu-wrap",
+    "settings-approval-dot",
+  ]);
+}
+
+function cacheTraceAndRunEls() {
+  cacheElementIds([
+    "toggle-trace",
+    "close-trace",
     "trace-drawer",
     "trace-empty",
     "trace-body",
@@ -200,6 +238,41 @@ function cacheEls() {
     "decision-section",
     "decision-card",
     "events",
+  ]);
+}
+
+function cacheNoteAndApprovalEls() {
+  cacheElementIds([
+    "note-capture-form",
+    "note-capture-input",
+    "note-capture-save",
+    "note-capture-status",
+    "open-note-capture",
+    "open-approval",
+    "approval-badge",
+    "close-approval",
+    "approval-modal",
+    "approval-backdrop",
+    "approval-empty",
+    "approval-detail",
+    "approval-run-id",
+    "approval-operation-id",
+    "approval-target-path",
+    "approval-command-block",
+    "approval-command",
+    "approval-risky",
+    "approval-diff",
+    "approval-decided-by",
+    "approval-result",
+    "approval-foot",
+    "approval-loading",
+    "approval-deny",
+    "approval-approve",
+  ]);
+}
+
+function cacheProviderConfigEls() {
+  cacheElementIds([
     "open-provider-test",
     "close-provider-test",
     "provider-test-modal",
@@ -224,6 +297,21 @@ function cacheEls() {
     "provider-config-adv-key-toggle",
     "provider-config-adv-add",
     "provider-config-adv-result",
+    "open-orchestration-model-config",
+    "close-orchestration-model-config",
+    "orchestration-model-config-modal",
+    "orchestration-model-config-backdrop",
+    "orchestration-model-config-loading",
+    "orchestration-model-config-error",
+    "orchestration-model-reset",
+    "orchestration-model-status",
+    "orchestration-model-empty-providers",
+    "orchestration-model-rows",
+  ]);
+}
+
+function cacheMemoryAndModuleEls() {
+  cacheElementIds([
     "open-memory-provider-config",
     "close-memory-provider-config",
     "memory-provider-config-modal",
@@ -231,6 +319,9 @@ function cacheEls() {
     "memory-provider-config-loading",
     "memory-provider-config-error",
     "memory-provider-config-cards",
+    "memory-assignment-matrix",
+    "memory-assignment-reset",
+    "memory-assignment-result",
     "memory-provider-config-add-form",
     "memory-provider-config-kind",
     "memory-provider-config-id",
@@ -240,6 +331,13 @@ function cacheEls() {
     "memory-provider-config-add-key-toggle",
     "memory-provider-config-add",
     "memory-provider-config-add-result",
+    "open-module-manager",
+    "close-module-manager",
+    "module-manager-modal",
+    "module-manager-backdrop",
+    "module-manager-loading",
+    "module-manager-error",
+    "module-manager-list",
     "open-memory-browser",
     "close-memory-browser",
     "memory-browser-modal",
@@ -252,6 +350,32 @@ function cacheEls() {
     "memory-browser-filter-all",
     "memory-browser-filter-episodic",
     "memory-browser-filter-core",
+  ]);
+}
+
+function cacheTemplateAndSetupEls() {
+  cacheElementIds([
+    "open-template-manager",
+    "close-template-manager",
+    "template-manager-modal",
+    "template-manager-backdrop",
+    "template-manager-loading",
+    "template-manager-error",
+    "template-manager-gallery",
+    "template-manager-preview",
+    "template-manager-preview-title",
+    "template-manager-preview-summary",
+    "template-manager-requirements",
+    "template-manager-result",
+    "template-manager-apply",
+    "template-manager-apply-mode",
+    "template-manager-confirm-replace",
+    "template-manager-import-json",
+    "template-manager-import-preview",
+    "template-manager-import-apply",
+    "template-manager-export",
+    "template-manager-save-current",
+    "template-manager-suggest-cheap-byok",
     "open-setup-wizard",
     "close-setup-wizard",
     "setup-wizard-modal",
@@ -261,6 +385,17 @@ function cacheEls() {
     "setup-wizard-categories",
     "setup-wizard-loading",
     "setup-wizard-error",
+    "app-shell",
+    "onboarding-overlay",
+    "onboarding-stepper",
+    "onboarding-step-body",
+    "onboarding-blockers",
+    "onboarding-actions",
+    "onboarding-action-primary",
+    "onboarding-action-secondary",
+    "onboarding-activate",
+    "onboarding-loading",
+    "onboarding-error",
     "open-workspace-safety",
     "close-workspace-safety",
     "workspace-safety-modal",
@@ -272,26 +407,11 @@ function cacheEls() {
     "safety-destructive",
     "safety-allowlist",
     "safety-approval",
-    "open-approval",
-    "approval-badge",
-    "close-approval",
-    "approval-modal",
-    "approval-backdrop",
-    "approval-empty",
-    "approval-detail",
-    "approval-run-id",
-    "approval-operation-id",
-    "approval-target-path",
-    "approval-command-block",
-    "approval-command",
-    "approval-risky",
-    "approval-diff",
-    "approval-decided-by",
-    "approval-result",
-    "approval-foot",
-    "approval-loading",
-    "approval-deny",
-    "approval-approve",
+  ]);
+}
+
+function cacheAppearanceEls() {
+  cacheElementIds([
     "open-appearance",
     "close-appearance",
     "appearance-modal",
@@ -303,20 +423,17 @@ function cacheEls() {
     "appearance-fontscale",
     "appearance-reduced-motion",
     "appearance-reset",
-    // Top-bar action launchers + overlay surfaces (settings menu + command palette).
-    "open-command-palette",
-    "command-palette",
-    "command-palette-backdrop",
-    "command-palette-input",
-    "command-palette-list",
-    "open-settings-menu",
-    "settings-menu",
-    "settings-menu-wrap",
-    "settings-approval-dot",
-  ];
-  for (const id of ids) {
-    els[id] = document.getElementById(id);
-  }
+  ]);
+}
+
+function cacheEls() {
+  cacheShellEls();
+  cacheTraceAndRunEls();
+  cacheNoteAndApprovalEls();
+  cacheProviderConfigEls();
+  cacheMemoryAndModuleEls();
+  cacheTemplateAndSetupEls();
+  cacheAppearanceEls();
 }
 
 // --- API helper ---
@@ -359,6 +476,24 @@ function statusPillClass(phase, runStatus) {
 function setRunStatus(label, pillClass) {
   els["run-status"].textContent = label;
   els["run-status"].className = `status-pill ${pillClass}`;
+}
+
+function setRunControls(active) {
+  const stop = els["run-stop"];
+  const steer = els["run-steer"];
+  const steerInput = els["run-steer-input"];
+  const steerSend = els["run-steer-send"];
+
+  if (stop) {
+    stop.hidden = !active;
+    stop.disabled = !active || liveRun.interruptPending;
+  }
+  if (steer) steer.hidden = !active;
+  if (steerInput) {
+    steerInput.disabled = !active || liveRun.steerPending;
+    if (!active) steerInput.value = "";
+  }
+  if (steerSend) steerSend.disabled = !active || liveRun.steerPending;
 }
 
 function delay(ms) {
@@ -406,6 +541,28 @@ async function loadConversations() {
 function renderConversationList() {
   const list = els["conversation-list"];
   list.innerHTML = "";
+  const search = state.conversationSearch;
+  if (search.active) {
+    if (search.loading) {
+      const loading = document.createElement("p");
+      loading.className = "conversation-list__empty";
+      loading.textContent = "Searching...";
+      list.appendChild(loading);
+      return;
+    }
+    if (!search.hits.length) {
+      const empty = document.createElement("p");
+      empty.className = "conversation-list__empty";
+      empty.textContent = "No matching conversations.";
+      list.appendChild(empty);
+      return;
+    }
+    for (const hit of search.hits) {
+      list.appendChild(renderSearchHitButton(hit));
+    }
+    return;
+  }
+
   if (!state.conversations.length) {
     const empty = document.createElement("p");
     empty.className = "conversation-list__empty";
@@ -414,13 +571,99 @@ function renderConversationList() {
     return;
   }
   for (const conv of state.conversations) {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "conversation-item" + (conv.id === state.conversationId ? " active" : "");
-    item.textContent = conv.title || "Untitled conversation";
-    item.title = conv.title || conv.id;
-    item.addEventListener("click", () => openConversation(conv.id));
-    list.appendChild(item);
+    list.appendChild(renderConversationButton(conv));
+  }
+}
+
+function renderConversationButton(conv) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = "conversation-item" + (conv.id === state.conversationId ? " active" : "");
+  item.title = conv.title || conv.id;
+
+  const row = document.createElement("span");
+  row.className = "conversation-item__row";
+  const title = document.createElement("span");
+  title.className = "conversation-item__title";
+  title.textContent = conv.title || "Untitled conversation";
+  row.appendChild(title);
+  appendGenerationBadge(row, conv.compressionGeneration);
+  item.appendChild(row);
+
+  item.addEventListener("click", () => openConversation(conv.id));
+  return item;
+}
+
+function renderSearchHitButton(hit) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = "conversation-item conversation-item--search" + (hit.conversationId === state.conversationId ? " active" : "");
+  item.title = hit.title || hit.conversationId;
+
+  const row = document.createElement("span");
+  row.className = "conversation-item__row";
+  const title = document.createElement("span");
+  title.className = "conversation-item__title";
+  title.textContent = hit.title || "Untitled conversation";
+  row.appendChild(title);
+  appendGenerationBadge(row, hit.compressionGeneration);
+  item.appendChild(row);
+
+  const snippet = document.createElement("span");
+  snippet.className = "conversation-item__snippet";
+  snippet.textContent = hit.snippet || "";
+  item.appendChild(snippet);
+
+  item.addEventListener("click", () => openConversation(hit.conversationId));
+  return item;
+}
+
+function appendGenerationBadge(parent, generation) {
+  const gen = Number(generation || 0);
+  if (!Number.isFinite(gen) || gen <= 0) return;
+  const badge = document.createElement("span");
+  badge.className = "conversation-item__badge";
+  badge.textContent = `gen-${gen}`;
+  parent.appendChild(badge);
+}
+
+function bindConversationSearch() {
+  const input = els["session-search-input"];
+  if (!input) return;
+  input.addEventListener("input", () => {
+    const query = input.value.trim();
+    state.conversationSearch.query = query;
+    if (state.conversationSearch.timer) clearTimeout(state.conversationSearch.timer);
+    if (!query) {
+      state.conversationSearch.active = false;
+      state.conversationSearch.loading = false;
+      state.conversationSearch.hits = [];
+      renderConversationList();
+      return;
+    }
+    state.conversationSearch.active = true;
+    state.conversationSearch.loading = true;
+    renderConversationList();
+    state.conversationSearch.timer = setTimeout(() => {
+      void runConversationSearch(query);
+    }, 300);
+  });
+}
+
+async function runConversationSearch(query) {
+  const seq = ++state.conversationSearch.requestSeq;
+  try {
+    const data = await api(`/conversations/search?q=${encodeURIComponent(query)}&limit=20&workspaceId=browser`);
+    if (seq !== state.conversationSearch.requestSeq || state.conversationSearch.query !== query) return;
+    state.conversationSearch.hits = data.hits || [];
+  } catch (err) {
+    console.error("Failed to search conversations", err);
+    if (seq === state.conversationSearch.requestSeq) state.conversationSearch.hits = [];
+  } finally {
+    if (seq === state.conversationSearch.requestSeq) {
+      state.conversationSearch.loading = false;
+      renderConversationList();
+    }
   }
 }
 
@@ -439,6 +682,7 @@ async function ensureConversation() {
 function startNewConversation() {
   state.conversationId = null;
   els["chat-title"].textContent = "New conversation";
+  renderLineageBreadcrumb([]);
   setRunStatus("Idle", "status-pill--idle");
   clearMessages(true);
   resetTrace();
@@ -454,6 +698,8 @@ async function openConversation(id) {
   try {
     const data = await api(`/chat/conversations/${id}`);
     els["chat-title"].textContent = data.conversation?.title || "Conversation";
+    renderLineageBreadcrumb([data.conversation].filter(Boolean));
+    void loadConversationLineage(id);
     clearMessages(false);
     const messages = data.messages || [];
     for (const message of messages) {
@@ -470,6 +716,33 @@ async function openConversation(id) {
   }
 }
 
+async function loadConversationLineage(id) {
+  try {
+    const data = await api(`/conversations/${id}/lineage`);
+    if (state.conversationId !== id) return;
+    renderLineageBreadcrumb(data.lineage || []);
+  } catch (err) {
+    console.error("Failed to load conversation lineage", err);
+  }
+}
+
+function renderLineageBreadcrumb(lineage) {
+  const el = els["lineage-breadcrumb"];
+  if (!el) return;
+  const current = lineage?.at?.(-1);
+  const generation = Number(current?.compressionGeneration || 0);
+  if (!current || (!current.parentConversationId && generation <= 0 && lineage.length <= 1)) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  const parent = lineage.length > 1 ? lineage[lineage.length - 2] : null;
+  const parentTitle = parent?.title || "Parent";
+  const currentTitle = current.title || "Current";
+  el.textContent = parent ? `${parentTitle} > ${currentTitle} (compressed)` : `gen-${generation}`;
+  el.hidden = false;
+}
+
 // --- Messages ---
 function clearMessages(showEmpty) {
   els["messages"].innerHTML = "";
@@ -479,8 +752,8 @@ function clearMessages(showEmpty) {
     empty.className = "empty-state";
     empty.innerHTML = `
       <div class="empty-state__mark" aria-hidden="true"></div>
-      <h2>Chat with Rector</h2>
-      <p>Every message runs the full local pipeline on deterministic fake adapters. No providers are called.</p>`;
+      <h2>Configure Rector before your first chat</h2>
+      <p>Complete setup and activate Rector to unlock chat with your configured providers.</p>`;
     els["messages"].appendChild(empty);
   }
 }
@@ -556,8 +829,11 @@ function beginLiveRun({ runId, traceId }) {
   liveRun.source = null;
   liveRun.pollTimer = null;
   liveRun.closed = false;
+  liveRun.interruptPending = false;
+  liveRun.steerPending = false;
   resetCostPanel(); // a fresh run must never show the previous run's totals
   resetPhaseCards(); // a fresh run starts with no expand state seeded
+  setRunControls(true);
 }
 
 // Close the EventSource and clear the poll timer so neither transport keeps running. Idempotent.
@@ -575,6 +851,9 @@ function teardownLiveRun() {
     liveRun.pollTimer = null;
   }
   liveRun.closed = true;
+  liveRun.interruptPending = false;
+  liveRun.steerPending = false;
+  setRunControls(false);
   setLiveIndicator("off");
 }
 
@@ -1655,40 +1934,60 @@ function findProviderRecord(providerId) {
   return providerConfigState.providers.find((p) => p.id === providerId) || null;
 }
 
-function setProviderConfigLoading(loading) {
-  const indicator = els["provider-config-loading"];
+function setPanelLoading(elementId, loading) {
+  const indicator = els[elementId];
   if (indicator) indicator.hidden = !loading;
 }
 
-function showProviderConfigError(message) {
-  const box = els["provider-config-error"];
+function showPanelError(elementId, message) {
+  const box = els[elementId];
   if (!box) return;
   box.hidden = false;
   box.textContent = message;
 }
 
-function hideProviderConfigError() {
-  const box = els["provider-config-error"];
+function hidePanelError(elementId) {
+  const box = els[elementId];
   if (!box) return;
   box.hidden = true;
   box.textContent = "";
 }
 
+function setProviderConfigLoading(loading) {
+  setPanelLoading("provider-config-loading", loading);
+}
+
+function showProviderConfigError(message) {
+  showPanelError("provider-config-error", message);
+}
+
+function hideProviderConfigError() {
+  hidePanelError("provider-config-error");
+}
+
 // Render a redacted result line into a card/form result element. Server responses are already
 // redacted at the boundary; client-built strings carry only static text + the non-secret label and
 // model id, so no key material can appear (Req 15.2–15.5).
-function showProviderConfigResult(box, kind, message) {
+function showConfigResult(box, kind, message) {
   if (!box) return;
   box.hidden = false;
   box.textContent = message;
   box.className = `provider-config-result provider-config-result--${kind === "ok" ? "ok" : "err"}`;
 }
 
-function clearProviderConfigResult(box) {
+function clearConfigResult(box) {
   if (!box) return;
   box.hidden = true;
   box.textContent = "";
   box.className = "provider-config-result";
+}
+
+function showProviderConfigResult(box, kind, message) {
+  showConfigResult(box, kind, message);
+}
+
+function clearProviderConfigResult(box) {
+  clearConfigResult(box);
 }
 
 // Wire a masked key input to its show/hide toggle (Req 11.1). Flipping reveals/masks the value and
@@ -1703,58 +2002,73 @@ function bindKeyToggle(input, toggle) {
   });
 }
 
-// Run a connection test for one configured provider (Req 15). Validates via the server, applies a
-// 30s aborting client timeout (Req 15.5), disables the action while in flight (Req 15.4), and
-// renders a redacted success/failure/timeout message (Req 15.2/15.3) into the card's result box.
-async function runProviderConfigTest(providerId, label, resultBox, testBtn, loadingEl) {
-  if (providerConfigTest.inFlight) return;
-  providerConfigTest.inFlight = true;
-  clearProviderConfigResult(resultBox);
+// Shared connection-test runner for provider and memory-provider cards. It keeps secrets out of
+// responses, applies the same 30s aborting timeout, and centralizes in-flight UI cleanup.
+async function runConfigConnectionTest(options) {
+  const { state, url, body, label, resultBox, testBtn, loadingEl, successMessage, failureFallback } = options;
+  if (state.inFlight) return;
+  state.inFlight = true;
+  clearConfigResult(resultBox);
   if (testBtn) testBtn.disabled = true;
   if (loadingEl) loadingEl.hidden = false;
 
   const controller = new AbortController();
-  providerConfigTest.abort = controller;
+  state.abort = controller;
   let timedOut = false;
-  providerConfigTest.timer = setTimeout(() => {
+  state.timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
   }, PROVIDER_TEST_TIMEOUT_MS);
 
   try {
-    const res = await fetch(`${API}/setup/test-connection`, {
+    const request = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ providerId }),
       signal: controller.signal,
-    });
+    };
+    if (body !== undefined) request.body = JSON.stringify(body);
+    const res = await fetch(url, request);
     const text = await res.text();
-    const body = text ? JSON.parse(text) : {};
-    if (res.ok && body.ok) {
-      const model = typeof body.model === "string" && body.model ? ` (model: ${body.model})` : "";
-      showProviderConfigResult(resultBox, "ok", `${label} is ready. Connection succeeded${model}.`);
+    const parsed = text ? JSON.parse(text) : {};
+    if (res.ok && parsed.ok) {
+      showConfigResult(resultBox, "ok", successMessage(parsed));
     } else {
-      const reason = (body && (body.error || body.code)) || "the provider rejected the request";
-      showProviderConfigResult(resultBox, "err", `${label} connection failed: ${reason}`);
+      const reason = (parsed && (parsed.error || parsed.code)) || failureFallback;
+      showConfigResult(resultBox, "err", `${label} connection failed: ${reason}`);
     }
   } catch (err) {
-    if (timedOut || (err && err.name === "AbortError")) {
-      showProviderConfigResult(
-        resultBox,
-        "err",
-        `${label} connection test timed out after 30 seconds. No result was received.`,
-      );
-    } else {
-      showProviderConfigResult(resultBox, "err", `${label} connection failed: could not reach the server.`);
-    }
+    const message = timedOut || (err && err.name === "AbortError")
+      ? `${label} connection test timed out after 30 seconds. No result was received.`
+      : `${label} connection failed: could not reach the server.`;
+    showConfigResult(resultBox, "err", message);
   } finally {
-    clearTimeout(providerConfigTest.timer);
-    providerConfigTest.timer = null;
-    providerConfigTest.abort = null;
-    providerConfigTest.inFlight = false;
+    clearTimeout(state.timer);
+    state.timer = null;
+    state.abort = null;
+    state.inFlight = false;
     if (testBtn) testBtn.disabled = false;
     if (loadingEl) loadingEl.hidden = true;
   }
+}
+
+// Run a connection test for one configured provider (Req 15). Validates via the server, applies a
+// 30s aborting client timeout (Req 15.5), disables the action while in flight (Req 15.4), and
+// renders a redacted success/failure/timeout message (Req 15.2/15.3) into the card's result box.
+async function runProviderConfigTest(providerId, label, resultBox, testBtn, loadingEl) {
+  return runConfigConnectionTest({
+    state: providerConfigTest,
+    url: `${API}/setup/test-connection`,
+    body: { providerId },
+    label,
+    resultBox,
+    testBtn,
+    loadingEl,
+    failureFallback: "the provider rejected the request",
+    successMessage: (body) => {
+      const model = typeof body.model === "string" && body.model ? ` (model: ${body.model})` : "";
+      return `${label} is ready. Connection succeeded${model}.`;
+    },
+  });
 }
 
 // Persist a record via POST /api/providers, sending the key only when entered (write-once). On
@@ -2562,6 +2876,351 @@ function bindProviderConfig() {
   });
 }
 
+// --- Orchestration model assignment panel (Chunk 043) ---
+//
+// Talks to the non-secret Orchestration_Model_Assignment_API:
+//   GET  /api/orchestration-models/effective
+//   PUT  /api/orchestration-models/assignments/:role
+//   POST /api/orchestration-models/assignments/:role/test
+//   POST /api/orchestration-models/assignments/reset
+// Assignments never carry API keys or secret refs; provider/model ids and budgets only.
+
+const orchestrationModelState = {
+  roles: [],
+  providers: [],
+  assignments: [],
+  effective: [],
+};
+
+function setOrchestrationModelLoading(loading) {
+  const indicator = els["orchestration-model-config-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+function showOrchestrationModelError(message) {
+  const box = els["orchestration-model-config-error"];
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+}
+
+function hideOrchestrationModelError() {
+  const box = els["orchestration-model-config-error"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+}
+
+function showOrchestrationModelStatus(kind, message) {
+  const box = els["orchestration-model-status"];
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+  box.className = `orchestration-model-status orchestration-model-status--${kind === "ok" ? "ok" : "err"}`;
+}
+
+function clearOrchestrationModelStatus() {
+  const box = els["orchestration-model-status"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+  box.className = "orchestration-model-status";
+}
+
+function orchestrationProviderOptions() {
+  return [
+    { id: "deterministic", label: "Deterministic local", models: [{ id: "deterministic-local", label: "deterministic-local" }] },
+    { id: "disabled", label: "Disabled", models: [] },
+    ...orchestrationModelState.providers,
+  ];
+}
+
+function findOrchestrationProvider(providerId) {
+  return orchestrationProviderOptions().find((provider) => provider.id === providerId) || null;
+}
+
+function findOrchestrationAssignment(roleId) {
+  return orchestrationModelState.assignments.find((assignment) => assignment.role === roleId) || null;
+}
+
+function findOrchestrationEffective(roleId) {
+  return orchestrationModelState.effective.find((route) => route.role === roleId) || null;
+}
+
+function appendSelectOption(select, value, label) {
+  const opt = document.createElement("option");
+  opt.value = value;
+  opt.textContent = label;
+  select.appendChild(opt);
+}
+
+function populateOrchestrationModelSelect(select, providerId, selectedModel) {
+  if (!select) return;
+  select.innerHTML = "";
+  appendSelectOption(select, "", "Default model");
+  const provider = findOrchestrationProvider(providerId);
+  const models = Array.isArray(provider?.models) ? provider.models : [];
+  for (const model of models) {
+    appendSelectOption(select, model.id, model.label || model.id);
+  }
+  if (selectedModel && !models.some((model) => model.id === selectedModel)) {
+    appendSelectOption(select, selectedModel, selectedModel);
+  }
+  select.value = selectedModel || "";
+}
+
+function orchestrationWarningText(effective) {
+  const warnings = Array.isArray(effective?.warnings) ? effective.warnings : [];
+  if (!warnings.length) return "Ready";
+  return warnings.map((warning) => `${warning.severity}: ${warning.message}`).join(" | ");
+}
+
+function roleCapabilityText(role) {
+  const required = Array.isArray(role.requiredCapabilities) ? role.requiredCapabilities : [];
+  return required.length ? required.join(", ") : "text";
+}
+
+function createOrchestrationModelRow(role) {
+  const assignment = findOrchestrationAssignment(role.id);
+  const effective = findOrchestrationEffective(role.id);
+  const providerId = assignment?.providerId || effective?.providerId || "deterministic";
+  const fallbackProviderId = assignment?.fallbackProviderId || effective?.fallbackProviderId || "deterministic";
+
+  const row = document.createElement("tr");
+  row.className = "orchestration-model-row";
+  row.dataset.role = role.id;
+
+  const roleCell = document.createElement("td");
+  const roleName = document.createElement("div");
+  roleName.className = "orchestration-model-role__name";
+  roleName.textContent = role.label || role.id;
+  const roleDesc = document.createElement("div");
+  roleDesc.className = "orchestration-model-role__desc";
+  roleDesc.textContent = role.description || "";
+  roleCell.appendChild(roleName);
+  roleCell.appendChild(roleDesc);
+  row.appendChild(roleCell);
+
+  const providerCell = document.createElement("td");
+  const providerSelect = document.createElement("select");
+  providerSelect.className = "orchestration-model-provider";
+  for (const provider of orchestrationProviderOptions()) {
+    appendSelectOption(providerSelect, provider.id, provider.label || provider.id);
+  }
+  providerSelect.value = providerId;
+  providerCell.appendChild(providerSelect);
+  row.appendChild(providerCell);
+
+  const modelCell = document.createElement("td");
+  const modelSelect = document.createElement("select");
+  modelSelect.className = "orchestration-model-model";
+  populateOrchestrationModelSelect(modelSelect, providerId, assignment?.modelId || effective?.modelId || "");
+  modelCell.appendChild(modelSelect);
+  row.appendChild(modelCell);
+
+  const fallbackCell = document.createElement("td");
+  const fallbackSelect = document.createElement("select");
+  fallbackSelect.className = "orchestration-model-fallback";
+  for (const provider of orchestrationProviderOptions()) {
+    appendSelectOption(fallbackSelect, provider.id, provider.label || provider.id);
+  }
+  fallbackSelect.value = fallbackProviderId;
+  fallbackCell.appendChild(fallbackSelect);
+  const fallbackModelSelect = document.createElement("select");
+  fallbackModelSelect.className = "orchestration-model-fallback-model";
+  populateOrchestrationModelSelect(
+    fallbackModelSelect,
+    fallbackProviderId,
+    assignment?.fallbackModelId || effective?.fallbackModelId || "",
+  );
+  fallbackCell.appendChild(fallbackModelSelect);
+  row.appendChild(fallbackCell);
+
+  const budgetCell = document.createElement("td");
+  const usd = document.createElement("input");
+  usd.type = "number";
+  usd.className = "orchestration-model-budget-usd";
+  usd.setAttribute("min", "0");
+  usd.setAttribute("step", "0.001");
+  usd.setAttribute("placeholder", "USD");
+  usd.value = assignment?.maxUsdPerCall != null ? String(assignment.maxUsdPerCall) : "";
+  const tokens = document.createElement("input");
+  tokens.type = "number";
+  tokens.className = "orchestration-model-budget-tokens";
+  tokens.setAttribute("min", "1");
+  tokens.setAttribute("step", "1");
+  tokens.setAttribute("placeholder", "tokens");
+  tokens.value = assignment?.maxTokens != null ? String(assignment.maxTokens) : "";
+  budgetCell.appendChild(usd);
+  budgetCell.appendChild(tokens);
+  row.appendChild(budgetCell);
+
+  const capsCell = document.createElement("td");
+  const caps = document.createElement("div");
+  caps.className = "orchestration-model-caps";
+  caps.textContent = roleCapabilityText(role);
+  const warnings = document.createElement("div");
+  warnings.className = (effective?.warnings || []).some((warning) => warning.severity === "blocker")
+    ? "orchestration-model-warnings is-blocked"
+    : "orchestration-model-warnings";
+  warnings.textContent = orchestrationWarningText(effective);
+  capsCell.appendChild(caps);
+  capsCell.appendChild(warnings);
+  row.appendChild(capsCell);
+
+  const actionsCell = document.createElement("td");
+  const dirty = document.createElement("span");
+  dirty.className = "orchestration-model-dirty";
+  dirty.textContent = "Unsaved";
+  dirty.hidden = true;
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "btn btn--primary btn--sm orchestration-model-save";
+  saveBtn.textContent = "Save";
+  const testBtn = document.createElement("button");
+  testBtn.type = "button";
+  testBtn.className = "btn btn--sm orchestration-model-test";
+  testBtn.textContent = "Test";
+  actionsCell.appendChild(dirty);
+  actionsCell.appendChild(saveBtn);
+  actionsCell.appendChild(testBtn);
+  row.appendChild(actionsCell);
+
+  const markDirty = () => {
+    dirty.hidden = false;
+  };
+  providerSelect.addEventListener("change", () => {
+    populateOrchestrationModelSelect(modelSelect, providerSelect.value, "");
+    markDirty();
+  });
+  fallbackSelect.addEventListener("change", () => {
+    populateOrchestrationModelSelect(fallbackModelSelect, fallbackSelect.value, "");
+    markDirty();
+  });
+  for (const input of [modelSelect, fallbackModelSelect, usd, tokens]) {
+    input.addEventListener("change", markDirty);
+    input.addEventListener("input", markDirty);
+  }
+  saveBtn.addEventListener("click", () => void saveOrchestrationModelRow(row));
+  testBtn.addEventListener("click", () => void testOrchestrationModelRow(row));
+
+  return row;
+}
+
+function readOrchestrationModelRow(row) {
+  const role = row.dataset.role;
+  const providerId = row.querySelector(".orchestration-model-provider")?.value || "deterministic";
+  const modelId = row.querySelector(".orchestration-model-model")?.value || "";
+  const fallbackProviderId = row.querySelector(".orchestration-model-fallback")?.value || "deterministic";
+  const fallbackModelId = row.querySelector(".orchestration-model-fallback-model")?.value || "";
+  const usdRaw = row.querySelector(".orchestration-model-budget-usd")?.value || "";
+  const tokensRaw = row.querySelector(".orchestration-model-budget-tokens")?.value || "";
+  const body = {
+    providerId,
+    enabled: providerId !== "disabled",
+  };
+  if (fallbackProviderId && fallbackProviderId !== providerId) body.fallbackProviderId = fallbackProviderId;
+  if (modelId) body.modelId = modelId;
+  if (fallbackProviderId && fallbackProviderId !== providerId && fallbackModelId) body.fallbackModelId = fallbackModelId;
+  if (usdRaw) body.maxUsdPerCall = Number(usdRaw);
+  if (tokensRaw) body.maxTokens = Number.parseInt(tokensRaw, 10);
+  return { role, body };
+}
+
+function renderOrchestrationModelConfig() {
+  const rows = els["orchestration-model-rows"];
+  if (!rows) return;
+  rows.innerHTML = "";
+  const emptyProviders = els["orchestration-model-empty-providers"];
+  if (emptyProviders) emptyProviders.hidden = orchestrationModelState.providers.length > 0;
+  for (const role of orchestrationModelState.roles) {
+    rows.appendChild(createOrchestrationModelRow(role));
+  }
+}
+
+async function loadOrchestrationModelConfig() {
+  setOrchestrationModelLoading(true);
+  hideOrchestrationModelError();
+  clearOrchestrationModelStatus();
+  try {
+    const data = await api("/orchestration-models/effective");
+    orchestrationModelState.roles = Array.isArray(data.roles) ? data.roles : [];
+    orchestrationModelState.providers = Array.isArray(data.providers) ? data.providers : [];
+    orchestrationModelState.assignments = Array.isArray(data.assignments) ? data.assignments : [];
+    orchestrationModelState.effective = Array.isArray(data.effective) ? data.effective : [];
+    renderOrchestrationModelConfig();
+  } catch {
+    orchestrationModelState.roles = [];
+    orchestrationModelState.providers = [];
+    orchestrationModelState.assignments = [];
+    orchestrationModelState.effective = [];
+    renderOrchestrationModelConfig();
+    showOrchestrationModelError("Orchestration model assignments could not be loaded. Chat remains available.");
+  } finally {
+    setOrchestrationModelLoading(false);
+  }
+}
+
+async function saveOrchestrationModelRow(row) {
+  const { role, body } = readOrchestrationModelRow(row);
+  if (!role) return;
+  try {
+    await api(`/orchestration-models/assignments/${encodeURIComponent(role)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+    showOrchestrationModelStatus("ok", `${role} assignment saved.`);
+    await loadOrchestrationModelConfig();
+  } catch (err) {
+    showOrchestrationModelStatus("err", `Could not save ${role}: ${err.message}`);
+  }
+}
+
+async function testOrchestrationModelRow(row) {
+  const { role, body } = readOrchestrationModelRow(row);
+  if (!role) return;
+  try {
+    const result = await api(`/orchestration-models/assignments/${encodeURIComponent(role)}/test`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const model = result.model ? ` (${result.model})` : "";
+    const network = result.networkAttempted ? "connection test sent" : "local validation only";
+    showOrchestrationModelStatus("ok", `${role} route is ready${model}; ${network}.`);
+  } catch (err) {
+    showOrchestrationModelStatus("err", `${role} test failed: ${err.message}`);
+  }
+}
+
+async function resetOrchestrationModelAssignments() {
+  try {
+    await api("/orchestration-models/assignments/reset", { method: "POST", body: JSON.stringify({}) });
+    showOrchestrationModelStatus("ok", "Reset to deterministic local defaults.");
+    await loadOrchestrationModelConfig();
+  } catch (err) {
+    showOrchestrationModelStatus("err", `Could not reset assignments: ${err.message}`);
+  }
+}
+
+function openOrchestrationModelConfig() {
+  const modal = els["orchestration-model-config-modal"];
+  if (!modal) return;
+  modal.hidden = false;
+  void loadOrchestrationModelConfig();
+}
+
+function closeOrchestrationModelConfig() {
+  const modal = els["orchestration-model-config-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindOrchestrationModelConfig() {
+  els["open-orchestration-model-config"]?.addEventListener("click", openOrchestrationModelConfig);
+  els["close-orchestration-model-config"]?.addEventListener("click", closeOrchestrationModelConfig);
+  els["orchestration-model-config-backdrop"]?.addEventListener("click", closeOrchestrationModelConfig);
+  els["orchestration-model-reset"]?.addEventListener("click", () => void resetOrchestrationModelAssignments());
+}
+
 // --- Memory provider configuration panel (Memory_Provider_Config_UI, Chunk 36) ---
 //
 // Mirrors Provider_Config_UI but talks to the Memory_Provider_API:
@@ -2635,6 +3294,12 @@ const memoryProviderConfigState = {
   activeMemoryProviderId: null,
 };
 
+const memoryAssignmentState = {
+  roles: [],
+  assignments: [],
+  effective: [],
+};
+
 const memoryProviderConfigTest = {
   inFlight: false,
   abort: null,
@@ -2675,31 +3340,222 @@ function findMemoryProviderRecord(providerId) {
   return memoryProviderConfigState.providers.find((p) => p.id === providerId) || null;
 }
 
+function memoryAssignmentEffectiveForRole(role) {
+  return memoryAssignmentState.effective.find((item) => item.role === role) || null;
+}
+
+function memoryAssignmentForRole(role) {
+  return memoryAssignmentState.assignments.find((item) => item.role === role) || null;
+}
+
+function memoryAssignmentProviderLabel(providerId) {
+  if (providerId === "local") return "Local default";
+  if (providerId === "disabled") return "Disabled";
+  const record = findMemoryProviderRecord(providerId);
+  return record ? record.label || record.id : providerId;
+}
+
+function memoryAssignmentProviderOptions() {
+  return [
+    { id: "local", label: "Local default" },
+    { id: "disabled", label: "Disabled" },
+    ...memoryProviderConfigState.providers.map((provider) => ({
+      id: provider.id,
+      label: `${provider.label || provider.id} (${memoryProviderKindSpec(provider.kind).label})`,
+    })),
+  ];
+}
+
 function setMemoryProviderConfigLoading(loading) {
-  const indicator = els["memory-provider-config-loading"];
-  if (indicator) indicator.hidden = !loading;
+  setPanelLoading("memory-provider-config-loading", loading);
 }
 
 function showMemoryProviderConfigError(message) {
-  const box = els["memory-provider-config-error"];
-  if (!box) return;
-  box.hidden = false;
-  box.textContent = message;
+  showPanelError("memory-provider-config-error", message);
 }
 
 function hideMemoryProviderConfigError() {
-  const box = els["memory-provider-config-error"];
-  if (!box) return;
-  box.hidden = true;
-  box.textContent = "";
+  hidePanelError("memory-provider-config-error");
 }
 
 function showMemoryProviderConfigResult(box, kind, message) {
-  showProviderConfigResult(box, kind, message);
+  showConfigResult(box, kind, message);
 }
 
 function clearMemoryProviderConfigResult(box) {
-  clearProviderConfigResult(box);
+  clearConfigResult(box);
+}
+
+async function saveMemoryAssignment(role, providerRecordId, resultBox) {
+  try {
+    await api(`/memory-assignments/${encodeURIComponent(role)}`, {
+      method: "PUT",
+      body: JSON.stringify({ providerRecordId }),
+    });
+    showMemoryProviderConfigResult(
+      resultBox,
+      "ok",
+      `${role} now uses ${memoryAssignmentProviderLabel(providerRecordId)}.`,
+    );
+    await loadMemoryAssignments();
+  } catch (err) {
+    showMemoryProviderConfigResult(resultBox, "err", `Could not save memory assignment: ${err.message}`);
+  }
+}
+
+async function testMemoryAssignment(role, providerRecordId, resultBox, button) {
+  if (button) button.disabled = true;
+  clearMemoryProviderConfigResult(resultBox);
+  try {
+    const data = await api(`/memory-assignments/${encodeURIComponent(role)}/test`, {
+      method: "POST",
+      body: JSON.stringify({ providerRecordId }),
+    });
+    if (data.ok) {
+      showMemoryProviderConfigResult(resultBox, "ok", `${role} memory role is ready.`);
+    } else {
+      showMemoryProviderConfigResult(resultBox, "err", `${role} is not ready: ${data.error || data.code || "unknown"}`);
+    }
+    await loadMemoryAssignments();
+  } catch (err) {
+    showMemoryProviderConfigResult(resultBox, "err", `Could not test memory assignment: ${err.message}`);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function previewMemoryAssignmentMigration(role, targetProviderRecordId, resultBox) {
+  try {
+    const data = await api(`/memory-assignments/${encodeURIComponent(role)}/migrate/plan`, {
+      method: "POST",
+      body: JSON.stringify({ targetProviderRecordId }),
+    });
+    const steps = Array.isArray(data.steps) ? data.steps.length : 0;
+    showMemoryProviderConfigResult(
+      resultBox,
+      "ok",
+      `Migration preview only: ${steps} planned steps, destructive action: ${data.destructive === true ? "yes" : "no"}.`,
+    );
+  } catch (err) {
+    showMemoryProviderConfigResult(resultBox, "err", `Could not create migration plan: ${err.message}`);
+  }
+}
+
+function createMemoryAssignmentRow(roleDef) {
+  const role = roleDef.role;
+  const assignment = memoryAssignmentForRole(role);
+  const effective = memoryAssignmentEffectiveForRole(role);
+  const selected = assignment?.providerRecordId || effective?.providerRecordId || "local";
+
+  const row = document.createElement("div");
+  row.className = "provider-config-card memory-assignment-row";
+  row.dataset.role = role;
+
+  const head = document.createElement("div");
+  head.className = "provider-config-card__head";
+  const name = document.createElement("span");
+  name.className = "provider-config-card__name";
+  name.textContent = roleDef.label || role;
+  const status = document.createElement("span");
+  status.className = "provider-config-card__status";
+  status.textContent = effective?.readiness?.status || effective?.status || "ready";
+  head.appendChild(name);
+  head.appendChild(status);
+  row.appendChild(head);
+
+  const desc = document.createElement("p");
+  desc.className = "provider-config-tier__desc";
+  desc.textContent = roleDef.purpose || "Memory role";
+  row.appendChild(desc);
+
+  const field = document.createElement("label");
+  field.className = "provider-config-field-row";
+  const label = document.createElement("span");
+  label.className = "provider-config-label";
+  label.textContent = "Provider";
+  const select = document.createElement("select");
+  select.className = "provider-config-input memory-assignment-provider";
+  select.dataset.role = role;
+  for (const optionSpec of memoryAssignmentProviderOptions()) {
+    const option = document.createElement("option");
+    option.value = optionSpec.id;
+    option.textContent = optionSpec.label;
+    if (optionSpec.id === selected) option.selected = true;
+    select.appendChild(option);
+  }
+  select.value = selected;
+  field.appendChild(label);
+  field.appendChild(select);
+  row.appendChild(field);
+
+  const warningBox = document.createElement("div");
+  warningBox.className = "provider-config-key-hint memory-assignment-warnings";
+  const warnings = Array.isArray(effective?.warnings) ? effective.warnings : [];
+  warningBox.textContent = warnings.length > 0 ? warnings.map((warning) => warning.message).join(" ") : "No capability warnings.";
+  row.appendChild(warningBox);
+
+  const resultBox = document.createElement("div");
+  resultBox.className = "provider-config-result";
+  resultBox.setAttribute("role", "status");
+  resultBox.setAttribute("aria-live", "polite");
+  resultBox.hidden = true;
+
+  const actions = document.createElement("div");
+  actions.className = "provider-config-card__actions";
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "btn btn--primary btn--sm memory-assignment-save";
+  saveBtn.textContent = "Save assignment";
+  saveBtn.addEventListener("click", () => void saveMemoryAssignment(role, select.value, resultBox));
+  const testBtn = document.createElement("button");
+  testBtn.type = "button";
+  testBtn.className = "btn btn--sm memory-assignment-test";
+  testBtn.textContent = "Test";
+  testBtn.addEventListener("click", () => void testMemoryAssignment(role, select.value, resultBox, testBtn));
+  const migrateBtn = document.createElement("button");
+  migrateBtn.type = "button";
+  migrateBtn.className = "btn btn--ghost btn--sm memory-assignment-migrate";
+  migrateBtn.textContent = "Migration plan";
+  migrateBtn.addEventListener("click", () => void previewMemoryAssignmentMigration(role, select.value, resultBox));
+  actions.appendChild(saveBtn);
+  actions.appendChild(testBtn);
+  actions.appendChild(migrateBtn);
+  row.appendChild(actions);
+  row.appendChild(resultBox);
+
+  return row;
+}
+
+function renderMemoryAssignmentMatrix() {
+  const container = els["memory-assignment-matrix"];
+  if (!container) return;
+  container.innerHTML = "";
+  const roles = memoryAssignmentState.roles.length > 0 ? memoryAssignmentState.roles : [];
+  for (const roleDef of roles) {
+    container.appendChild(createMemoryAssignmentRow(roleDef));
+  }
+}
+
+async function loadMemoryAssignments() {
+  const [assignmentsData, effectiveData] = await Promise.all([
+    api("/memory-assignments"),
+    api("/memory-assignments/effective"),
+  ]);
+  memoryAssignmentState.roles = Array.isArray(assignmentsData.roles) ? assignmentsData.roles : [];
+  memoryAssignmentState.assignments = Array.isArray(assignmentsData.assignments) ? assignmentsData.assignments : [];
+  memoryAssignmentState.effective = Array.isArray(effectiveData.effective) ? effectiveData.effective : [];
+  renderMemoryAssignmentMatrix();
+}
+
+async function resetMemoryAssignments() {
+  const resultBox = els["memory-assignment-result"];
+  try {
+    await api("/memory-assignments/reset", { method: "POST", body: JSON.stringify({}) });
+    showMemoryProviderConfigResult(resultBox, "ok", "Memory assignments reset to local defaults.");
+    await loadMemoryAssignments();
+  } catch (err) {
+    showMemoryProviderConfigResult(resultBox, "err", `Could not reset memory assignments: ${err.message}`);
+  }
 }
 
 function renderMemoryProviderAddFields() {
@@ -2727,52 +3583,16 @@ function renderMemoryProviderAddFields() {
 }
 
 async function runMemoryProviderConfigTest(providerId, label, resultBox, testBtn, loadingEl) {
-  if (memoryProviderConfigTest.inFlight) return;
-  memoryProviderConfigTest.inFlight = true;
-  clearMemoryProviderConfigResult(resultBox);
-  if (testBtn) testBtn.disabled = true;
-  if (loadingEl) loadingEl.hidden = false;
-
-  const controller = new AbortController();
-  memoryProviderConfigTest.abort = controller;
-  let timedOut = false;
-  memoryProviderConfigTest.timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, PROVIDER_TEST_TIMEOUT_MS);
-
-  try {
-    const res = await fetch(`${API}/memory-providers/${encodeURIComponent(providerId)}/test-connection`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    const body = text ? JSON.parse(text) : {};
-    if (res.ok && body.ok) {
-      showMemoryProviderConfigResult(resultBox, "ok", `${label} memory provider is ready. Configuration is valid.`);
-    } else {
-      const reason = (body && (body.error || body.code)) || "configuration validation failed";
-      showMemoryProviderConfigResult(resultBox, "err", `${label} connection failed: ${reason}`);
-    }
-  } catch (err) {
-    if (timedOut || (err && err.name === "AbortError")) {
-      showMemoryProviderConfigResult(
-        resultBox,
-        "err",
-        `${label} connection test timed out after 30 seconds. No result was received.`,
-      );
-    } else {
-      showMemoryProviderConfigResult(resultBox, "err", `${label} connection failed: could not reach the server.`);
-    }
-  } finally {
-    clearTimeout(memoryProviderConfigTest.timer);
-    memoryProviderConfigTest.timer = null;
-    memoryProviderConfigTest.abort = null;
-    memoryProviderConfigTest.inFlight = false;
-    if (testBtn) testBtn.disabled = false;
-    if (loadingEl) loadingEl.hidden = true;
-  }
+  return runConfigConnectionTest({
+    state: memoryProviderConfigTest,
+    url: `${API}/memory-providers/${encodeURIComponent(providerId)}/test-connection`,
+    label,
+    resultBox,
+    testBtn,
+    loadingEl,
+    failureFallback: "configuration validation failed",
+    successMessage: () => `${label} memory provider is ready. Configuration is valid.`,
+  });
 }
 
 async function saveMemoryProviderConfig(spec, providerId, label, inputs, keyInput, resultBox) {
@@ -3023,11 +3843,28 @@ async function loadMemoryProviderConfig() {
       typeof data.activeMemoryProviderId === "string" ? data.activeMemoryProviderId : null;
     renderMemoryProviderConfig();
     renderMemoryProviderAddFields();
+    try {
+      await loadMemoryAssignments();
+    } catch (err) {
+      memoryAssignmentState.roles = [];
+      memoryAssignmentState.assignments = [];
+      memoryAssignmentState.effective = [];
+      renderMemoryAssignmentMatrix();
+      showMemoryProviderConfigResult(
+        els["memory-assignment-result"],
+        "err",
+        `Memory assignments could not be loaded: ${err.message}`,
+      );
+    }
   } catch {
     memoryProviderConfigState.providers = [];
     memoryProviderConfigState.activeMemoryProviderId = null;
     renderMemoryProviderConfig();
     renderMemoryProviderAddFields();
+    memoryAssignmentState.roles = [];
+    memoryAssignmentState.assignments = [];
+    memoryAssignmentState.effective = [];
+    renderMemoryAssignmentMatrix();
     showMemoryProviderConfigError(
       "Memory provider configuration could not be loaded. Chat and trace remain available.",
     );
@@ -3105,10 +3942,456 @@ function bindMemoryProviderConfig() {
   els["memory-provider-config-backdrop"]?.addEventListener("click", closeMemoryProviderConfig);
   bindKeyToggle(els["memory-provider-config-add-key"], els["memory-provider-config-add-key-toggle"]);
   els["memory-provider-config-kind"]?.addEventListener("change", renderMemoryProviderAddFields);
+  els["memory-assignment-reset"]?.addEventListener("click", () => void resetMemoryAssignments());
   els["memory-provider-config-add-form"]?.addEventListener("submit", (event) => {
     event.preventDefault();
     void addMemoryProviderFromForm();
   });
+}
+
+// --- Module manager (Chunk 041) ---
+
+function setModuleManagerLoading(loading) {
+  const indicator = els["module-manager-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+function showModuleManagerError(message) {
+  const box = els["module-manager-error"];
+  if (box) {
+    box.hidden = false;
+    box.textContent = message;
+  }
+}
+
+function clearModuleManagerError() {
+  const box = els["module-manager-error"];
+  if (box) {
+    box.hidden = true;
+    box.textContent = "";
+  }
+}
+
+function renderModuleManagerList(modules) {
+  const container = els["module-manager-list"];
+  if (!container) return;
+  container.replaceChildren();
+  for (const mod of modules) {
+    const card = document.createElement("article");
+    card.className = "provider-config-card";
+    card.dataset.moduleId = mod.id;
+
+    const head = document.createElement("div");
+    head.className = "provider-config-card__head";
+    const title = document.createElement("h4");
+    title.className = "provider-config-card__title";
+    title.textContent = mod.name;
+    head.append(title);
+
+    const body = document.createElement("div");
+    body.className = "provider-config-card__body";
+    const desc = document.createElement("p");
+    desc.className = "provider-config-card__desc";
+    desc.textContent = mod.description || mod.id;
+    body.append(desc);
+
+    const tier = document.createElement("p");
+    tier.className = "provider-config-card__meta";
+    tier.textContent = `Tier: ${mod.tier}${mod.externalModeOnly ? " · external mode only" : ""}`;
+    body.append(tier);
+
+    const toggleRow = document.createElement("label");
+    toggleRow.className = "provider-config-field-row";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = Boolean(mod.enabled);
+    checkbox.disabled = mod.tier === "core";
+    checkbox.addEventListener("change", () => {
+      void toggleModuleEnabled(mod.id, checkbox.checked, checkbox);
+    });
+    toggleRow.append(checkbox, document.createTextNode(" Enabled"));
+    body.append(toggleRow);
+
+    card.append(head, body);
+    container.append(card);
+  }
+}
+
+async function toggleModuleEnabled(moduleId, enabled, checkbox) {
+  try {
+    const res = await fetch("/api/modules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ moduleId, enabled }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || `Request failed (${res.status})`);
+    }
+  } catch (err) {
+    if (checkbox) checkbox.checked = !enabled;
+    showModuleManagerError(`Could not update module: ${err.message}`);
+  }
+}
+
+async function loadModuleManager() {
+  clearModuleManagerError();
+  setModuleManagerLoading(true);
+  try {
+    const res = await fetch("/api/modules");
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    renderModuleManagerList(data.modules || []);
+  } catch (err) {
+    showModuleManagerError(`Could not load modules: ${err.message}`);
+  } finally {
+    setModuleManagerLoading(false);
+  }
+}
+
+function openModuleManager() {
+  const modal = els["module-manager-modal"];
+  if (!modal) return;
+  modal.hidden = false;
+  void loadModuleManager();
+}
+
+function closeModuleManager() {
+  const modal = els["module-manager-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindModuleManager() {
+  els["open-module-manager"]?.addEventListener("click", openModuleManager);
+  els["close-module-manager"]?.addEventListener("click", closeModuleManager);
+  els["module-manager-backdrop"]?.addEventListener("click", closeModuleManager);
+}
+
+// --- Template manager (Chunk 045) ---
+//
+// Minimal one-click preset surface. Templates are fetched from the Template_API, previewed before
+// apply, and imported/exported as JSON. No secret is accepted into template state: imported JSON is
+// parsed client-side and the server repeats secret scanning before preview/apply.
+
+const templateManagerState = {
+  templates: [],
+  selectedTemplateId: "cheap-byok",
+  importTemplate: null,
+  lastPreview: null,
+};
+
+function setTemplateManagerLoading(loading) {
+  const indicator = els["template-manager-loading"];
+  if (indicator) indicator.hidden = !loading;
+}
+
+function showTemplateManagerError(message) {
+  const box = els["template-manager-error"];
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+}
+
+function clearTemplateManagerError() {
+  const box = els["template-manager-error"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+}
+
+function showTemplateManagerResult(kind, message) {
+  const box = els["template-manager-result"];
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = message;
+  box.className = `provider-config-result provider-config-result--${kind === "ok" ? "ok" : "err"}`;
+}
+
+function clearTemplateManagerResult() {
+  const box = els["template-manager-result"];
+  if (!box) return;
+  box.hidden = true;
+  box.textContent = "";
+  box.className = "provider-config-result";
+}
+
+function templateCardStatus(template) {
+  if (!template) return "Template";
+  const cost = template.budgets?.estimatedCostTier || "unknown";
+  return `${template.riskLevel || "risk"} · ${cost}`;
+}
+
+function renderTemplateGallery() {
+  const gallery = els["template-manager-gallery"];
+  if (!gallery) return;
+  gallery.innerHTML = "";
+  for (const template of templateManagerState.templates) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "provider-config-card template-card" + (template.id === templateManagerState.selectedTemplateId ? " is-active" : "");
+    card.dataset.templateId = template.id;
+    card.setAttribute("aria-pressed", template.id === templateManagerState.selectedTemplateId ? "true" : "false");
+
+    const head = document.createElement("div");
+    head.className = "provider-config-card__head";
+    const name = document.createElement("span");
+    name.className = "provider-config-card__name";
+    name.textContent = template.name;
+    const status = document.createElement("span");
+    status.className = "provider-config-card__status";
+    status.textContent = templateCardStatus(template);
+    head.appendChild(name);
+    head.appendChild(status);
+
+    const desc = document.createElement("p");
+    desc.className = "provider-config-card__desc";
+    desc.textContent = template.description;
+
+    card.appendChild(head);
+    card.appendChild(desc);
+    card.addEventListener("click", () => {
+      templateManagerState.selectedTemplateId = template.id;
+      renderTemplateGallery();
+      void previewTemplateById(template.id);
+    });
+    gallery.appendChild(card);
+  }
+}
+
+function summarizePreview(preview) {
+  if (!preview) return "No preview loaded.";
+  const orch = preview.changes?.orchestrationAssignments?.length || 0;
+  const mem = preview.changes?.memoryAssignments?.length || 0;
+  const modules = preview.changes?.moduleToggles?.length || 0;
+  const providers = preview.missingProviderConfigs?.length || 0;
+  const missingSecrets = preview.missingSecrets?.length || 0;
+  const caps = preview.capabilityMismatches?.length || 0;
+  return `${orch} orchestration changes · ${mem} memory changes · ${modules} module toggles · ${providers} missing providers · ${missingSecrets} missing secrets · ${caps} capability warnings · ${preview.estimatedCostTier || "free"} cost tier`;
+}
+
+function renderTemplateRequirements(preview) {
+  const list = els["template-manager-requirements"];
+  if (!list) return;
+  list.innerHTML = "";
+  const rows = [];
+  for (const item of preview?.missingProviderConfigs || []) {
+    rows.push(`Missing provider: ${item.providerId || item.providerKind || "provider"} — ${item.reason}`);
+  }
+  for (const item of preview?.missingSecrets || []) {
+    rows.push(`Missing credential: ${item.label || item.providerId || item.providerKind || "provider"} — ${item.reason}`);
+  }
+  for (const item of preview?.capabilityMismatches || []) {
+    rows.push(`Capability warning: ${item.capability} — ${item.reason}`);
+  }
+  for (const implication of preview?.externalNetworkImplications || []) {
+    rows.push(`Network/cost implication: ${implication}`);
+  }
+  for (const warning of preview?.warnings || []) {
+    rows.push(`Warning: ${warning}`);
+  }
+  if (!rows.length) rows.push("All requirements satisfied for this preview.");
+
+  for (const row of rows) {
+    const li = document.createElement("li");
+    li.textContent = row;
+    list.appendChild(li);
+  }
+}
+
+function renderTemplatePreview(preview) {
+  templateManagerState.lastPreview = preview;
+  const pane = els["template-manager-preview"];
+  if (pane) pane.hidden = false;
+  if (els["template-manager-preview-title"]) {
+    els["template-manager-preview-title"].textContent = preview?.template?.name || "Template preview";
+  }
+  if (els["template-manager-preview-summary"]) {
+    els["template-manager-preview-summary"].textContent = summarizePreview(preview);
+  }
+  renderTemplateRequirements(preview);
+  const apply = els["template-manager-apply"];
+  if (apply) apply.disabled = !preview || preview.valid === false;
+}
+
+async function loadTemplates() {
+  clearTemplateManagerError();
+  clearTemplateManagerResult();
+  setTemplateManagerLoading(true);
+  try {
+    const data = await api("/templates");
+    templateManagerState.templates = Array.isArray(data.templates) ? data.templates : [];
+    if (!templateManagerState.templates.some((template) => template.id === templateManagerState.selectedTemplateId)) {
+      templateManagerState.selectedTemplateId = templateManagerState.templates[0]?.id || null;
+    }
+    renderTemplateGallery();
+    if (templateManagerState.selectedTemplateId) await previewTemplateById(templateManagerState.selectedTemplateId);
+  } catch (err) {
+    showTemplateManagerError(`Could not load templates: ${err.message}`);
+  } finally {
+    setTemplateManagerLoading(false);
+  }
+}
+
+async function previewTemplateById(templateId) {
+  if (!templateId) return;
+  clearTemplateManagerError();
+  clearTemplateManagerResult();
+  setTemplateManagerLoading(true);
+  try {
+    const data = await api(`/templates/${encodeURIComponent(templateId)}/preview`, { method: "POST", body: JSON.stringify({}) });
+    renderTemplatePreview(data.preview);
+  } catch (err) {
+    showTemplateManagerError(`Could not preview template: ${err.message}`);
+  } finally {
+    setTemplateManagerLoading(false);
+  }
+}
+
+function selectedTemplateApplyOptions() {
+  const mode = els["template-manager-apply-mode"]?.value || "mergeMissing";
+  const confirmReplace = els["template-manager-confirm-replace"]?.checked === true;
+  return { mode, confirmReplace };
+}
+
+async function applySelectedTemplate() {
+  const templateId = templateManagerState.selectedTemplateId;
+  if (!templateId) return;
+  clearTemplateManagerError();
+  clearTemplateManagerResult();
+  const apply = els["template-manager-apply"];
+  if (apply) apply.disabled = true;
+  try {
+    const result = await api(`/templates/${encodeURIComponent(templateId)}/apply`, {
+      method: "POST",
+      body: JSON.stringify(selectedTemplateApplyOptions()),
+    });
+    renderTemplatePreview(result.preview);
+    showTemplateManagerResult("ok", `Applied ${result.template?.name || templateId}: ${result.changed?.orchestrationAssignments || 0} orchestration and ${result.changed?.memoryAssignments || 0} memory assignments changed.`);
+    await loadProductReadiness();
+    if (productReadiness.ready && productReadiness.orchestrationProfile !== "configured") {
+      showTemplateManagerResult(
+        "ok",
+        "Template applied and readiness checks pass. Activate Rector from the onboarding overlay to unlock chat.",
+      );
+    } else if (!productReadiness.ready && Array.isArray(productReadiness.blockers) && productReadiness.blockers.length > 0) {
+      showTemplateManagerResult(
+        "err",
+        `Template applied, but setup is not ready yet: ${productReadiness.blockers.join("; ")}`,
+      );
+    }
+  } catch (err) {
+    showTemplateManagerResult("err", `Could not apply template: ${err.message}`);
+  } finally {
+    if (apply) apply.disabled = false;
+  }
+}
+
+function parseTemplateImportText() {
+  const raw = els["template-manager-import-json"]?.value || "";
+  if (!raw.trim()) throw new Error("Paste a template JSON document first.");
+  return JSON.parse(raw);
+}
+
+async function previewImportedTemplate() {
+  clearTemplateManagerError();
+  clearTemplateManagerResult();
+  try {
+    const template = parseTemplateImportText();
+    const data = await api("/templates/import/preview", {
+      method: "POST",
+      body: JSON.stringify({ template }),
+    });
+    templateManagerState.importTemplate = data.template;
+    renderTemplatePreview(data.preview);
+    showTemplateManagerResult("ok", `Imported preview ready: ${data.template?.name || "template"}.`);
+  } catch (err) {
+    templateManagerState.importTemplate = null;
+    showTemplateManagerResult("err", `Import preview failed: ${err.message}`);
+  }
+}
+
+async function applyImportedTemplate() {
+  clearTemplateManagerError();
+  clearTemplateManagerResult();
+  try {
+    const template = parseTemplateImportText();
+    const result = await api("/templates/import/apply", {
+      method: "POST",
+      body: JSON.stringify({ template, ...selectedTemplateApplyOptions() }),
+    });
+    templateManagerState.importTemplate = result.template || null;
+    renderTemplatePreview(result.preview);
+    showTemplateManagerResult("ok", `Imported template applied: ${result.template?.name || "template"}.`);
+    await loadTemplates();
+  } catch (err) {
+    showTemplateManagerResult("err", `Import apply failed: ${err.message}`);
+  }
+}
+
+async function exportCurrentTemplate() {
+  clearTemplateManagerResult();
+  try {
+    const data = await api("/templates/export/current");
+    if (els["template-manager-import-json"]) {
+      els["template-manager-import-json"].value = JSON.stringify(data.template, null, 2);
+    }
+    showTemplateManagerResult("ok", "Current configuration exported into the import/export JSON box.");
+  } catch (err) {
+    showTemplateManagerResult("err", `Export failed: ${err.message}`);
+  }
+}
+
+async function saveCurrentTemplate() {
+  clearTemplateManagerResult();
+  try {
+    const data = await api("/templates/save-current", {
+      method: "POST",
+      body: JSON.stringify({ name: "Saved personal setup" }),
+    });
+    showTemplateManagerResult("ok", `Saved current setup as ${data.template?.name || "template"}.`);
+    await loadTemplates();
+  } catch (err) {
+    showTemplateManagerResult("err", `Save current failed: ${err.message}`);
+  }
+}
+
+async function suggestCheapByokTemplate() {
+  clearTemplateManagerResult();
+  templateManagerState.selectedTemplateId = "cheap-byok";
+  renderTemplateGallery();
+  try {
+    await previewTemplateById("cheap-byok");
+    showTemplateManagerResult(
+      "ok",
+      "Cheap BYOK is selected. Review the preview, then apply when your provider credentials are configured.",
+    );
+  } catch (err) {
+    showTemplateManagerResult("err", `Could not load Cheap BYOK template: ${err.message}`);
+  }
+}
+
+function openTemplateManager() {
+  const modal = els["template-manager-modal"];
+  if (!modal) return;
+  modal.hidden = false;
+  void loadTemplates();
+}
+
+function closeTemplateManager() {
+  const modal = els["template-manager-modal"];
+  if (modal) modal.hidden = true;
+}
+
+function bindTemplateManager() {
+  els["open-template-manager"]?.addEventListener("click", openTemplateManager);
+  els["close-template-manager"]?.addEventListener("click", closeTemplateManager);
+  els["template-manager-backdrop"]?.addEventListener("click", closeTemplateManager);
+  els["template-manager-apply"]?.addEventListener("click", () => void applySelectedTemplate());
+  els["template-manager-import-preview"]?.addEventListener("click", () => void previewImportedTemplate());
+  els["template-manager-import-apply"]?.addEventListener("click", () => void applyImportedTemplate());
+  els["template-manager-export"]?.addEventListener("click", () => void exportCurrentTemplate());
+  els["template-manager-save-current"]?.addEventListener("click", () => void saveCurrentTemplate());
+  els["template-manager-suggest-cheap-byok"]?.addEventListener("click", () => void suggestCheapByokTemplate());
 }
 
 // --- Memory browser panel (Chunk 36 stretch) ---
@@ -3290,6 +4573,255 @@ function bindMemoryBrowser() {
   }
 }
 
+// --- Mandatory first-run onboarding overlay ---
+const ONBOARDING_STEP_COPY = {
+  1: {
+    title: "Add a provider",
+    body: "Connect at least one LLM provider and store its API key on the server. Secrets never appear in the browser.",
+    primary: "Add provider",
+    action: () => openProviderConfig(),
+  },
+  2: {
+    title: "Pick a starter template",
+    body: "Apply a preset to seed orchestration and memory assignments, or continue without a template and configure roles manually.",
+    primary: "Browse templates",
+    secondary: "Continue without template",
+    action: () => openTemplateManager(),
+    secondaryAction: () => advanceOnboardingPastTemplate(),
+  },
+  3: {
+    title: "Review assignments",
+    body: "Confirm triage, planner, and synthesizer routes point at configured providers with no blocker capability mismatches.",
+    primary: "Review orchestration models",
+    action: () => openOrchestrationModelConfig(),
+  },
+  4: {
+    title: "Activate Rector",
+    body: "When the checklist passes, activate to persist the configured profile and unlock chat.",
+    primary: "Activate Rector",
+    action: () => void activateProduct(),
+  },
+};
+
+const onboardingUi = {
+  inFlight: false,
+  templateSkipped: false,
+  escapeHandler: null,
+};
+
+function setOnboardingShellLocked(locked) {
+  const shell = els["app-shell"];
+  if (!shell) return;
+  shell.classList.toggle("shell--onboarding-locked", locked);
+  if (els["composer-input"]) els["composer-input"].disabled = locked;
+  if (els["composer-send"]) els["composer-send"].disabled = locked;
+  if (els["new-conversation"]) els["new-conversation"].disabled = locked;
+  if (els["open-note-capture"]) els["open-note-capture"].disabled = locked;
+}
+
+function setOnboardingLoading(loading) {
+  if (els["onboarding-loading"]) els["onboarding-loading"].hidden = !loading;
+}
+
+function showOnboardingError(message) {
+  const error = els["onboarding-error"];
+  if (!error) return;
+  error.hidden = false;
+  error.textContent = message;
+}
+
+function clearOnboardingError() {
+  const error = els["onboarding-error"];
+  if (!error) return;
+  error.hidden = true;
+  error.textContent = "";
+}
+
+function renderOnboardingBlockers(blockers) {
+  const list = els["onboarding-blockers"];
+  if (!list) return;
+  const items = Array.isArray(blockers) ? blockers : [];
+  if (items.length === 0) {
+    list.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  list.hidden = false;
+  list.innerHTML = "";
+  for (const blocker of items) {
+    const li = document.createElement("li");
+    li.textContent = blocker;
+    list.appendChild(li);
+  }
+}
+
+function renderOnboardingStepper(step) {
+  const stepper = els["onboarding-stepper"];
+  if (!stepper) return;
+  for (const node of stepper.querySelectorAll(".onboarding-step")) {
+    const nodeStep = Number(node.dataset.step || "0");
+    node.classList.toggle("onboarding-step--active", nodeStep === step);
+    node.classList.toggle("onboarding-step--complete", nodeStep < step);
+  }
+}
+
+function renderOnboardingOverlay() {
+  const overlay = els["onboarding-overlay"];
+  if (!overlay) return;
+
+  if (productReadiness.ready) {
+    overlay.hidden = true;
+    setOnboardingShellLocked(false);
+    detachOnboardingEscapeTrap();
+    return;
+  }
+
+  overlay.hidden = false;
+  setOnboardingShellLocked(true);
+  attachOnboardingEscapeTrap();
+
+  const step = productReadiness.onboardingStep || 1;
+  const copy = ONBOARDING_STEP_COPY[step] || ONBOARDING_STEP_COPY[1];
+  renderOnboardingStepper(step);
+
+  const body = els["onboarding-step-body"];
+  if (body) {
+    body.innerHTML = `<h3 class="onboarding-step-body__title">${copy.title}</h3><p>${copy.body}</p>`;
+  }
+
+  renderOnboardingBlockers(productReadiness.blockers);
+
+  const primary = els["onboarding-action-primary"];
+  const secondary = els["onboarding-action-secondary"];
+  const activate = els["onboarding-activate"];
+  if (primary) {
+    primary.hidden = step === 4;
+    primary.textContent = copy.primary;
+  }
+  if (secondary) {
+    const showSecondary = step === 2 && !onboardingUi.templateSkipped;
+    secondary.hidden = !showSecondary;
+    secondary.textContent = copy.secondary || "Continue";
+  }
+  if (activate) {
+    activate.hidden = step !== 4;
+    activate.disabled = onboardingUi.inFlight;
+  }
+}
+
+function attachOnboardingEscapeTrap() {
+  if (onboardingUi.escapeHandler) return;
+  onboardingUi.escapeHandler = (event) => {
+    if (!productReadiness.ready && event.key === "Escape") {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+    }
+  };
+  document.addEventListener("keydown", onboardingUi.escapeHandler, true);
+}
+
+function detachOnboardingEscapeTrap() {
+  if (!onboardingUi.escapeHandler) return;
+  document.removeEventListener("keydown", onboardingUi.escapeHandler, true);
+  onboardingUi.escapeHandler = null;
+}
+
+function applySetupStatusPayload(body) {
+  if (!body || typeof body !== "object") return;
+  productReadiness.ready = body.ready === true;
+  productReadiness.orchestrationProfile = body.orchestrationProfile === "configured" ? "configured" : "unconfigured";
+  productReadiness.onboardingStep = Number(body.onboardingStep) || 1;
+  productReadiness.blockers = Array.isArray(body.blockers) ? body.blockers : [];
+  orchestration.configured = productReadiness.orchestrationProfile === "configured";
+  updateDeepPlanningVisibility();
+  renderOnboardingOverlay();
+}
+
+async function loadProductReadiness() {
+  if (onboardingUi.inFlight) return;
+  onboardingUi.inFlight = true;
+  clearOnboardingError();
+  setOnboardingLoading(true);
+  try {
+    const res = await fetch(`${API}/setup/status`, {
+      headers: { "Content-Type": "application/json" },
+    });
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+    if (!res.ok) {
+      showOnboardingError("Setup readiness is unavailable right now.");
+      return;
+    }
+    applySetupStatusPayload(body);
+  } catch {
+    showOnboardingError("Setup readiness could not be loaded.");
+  } finally {
+    onboardingUi.inFlight = false;
+    setOnboardingLoading(false);
+  }
+}
+
+function advanceOnboardingPastTemplate() {
+  onboardingUi.templateSkipped = true;
+  if (productReadiness.onboardingStep < 3) {
+    productReadiness.onboardingStep = 3;
+  }
+  renderOnboardingOverlay();
+}
+
+async function activateProduct() {
+  if (onboardingUi.inFlight) return;
+  onboardingUi.inFlight = true;
+  clearOnboardingError();
+  setOnboardingLoading(true);
+  try {
+    const res = await fetch(`${API}/setup/activate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+    if (!res.ok) {
+      productReadiness.blockers = Array.isArray(body.blockers) ? body.blockers : ["Activation failed."];
+      renderOnboardingBlockers(productReadiness.blockers);
+      showOnboardingError(body.error || "Activation could not complete yet.");
+      renderOnboardingOverlay();
+      return;
+    }
+    const readiness = body.readiness || body;
+    applySetupStatusPayload({
+      ready: readiness.ready,
+      orchestrationProfile: readiness.orchestrationProfile,
+      onboardingStep: readiness.onboardingStep,
+      blockers: readiness.blockers,
+      mode: readiness.orchestrationProfile === "configured" ? "external" : "local",
+    });
+  } catch {
+    showOnboardingError("Activation request failed.");
+  } finally {
+    onboardingUi.inFlight = false;
+    setOnboardingLoading(false);
+  }
+}
+
+function handleOnboardingPrimaryAction() {
+  const step = productReadiness.onboardingStep || 1;
+  const copy = ONBOARDING_STEP_COPY[step];
+  if (copy?.action) copy.action();
+}
+
+function handleOnboardingSecondaryAction() {
+  const step = productReadiness.onboardingStep || 1;
+  const copy = ONBOARDING_STEP_COPY[step];
+  if (copy?.secondaryAction) copy.secondaryAction();
+}
+
+function bindOnboardingOverlay() {
+  els["onboarding-action-primary"]?.addEventListener("click", handleOnboardingPrimaryAction);
+  els["onboarding-action-secondary"]?.addEventListener("click", handleOnboardingSecondaryAction);
+  els["onboarding-activate"]?.addEventListener("click", () => void activateProduct());
+}
+
 // --- Setup Wizard panel (Setup_Wizard, Requirement 1) ---
 //
 // A read-only status surface rendered as a modal overlay so the chat + trace UI stay mounted and
@@ -3304,9 +4836,10 @@ const setupWizard = {
   timer: null,
 };
 
-// Human-language mode label (Requirement 1.1). Local_Mode unless the server reports "external".
-function setupModeLabel(mode) {
-  return mode === "external" ? "External mode" : "Local mode";
+// Human-language product profile label for the setup wizard.
+function setupModeLabel(mode, orchestrationProfile) {
+  if (orchestrationProfile === "configured" || mode === "external") return "Configured";
+  return "Unconfigured";
 }
 
 // Map a closed-set readiness status to its pill style. Unknown values fall back to the error style.
@@ -3335,11 +4868,15 @@ function showSetupWizardError(message) {
 function renderSetupStatus(status) {
   if (els["setup-wizard-error"]) els["setup-wizard-error"].hidden = true;
 
-  orchestration.mode = status.mode === "external" ? "external" : "local";
-  updateDeepPlanningVisibility();
+  if (typeof status.ready === "boolean") {
+    applySetupStatusPayload(status);
+  } else {
+    orchestration.configured = status.orchestrationProfile === "configured" || status.mode === "external";
+    updateDeepPlanningVisibility();
+  }
 
   const modeEl = els["setup-wizard-mode"];
-  if (modeEl) modeEl.textContent = setupModeLabel(status.mode);
+  if (modeEl) modeEl.textContent = setupModeLabel(status.mode, status.orchestrationProfile);
 
   const container = els["setup-wizard-categories"];
   if (container) {
@@ -3488,17 +5025,16 @@ function syncDeepPlanningToggle() {
 function updateDeepPlanningVisibility() {
   const wrap = els["deep-planning-wrap"];
   if (!wrap) return;
-  wrap.hidden = orchestration.mode !== "external";
+  wrap.hidden = !orchestration.configured;
 }
 
 function isDeepPlanningEnabled() {
-  if (orchestration.mode !== "external") return false;
+  if (!orchestration.configured) return false;
   const toggle = els["deep-planning-toggle"];
   return !!(toggle && toggle.checked);
 }
 
-// Fetch orchestration mode from the setup status API so the deep-planning toggle can reflect
-// External vs Local mode without opening the wizard.
+// Fetch setup status so the deep-planning toggle reflects configured readiness.
 async function refreshOrchestrationMode() {
   try {
     const res = await fetch(`${API}/setup/status`, {
@@ -3507,7 +5043,7 @@ async function refreshOrchestrationMode() {
     const text = await res.text();
     const body = text ? JSON.parse(text) : {};
     if (res.ok && body && Array.isArray(body.categories)) {
-      orchestration.mode = body.mode === "external" ? "external" : "local";
+      applySetupStatusPayload(body);
     }
   } catch {
     /* keep prior mode on failure */
@@ -4450,6 +5986,7 @@ function commandRegistry() {
   return [
     { id: "setup", label: "Setup status", run: () => openSetupWizard() },
     { id: "provider-config", label: "Provider configuration", run: () => openProviderConfig() },
+    { id: "templates", label: "Templates", run: () => openTemplateManager() },
     { id: "provider-test", label: "Test provider connection", run: () => openProviderTest() },
     { id: "safety", label: "Workspace safety", run: () => openWorkspaceSafety() },
     { id: "appearance", label: "Appearance", run: () => openAppearance() },
@@ -4738,6 +6275,61 @@ function bindComposer() {
   });
 }
 
+async function requestRunInterrupt() {
+  if (!liveRun.runId || liveRun.closed || liveRun.interruptPending) return;
+  liveRun.interruptPending = true;
+  setRunControls(true);
+  setRunStatus("Stopping...", "status-pill--running");
+  try {
+    await api(`/runs/${liveRun.runId}/interrupt`, {
+      method: "POST",
+      body: JSON.stringify({ reason: "user stop requested" }),
+    });
+  } catch (err) {
+    liveRun.interruptPending = false;
+    setRunControls(!liveRun.closed);
+    setRunStatus("Stop failed", "status-pill--failed");
+    console.error("Failed to interrupt run", err);
+  }
+}
+
+async function submitRunSteer(message) {
+  const trimmed = message.trim();
+  if (!trimmed || !liveRun.runId || liveRun.closed || liveRun.steerPending) return;
+  liveRun.steerPending = true;
+  setRunControls(true);
+  try {
+    await api(`/runs/${liveRun.runId}/steer`, {
+      method: "POST",
+      body: JSON.stringify({ message: trimmed }),
+    });
+    if (els["run-steer-input"]) els["run-steer-input"].value = "";
+  } catch (err) {
+    console.error("Failed to steer run", err);
+  } finally {
+    liveRun.steerPending = false;
+    setRunControls(!liveRun.closed);
+  }
+}
+
+function bindRunControls() {
+  const stop = els["run-stop"];
+  if (stop) {
+    stop.addEventListener("click", () => {
+      void requestRunInterrupt();
+    });
+  }
+
+  const steer = els["run-steer"];
+  const steerInput = els["run-steer-input"];
+  if (steer && steerInput) {
+    steer.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void submitRunSteer(steerInput.value);
+    });
+  }
+}
+
 function bindSuggestions() {
   const messages = els["messages"];
   if (!messages) {
@@ -4756,15 +6348,21 @@ function bindSuggestions() {
 // --- Init ---
 function init() {
   cacheEls();
+  bindConversationSearch();
   bindComposer();
+  bindRunControls();
   bindDeepPlanning();
   bindNoteCapture();
   bindSuggestions();
   bindProviderTest();
   bindProviderConfig();
+  bindOrchestrationModelConfig();
   bindMemoryProviderConfig();
+  bindModuleManager();
+  bindTemplateManager();
   bindMemoryBrowser();
   bindSetupWizard();
+  bindOnboardingOverlay();
   bindWorkspaceSafety();
   bindApproval();
   bindAppearance();
@@ -4791,7 +6389,7 @@ function init() {
 
   checkHealth();
   loadConversations();
-  void refreshOrchestrationMode();
+  void loadProductReadiness();
   els["composer-input"]?.focus();
 }
 

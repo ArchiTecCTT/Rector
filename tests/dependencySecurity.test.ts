@@ -7,6 +7,6 @@ describe("dependency security overrides", () => {
   });
 
   it("forces esbuild to a non-vulnerable range via npm overrides", () => {
-    expect(packageJson.overrides.esbuild).toBe(">=0.25.0");
+    expect(packageJson.overrides.esbuild).toBe(">=0.28.1");
   });
 });

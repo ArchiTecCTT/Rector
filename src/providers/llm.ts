@@ -62,7 +62,8 @@ export type ProviderErrorCode =
   | "BUDGET_DENIED"
   | "NETWORK_DISABLED"
   | "PROVIDER_HTTP_ERROR"
-  | "PROVIDER_RESPONSE_INVALID";
+  | "PROVIDER_RESPONSE_INVALID"
+  | "ABORTED";
 
 export class ProviderError extends Error {
   readonly name = "ProviderError";
@@ -93,7 +94,17 @@ export interface LLMProvider {
   readonly metadata: ProviderCapabilityMetadata;
   validateConfig(): void;
   estimateRequest(request: LLMRequest): LLMUsage;
-  invoke(request: LLMRequest): Promise<LLMResponse>;
+  invoke(request: LLMRequest, options?: LLMInvokeOptions): Promise<LLMResponse>;
+}
+
+export interface LLMInvokeOptions {
+  abortSignal?: AbortSignal;
+}
+
+/** True when the router-selected provider should run live LLM steps (skeptic, synthesizer, etc.). */
+export function isLiveLLMProvider(provider: LLMProvider): boolean {
+  const id = provider.metadata.id;
+  return id !== "fake" && id !== "deterministic";
 }
 
 export class FakeLLMProvider implements LLMProvider {
@@ -132,7 +143,8 @@ export class FakeLLMProvider implements LLMProvider {
     });
   }
 
-  async invoke(request: LLMRequest): Promise<LLMResponse> {
+  async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
+    throwIfAborted(options.abortSignal, this.metadata.id);
     const parsed = LLMRequestSchema.parse(request);
     const usage = this.estimateRequest(parsed);
     const lastUserMessage = [...parsed.messages].reverse().find((message) => message.role === "user")?.content ?? "";
@@ -254,9 +266,10 @@ export class TogetherAIProvider implements LLMProvider {
     };
   }
 
-  async invoke(request: LLMRequest): Promise<LLMResponse> {
+  async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
     const parsed = LLMRequestSchema.parse(request);
     const built = this.buildRequest(parsed);
+    throwIfAborted(options.abortSignal, this.metadata.id);
 
     if (!this.enableNetwork) {
       throw new ProviderError({
@@ -266,7 +279,7 @@ export class TogetherAIProvider implements LLMProvider {
       });
     }
 
-    const response = await this.fetchImpl(built.url, built.init);
+    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id);
     if (!response.ok) {
       throw new ProviderError({
         code: "PROVIDER_HTTP_ERROR",
@@ -411,9 +424,10 @@ export class CloudflareWorkersAIProvider implements LLMProvider {
     };
   }
 
-  async invoke(request: LLMRequest): Promise<LLMResponse> {
+  async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
     const parsed = LLMRequestSchema.parse(request);
     const built = this.buildRequest(parsed);
+    throwIfAborted(options.abortSignal, this.metadata.id);
 
     if (!this.enableNetwork) {
       throw new ProviderError({
@@ -423,7 +437,7 @@ export class CloudflareWorkersAIProvider implements LLMProvider {
       });
     }
 
-    const response = await this.fetchImpl(built.url, built.init);
+    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id);
     if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, "Cloudflare Workers AI");
 
     const raw = await response.json();
@@ -556,9 +570,10 @@ export class AzureOpenAIProvider implements LLMProvider {
     };
   }
 
-  async invoke(request: LLMRequest): Promise<LLMResponse> {
+  async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
     const parsed = LLMRequestSchema.parse(request);
     const built = this.buildRequest(parsed);
+    throwIfAborted(options.abortSignal, this.metadata.id);
 
     if (!this.enableNetwork) {
       throw new ProviderError({
@@ -568,7 +583,7 @@ export class AzureOpenAIProvider implements LLMProvider {
       });
     }
 
-    const response = await this.fetchImpl(built.url, built.init);
+    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id);
     if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, "Azure OpenAI");
 
     const raw = await response.json();
@@ -683,9 +698,10 @@ export class OpenAICompatibleProvider implements LLMProvider {
     };
   }
 
-  async invoke(request: LLMRequest): Promise<LLMResponse> {
+  async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
     const parsed = LLMRequestSchema.parse(request);
     const built = this.buildRequest(parsed);
+    throwIfAborted(options.abortSignal, this.metadata.id);
 
     if (!this.enableNetwork) {
       throw new ProviderError({
@@ -695,7 +711,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       });
     }
 
-    const response = await this.fetchImpl(built.url, built.init);
+    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id);
     if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, this.metadata.displayName);
 
     const raw = await response.json();
@@ -718,9 +734,16 @@ export interface ModelRouterInput {
 
 export interface ModelSelection {
   provider: LLMProvider;
+  providerId?: string;
   modelRoute: ModelRoute;
   model: string;
   reason: string;
+  fallback?: {
+    provider: LLMProvider;
+    providerId?: string;
+    model: string;
+    reason: string;
+  };
 }
 
 export interface ModelRouter {
@@ -785,7 +808,12 @@ export function buildModelRouter(options: ModelRouterOptions = {}): ModelRouter 
   };
 }
 
-export async function invokeWithBudget(provider: LLMProvider, request: LLMRequest, run: Run): Promise<LLMResponse> {
+export async function invokeWithBudget(
+  provider: LLMProvider,
+  request: LLMRequest,
+  run: Run,
+  options: LLMInvokeOptions = {},
+): Promise<LLMResponse> {
   const parsed = LLMRequestSchema.parse(request);
   const estimate = provider.estimateRequest(parsed);
   const usage = providerBudgetUsage(provider.metadata.id, estimate, run);
@@ -800,7 +828,49 @@ export async function invokeWithBudget(provider: LLMProvider, request: LLMReques
     });
   }
 
-  return provider.invoke(parsed);
+  return provider.invoke(parsed, options);
+}
+
+function throwIfAborted(signal: AbortSignal | undefined, provider: string): void {
+  if (!signal?.aborted) return;
+  throw new ProviderError({
+    code: "ABORTED",
+    provider,
+    message: "Provider invocation aborted",
+    retryable: false,
+  });
+}
+
+async function fetchWithAbort(
+  fetchImpl: typeof fetch,
+  built: BuiltProviderRequest,
+  signal: AbortSignal | undefined,
+  provider: string,
+): Promise<Response> {
+  try {
+    return await fetchImpl(built.url, withAbortSignal(built.init, signal));
+  } catch (error) {
+    if (isAbortLikeError(error)) {
+      throw new ProviderError({
+        code: "ABORTED",
+        provider,
+        message: "Provider invocation aborted",
+        retryable: false,
+      });
+    }
+    throw error;
+  }
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
+function withAbortSignal(init: BuiltProviderRequest["init"], signal: AbortSignal | undefined): BuiltProviderRequest["init"] {
+  return signal ? { ...init, signal } : init;
 }
 
 function estimateCostedRequest(request: LLMRequest, metadata: ProviderCapabilityMetadata, defaultOutputTokens: number): LLMUsage {
@@ -956,7 +1026,7 @@ function providerBudgetUsage(provider: string, estimate: LLMUsage, run: Run): Bu
 
 function selection(provider: LLMProvider, modelRoute: ModelRoute, reason: string): ModelSelection {
   const model = provider.metadata.models[modelRoute] ?? provider.metadata.models.fake ?? provider.metadata.models.fast;
-  return { provider, modelRoute, model, reason };
+  return { provider, providerId: provider.metadata.id, modelRoute, model, reason };
 }
 
 function inferModelRoute(input: ModelRouterInput): ModelRoute {

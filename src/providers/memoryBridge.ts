@@ -1,9 +1,7 @@
 import type { SecretStore } from "../security/secretStore";
 import type { MemoryProvider } from "../memory/provider";
 import { LocalMemoryProvider, ExternalMemoryProviderStub } from "../memory/provider";
-import { Mem0MemoryProvider } from "../memory/mem0Adapter";
-import { TiDBMemoryProvider } from "../memory/tidbMemoryAdapter";
-import { ChromaMemoryProvider } from "../memory/chromaMemoryAdapter";
+import { getMemoryProviderRegistry } from "../modules/builtin/memoryProviderModules";
 import type { MemoryConfigStore } from "./memoryConfigStore";
 import type { MemoryProviderRecord } from "./memoryConfig";
 import type { Run } from "../store/schemas";
@@ -58,50 +56,16 @@ export function buildMemoryProviderFromRecord(
     });
   }
 
-  switch (record.kind) {
-    case "mem0": {
-      const provider = new Mem0MemoryProvider({
-        id: record.id,
-        kind: record.kind,
-        label: record.label,
-        apiKey: secret ?? "",
-        config: record.config,
-        now,
-        run: options.run,
-      });
-      provider.validateConfig?.();
-      return provider;
-    }
-    case "tidb-memory": {
-      const provider = TiDBMemoryProvider.fromRecord(record, secret, {
-        now,
-        delegateStore: options.delegateStoreForLocalSqliteMem as
-          | ConstructorParameters<typeof TiDBMemoryProvider>[0]["delegateStore"]
-          | undefined,
-      });
-      provider.validateConfig?.();
-      return provider;
-    }
-    case "chroma": {
-      const provider = new ChromaMemoryProvider({
-        id: record.id,
-        kind: record.kind,
-        label: record.label,
-        config: record.config,
-        apiKey: secret,
-        now,
-        run: options.run,
-      });
-      provider.validateConfig?.();
-      return provider;
-    }
-    default:
-      return new ExternalMemoryProviderStub({
-        id: record.id,
-        kind: record.kind,
-        label: record.label,
-      });
+  const built = getMemoryProviderRegistry().build(record, secret, options);
+  if (built) {
+    return built;
   }
+
+  return new ExternalMemoryProviderStub({
+    id: record.id,
+    kind: record.kind,
+    label: record.label,
+  });
 }
 
 /**
@@ -133,9 +97,9 @@ export async function resolveTestMemoryProvider(
 /**
  * Resolve the active MemoryProvider from the persisted config + secrets.
  *
- * - If mode === 'local' or there is no active record or the active kind is a
- *   local-* kind: return a LocalMemoryProvider (pure inmem by default, or
- *   delegating if delegateStoreForLocalSqliteMem is supplied).
+ * - If there is no active record or the active kind is a local-* kind: return a
+ *   LocalMemoryProvider (pure inmem by default, or delegating if
+ *   delegateStoreForLocalSqliteMem is supplied).
  * - For external kinds: read the secret (transiently), construct the appropriate
  *   provider via {@link buildMemoryProviderFromRecord}. Any construction or
  *   secret read error falls back to local-inmemory (redacted).
@@ -145,18 +109,7 @@ export async function resolveActiveMemoryProvider(
   secrets: SecretStore,
   options: ResolveMemoryProviderOptions = {},
 ): Promise<MemoryProvider> {
-  const mode = options.mode ?? "external";
   const now = options.now;
-
-  // Local mode or no config store: always safe local default.
-  if (mode === "local") {
-    return new LocalMemoryProvider({
-      id: "local-inmemory:default",
-      kind: "local-inmemory",
-      label: "Local (in-memory)",
-      now,
-    });
-  }
 
   try {
     const state = await configStore.getState();

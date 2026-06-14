@@ -2,11 +2,12 @@
 
 ## Overview
 
-This design transitions Rector from a provider-free, local-only simulation baseline into a
-cloud-capable commercial codebase, **without disturbing the existing local-mode regression
-baseline**. Almost every building block already exists in the tree as a stub, a partial
-implementation, or a fully-formed component that is simply not yet wired into the live path. The
-transition is therefore primarily an exercise in **completing and connecting** existing seams:
+This design transitions Rector to a **configured-only product** (v0.3.0): UI-persisted
+`runtime-settings.json`, mandatory first-run onboarding, single orchestration path
+(`runOrchestratedChatRun`), and **spy-only CI** (`SpyLLMProvider`). The legacy local/external
+dual-mode framing is deprecated — not preserved as a product default. Almost every building block
+already exists in the tree as a stub, partial implementation, or fully-formed component. The
+transition is primarily an exercise in **completing and connecting** existing seams:
 
 | Area | Current state | Transition target |
 | --- | --- | --- |
@@ -17,16 +18,18 @@ transition is therefore primarily an exercise in **completing and connecting** e
 | Sandbox (Req 6) | `WorkspaceSandboxAdapter` (real, network-free) + `createE2BSandboxAdapterStub` (no-network) | Replace the stub with a real `E2B_Sandbox_Adapter` that runs commands/patches in a container, captures + truncates + redacts streams, and is never constructed in local mode |
 | Synthesizer (Req 7) | `runLiveSynthesizer` exists with budget preflight, repair, and deterministic fallback | Gate it on External_Mode + a valid flagship route for Heavy_Developer_Routes, with a 60s deadline and Legacy_Status_Response fallback |
 | Persistence (Req 8) | `SqlRectorStore` already speaks the `mysql` dialect; `createTiDBDriver` + `createRectorStore` exist | Add connection pooling, a 30s connect deadline, an explicit Startup_Migration verify/provision step, and field-level config validation |
-| Local baseline (Req 9) | Provider-free fake router, deterministic synthesizer, in-memory store | Preserve exactly: zero network, zero external sandbox, Config_Bridge not consulted, deterministic output |
+| Configured product (Req 9) | `runtime-settings.json`, onboarding gate, `runOrchestratedChatRun` | Unconfigured profile gates chat; configured profile uses live adapters; CI uses Spy_LLM_Provider only |
 | Redaction (Req 10) | `Redaction_Layer` (`redactString`/`redactSecrets`/`redactOutbound`) is mature | Confirm universal coverage of every log/telemetry sink with the fixed placeholder |
 | Build/test (Req 11) | Optional deps (`sync-mysql`, E2B client) lazily required | Keep the build green with optional deps absent; emit a clear error when an absent dependency is selected |
 
 Two cross-cutting invariants govern every area and are restated as correctness properties:
 
-1. **Local-mode isolation** — when `Orchestrator_Mode` is `local`, Rector performs **zero** outbound
-   provider network calls and **zero** external sandbox execution, never consults the Config_Bridge,
-   and produces deterministic output.
-2. **Secret confinement** — every secret-bearing value is redacted before it reaches any log or
+1. **Configured-product gate** — when `Orchestration_Profile` is `unconfigured`, chat is blocked and
+   the UI shows mandatory onboarding until readiness passes. When `configured`, orchestration runs
+   through `runOrchestratedChatRun` with UI-wired providers.
+2. **Spy-only CI** — `npm test` uses `SpyLLMProvider` and injectable doubles with **zero** real
+   network calls. Deterministic fake pipelines are not the product default.
+3. **Secret confinement** — every secret-bearing value is redacted before it reaches any log or
    telemetry sink, and no secret value is ever returned through an API/UI surface.
 
 ## Architecture

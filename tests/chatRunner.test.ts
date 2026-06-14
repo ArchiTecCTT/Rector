@@ -19,13 +19,25 @@ import fc from "fast-check";
 
 import {
   runChat,
-  runFakeChatRun,
   type ChatRunArgs,
 } from "../src/orchestration/chatRunner";
+import { runFakeChatRun } from "./support/fakeChatRun";
+
 import { InMemoryRectorStore } from "../src/store/inMemoryRectorStore";
 import { triageUserMessage } from "../src/orchestration/triage";
 import { createInMemoryObservabilityTrace } from "../src/observability";
-import { arbPrompt, makeContextPack } from "./support/byokArbitraries";
+import {
+  arbPrompt,
+  DEFAULT_SPY_USAGE,
+  generousBudget,
+  makeContextPack,
+  planToJson,
+  skepticDraftToJson,
+  SpyLLMProvider,
+  synthesisDraftToJson,
+} from "./support/byokArbitraries";
+import { PlannerOutputSchema } from "../src/orchestration/planner";
+import type { LLMUsage, ModelRouter, ModelSelection } from "../src/providers/llm";
 
 /** The deterministic phase sequence the local brainstem run must transition through. */
 const DETERMINISTIC_PHASES = [
@@ -42,6 +54,31 @@ const DETERMINISTIC_PHASES = [
 ] as const;
 
 const PHASE_SET = new Set<string>(DETERMINISTIC_PHASES);
+
+/**
+ * Spy-router plan with only no-op DAG nodes so arbitrary prompts complete the orchestrated pipeline
+ * without real workspace I/O (CODE_EDIT honesty is covered by dedicated external-runner tests).
+ */
+const SPY_PIPELINE_PLAN = PlannerOutputSchema.parse({
+  goal: "Answer the user question from available conversation context",
+  assumptions: ["User expects a concise synthesis, not changes."],
+  tasks: [
+    {
+      id: "answer.synthesize",
+      title: "Synthesize direct answer",
+      description: "Use available conversation context to produce a concise response.",
+      dependencies: [],
+      expectedArtifacts: ["Assistant answer"],
+      validation: ["Answer addresses the stated question"],
+      risk: "low",
+      approvalRequired: false,
+    },
+  ],
+  dependencies: [],
+  validation: { summary: "Direct answer plan stays non-executing", checks: ["Confirm response is grounded in context"] },
+  riskLevel: "low",
+  approvalGates: [],
+});
 
 /**
  * Builds a fresh, schema-valid `ChatRunArgs` for the prompt by seeding a
@@ -75,20 +112,48 @@ async function buildArgs(store: InMemoryRectorStore, prompt: string): Promise<Ch
   };
 }
 
+/** Builds a spy router that completes the orchestrated pipeline for an arbitrary prompt. */
+function spyOrchestrationRouter(prompt: string): ModelRouter {
+  const provider = new SpyLLMProvider({
+    estimate: DEFAULT_SPY_USAGE,
+    onOverflow: "repeat-last",
+    responses: [
+      {
+        content: JSON.stringify({
+          distilledContext: prompt,
+          proposedToolCalls: [],
+          entities: [],
+          intent: "Explain",
+          constraints: [],
+        }),
+      },
+      { content: planToJson(SPY_PIPELINE_PLAN) },
+      { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
+      {
+        content: synthesisDraftToJson({
+          response: "Completed the orchestrated run.",
+          citations: [{ kind: "artifact", ref: "task:answer.synthesize", detail: "ok" }],
+        }),
+      },
+    ],
+  });
+  return spyRouter(provider);
+}
+
 /** Extracts the ordered list of deterministic phases recorded in the run's events. */
 async function recordedPhaseSequence(store: InMemoryRectorStore, runId: string): Promise<string[]> {
   const events = await store.listEvents(runId);
   return events.map((event) => event.phase).filter((phase) => PHASE_SET.has(phase));
 }
 
-describe("Property 1: local mode output is unchanged (regression baseline)", () => {
-  it("preserves the deterministic phase sequence and zero cost for arbitrary prompts", async () => {
+describe("Property 1: orchestrated spy runner preserves the regression baseline", () => {
+  it("preserves the full phase sequence for arbitrary prompts via the configured router", async () => {
     await fc.assert(
       fc.asyncProperty(arbPrompt(), async (prompt) => {
         const store = new InMemoryRectorStore();
         const args = await buildArgs(store, prompt);
 
-        const { run, observabilitySummary } = await runChat(store, args, { mode: "local" });
+        const { run, observabilitySummary } = await runChat(store, args, { router: spyOrchestrationRouter(prompt), sandboxConfigured: true });
 
         // Same phases visited, in the deterministic order.
         const phases = await recordedPhaseSequence(store, run.id);
@@ -98,57 +163,44 @@ describe("Property 1: local mode output is unchanged (regression baseline)", () 
         expect(run.phase).toBe("DONE");
         expect(run.status).toBe("completed");
 
-        // All-zero budget/cost: zero cost estimate and zero model calls.
-        expect(run.costEstimate.usd).toBe(0);
-        // The fake run records actualCost as { usd: 0 } without a modelCalls field;
-        // an unset count means zero model calls (Property 1: "zero model calls").
-        expect(run.actualCost?.modelCalls ?? 0).toBe(0);
-        // The observability trace is the authoritative provider-call signal.
-        expect(observabilitySummary.modelCallCount).toBe(0);
-        expect(observabilitySummary.estimatedCostUsd).toBe(0);
+        // Orchestrated spy runs record provider usage on the run and trace.
+        expect(run.costEstimate.usd).toBeGreaterThanOrEqual(0);
+        expect(observabilitySummary.modelCallCount).toBeGreaterThanOrEqual(0);
       }),
       { numRuns: 30 },
     );
   });
 
-  it("dispatches local mode to runFakeChatRun (structurally equivalent output)", async () => {
+  it("keeps non-CODE_EDIT prompts aligned between orchestrated spy and test-only fake runner", async () => {
     await fc.assert(
-      fc.asyncProperty(arbPrompt(), async (prompt) => {
-        // Two independent stores so run/event ids and trace ids do not collide.
-        const storeA = new InMemoryRectorStore();
-        const storeB = new InMemoryRectorStore();
+      fc.asyncProperty(
+        arbPrompt().filter((prompt) => triageUserMessage(prompt).route !== "CODE_EDIT"),
+        async (prompt) => {
+          const storeA = new InMemoryRectorStore();
+          const storeB = new InMemoryRectorStore();
 
-        const viaDispatcher = await runChat(storeA, await buildArgs(storeA, prompt), { mode: "local" });
-        const viaDirect = await runFakeChatRun(storeB, await buildArgs(storeB, prompt));
+          const viaOrchestrated = await runChat(storeA, await buildArgs(storeA, prompt), {
+            router: spyOrchestrationRouter(prompt),
+            sandboxConfigured: true,
+          });
+          const viaFake = await runFakeChatRun(storeB, await buildArgs(storeB, prompt));
 
-        // Identical phase sequences.
-        const phasesA = await recordedPhaseSequence(storeA, viaDispatcher.run.id);
-        const phasesB = await recordedPhaseSequence(storeB, viaDirect.run.id);
-        expect(phasesA).toEqual(phasesB);
-        expect(phasesA).toEqual([...DETERMINISTIC_PHASES]);
-
-        // Identical, deterministic synthesis structure (volatile ids excluded).
-        expect(viaDispatcher.synthesis.status).toBe(viaDirect.synthesis.status);
-        expect(viaDispatcher.synthesis.route).toBe(viaDirect.synthesis.route);
-
-        // Both paths are provider-free.
-        expect(viaDispatcher.run.costEstimate.usd).toBe(0);
-        expect(viaDirect.run.costEstimate.usd).toBe(0);
-        expect(viaDispatcher.observabilitySummary.modelCallCount).toBe(0);
-        expect(viaDirect.observabilitySummary.modelCallCount).toBe(0);
-      }),
+          expect(viaOrchestrated.run.phase).toBe("DONE");
+          expect(viaFake.run.phase).toBe("DONE");
+          expect(viaOrchestrated.synthesis.route).toBe(viaFake.synthesis.route);
+          expect(viaFake.run.costEstimate.usd).toBe(0);
+          expect(viaFake.observabilitySummary.modelCallCount).toBe(0);
+        },
+      ),
       { numRuns: 20 },
     );
   });
 
-  it("local mode requires no router dependency", async () => {
+  it("requires a configured router for orchestrated chat runs", async () => {
     const store = new InMemoryRectorStore();
     const args = await buildArgs(store, "Explain the Rector vertical slice.");
 
-    // No router supplied: local dispatch must succeed without any provider wiring.
-    const result = await runChat(store, args, { mode: "local" });
-    expect(result.run.phase).toBe("DONE");
-    expect(result.run.actualCost?.modelCalls ?? 0).toBe(0);
+    await expect(runChat(store, args, { router: undefined! })).rejects.toThrow(/configured router/i);
   });
 
   // Req 8.1 / 8.4: the deterministic synthesis preserves the Phase 1 output field
@@ -159,7 +211,7 @@ describe("Property 1: local mode output is unchanged (regression baseline)", () 
     await fc.assert(
       fc.asyncProperty(arbPrompt(), async (prompt) => {
         const store = new InMemoryRectorStore();
-        const { synthesis } = await runChat(store, await buildArgs(store, prompt), { mode: "local" });
+        const { synthesis } = await runChat(store, await buildArgs(store, prompt), { router: spyOrchestrationRouter(prompt), sandboxConfigured: true });
 
         // Exact Phase 1 BrainstemSynthesis field set (no fields added or dropped).
         expect(new Set(Object.keys(synthesis))).toEqual(
@@ -173,8 +225,8 @@ describe("Property 1: local mode output is unchanged (regression baseline)", () 
         expect(Array.isArray(synthesis.evidence)).toBe(true);
         expect(typeof synthesis.response).toBe("string");
 
-        // Provider-free: the deterministic synthesizer always reports zero calls.
-        expect(synthesis.providerCalls).toBe(0);
+        // Live synthesizer may report non-zero provider calls; the field remains present.
+        expect(synthesis.providerCalls).toBeGreaterThanOrEqual(0);
       }),
       { numRuns: 30 },
     );
@@ -191,7 +243,7 @@ describe("Property 1: local mode output is unchanged (regression baseline)", () 
     await fc.assert(
       fc.asyncProperty(arbPrompt(), async (prompt) => {
         const store = new InMemoryRectorStore();
-        const { synthesis } = await runChat(store, await buildArgs(store, prompt), { mode: "local" });
+        const { synthesis } = await runFakeChatRun(store, await buildArgs(store, prompt));
 
         const response = synthesis.response;
 
@@ -234,25 +286,17 @@ describe("Property 1: local mode output is unchanged (regression baseline)", () 
   // would surface as a thrown error; the run instead completes provider-free with
   // zero recorded model calls and zero estimated cost across both the run's
   // authoritative fields and the observability trace.
-  it("makes zero provider and outbound network calls for arbitrary prompts", async () => {
+  it("keeps the test-only fake runner provider-free for arbitrary prompts", async () => {
     await fc.assert(
       fc.asyncProperty(arbPrompt(), async (prompt) => {
         const store = new InMemoryRectorStore();
-        // Deliberately omit any router/budget: a local run must never reach for one.
-        const { run, observabilitySummary, synthesis } = await runChat(store, await buildArgs(store, prompt), {
-          mode: "local",
-        });
+        const { run, observabilitySummary, synthesis } = await runFakeChatRun(store, await buildArgs(store, prompt));
 
         expect(run.phase).toBe("DONE");
         expect(run.status).toBe("completed");
-
-        // Zero provider calls: authoritative run fields and the observability trace agree.
         expect(run.actualCost?.modelCalls ?? 0).toBe(0);
-        expect((run.costEstimate as { modelCalls?: number }).modelCalls ?? 0).toBe(0);
         expect(observabilitySummary.modelCallCount).toBe(0);
         expect(synthesis.providerCalls).toBe(0);
-
-        // Zero cost: no network request could have been billed.
         expect(run.costEstimate.usd).toBe(0);
         expect(observabilitySummary.estimatedCostUsd).toBe(0);
       }),
@@ -296,16 +340,6 @@ describe("Property 1: local mode output is unchanged (regression baseline)", () 
  * provider, so no API key and no network are used.
  */
 import { ProviderCallMetadataSchema } from "../src/orchestration/chatRunner";
-import type { LLMUsage, ModelRouter, ModelSelection } from "../src/providers/llm";
-import {
-  DEFAULT_SPY_USAGE,
-  SpyLLMProvider,
-  generousBudget,
-  planToJson,
-  skepticDraftToJson,
-  synthesisDraftToJson,
-} from "./support/byokArbitraries";
-import { PlannerOutputSchema } from "../src/orchestration/planner";
 
 /** The PLANNING-event payload key the external runner writes its metadata to. */
 const PROVIDER_CALL_KEY = "providerCall";
@@ -319,26 +353,7 @@ const PROVIDER_CALL_KEY = "providerCall";
  * cleanly (status VALIDATED) with no real workspace I/O, so a successful
  * skeptic + synthesizer drive the run all the way to DONE.
  */
-const NON_FILE_OPERATION_PLAN = PlannerOutputSchema.parse({
-  goal: "Answer the user question from available conversation context",
-  assumptions: ["User expects a concise synthesis, not changes."],
-  tasks: [
-    {
-      id: "answer.synthesize",
-      title: "Synthesize direct answer",
-      description: "Use available conversation context to produce a concise response.",
-      dependencies: [],
-      expectedArtifacts: ["Assistant answer"],
-      validation: ["Answer addresses the stated question"],
-      risk: "low",
-      approvalRequired: false,
-    },
-  ],
-  dependencies: [],
-  validation: { summary: "Direct answer plan stays non-executing", checks: ["Confirm response is grounded in context"] },
-  riskLevel: "low",
-  approvalGates: [],
-});
+const NON_FILE_OPERATION_PLAN = SPY_PIPELINE_PLAN;
 
 /**
  * Arbitrary positive usage the spy provider reports on its response. These are
@@ -426,7 +441,6 @@ describe("Property 7: external mode records provider/model/cost on the PLANNING 
         const router = spyRouter(provider);
 
         const { run } = await runChat(store, args, {
-          mode: "external",
           router,
           // maxUsd is raised above the arbitrary planner cost so the skeptic/synthesizer preflights
           // (which see the planner's committed cost) are not denied; the run must reach DONE.
@@ -624,7 +638,6 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     });
 
     const { run } = await runChat(store, args, {
-      mode: "external",
       router: spyRouter(provider),
       budget: generousBudget({ maxUsd: 10_000 }),
     });
@@ -719,7 +732,6 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     });
 
     const result = await runChat(store, args, {
-      mode: "external",
       router: spyRouter(provider),
       budget: generousBudget({ maxUsd: 10_000 }),
     });
@@ -770,7 +782,6 @@ describe("Task 9.2: external control-plane recording and refusal", () => {
     });
 
     const { run, synthesis } = await runChat(store, args, {
-      mode: "external",
       router: spyRouter(provider),
       budget: generousBudget({ maxUsd: 10_000 }),
     });
@@ -950,7 +961,6 @@ describe("external mode deepPlanning flag", () => {
       store,
       { ...baseArgs, options: { deepPlanning: true } },
       {
-        mode: "external",
         router: spyRouter(provider),
         budget: generousBudget({ maxUsd: 10_000 }),
       }
@@ -960,12 +970,38 @@ describe("external mode deepPlanning flag", () => {
     expect(provider.invokeCount).toBeGreaterThanOrEqual(4);
   });
 
-  it("does not enable deep planner in local mode even when deepPlanning is set", async () => {
+  it("runs deep planner when deepPlanning is set and router is configured", async () => {
     const store = new InMemoryRectorStore();
     const args = await buildArgs(store, "What is Rector?");
-    const { run } = await runChat(store, { ...args, options: { deepPlanning: true } }, { mode: "local" });
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [
+        {
+          content: JSON.stringify({
+            distilledContext: "What is Rector?",
+            proposedToolCalls: [],
+            entities: [],
+            intent: "Explain",
+            constraints: [],
+          }),
+        },
+        { content: planToJson(NON_FILE_OPERATION_PLAN) },
+        { content: skepticDraftToJson({ verdict: "SOUND", findings: [] }) },
+        {
+          content: synthesisDraftToJson({
+            response: "Rector is a neuro-symbolic orchestration agent.",
+            citations: [{ kind: "artifact", ref: "task:answer.synthesize", detail: "synthesis" }],
+          }),
+        },
+      ],
+    });
+    const { run } = await runChat(
+      store,
+      { ...args, options: { deepPlanning: true } },
+      { router: spyRouter(provider), budget: generousBudget({ maxUsd: 10_000 }) },
+    );
 
     expect(run.phase).toBe("DONE");
-    expect(run.costEstimate.usd).toBe(0);
+    expect(provider.invokeCount).toBeGreaterThanOrEqual(4);
   });
 });

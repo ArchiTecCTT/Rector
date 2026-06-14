@@ -2,15 +2,17 @@
 
 ## Overview
 
-This plan completes and connects existing seams to move Rector from a provider-free, local-only
-baseline to a cloud-capable codebase, without disturbing the local-mode regression baseline. Work
-proceeds bottom-up: extend the provider config model, build the boot-tolerant config resolver, harden
-discovery, wire the Settings_API and routing, replace the sandbox stub with a real E2B adapter, gate
-the synthesizer, complete TiDB persistence, enforce the local-mode invariants, and confirm universal
-redaction. Each correctness property from the design is implemented by a single property-based test
-(`fast-check`, ≥100 iterations) placed next to the code it validates, using the existing injectable
-seams (`fetchImpl`, `fsImpl`, `clock`, `commandRunner`, `clientFactory`) so tests stay hermetic and
-the "zero network / zero sandbox" invariants are directly observable via counting doubles.
+This plan completes and connects existing seams to ship the **v0.3.0 configured product**:
+`runtime-settings.json` as source of truth, mandatory uncloseable onboarding, single orchestration path
+(`runOrchestratedChatRun`), and spy-only CI (`SpyLLMProvider`). The legacy local/external product
+model is deprecated — not preserved as the user-facing default. Work proceeds bottom-up: extend the
+provider config model, build the boot-tolerant config resolver, harden discovery, wire the
+Settings_API and routing, replace the sandbox stub with a real E2B adapter, gate the synthesizer,
+complete TiDB persistence, enforce configured-product and spy-CI invariants (Req 9), and confirm
+universal redaction. Each correctness property from the design is implemented by a single
+property-based test (`fast-check`, ≥100 iterations) placed next to the code it validates, using
+injectable seams (`fetchImpl`, `fsImpl`, `clock`, `commandRunner`, `clientFactory`, `SpyLLMProvider`)
+so tests stay hermetic with zero real network calls.
 
 The implementation language is **TypeScript** (existing Vitest/`fast-check` stack).
 

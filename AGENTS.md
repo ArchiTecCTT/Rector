@@ -4,28 +4,36 @@
 
 Rector is Apache-2.0 open-source software: a chat-first self-healing AI engineering orchestration system.
 
-User experience goal: user interacts like Claude/ChatGPT in a **hassle-free** way. The app is designed to be configurable entirely through the web UI — users select and configure their own providers for LLMs, memory databases (local in-memory/SQLite, Mem0, TiDB Cloud, and others), sandbox, telemetry, etc., without editing files or environment variables. Hidden beneath chat, Rector runs deterministic orchestration: triage, context building, planning, skeptic review, crucible arbitration, DAG compilation, execution, validation, healing, and synthesis. Users should not manage agents, model routing, retries, validation, or repair loops manually.
+User experience goal: user interacts like Claude/ChatGPT in a **hassle-free** way. The app is designed to be configurable entirely through the web UI — users select and configure their own providers for LLMs, memory databases (SQLite, Mem0, TiDB Cloud, and others), sandbox, telemetry, etc., without editing files or environment variables. Hidden beneath chat, Rector runs deterministic orchestration: triage, context building, planning, skeptic review, crucible arbitration, DAG compilation, execution, validation, healing, and synthesis. Users should not manage agents, model routing, retries, validation, or repair loops manually.
 
-The system supports a non-rigid, pluggable architecture so it can run locally for development or scale to a VPS/cloud deployment as a usable daily coding tool.
+The product is **configured orchestration**, not a provider-free demo. Fresh installs start **unconfigured** with mandatory first-run onboarding until readiness passes. There is no fake chat presented as the product.
 
 ## Current Branch / Worktree
 
-- Active branch: `rector-0.1.0`
-- Worktree path: `C:/Users/MharSky/Dev/Projects/Rector/.worktrees/rector-0.1.0`
-- Primary goal: Cloud-capable, VPS-deployable commercial product with full web-UI configuration for providers and backends (including memory). Local/provider-free mode remains the mandatory perfect regression baseline and contributor-friendly default.
+- Active branch: `rector-0.3.0-configured-product`
+- Worktree path: `C:/Users/MharSky/Dev/Projects/Rector/.worktrees/rector-0.2.0`
+- Primary goal: Kill local mode as default product. Ship v0.3.0 as a configured-only commercial product with UI-persisted `runtime-settings.json`, mandatory onboarding, and a single orchestration path (`runOrchestratedChatRun`).
 
 ## Source of Truth
 
 Read these before planning or implementing:
 
-1. `.kiro/specs/cloud-capable-transition/` (requirements.md, design.md, tasks.md) — current active spec for transitioning to a hassle-free, UI-configurable cloud-capable system.
-2. `docs/architecture/current-rector-byok-architecture.md` — current architecture (local-first BYOK with pluggable providers).
-3. `docs/plans/rector-master-roadmap.md` (update in progress for cloud direction).
-4. `docs/plans/chunks/*.md` for completed/current chunk plans (including 26-32 neuro-symbolic enhancements for usability, 033-036 for cloud transition + hassle-free UI, and 037+ for follow-on work).
+1. `docs/architecture/configured-product-architecture.md` — **canonical** product model (unconfigured vs configured, runtime settings, onboarding, single orchestration path, spy-only CI).
+2. `.kiro/specs/cloud-capable-transition/` (requirements.md, design.md, tasks.md) — active implementation spec aligned to the configured-product architecture.
+3. `docs/plans/rector-master-roadmap.md` — roadmap including v0.3.0 configured-product milestone.
+4. `docs/plans/chunks/*.md` for completed/current chunk plans (pre-v0.3.0 chunk plans carry stale banners).
 5. `docs/plans/concerns-and-vulnerabilities.md` for deferred risks.
 6. `docs/plans/chunks/002-migration-map.md` before touching old task-MVP modules.
 
-Stale/quarantined docs have warning banners. If stale docs conflict with source-of-truth docs, source-of-truth wins. Historical alpha-local docs (e.g. old rector-0.1.0-architecture.md) are retained for reference but are no longer authoritative for the primary product direction.
+Stale/quarantined docs have warning banners. If stale docs conflict with source-of-truth docs, source-of-truth wins. `docs/architecture/current-rector-byok-architecture.md` and `docs/architecture/rector-0.1.0-architecture.md` are retained for reference but are no longer authoritative.
+
+## Product Rules (v0.3.0+)
+
+- **Product = configured orchestration.** Chat is gated until `orchestrationProfile` is `configured` and readiness passes.
+- **Source of truth = `.rector/runtime-settings.json`**, written by the UI. Not `ORCHESTRATOR_MODE` env for normal use.
+- **Single orchestration path:** `runOrchestratedChatRun` — no parallel fake-chat product path.
+- **Deterministic doubles = test-only.** `SpyLLMProvider` and in-memory stores are for `npm test` / CI, not end-user defaults.
+- **`ORCHESTRATOR_MODE` is deprecated** — advanced override / migration only; primary configuration is UI setup.
 
 ## Build / Test Commands
 
@@ -95,46 +103,53 @@ Current test baseline after Chunk 37:
 
 ## Active Development Goal
 
-Shift to a hassle-free, UI-configurable commercial cloud-capable system suitable for VPS deployment and daily coding work. The app must allow users to configure providers and backends (LLMs, memory databases like local/Mem0/TiDB Cloud, sandbox, etc.) entirely through the web UI without file or env edits. Local/provider-free mode must remain the mandatory, identical regression baseline for tests, contributors, and safe development (never broken by cloud features). 
+**v0.3.0 configured product:** transition from local/external dual-mode to unconfigured/configured product model per `docs/architecture/configured-product-architecture.md`.
 
-The neuro-symbolic enhancements (chunks 26-32: SLM preprocessing, advanced hierarchical memory with notes/pruning/time-awareness, proactive layer, symbolic engines, MCTS, ponder swarm, task decomposition) are part of making the system actually usable and "alive" for real work.
+Key deliverables:
 
-Every new feature must be extensively tested. Architecture should stay non-rigid and pluggable to support the UI-config vision. Use web_search for choices when unsure. At end of major work, run reviews. Keep `docs/plans/concerns-and-vulnerabilities.md` complete. Follow chunk discipline: plan in `docs/plans/chunks/`, commit separately.
+- UI-persisted `runtime-settings.json` as authoritative product state
+- Mandatory uncloseable first-run onboarding overlay until readiness passes
+- Consolidate chat dispatch to `runOrchestratedChatRun` (no fake chat as product)
+- `SpyLLMProvider` for CI only; remove provider-free path as user-facing default
+- Deprecate `ORCHESTRATOR_MODE` env knob; primary path = UI setup
+- Full web-UI configurability for providers, memory, sandbox, budgets
+- Neuro-symbolic features integrated into configured product (not gated behind a separate local demo)
 
-The .kiro/specs/cloud-capable-transition/ spec (adapted for hassle-free UI config and non-rigid design) is the active guide for the transition work.
+Every new feature must be extensively tested. Architecture stays non-rigid and pluggable. Use web_search for choices when unsure. At end of major work, run reviews. Keep `docs/plans/concerns-and-vulnerabilities.md` complete. Follow chunk discipline.
 
 ## Next Work
 
-Roadmap chunks 0–36 (foundation + neuro-symbolic usability + hassle-free memory UI) are implemented. Active focus is follow-on cloud-capable hardening per `.kiro/specs/cloud-capable-transition/` (live adapter integration tests, event-driven proactive/ponder triggers, streaming answer polish), extended with:
+Phase 1 (docs): full documentation replacement per configured-product architecture.
 
-- Full web-UI configurability for all providers and backends, including pluggable memory database providers (local options, Mem0, TiDB Cloud, future).
-- Non-rigid, pluggable architecture to avoid lock-in.
-- Hassle-free experience: minimal or no file/env editing required for normal use.
-- Integration of neuro-symbolic features into the configurable cloud product.
+Phase 2+ (code): implement onboarding gate, `runOrchestratedChatRun` consolidation, remove fake-chat product path, migrate benchmarks to `configured_spy_pipeline` naming.
 
-See the cloud-capable-transition tasks for detailed items. Create new chunk plans (starting 037+) for phases of this work.
+See `.kiro/specs/cloud-capable-transition/tasks.md` for detailed implementation items.
 
 ## Release Path
 
-### v0.1.0-alpha — local developer preview
+### v0.3.0 — configured product
 
-Need complete local brainstem: Crucible, DAG compiler, executor simulator, validation/healing, synthesis, E2E test, clean UI demo, CI, dependency audit triage, screenshots/GIF, docs, tag release.
+Mandatory onboarding, `runtime-settings.json` source of truth, single orchestration path, spy-only CI, deprecated `ORCHESTRATOR_MODE`.
+
+### v0.2.0 / prior — BYOK alpha (historical)
+
+Local/external dual mode, provider-free regression baseline as product default. Superseded by v0.3.0.
 
 ### Public alpha
 
-Need optional real providers, durable persistence, better UI, observability, basic auth for hosted demo, provider setup docs.
+Configured product + optional real providers, durable persistence, observability, basic auth for hosted demo.
 
 ### Beta
 
-Need safe sandbox execution, operator console, memory/search, Linear/Make integrations, deployment docs, deeper security review.
+Safe sandbox execution, operator console, memory/search, Linear/Make integrations, deployment docs, deeper security review.
 
 ### Production / v1
 
-Need multi-user auth, quotas/billing, durable infra, robust sandboxing, compliance posture, monitoring/SLOs, backup/restore, incident response, stable plugin/provider contracts.
+Multi-user auth, quotas/billing, durable infra, robust sandboxing, compliance posture, monitoring/SLOs, backup/restore, incident response, stable plugin/provider contracts.
 
 ## Stack Credits / Optional Integrations
 
-Credits available for later optional integrations. Do not make these required for local contributor setup.
+Credits available for later optional integrations. Do not make these required for contributor setup.
 
 - Perplexity Enterprise Pro: 3 months
 - Retool Business: 13 months
@@ -172,7 +187,7 @@ Credits available for later optional integrations. Do not make these required fo
 
 ## Confluent Note
 
-Confluent is managed Kafka/event streaming. Treat it as a later scaling option for high-throughput/replayable event streams, not a v0.1.0-alpha dependency. Credits usually apply to Confluent Cloud usage, not arbitrary subscriptions.
+Confluent is managed Kafka/event streaming. Treat it as a later scaling option for high-throughput/replayable event streams, not a v0.3.0 dependency. Credits usually apply to Confluent Cloud usage, not arbitrary subscriptions.
 
 ## Security / Concerns Rule
 

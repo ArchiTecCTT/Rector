@@ -1,0 +1,43 @@
+[config]
+language = "en-US"
+model = "gpt-4o"
+fallback_models = ["gpt-4o-mini"]
+
+[github_app]
+handle_push_trigger = true
+pr_commands = [
+  "/describe",
+  "/review",
+  "/improve",
+  "/ask",
+  "/update_changelog"
+]
+
+[pr_description]
+publish_description = true
+add_original_user_description = true
+use_bullet_points = true
+include_generated_by_header = false
+
+[pr_reviewer]
+require_score_review = false
+require_tests_review = true
+require_security_review = true
+extra_instructions = """
+Rector is a TypeScript/Node, local-first AI orchestration system.
+Review priorities:
+1. local/provider-free mode must remain deterministic and zero-network;
+2. secrets must never be logged, returned, or stored outside SecretStore references;
+3. orchestration steps must preserve schema validation, redaction, budgets, and bounded retries;
+4. sandbox changes must fail closed and avoid arbitrary shell by default;
+5. optional cloud deps (Mem0, Chroma, TiDB, E2B, Auth0/OIDC) must remain optional.
+"""
+
+[pr_code_suggestions]
+num_code_suggestions = 5
+rank_suggestions = true
+commitable_code_suggestions = false
+extra_instructions = "Prefer small, testable suggestions. Do not suggest changes that require live provider credentials for default tests."
+
+[pr_update_changelog]
+push_changelog_changes = false

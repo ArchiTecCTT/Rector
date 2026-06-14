@@ -6,8 +6,16 @@ import {
   mapToMemoryEntry,
   memoryEntryToMetadata,
   metadataToMemoryFields,
+  redactMemoryContent,
   type MemoryAdapterDeps,
 } from "./adapterBase";
+import {
+  compareMemoryPruneCandidates,
+  memoryPruneScore,
+  normalizeMemorySearchLimit,
+  sanitizeCreateMemoryEntryInput,
+  sanitizeUpdateMemoryEntryInput,
+} from "./entryUtils";
 import { evaluateMemoryBudget, MEMORY_OP_COST_USD, type MemoryBudgetOperation } from "./budget";
 import { defaultMemoryBudgetRun } from "./defaultRun";
 import type { MemoryProviderConfig } from "../providers/memoryConfig";
@@ -93,7 +101,35 @@ function defaultClientFactory(options: ChromaClientConnectOptions): ChromaClient
 }
 
 function collectionNameForRecord(recordId: string): string {
-  return `rector-mem-${recordId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60)}`;
+  const normalizedId = recordId.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/\.{2,}/g, "_");
+  let name = `rector-mem-${normalizedId}`.slice(0, 63);
+  name = name.replace(/^[^a-zA-Z0-9]+/, "r").replace(/[^a-zA-Z0-9]+$/, "0");
+  while (name.length < 3) name += "0";
+  return name;
+}
+
+function validateCollectionName(name: string): void {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{1,61}[a-zA-Z0-9]$/.test(name)) {
+    throw new Error("Chroma memory provider generated an invalid collection name.");
+  }
+  if (/\.\./.test(name)) {
+    throw new Error("Chroma memory provider generated an invalid collection name.");
+  }
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(name)) {
+    throw new Error("Chroma memory provider generated an invalid collection name.");
+  }
+}
+
+function validateChromaBaseUrl(baseUrl: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("Chroma memory provider requires config.baseUrl to be a valid http(s) URL.");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Chroma memory provider requires config.baseUrl to be a valid http(s) URL.");
+  }
 }
 
 function documentFromEntry(entry: MemoryEntry): string {
@@ -190,6 +226,8 @@ export class ChromaMemoryProvider implements MemoryProvider {
     if (!this.chromaUrl) {
       throw new Error("Chroma memory provider requires config.baseUrl (Chroma server URL).");
     }
+    validateChromaBaseUrl(this.chromaUrl);
+    validateCollectionName(this.collectionName);
   }
 
   private nextId(): string {
@@ -208,6 +246,7 @@ export class ChromaMemoryProvider implements MemoryProvider {
   private async getCollection(): Promise<ChromaCollection> {
     if (this.collection) return this.collection;
     try {
+      this.validateConfig();
       if (!this.client) {
         this.client = this.clientFactory(this.getConnectOptions());
       }
@@ -230,18 +269,19 @@ export class ChromaMemoryProvider implements MemoryProvider {
 
   async createMemoryEntry(input: CreateMemoryEntryInput): Promise<MemoryEntry> {
     this.assertBudget("create");
+    const sanitized = sanitizeCreateMemoryEntryInput(input);
     const now = this.nowFn();
     const entry = mapToMemoryEntry(
       {
         id: this.nextId(),
-        layer: input.layer,
-        content: input.content,
-        timestamp: input.timestamp ?? now,
-        lastMentioned: input.lastMentioned ?? now,
-        accessCount: input.accessCount ?? 0,
-        tags: input.tags ?? [],
-        source: input.source,
-        metadata: input.metadata ?? {},
+        layer: sanitized.layer,
+        content: sanitized.content,
+        timestamp: sanitized.timestamp ?? now,
+        lastMentioned: sanitized.lastMentioned ?? now,
+        accessCount: sanitized.accessCount ?? 0,
+        tags: sanitized.tags ?? [],
+        source: sanitized.source,
+        metadata: sanitized.metadata ?? {},
       },
       this.nowFn,
     );
@@ -288,7 +328,7 @@ export class ChromaMemoryProvider implements MemoryProvider {
     this.assertBudget("update");
     const current = await this.getMemoryEntry(id);
     if (!current) return undefined;
-    const updated = mapToMemoryEntry({ ...current, ...patch, id: current.id }, this.nowFn);
+    const updated = mapToMemoryEntry({ ...current, ...sanitizeUpdateMemoryEntryInput(patch), id: current.id }, this.nowFn);
     try {
       await (await this.getCollection()).update({
         ids: [id],
@@ -316,19 +356,30 @@ export class ChromaMemoryProvider implements MemoryProvider {
     options: { layer?: MemoryLayer; limit?: number } = {},
   ): Promise<MemoryEntry[]> {
     this.assertBudget("search");
-    const { layer, limit = 20 } = options;
+    const { layer } = options;
+    const limit = normalizeMemorySearchLimit(options.limit);
     try {
       const collection = await this.getCollection();
       if (query && query.trim()) {
         const result = await collection.query({
-          queryTexts: [query],
+          queryTexts: [redactMemoryContent(query)],
           nResults: limit,
           where: layer ? { layer } : undefined,
         });
         const ids = result.ids[0] ?? [];
         const docs = result.documents[0] ?? [];
         const metas = result.metadatas[0] ?? [];
-        return ids.map((id, i) => entryFromDocument(id, docs[i] ?? null, metas[i] ?? null, this.nowFn));
+        const distances = result.distances?.[0] ?? [];
+        return ids
+          .map((id, i) => ({
+            entry: entryFromDocument(id, docs[i] ?? null, metas[i] ?? null, this.nowFn),
+            distance: Number.isFinite(distances[i]) ? distances[i] : Number.POSITIVE_INFINITY,
+            index: i,
+          }))
+          .filter(({ entry }) => layer === undefined || entry.layer === layer)
+          .sort((left, right) => left.distance - right.distance || left.index - right.index)
+          .slice(0, limit)
+          .map(({ entry }) => entry);
       }
       return this.listMemoryEntries(layer).then((entries) => entries.slice(0, limit));
     } catch (error) {
@@ -347,15 +398,9 @@ export class ChromaMemoryProvider implements MemoryProvider {
       return { pruned: 0, summarized: 0 };
     }
 
-    const now = Date.now();
-    const scored = layerEntries.map((entry) => {
-      const ageMs = now - (Date.parse(entry.timestamp) || now);
-      const recency = Math.max(0, 100 - Math.floor(ageMs / (1000 * 60 * 60 * 24)));
-      const accessBonus = Math.min(entry.accessCount * 3, 50);
-      const noteBonus = entry.source === "user-note" || entry.tags.includes("note") ? 30 : 0;
-      return { entry, score: recency + accessBonus + noteBonus };
-    });
-    scored.sort((a, b) => a.score - b.score);
+    const pruneNow = this.nowFn();
+    const scored = layerEntries.map((entry) => ({ entry, score: memoryPruneScore(entry, pruneNow) }));
+    scored.sort(compareMemoryPruneCandidates);
 
     let pruned = 0;
     let summarized = 0;

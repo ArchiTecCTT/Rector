@@ -1,15 +1,15 @@
 name: CI
 
-# Provider-free verification workflow for the Rector v0.1.0-alpha hardening path.
+# Provider-free verification workflow for the Rector hardening path.
 # Reproduces the local verification gates (test, build, type-check, issue-catalog drift)
-# across a Node 22 / Node 24 matrix. Requires no secrets, no providers, and performs no
+# across a Node 22 / Node 24 matrix. Requires no provider secrets and performs no
 # release side effects (no publish, tag, or push). Release tagging stays manual.
 
 on:
   push:
-    branches: [main, rector-0.1.0]
+    branches: [main, rector-0.1.0, rector-0.2.0]
   pull_request:
-    branches: [main, rector-0.1.0]
+    branches: [main, rector-0.1.0, rector-0.2.0]
 
 # Least privilege: read-only token cannot push commits, create tags, or publish releases.
 permissions:
@@ -51,8 +51,33 @@ jobs:
       - name: Linear export drift check
         run: node scripts/export-linear-issues.js --check
 
-      - name: Dependency audit (non-blocking)
-        # Deferred Vitest/Vite dev-tooling advisories remain pending maintainer approval,
-        # so this step surfaces the report without failing the build.
-        continue-on-error: true
+      - name: Dependency audit
         run: npm audit
+
+  coverage:
+    name: Coverage / Codecov
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies (deterministic)
+        run: npm ci
+
+      - name: Run coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}

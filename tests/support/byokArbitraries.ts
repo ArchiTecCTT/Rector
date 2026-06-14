@@ -51,6 +51,7 @@ import {
   LLMUsageSchema,
   ProviderCapabilityMetadataSchema,
   type LLMProvider,
+  type LLMInvokeOptions,
   type LLMRequest,
   type LLMResponse,
   type LLMUsage,
@@ -255,68 +256,12 @@ export const arbPlannerInput = (): fc.Arbitrary<PlannerInput> =>
  */
 export const arbValidPlan = (): fc.Arbitrary<PlannerOutput> => arbPlannerInput().map(createFakePlan);
 
-const RISK_LEVELS = ["low", "medium", "high", "destructive"] as const;
-const TASK_ID_POOL = ["alpha", "bravo", "charlie", "delta", "echo"];
-const DANGLING_TASK_ID = "ghost-task";
-
 /**
- * Arbitrary plan that is guaranteed to parse against `PlannerOutputSchema` but
- * may or may not satisfy `validatePlannerOutput` (it can contain dangling
- * dependency references or ungated high-risk tasks). Useful for asserting the
- * live planner enforces the deeper invariants, not just the schema.
+ * Arbitrary plan that parses against the hardened `PlannerOutputSchema`. The
+ * schema now owns dependency and approval-gate invariants, so this generator is
+ * intentionally the same safety bar as `arbValidPlan`.
  */
-export const arbSchemaValidPlan = (): fc.Arbitrary<PlannerOutput> =>
-  fc
-    .uniqueArray(fc.constantFrom(...TASK_ID_POOL), { minLength: 1, maxLength: TASK_ID_POOL.length })
-    .chain((ids) => {
-      const idArb = fc.constantFrom(...ids);
-      const refArb = fc.oneof(idArb, fc.constant(DANGLING_TASK_ID));
-
-      const taskArbs = ids.map((id) =>
-        fc.record({
-          id: fc.constant(id),
-          title: fc.constant(`Task ${id}`),
-          description: fc.constant(`Description for ${id}`),
-          dependencies: fc.uniqueArray(refArb, { maxLength: 2 }),
-          expectedArtifacts: fc.array(fc.constantFrom("artifact-a", "artifact-b"), { maxLength: 2 }),
-          validation: fc.array(fc.constantFrom("check passes", "output verified"), {
-            minLength: 1,
-            maxLength: 2,
-          }),
-          risk: fc.constantFrom(...RISK_LEVELS),
-          approvalRequired: fc.boolean(),
-        })
-      );
-
-      const dependencyArb = fc.record({
-        from: refArb,
-        to: refArb,
-        reason: fc.option(fc.constant("because"), { nil: undefined }),
-      });
-
-      const gateArb = fc.record({
-        id: fc.constantFrom("gate-1", "gate-2"),
-        type: fc.constantFrom("approval", "checkpoint", "clarification"),
-        reason: fc.constant("requires approval"),
-        required: fc.boolean(),
-        taskIds: fc.uniqueArray(idArb, { maxLength: ids.length }),
-      });
-
-      return fc
-        .record({
-          goal: fc.constant("Generated plan goal"),
-          assumptions: fc.array(fc.constantFrom("assumption a", "assumption b"), { maxLength: 2 }),
-          tasks: fc.tuple(...taskArbs),
-          dependencies: fc.array(dependencyArb, { maxLength: 3 }),
-          validation: fc.record({
-            summary: fc.constant("validation summary"),
-            checks: fc.array(fc.constantFrom("c1", "c2"), { minLength: 1, maxLength: 2 }),
-          }),
-          riskLevel: fc.constantFrom(...RISK_LEVELS),
-          approvalGates: fc.array(gateArb, { maxLength: 2 }),
-        })
-        .map((plan) => PlannerOutputSchema.parse({ ...plan, tasks: [...plan.tasks] }));
-    });
+export const arbSchemaValidPlan = (): fc.Arbitrary<PlannerOutput> => arbValidPlan();
 
 /** Serializes a plan to the JSON a provider would return. */
 export function planToJson(plan: PlannerOutput): string {
@@ -395,6 +340,7 @@ export interface SpyProviderOptions {
   responses?: Array<string | ScriptedResponse>;
   /** When set, `validateConfig()` throws this error. */
   validateConfigError?: Error;
+  invokeDelayMs?: number;
   /** Behaviour when invoked more times than there are scripted responses. */
   onOverflow?: "throw" | "repeat-last";
 }
@@ -422,6 +368,7 @@ export class SpyLLMProvider implements LLMProvider {
   private readonly responses: Array<string | ScriptedResponse>;
   private readonly estimate?: LLMUsage | ((request: LLMRequest) => LLMUsage);
   private readonly validateConfigError?: Error;
+  private readonly invokeDelayMs: number;
   private readonly onOverflow: "throw" | "repeat-last";
 
   constructor(options: SpyProviderOptions = {}) {
@@ -441,6 +388,7 @@ export class SpyLLMProvider implements LLMProvider {
     this.responses = options.responses ?? [];
     this.estimate = options.estimate;
     this.validateConfigError = options.validateConfigError;
+    this.invokeDelayMs = options.invokeDelayMs ?? 0;
     this.onOverflow = options.onOverflow ?? "throw";
   }
 
@@ -455,7 +403,11 @@ export class SpyLLMProvider implements LLMProvider {
     return DEFAULT_SPY_USAGE;
   }
 
-  async invoke(request: LLMRequest): Promise<LLMResponse> {
+  async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
+    if (options.abortSignal?.aborted) throw abortError();
+    if (this.invokeDelayMs > 0) {
+      await delayWithAbort(this.invokeDelayMs, options.abortSignal);
+    }
     this.requests.push(request);
     const index = this.invokeCount;
     this.invokeCount += 1;
@@ -488,6 +440,28 @@ export class SpyLLMProvider implements LLMProvider {
     }
     throw new Error(`SpyLLMProvider: no scripted response for invoke #${index + 1}`);
   }
+}
+
+function abortError(): Error {
+  const error = new Error("SpyLLMProvider invocation aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function delayWithAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(done, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    function done(): void {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 // ---------------------------------------------------------------------------

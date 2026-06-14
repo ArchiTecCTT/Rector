@@ -213,10 +213,9 @@ describe("Property 8: orchestration config defaults safely and never leaks secre
     }
   }
 
-  // (a) Requirement 1.1: unset / empty / whitespace-only ORCHESTRATOR_MODE resolves to
-  // local with an empty provider list, even when key-like secrets are present in the env,
-  // and never touches the network (1.6).
-  it("resolves unset, empty, or whitespace mode to local without leaking env secrets", () => {
+  // Unset / empty / whitespace-only ORCHESTRATOR_MODE resolves to external with an empty
+  // provider list (unconfigured baseline), even when key-like secrets are present in the env.
+  it("resolves unset, empty, or whitespace mode to external without leaking env secrets", () => {
     const arbBlankMode = fc.oneof(
       fc.constant<string | undefined>(undefined),
       fc.constantFrom("", " ", "   ", "\t", "\n", "\r\n", " \t \n "),
@@ -234,7 +233,7 @@ describe("Property 8: orchestration config defaults safely and never leaks secre
 
         const config = withoutNetwork(() => parseOrchestrationConfig(env));
 
-        expect(config.mode).toBe("local");
+        expect(config.mode).toBe("external");
         expect(config.configuredProviders).toEqual([]);
         expect(JSON.stringify(config)).not.toContain(secret);
       }),
@@ -346,12 +345,12 @@ describe("parseOrchestrationConfig (unit)", () => {
   // Requirement 1.1 (supporting context for the unit suite): an unset
   // ORCHESTRATOR_MODE resolves to the provider-free local default, and the
   // parse performs zero network I/O (Requirement 1.6).
-  it("defaults to local with an empty provider list when ORCHESTRATOR_MODE is unset", () => {
+  it("defaults to external with an empty provider list when ORCHESTRATOR_MODE is unset", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     try {
       const config = parseOrchestrationConfig({});
 
-      expect(config).toEqual({ mode: "local", configuredProviders: [] });
+      expect(config).toEqual({ mode: "external", configuredProviders: [] });
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();

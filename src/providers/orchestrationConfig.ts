@@ -151,15 +151,16 @@ function isNonEmpty(value: string | undefined): boolean {
 /**
  * Resolve the Orchestrator_Mode from a raw `ORCHESTRATOR_MODE` value.
  *
- * Unset, empty, or whitespace-only resolves to `local` (Requirement 9.5). Any
- * other value must match `local` or `external` exactly (case-sensitive);
+ * Unset, empty, or whitespace-only resolves to `external` with an empty provider
+ * list (unconfigured product baseline). Any other value must match `local` or
+ * `external` exactly (case-sensitive);
  * otherwise an {@link OrchestrationConfigError} is thrown naming the accepted
  * values (Requirement 1.6). Note no trimming is applied to the comparison: a
  * value such as `" local "` carries content and is therefore invalid.
  */
 function resolveOrchestratorMode(rawMode: string | undefined): OrchestratorMode {
   if (rawMode === undefined || rawMode.trim().length === 0) {
-    return "local";
+    return "external";
   }
   if (rawMode === "local" || rawMode === "external") {
     return rawMode;
@@ -253,8 +254,8 @@ async function resolveConfiguredProviders(deps: ResolveOrchestrationDeps): Promi
 /**
  * Boot-tolerant orchestration config resolution (design section C1).
  *
- * - Resolves unset/empty/whitespace `ORCHESTRATOR_MODE` to `local` with an empty
- *   configured-provider list (Requirement 9.5).
+ * - Resolves unset/empty/whitespace `ORCHESTRATOR_MODE` to `external` with an
+ *   empty configured-provider list (unconfigured product baseline).
  * - Throws {@link OrchestrationConfigError} (code `ORCHESTRATOR_MODE_INVALID`)
  *   for any non-empty value that is not exactly `local`/`external` — the only
  *   path that halts startup (Requirement 1.6).
@@ -272,11 +273,6 @@ export async function resolveOrchestrationConfig(
 ): Promise<OrchestrationConfig> {
   const mode = resolveOrchestratorMode(deps.env.ORCHESTRATOR_MODE);
 
-  // Local mode is the provider-free baseline: no store read, empty provider list.
-  if (mode === "local") {
-    return { mode, configuredProviders: [] };
-  }
-
-  const configuredProviders = await resolveConfiguredProviders(deps);
+  const configuredProviders = mode === "local" ? [] : await resolveConfiguredProviders(deps);
   return { mode, configuredProviders };
 }

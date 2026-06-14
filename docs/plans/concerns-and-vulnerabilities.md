@@ -4,7 +4,136 @@
 
 ## Open
 
+### Chunk 048 configured product readiness and gating (G1)
+
+- **Source:** Chunk 048 product model hardening.
+- **Severity:** Low (mitigated).
+- **Status:** Resolved / Closed.
+- **Root cause:** Conversation creation was previously ungated, which allowed unconfigured clients to bypass the first-run onboarding screen via API calls.
+- **Plan / Mitigations:** Gate both conversation creation (`POST /api/chat/conversations`) and message creation on setup readiness (returning `409 SETUP_REQUIRED` when unconfigured). Verified via unit tests (`tests/productGate.test.ts`) and end-to-end integration tests (`tests/productModel.integration.test.ts`).
+- **Traceability:** `src/api/server.ts`, `tests/productGate.test.ts`, `tests/productModel.integration.test.ts`.
+
+### Chunk 048 deprecation of ORCHESTRATOR_MODE in runtime paths (G3)
+
+- **Source:** Chunk 048 product model hardening.
+- **Severity:** Low (mitigated).
+- **Status:** Resolved / Closed.
+- **Root cause:** Boot routing previously checked environment variables directly instead of the authoritative `runtime-settings.json` file.
+- **Plan / Mitigations:** Remove `ORCHESTRATOR_MODE` checks from active server boot sequence. It remains only for one-time legacy migration in `ensureRuntimeSettings()`. Post-migration startup router and sandbox adapter check `runtime-settings.json`'s `orchestrationProfile`.
+- **Traceability:** `src/bin/server.ts`.
+
+### Chunk 048 TogetherAIProvider HTTP integration smoke tests (G5)
+
+- **Source:** Chunk 048 product model hardening.
+- **Severity:** Low (mitigated).
+- **Status:** Resolved / Closed.
+- **Root cause:** TogetherAIProvider network calls are disabled in default CI, meaning the real HTTP request serialization, headers, response parsing, and error-retryable mapping code paths lacked integration test coverage.
+- **Plan / Mitigations:** Added an integration test (`tests/providerSmoke.test.ts`) utilizing Node's built-in `http.createServer` to spin up a local mock server. Verifies that headers, request shape, token usage parsing, and retryable/non-retryable HTTP error mappings are correct on the live fetch path without hitting real external API endpoints.
+- **Traceability:** `tests/providerSmoke.test.ts`, `src/providers/llm.ts`.
+
+### Local performance baseline thresholds are advisory until history exists
+
+- **Source:** Performance baseline benchmark (`scripts/performance-baseline.ts`).
+- **Severity:** Low/medium — measurement exists, but production performance readiness is not claimed from local in-process timings alone.
+- **Status:** Open (monitoring).
+- **Root cause:** After Chunks 042–046 the codebase is large (orchestration hardening, assignment stores, templates, RBAC, expanded test suite). We need repeatable evidence before refactoring for speed, but a single developer-machine run cannot define production SLOs.
+- **Plan / Mitigations:** Run `npm run benchmark:performance` locally or in CI for trend tracking (after `npm run build` so compiled cold-start and dist-backed probes are available). Thresholds in `docs/benchmarks/performance-baseline.md` are advisory unless `--enforce` is passed. Cold subprocess startup (`startup_cold_subprocess` tsx + `startup_cold_compiled_subprocess` node/dist) supplements warm in-process import timing. Pipeline phase rows (`pipeline_*`) break down `local_fake_pipeline` for regression targeting. Do not claim VPS/cloud performance readiness until multi-machine baseline history and hosted smoke timings exist.
+- **Traceability:** `docs/benchmarks/performance-baseline.md`, `scripts/performance-baseline.ts`, `scripts/performance-baseline-cold-start.ts`, `scripts/performance-baseline-cold-start-compiled.mjs`, `tests/performanceBaseline.test.ts`, `package.json` (`benchmark:performance`).
+
 > Updated during full system audit 2026-06-09 (subagents used; see audits/full-system-audit-2026-06-09.md); follow-up register cleanup 2026-06-10 after Gemini-led test fixes + neuro chunk commits (now 1241 tests green). See audit report for original matrix + evidence.
+>
+> 2026-06-12 042f stitch note: Chunks 042a-046 are merged on `work/042-046-stitch`; verification passed with `npm run build`, `npm test` (265 files / 1575 tests passed, 5 skipped), and `npm audit` (0 vulnerabilities). The table below supersedes older historical statuses where they conflict.
+
+### Chunk 047a deterministic compression is safe for CI but lossy for production-quality context reduction
+
+- **Source:** Chunk 047a tiered prompt assembly and compression lineage.
+- **Severity:** Medium for long, high-context production conversations; low for deterministic spy CI.
+- **Status:** Open / accepted for 047a.
+- **Root cause:** Oversized context is summarized by deterministic truncation/bullet extraction so `npm test` stays network-free with `SpyLLMProvider` and in-memory stores. This preserves redaction and lineage but can drop nuance that a configured live summarizer may retain.
+- **Plan / Mitigations:** Keep deterministic summarization as the default test-safe path. Add a configured, budget-aware live summarizer only after provider resilience and run-control semantics are in place; never call it in default CI. Chunk 047e should make compression lineage visible in the conversation UI so users can inspect parent/child context boundaries.
+- **Traceability:** `docs/plans/chunks/047a-tiered-prompt-assembly.md`, `src/orchestration/contextCompression.ts`, `src/orchestration/promptTiers.ts`, `tests/contextCompression.test.ts`, `tests/promptTiers.test.ts`.
+
+### Chunk 047a prompt tier stability is run-scoped, not assignment-scoped
+
+- **Source:** Chunk 047a stable/context/volatile prompt assembly.
+- **Severity:** Low/medium.
+- **Status:** Open / expected behavior.
+- **Root cause:** Stable tier hashes are enforced within a single run. A future model/template/assignment change between runs can legitimately change the stable tier contract, but there is not yet a product UX indicator explaining that distinction.
+- **Plan / Mitigations:** Treat mid-run stable tier mutation as blocked. Record tier budget/compression events in traces, and add assignment/lineage visibility in later 047 chunks so operators can tell whether a prompt contract changed because of a deliberate configured assignment change.
+- **Traceability:** `src/orchestration/promptTiers.ts`, `src/orchestration/prompts.ts`, `src/orchestration/chatRunner.ts`, `tests/promptTiers.test.ts`.
+
+### Chunk 047b tool registry centralizes dispatch but still needs production ACL and sandbox readiness hardening
+
+- **Source:** Chunk 047b tool registry and executor middleware.
+- **Severity:** Medium for production extensibility and sandbox execution; low for current builtin-only CI coverage.
+- **Status:** Open / accepted for 047b.
+- **Root cause:** The builtin registry is an explicit TypeScript list, so new executor tools require manual catalog updates. Module-provided tools can register through `ModuleBootContext.toolRegistry`, but their ACL/review model is still minimal. The sandbox environment selector defaults to the safe `stub` path, while real `local`/`e2b` execution still depends on readiness checks, approvals, and future UI configuration polish.
+- **Plan / Mitigations:** Keep `/api/tools` read-only and builtin-filtered for now, fail closed on unknown/unavailable tools, require middleware approval gates for write/destructive tools, and keep module tools unavailable when their module is disabled. Future chunks should add module tool ACL review, per-tool readiness diagnostics, and E2B network/isolation smoke tests behind explicit configured-product setup.
+- **Traceability:** `docs/plans/chunks/047b-tool-registry-executor.md`, `src/tools/*`, `src/orchestration/sandboxExecutor.ts`, `tests/toolRegistry.test.ts`, `tests/toolMiddleware.test.ts`, `tests/sandboxExecutorRegistry.integration.test.ts`, `tests/toolsApi.test.ts`.
+
+### Chunk 047c run control is in-memory and cooperative
+
+- **Source:** Chunk 047c interrupt, steer, and turn-budget implementation.
+- **Severity:** Medium for hosted/multi-instance deployments; low for current single-process local/product preview.
+- **Status:** Open / accepted for 047c.
+- **Root cause:** Run control state is process-local and cancellation is cooperative. Interrupts trip the registered abort signal and are observed by provider, sandbox, executor, and healing boundaries, but a multi-process deployment would need shared run-control state. Already-spawned local commands may also take a short time to terminate, depending on the command runner and OS behavior.
+- **Plan / Mitigations:** Keep operator and user routes delegated to shared `interruptRun` / `steerRun`, emit `RUN_INTERRUPT_REQUESTED`, `RUN_STEER_ENQUEUED`, and `RUN_BUDGET_EXHAUSTED` events for auditability, and treat stop as best-effort cooperative cancellation until distributed run state and stronger sandbox process supervision land. Future hosted work should back run control with the durable run/event store or a shared coordinator.
+- **Traceability:** `docs/plans/chunks/047c-run-control-budget.md`, `src/orchestration/runControl.ts`, `src/orchestration/turnBudget.ts`, `src/api/routes/runControl.ts`, `src/orchestration/sandboxExecutor.ts`, `src/tools/middleware.ts`, `tests/runControl.test.ts`, `tests/runControlApi.test.ts`, `tests/runInterrupt.integration.test.ts`, `tests/runSteer.integration.test.ts`.
+
+### Chunk 047d user-supplied skills are prompt material, not trusted code
+
+- **Source:** Chunk 047d procedural memory / skills catalog.
+- **Severity:** Medium for prompt-injection and stale-procedure risk; low for bundled low-risk skills.
+- **Status:** Open / accepted for 047d.
+- **Root cause:** `.rector/skills/` files are user-supplied procedural text. The catalog is read-only and crucible-gated, but approved skill bodies still become prompt context and can contain stale or adversarial instructions.
+- **Plan / Mitigations:** Keep skills passive: no automatic execution, no network install, and no file writes from the catalog. Crucible denies unknown skills, enforces a max activation cap, blocks high-risk skills without approval gates, and emits redacted skill activation events. Context injection is limited to approved skill IDs and capped by `maxSkillContextChars`. Future chunks should add stronger provenance/signature checks and skill write-guard scanning before marketplace/import support.
+- **Traceability:** `docs/plans/chunks/047d-procedural-memory-skills.md`, `src/memory/skillsCatalog.ts`, `src/orchestration/crucible.ts`, `src/orchestration/contextBuilder.ts`, `tests/skillsCatalog.test.ts`, `tests/skillCrucible.integration.test.ts`.
+
+### Chunk 047e SQLite FTS search is redacted and workspace-scoped but still a local keyword index
+
+- **Source:** Chunk 047e session search and conversation lineage.
+- **Severity:** Medium for production search quality and retention policy, low for default CI.
+- **Status:** Open / accepted for 047e.
+- **Root cause:** SQLite FTS5 indexes redacted message text for local persistence only. This prevents raw secret substrings from entering or matching the FTS table, but it is still keyword-only, stores redacted copies of message text, and does not cover future TiDB/vector-backed search semantics.
+- **Plan / Mitigations:** Keep `npm test` hermetic with in-memory stores and SQLite `:memory:`. Continue redacting before FTS writes, API egress, and UI snippet rendering. Workspace filters stay mandatory on search routes. Follow-up production hardening should add retention-aware index pruning, TiDB/search-provider parity, and broader fuzz coverage for unusual FTS query syntax.
+- **Traceability:** `docs/plans/chunks/047e-session-search-lineage.md`, `src/store/sessionSearch.ts`, `src/store/sqlRectorStore.ts`, `tests/sessionSearchSqlite.test.ts`, `tests/conversationSearchApi.test.ts`.
+
+### Chunk 042f reconciliation matrix for known hardening concerns
+
+| Concern | 042f status | Evidence | Remaining follow-up |
+|---|---|---|---|
+| SQL/TiDB advanced memory parity | RESOLVED for local/SQL contract coverage | `src/store/sqlRectorStore.ts`, `src/memory/tidbMemoryAdapter.ts`, `tests/sqlMemoryParity.test.ts`, `tests/memoryProviderContract.test.ts` | Live TiDB smoke remains env-gated and not run in default verification. |
+| Startup migration boot path | RESOLVED | `src/bin/server.ts` calls `runStartupMigration` before `createApp` for sqlite/tidb; `tests/startupMigrationBoot.test.ts`, `tests/tidbStartupMigrationBoot.test.ts` | Production migrations still need operator backup/rollback policy. |
+| Deterministic orchestration placeholders | PARTIALLY RESOLVED | 042a/042b added schema validation, repair/fallback, explicit DAG/approval/validation policies; local deterministic mode preserved; `tests/*Hardening.test.ts`, `tests/livePlanner.test.ts`, `tests/liveSkeptic.test.ts` | Local fake planner remains regression baseline; real provider quality/live smokes are optional. |
+| Heuristic skeptic/crucible/planner | PARTIALLY RESOLVED | Deterministic rules are named/deduped; live planner/skeptic paths are schema-gated and cannot suppress deterministic blockers; `src/orchestration/{planner,skeptic,crucible}.ts` | Deep semantic quality and human escalation UX need later product work. |
+| Sandbox mock runner | PARTIALLY RESOLVED | Sandbox policy and safe local runner guard added; E2B remains optional; `src/sandbox/index.ts`, `src/orchestration/sandboxExecutor.ts`, `tests/sandboxPolicyHardening.test.ts`, `tests/safeLocalRunner.guard.test.ts` | Default local mode still avoids real execution; production isolation requires configured external sandbox and live smoke. |
+| Rate limiter local-only | PARTIALLY RESOLVED | `src/security/rateLimiter.ts` introduces interface, route buckets, fail-closed behavior; `tests/rateLimiterHardening.test.ts` | Default backend is still in-memory; distributed backend required for multi-instance hosting. |
+| Truth library keyword-only | PARTIALLY RESOLVED | Hybrid scoring/provenance validation added; `src/memory/truthLibrary.ts`, `tests/truthLibraryHardening.test.ts` | Vector-backed truth retrieval remains future adapter work. |
+| Provider adapter hardening | PARTIALLY RESOLVED | Probe classification, discovery, redaction, model assignment routing, and tests pass; `src/providers/*`, `tests/*Discovery*.test.ts`, `tests/orchestrationAssignments*.test.ts` | Live provider smoke remains opt-in and was not run. |
+| Telemetry no-ops | STILL OPEN | Local telemetry/observability tests pass, but external telemetry integrations remain inert/no-op | Add PostHog/DataDog/New Relic adapters only behind UI config and redaction gates. |
+| Operator API auth/local-only | PARTIALLY RESOLVED | 046 adds RBAC middleware around `/api/operator`; `tests/rbacApiAuthorization.test.ts` | Operator envelope still labels local/no-auth for compatibility; durable team membership/admin UX remains open. |
+| Linear UUID labels | STILL OPEN | Linear export remains network-disabled/stub-oriented | Add real Linear ID mapping once integration is enabled. |
+| `pruneMemory` determinism | RESOLVED for tested stores | Deterministic clock/contract coverage in memory hardening tests | Reassess when external memory pruning is live. |
+| Template assignment stubs | RESOLVED by stitch | `TemplateService` now writes through durable `OrchestrationAssignmentStore`/`MemoryAssignmentStore`; `tests/templateService.test.ts`, `tests/templateApi.test.ts` | Restart-persistence UI smoke can be added later. |
+| Commercial auth/RBAC | PARTIALLY RESOLVED | Auth/RBAC/quotas/audit/readiness merged and tested; OIDC/Auth0 remains adapter-only optional shape | Durable workspace membership, invitation flows, backup/restore, billing, and compliance are not production-ready. |
+
+### Chunk 045 template assignments required stitch to durable Chunk 043/044 stores
+
+- **Source:** Chunk 045 implementation wave; durable orchestration/memory assignment stores from Chunks 043/044 were not present in that isolated worktree.
+- **Severity:** Low after stitch for current local/file-backed behavior; persistence coverage still needs final verification.
+- **Status:** Partially resolved during 042f stitch.
+- **Root cause:** Template preview/apply needs role assignment targets, but the durable stores/routes from sibling chunks were unavailable during wave 2. Chunk 045 added secret-free additive interfaces plus in-memory assignment stores so template apply could be tested without touching provider secrets or provider records.
+- **Plan:** Final 042f verification must confirm template apply writes through `OrchestrationAssignmentStore` and `MemoryAssignmentStore` from Chunks 043/044 and preserve the current template schema/API contract.
+- **Traceability:** `src/providers/orchestrationAssignments.ts`, `src/providers/memoryAssignmentStore.ts`, `src/providers/memoryAssignments.ts`, `src/templates/templateService.ts`, `tests/templateService.test.ts`, `tests/templateApi.test.ts`.
+
+### Chunk 046 commercial auth/RBAC baseline still needs durable workspace membership backing
+
+- **Source:** Chunk 046 implementation.
+- **Severity:** Medium for hosted/team production, low for local-dev.
+- **Status:** Open.
+- **Root cause:** RBAC, quotas, audit logging, deployment readiness checks, and workspace isolation helpers are now centralized and tested, but the default workspace directory is an in-memory helper. The live server persists audit events to `.rector/audit-events.jsonl`, and per-user provider/memory/secret stores already exist, but workspace/user/membership administration needs a durable store before relying on team membership changes across restarts.
+- **Plan / Mitigations:** Local-dev auth-disabled mode remains implicit owner and zero-config. Auth-enabled deployments can inject a `WorkspaceDirectory` implementation; route-level authorization/audit/quota checks are centralized around that interface. Follow-up production hardening should add SQLite/TiDB-backed users/workspaces/memberships, invitation flows, owner-transfer constraints, and backup/restore coverage for membership state.
+- **Traceability:** `docs/plans/chunks/046-commercial-readiness-auth-rbac.md`, `src/security/rbac.ts`, `src/security/workspaces.ts`, `src/security/auditLog.ts`, `src/security/quotas.ts`, `src/deployment/readiness.ts`, `tests/rbacApiAuthorization.test.ts`, `tests/workspaceIsolation.test.ts`.
 
 ### External mode fail-fast startup check ignores UI-persisted configurations
 
@@ -126,7 +255,7 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 - **Status:** Open until MongoDB/local durable store adapter chunk.
 - **Plan:** Keep documented. Replace/augment with durable store in later persistence/provider chunks.
 
-**Local baseline (intentionally preserved per Req 9 / cloud design):** Chat store (and many other "prototype" behaviors) remain in-memory/deterministic for the mandatory provider-free regression baseline (see `.kiro/specs/cloud-capable-transition/requirements.md` Req 9 + src/api/server.ts + createRectorStore "memory" path). 
+**CI spy baseline (v0.3.0 Req 9):** `npm test` uses in-memory stores and `SpyLLMProvider` doubles — not a user-facing provider-free product path. Real installs use SQLite persistence and configured orchestration per `configured-product-architecture.md`. 
 
 **External / Cloud paths (partially advanced by transition: E2B gated, live gated synth, SSE, boot-tolerant, discovery full, etc.):** See updates below for sandbox/synthesizer/streaming/startup (and cross-refs in new gaps + roadmap section). Startup item resolved (see top of Open). 
 
@@ -404,7 +533,7 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 
 - **Source:** `npm audit` during branch setup and Gemini final audit; remediated by the `dependency-security-triage` spec.
 - **Severity:** Moderate (CVSS 5.3, CWE-346) — esbuild dev server allowed any website to send requests and read responses (DNS-rebinding-style exposure). Dev/test tooling only; never shipped in the `dist` runtime.
-- **Fix:** Added an additive npm `overrides` entry to `package.json` forcing `esbuild >=0.25.0`, then regenerated the lockfile with `npm install` (no `npm audit fix --force`, no runtime dependency change). `npm ls esbuild` now resolves every entry to `esbuild@0.28.0` (via both `tsx` and `vitest > vite`), and `npm audit` no longer reports GHSA-67mh-4wv8-2f99. The full verification baseline stayed green after the change: `npm test` 28 files / 278 tests (29 files / 280 tests with the added `tests/dependencySecurity.test.ts` override regression guard), `npm run build` and `npm run check` both succeeded.
+- **Fix:** Added an additive npm `overrides` entry to `package.json` forcing `esbuild >=0.28.1`, then regenerated the lockfile with `npm install` (no `npm audit fix --force`, no runtime dependency change). `npm ls esbuild` now resolves every entry to `esbuild@0.28.1` (via both `tsx` and `vitest > vite`), and `npm audit` no longer reports GHSA-67mh-4wv8-2f99. The full verification baseline stayed green after the change: `npm test` 28 files / 278 tests (29 files / 280 tests with the added `tests/dependencySecurity.test.ts` override regression guard), `npm run build` and `npm run check` both succeeded. Chunk 047a reconfirmed the override with `npm test` (260 files / 1624 tests passed, 5 skipped), `npm run build`, and `npm audit` (0 vulnerabilities).
 - **Status:** Closed / Mitigated for the esbuild advisory. The remaining `vitest`/`vite`/`@vitest/mocker`/`vite-node` findings (which require a forced `vitest@4` major upgrade) are tracked separately under `## Open` and deferred for maintainer approval.
 - **Traceability:** `docs/security/dependency-audit-2026-06-04.md`.
 
@@ -428,6 +557,13 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 - **Severity:** Major planning risk.
 - **Fix:** Removed superseded local-MVP and cloud-heavy planning docs, then updated `docs/README.md`, `docs/architecture/rector-0.1.0-architecture.md`, and `.kiro/steering/docs.md` so current source-of-truth docs are the only active guidance.
 - **Status:** Closed.
+
+### Provider resilience retries can add provider spend beyond the initial preflight
+
+- **Source:** Chunk 047f implementation.
+- **Severity:** Medium provider/budget risk.
+- **Concern:** The resilience wrapper preflights through the existing `invokeWithBudget` call before the first provider invocation, then may perform a bounded 429 retry, auth retry, or fallback substitution inside that call site. Those extra attempts are traced and bounded, but per-attempt budget preflight/accounting should be tightened in a follow-up so retry/fallback spend is projected before each recovery call.
+- **Status:** Open follow-up before public alpha billing/quotas.
 
 ### Open-source project lacked license/community scaffolding
 

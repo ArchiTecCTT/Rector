@@ -38,6 +38,7 @@ import http from "node:http";
 
 import { createApp } from "../src/api/server";
 import { TaskManager } from "../src/thalamus/router";
+import { configuredAppOptions } from "./support/configuredApp";
 import {
   aggregateRunCost,
   aggregateConversationCost,
@@ -136,8 +137,11 @@ function successResponsesFor(prompt: string, plannerUsage: Partial<typeof DEFAUL
   ];
 }
 
-function externalApp(provider: SpyLLMProvider): express.Application {
-  return createApp(new TaskManager(), { orchestration: { mode: "external", router: spyRouter(provider) } });
+async function externalApp(provider: SpyLLMProvider): Promise<express.Application> {
+  return createApp(
+    new TaskManager(),
+    await configuredAppOptions({ orchestration: { router: spyRouter(provider) } }),
+  );
 }
 
 // --- (1) GET /api/runs/:id/cost for a run with provider-call events (Req 3.6) ------------------
@@ -151,7 +155,7 @@ describe("GET /api/runs/:id/cost — run with provider-call events (Req 3.6)", (
       responses: successResponsesFor(prompt, plannerUsage),
     });
 
-    await withServer(externalApp(provider), async (base) => {
+    await withServer(await externalApp(provider), async (base) => {
       const created = await api(base, "/api/chat/conversations", {
         method: "POST",
         body: JSON.stringify({ title: "run cost" }),
@@ -211,7 +215,7 @@ describe("GET /api/chat/conversations/:id/cost — summed across the conversatio
       ],
     });
 
-    await withServer(externalApp(provider), async (base) => {
+    await withServer(await externalApp(provider), async (base) => {
       const created = await api(base, "/api/chat/conversations", {
         method: "POST",
         body: JSON.stringify({ title: "conversation cost" }),

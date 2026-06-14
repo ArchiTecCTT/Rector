@@ -106,6 +106,11 @@ export const ProviderConfigRecordSchema = z
     headers: z.record(z.string()).optional(),
     /** `Secret_Store` key for this record's secret. NEVER the value itself. */
     secretRef: NonEmptyStringSchema,
+    /**
+     * Optional additional Secret_Store keys for this provider's credential pool.
+     * Values are secret references only, never secret material.
+     */
+    additionalSecretRefs: z.array(NonEmptyStringSchema).optional(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })
