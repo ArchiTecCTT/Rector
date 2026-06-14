@@ -52,8 +52,8 @@ describe("memoryBridge", () => {
     store = createInMemoryMemoryConfigStore();
   });
 
-  it("local mode never reads secrets and returns pure local-inmemory", async () => {
-    const getSecret = vi.fn(async () => ({ ok: false, error: "should not be called" }));
+  it("falls back to pure local-inmemory when an external provider secret is missing", async () => {
+    const getSecret = vi.fn(async () => ({ ok: false, error: "missing" }));
     const secrets: SecretStore = {
       setSecret: async () => ({ ok: true, value: undefined }),
       getSecret,
@@ -63,15 +63,12 @@ describe("memoryBridge", () => {
     await store.upsertMemoryProvider(makeRecord({ kind: "mem0", id: "mem0:active" }));
     await store.setActiveMemoryProvider("mem0:active");
 
-    const provider = await resolveActiveMemoryProvider(store, secrets, {
-      mode: "local",
-      now: FIXED_NOW,
-    });
+    const provider = await resolveActiveMemoryProvider(store, secrets, { now: FIXED_NOW });
 
     expect(provider).toBeInstanceOf(LocalMemoryProvider);
     expect(provider.kind).toBe("local-inmemory");
     expect(provider.id).toBe("local-inmemory:default");
-    expect(getSecret).not.toHaveBeenCalled();
+    expect(getSecret).toHaveBeenCalled();
   });
 
   it("resolves external mem0 kind when secret is present", async () => {

@@ -175,6 +175,24 @@ describe("auth API integration", () => {
       expect(res.text.includes(password)).toBe(false);
       expect((res.data as { error?: string }).error).toBe("Invalid username or password");
     });
+
+    it("rate-limits repeated invalid login attempts per username and IP", async () => {
+      const username = "rate-limit-target";
+      for (let i = 0; i < 5; i += 1) {
+        const denied = await api(harness.base, "/api/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ username, password: `wrong-${i}` }),
+        });
+        expect(denied.status).toBe(401);
+      }
+
+      const limited = await api(harness.base, "/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password: "still-wrong" }),
+      });
+      expect(limited.status).toBe(429);
+      expect((limited.data as { error?: string }).error).toBe("Too many login attempts");
+    });
   });
 
   it("property: enabled-mode API responses never include password hash substrings", async () => {

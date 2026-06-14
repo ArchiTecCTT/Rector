@@ -24,6 +24,23 @@ import {
   type UpdateRunInput,
 } from "./schemas";
 import type { RectorStore } from "./index";
+import {
+  compareMemoryPruneCandidates,
+  compareMemorySearchResults,
+  memoryPruneScore,
+  normalizeMemorySearchLimit,
+  sanitizeCreateMemoryEntryInput,
+  sanitizeUpdateMemoryEntryInput,
+} from "../memory/entryUtils";
+import {
+  getConversationLineage as walkConversationLineage,
+  validateParentConversation,
+} from "./lineage";
+import {
+  keywordSearchConversations,
+  type SessionSearchHit,
+  type SessionSearchQuery,
+} from "./sessionSearch";
 
 type IdPrefix = "conv" | "msg" | "run" | "art" | "mem";
 
@@ -54,9 +71,17 @@ export class InMemoryRectorStore implements RectorStore {
 
   async createConversation(input: CreateConversationInput): Promise<Conversation> {
     const now = this.now();
+    const id = this.peekNextId("conv");
+    if (input.parentConversationId) {
+      await validateParentConversation(this, id, input.parentConversationId, {
+        workspaceId: input.workspaceId,
+      });
+    }
+    this.counters.conv += 1;
     const conversation = ConversationSchema.parse({
       ...clone(input),
-      id: this.nextId("conv"),
+      id,
+      compressionGeneration: input.compressionGeneration ?? 0,
       createdAt: now,
       updatedAt: now,
     });
@@ -81,6 +106,15 @@ export class InMemoryRectorStore implements RectorStore {
   async updateConversation(id: string, patch: UpdateConversationInput): Promise<Conversation | undefined> {
     const current = this.conversations.get(id);
     if (!current) return undefined;
+    const nextWorkspaceId = patch.workspaceId ?? current.workspaceId;
+    const nextParentConversationId = Object.prototype.hasOwnProperty.call(patch, "parentConversationId")
+      ? patch.parentConversationId
+      : current.parentConversationId;
+    if (nextParentConversationId) {
+      await validateParentConversation(this, current.id, nextParentConversationId, {
+        workspaceId: nextWorkspaceId,
+      });
+    }
 
     const updated = ConversationSchema.parse({
       ...clone(current),
@@ -99,6 +133,14 @@ export class InMemoryRectorStore implements RectorStore {
    */
   async deleteConversation(id: string): Promise<boolean> {
     return this.conversations.delete(id);
+  }
+
+  async searchConversations(query: SessionSearchQuery): Promise<SessionSearchHit[]> {
+    return keywordSearchConversations(this, query);
+  }
+
+  async getConversationLineage(conversationId: string): Promise<Conversation[]> {
+    return walkConversationLineage(this, conversationId);
   }
 
   async createMessage(input: CreateMessageInput): Promise<Message> {
@@ -308,14 +350,15 @@ export class InMemoryRectorStore implements RectorStore {
   // === Advanced Memory (Chunk 27 / neuro-symbolic Step 2) ===
   async createMemoryEntry(input: CreateMemoryEntryInput): Promise<MemoryEntry> {
     const now = this.now();
+    const sanitized = sanitizeCreateMemoryEntryInput(input);
     const entry = MemoryEntrySchema.parse({
-      ...clone(input),
+      ...clone(sanitized),
       id: this.nextId("mem"),
-      accessCount: input.accessCount ?? 0,
-      lastMentioned: input.lastMentioned ?? now,
-      timestamp: input.timestamp ?? now,
-      tags: input.tags ?? [],
-      metadata: input.metadata ?? {},
+      accessCount: sanitized.accessCount ?? 0,
+      lastMentioned: sanitized.lastMentioned ?? now,
+      timestamp: sanitized.timestamp ?? now,
+      tags: sanitized.tags ?? [],
+      metadata: sanitized.metadata ?? {},
     });
     this.memories.set(entry.id, clone(entry));
     return clone(entry);
@@ -337,7 +380,7 @@ export class InMemoryRectorStore implements RectorStore {
 
     const updated = MemoryEntrySchema.parse({
       ...clone(current),
-      ...clone(patch),
+      ...clone(sanitizeUpdateMemoryEntryInput(patch)),
       id: current.id,
     });
     this.memories.set(id, clone(updated));
@@ -349,7 +392,8 @@ export class InMemoryRectorStore implements RectorStore {
   }
 
   async searchMemory(query?: string, options: { layer?: MemoryLayer; limit?: number } = {}): Promise<MemoryEntry[]> {
-    const { layer, limit = 20 } = options;
+    const { layer } = options;
+    const limit = normalizeMemorySearchLimit(options.limit);
     let results = Array.from(this.memories.values());
 
     if (layer) {
@@ -365,12 +409,7 @@ export class InMemoryRectorStore implements RectorStore {
       );
     }
 
-    // Simple recency + access sort for relevance
-    results.sort((a, b) => {
-      const scoreA = a.accessCount * 2 + (Date.parse(a.lastMentioned) || 0);
-      const scoreB = b.accessCount * 2 + (Date.parse(b.lastMentioned) || 0);
-      return scoreB - scoreA;
-    });
+    results.sort(compareMemorySearchResults);
 
     return results.slice(0, limit).map(clone);
   }
@@ -383,17 +422,10 @@ export class InMemoryRectorStore implements RectorStore {
       return { pruned: 0, summarized: 0 };
     }
 
-    // Score: recency (inverse age) + accessCount + bonus for user notes
-    const scored = layerEntries.map((entry) => {
-      const ageMs = Date.now() - (Date.parse(entry.timestamp) || Date.now());
-      const recency = Math.max(0, 100 - Math.floor(ageMs / (1000 * 60 * 60 * 24))); // decay per day rough
-      const accessBonus = Math.min(entry.accessCount * 3, 50);
-      const noteBonus = entry.source === "user-note" || entry.tags.includes("note") ? 30 : 0;
-      const score = recency + accessBonus + noteBonus;
-      return { entry, score };
-    });
+    const pruneNow = this.now();
+    const scored = layerEntries.map((entry) => ({ entry, score: memoryPruneScore(entry, pruneNow) }));
 
-    scored.sort((a, b) => a.score - b.score); // lowest first
+    scored.sort(compareMemoryPruneCandidates); // lowest first
 
     let pruned = 0;
     let summarized = 0;
@@ -427,6 +459,10 @@ export class InMemoryRectorStore implements RectorStore {
   private nextId(prefix: IdPrefix): string {
     this.counters[prefix] += 1;
     return `${prefix}-${this.counters[prefix]}`;
+  }
+
+  private peekNextId(prefix: IdPrefix): string {
+    return `${prefix}-${this.counters[prefix] + 1}`;
   }
 
   private cloneFromMap<T>(map: Map<string, T>, id: string): T | undefined {

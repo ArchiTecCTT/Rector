@@ -83,7 +83,7 @@ describe("Setup_Wizard panel", () => {
     await harness.sandbox.loadSetupStatus();
 
     // Req 1.1: the orchestration mode is displayed in human language.
-    expect(harness.getEl("setup-wizard-mode").textContent).toBe("Local mode");
+    expect(harness.getEl("setup-wizard-mode").textContent).toBe("Unconfigured");
     expect(requestedUrl).toBe("/api/setup/status");
 
     // Req 1.2: exactly one pill per category, in order, each carrying one closed-set status.
@@ -113,12 +113,14 @@ describe("Setup_Wizard panel", () => {
     expectChatAndTraceAccessible(harness);
   });
 
-  it("labels External_Mode when the server reports external (Req 1.1)", async () => {
-    harness.setFetchHandler(async () => jsonResponse(statusResponse("external")));
+  it("labels configured profile when the server reports configured (Req 1.1)", async () => {
+    harness.setFetchHandler(async () =>
+      jsonResponse({ ...statusResponse("external"), orchestrationProfile: "configured" }),
+    );
 
     await harness.sandbox.loadSetupStatus();
 
-    expect(harness.getEl("setup-wizard-mode").textContent).toBe("External mode");
+    expect(harness.getEl("setup-wizard-mode").textContent).toBe("Configured");
     expect(harness.getEl("setup-wizard-categories").children.length).toBe(5);
   });
 

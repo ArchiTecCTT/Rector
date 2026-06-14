@@ -12,7 +12,7 @@ export const SETUP_ITEMS: SetupItem[] = [
   { key: "PORT", label: "HTTP Port", description: "Local API/UI port.", required: false, defaultValue: "3000", category: "core" },
   { key: "HOST", label: "HTTP Host", description: "Bind host for local API/UI. Defaults to loopback for local safety.", required: false, defaultValue: "127.0.0.1", category: "core" },
   { key: "DOPPLER_TOKEN", label: "Doppler Token", description: "Service token used to load production secrets.", required: false, category: "core" },
-  { key: "ORCHESTRATOR_MODE", label: "Orchestration Mode", description: "Chat pipeline mode: local (default) runs provider-free with zero network calls and zero cost; external enables the Bring-Your-Own-Key planner, which requires at least one configured provider validated at startup.", required: false, defaultValue: "local", category: "core" },
+  { key: "ORCHESTRATOR_MODE", label: "Orchestration Mode (deprecated)", description: "DEPRECATED advanced override only. Primary product configuration is via the web UI setup wizard, which persists orchestrationProfile (unconfigured/configured) to .rector/runtime-settings.json. This env knob remains for one-time migration from legacy installs (local→unconfigured, external+providers→configured). New installs should not use it.", required: false, defaultValue: "local", category: "core" },
 
   { key: "KAFKA_BROKERS", label: "Kafka Brokers", description: "Comma-separated Kafka bootstrap servers.", required: false, defaultValue: "localhost:9092", category: "event-bus" },
   { key: "KAFKA_CLIENT_ID", label: "Kafka Client ID", description: "Client ID for Thalamus and worker consumers.", required: false, defaultValue: "rector-local", category: "event-bus" },

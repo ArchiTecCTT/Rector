@@ -11,10 +11,25 @@ export const ExecutionErrorCodeSchema = z.enum([
   "DAG_VALIDATION_FAILED",
   "DEPENDENCY_FAILED",
   "INJECTED_FAILURE",
+  "OPERATION_MAPPING_FAILED",
   "PERMISSION_DENIED",
+  "SANDBOX_OPERATION_FAILED",
   "TIMEOUT",
+  "VALIDATION_FAILED",
+  "ABORTED",
 ]);
 export type ExecutionErrorCode = z.infer<typeof ExecutionErrorCodeSchema>;
+
+export const DependencyFailureStrategySchema = z.enum(["SKIP_DOWNSTREAM", "FAIL_FAST"]);
+export type DependencyFailureStrategy = z.infer<typeof DependencyFailureStrategySchema>;
+
+export const ExecutionPolicySchema = z.object({
+  maxAttempts: z.number().int().min(1).default(1),
+  retryableErrorCodes: z.array(ExecutionErrorCodeSchema).default(["INJECTED_FAILURE", "TIMEOUT"]),
+  perNodeTimeoutMs: z.number().int().positive().optional(),
+  dependencyFailureStrategy: DependencyFailureStrategySchema.default("SKIP_DOWNSTREAM"),
+});
+export type ExecutionPolicy = z.infer<typeof ExecutionPolicySchema>;
 
 export const ExecutionErrorSchema = z.object({
   code: ExecutionErrorCodeSchema,
@@ -41,7 +56,11 @@ export const ExecutionEventSchema = z.object({
   sequence: z.number().int().min(1),
   type: z.enum(["DAG_STARTED", "NODE_STARTED", "NODE_RETRIED", "NODE_COMPLETED", "NODE_FAILED", "NODE_SKIPPED", "DAG_COMPLETED"]),
   nodeId: z.string().min(1).optional(),
+  toolName: z.string().min(1).optional(),
+  middlewareHalt: z.boolean().optional(),
+  approvalGateId: z.string().min(1).optional(),
   status: z.union([DagExecutionStatusSchema, NodeExecutionStatusSchema]).optional(),
+  attempt: z.number().int().min(1).optional(),
   error: ExecutionErrorSchema.optional(),
   at: z.string().datetime(),
 });
@@ -62,12 +81,22 @@ export type DagExecutionResult = z.infer<typeof DagExecutionResultSchema>;
 
 export interface ExecutorSimulatorOptions {
   now?: () => string;
+  executionPolicy?: Partial<ExecutionPolicy>;
   injectFailureNodeIds?: string[];
   injectFailureNodeTypes?: DagNodeType[];
+  injectedErrorCodeByNodeId?: Partial<Record<string, ExecutionErrorCode>>;
   failAttemptsByNodeId?: Record<string, number>;
   simulatedDurationMsByNodeId?: Record<string, number>;
   simulatedDurationMsByNodeType?: Partial<Record<DagNodeType, number>>;
+  simulatedOutputByNodeId?: Record<string, Record<string, unknown>>;
+  validationFailuresByNodeId?: Record<string, string>;
   allowUnsafeShell?: boolean;
+  abortSignal?: AbortSignal;
+  /**
+   * When true, FILE_OPERATION and SHELL_COMMAND nodes fail instead of simulating SUCCESS.
+   * Used for CODE_EDIT honesty when no real sandbox is configured.
+   */
+  blockSimulatedWorkspaceOps?: boolean;
 }
 
 const DEFAULT_NODE_DURATION_MS = 1;
@@ -144,6 +173,22 @@ export function executeCompiledDagSync(compiledDag: Dag, options: ExecutorSimula
   const nodeResults: NodeExecutionResult[] = [];
 
   for (const node of orderedNodes) {
+    if (options.abortSignal?.aborted) {
+      appendAbortedRemainder(node, orderedNodes, nodeResults, resultsByNode, dependenciesByNode, cursorMs, appendEvent);
+      appendEvent("DAG_COMPLETED", { status: "PARTIAL", error: abortExecutionError(node.id) });
+      return DagExecutionResultSchema.parse({
+        dagId: dag.id,
+        runId: dag.runId,
+        status: dagStatus(nodeResults),
+        startedAt: iso(startedAtMs),
+        completedAt: iso(cursorMs),
+        durationMs: cursorMs - startedAtMs,
+        nodeResults,
+        events,
+        error: abortExecutionError(node.id),
+      });
+    }
+
     const dependencies = [...(dependenciesByNode.get(node.id) ?? [])].sort();
     const blockedBy = dependencies.filter((dependencyId) => {
       const result = resultsByNode.get(dependencyId);
@@ -152,11 +197,12 @@ export function executeCompiledDagSync(compiledDag: Dag, options: ExecutorSimula
 
     if (blockedBy.length > 0) {
       const at = iso(cursorMs);
+      const policy = resolveExecutionPolicy(node, options);
       const error: ExecutionError = {
         code: "DEPENDENCY_FAILED",
         message: `Node ${node.id} skipped because dependencies did not complete: ${blockedBy.join(", ")}`,
         nodeId: node.id,
-        details: { blockedBy },
+        details: { blockedBy, dependencyFailureStrategy: policy.dependencyFailureStrategy },
       };
       const result: NodeExecutionResult = {
         nodeId: node.id,
@@ -174,7 +220,7 @@ export function executeCompiledDagSync(compiledDag: Dag, options: ExecutorSimula
       continue;
     }
 
-    const result = executeNode(node, dependencies, cursorMs, options, appendEvent);
+    const result = executeNode(node, dependencies, cursorMs, options, resultsByNode, appendEvent);
     cursorMs += result.durationMs;
     nodeResults.push(result);
     resultsByNode.set(node.id, result);
@@ -195,90 +241,359 @@ export function executeCompiledDagSync(compiledDag: Dag, options: ExecutorSimula
   });
 }
 
+function appendAbortedRemainder(
+  firstNode: DagNode,
+  orderedNodes: DagNode[],
+  nodeResults: NodeExecutionResult[],
+  resultsByNode: Map<string, NodeExecutionResult>,
+  dependenciesByNode: Map<string, Set<string>>,
+  cursorMs: number,
+  appendEvent: (type: ExecutionEvent["type"], event?: Omit<ExecutionEvent, "sequence" | "type" | "at">) => void,
+): void {
+  const startIndex = orderedNodes.findIndex((candidate) => candidate.id === firstNode.id);
+  const remaining = startIndex >= 0 ? orderedNodes.slice(startIndex) : [firstNode];
+  for (const node of remaining) {
+    const at = iso(cursorMs);
+    const error = abortExecutionError(node.id);
+    const result: NodeExecutionResult = {
+      nodeId: node.id,
+      status: "SKIPPED",
+      attempts: 0,
+      startedAt: at,
+      completedAt: at,
+      durationMs: 0,
+      error,
+      dependencies: [...(dependenciesByNode.get(node.id) ?? [])].sort(),
+    };
+    nodeResults.push(result);
+    resultsByNode.set(node.id, result);
+    appendEvent("NODE_SKIPPED", { nodeId: node.id, status: "SKIPPED", error });
+  }
+}
+
+function abortExecutionError(nodeId?: string): ExecutionError {
+  return {
+    code: "ABORTED",
+    message: nodeId ? `Execution aborted before node ${nodeId}` : "Execution aborted",
+    nodeId,
+    details: { aborted: true },
+  };
+}
+
 function executeNode(
   node: DagNode,
   dependencies: string[],
   startedAtMs: number,
   options: ExecutorSimulatorOptions,
+  resultsByNode: Map<string, NodeExecutionResult>,
   appendEvent: (type: ExecutionEvent["type"], event?: Omit<ExecutionEvent, "sequence" | "type" | "at">) => void
 ): NodeExecutionResult {
-  const durationMs = simulatedDurationMs(node, options);
+  const policy = resolveExecutionPolicy(node, options);
+  const perAttemptDurationMs = simulatedDurationMs(node, options);
   const startedAt = iso(startedAtMs);
-  const completedAt = iso(startedAtMs + durationMs);
-  const maxAttempts = Math.max(1, node.retryPolicy?.maxAttempts ?? DEFAULT_RETRY_ATTEMPTS);
 
-  appendEvent("NODE_STARTED", { nodeId: node.id });
+  const toolName = simulatedToolNameForNode(node);
+  appendEvent("NODE_STARTED", { nodeId: node.id, toolName, middlewareHalt: false, attempt: 1 });
 
   const permissionError = unsafeShellError(node, options);
   if (permissionError) {
-    appendEvent("NODE_FAILED", { nodeId: node.id, status: "FAILED", error: permissionError });
-    return {
-      nodeId: node.id,
-      status: "FAILED",
-      attempts: 1,
-      startedAt,
-      completedAt,
-      durationMs,
-      error: permissionError,
-      dependencies,
-    };
+    return failedNodeResult(node, dependencies, startedAtMs, perAttemptDurationMs, permissionError, policy, appendEvent);
   }
 
-  const timeoutError = timeoutErrorFor(node, durationMs);
+  const unsandboxedWorkspaceError = unsandboxedWorkspaceOpError(node, options);
+  if (unsandboxedWorkspaceError) {
+    return failedNodeResult(node, dependencies, startedAtMs, perAttemptDurationMs, unsandboxedWorkspaceError, policy, appendEvent);
+  }
+
+  const timeoutError = timeoutErrorFor(node, perAttemptDurationMs, policy);
   if (timeoutError) {
-    appendEvent("NODE_FAILED", { nodeId: node.id, status: "FAILED", error: timeoutError });
-    return {
-      nodeId: node.id,
-      status: "FAILED",
-      attempts: 1,
-      startedAt,
-      completedAt,
-      durationMs,
-      error: timeoutError,
-      dependencies,
-    };
+    return failedNodeResult(node, dependencies, startedAtMs, perAttemptDurationMs, timeoutError, policy, appendEvent);
   }
 
-  const forcedFailureAttempts = injectedFailureAttempts(node, options, maxAttempts);
-  if (forcedFailureAttempts >= maxAttempts) {
-    for (let attempt = 1; attempt < maxAttempts; attempt += 1) {
-      appendEvent("NODE_RETRIED", { nodeId: node.id, status: "RETRIED", error: injectedFailureError(node, attempt) });
+  const forcedFailureAttempts = injectedFailureAttempts(node, options, policy.maxAttempts);
+  if (forcedFailureAttempts > 0) {
+    const firstError = injectedFailureError(node, 1, options);
+    const retryable = isRetryableExecutionError(firstError, policy);
+    if (!retryable) {
+      appendEvent("NODE_FAILED", { nodeId: node.id, toolName, middlewareHalt: firstError.code === "PERMISSION_DENIED", status: "FAILED", attempt: 1, error: firstError });
+      return {
+        nodeId: node.id,
+        status: "FAILED",
+        attempts: 1,
+        startedAt,
+        completedAt: iso(startedAtMs + perAttemptDurationMs),
+        durationMs: perAttemptDurationMs,
+        error: firstError,
+        dependencies,
+      };
     }
-    const error = injectedFailureError(node, maxAttempts);
-    appendEvent("NODE_FAILED", { nodeId: node.id, status: "FAILED", error });
-    return {
-      nodeId: node.id,
-      status: "FAILED",
-      attempts: maxAttempts,
-      startedAt,
-      completedAt,
-      durationMs,
-      error,
-      dependencies,
-    };
+
+    const boundedFailureAttempts = Math.min(forcedFailureAttempts, policy.maxAttempts);
+    if (boundedFailureAttempts >= policy.maxAttempts) {
+      for (let attempt = 1; attempt < policy.maxAttempts; attempt += 1) {
+        appendEvent("NODE_RETRIED", {
+          nodeId: node.id,
+          toolName,
+          middlewareHalt: false,
+          status: "RETRIED",
+          attempt,
+          error: injectedFailureError(node, attempt, options),
+        });
+      }
+      const error = injectedFailureError(node, policy.maxAttempts, options);
+      appendEvent("NODE_FAILED", { nodeId: node.id, toolName, middlewareHalt: error.code === "PERMISSION_DENIED", status: "FAILED", attempt: policy.maxAttempts, error });
+      return {
+        nodeId: node.id,
+        status: "FAILED",
+        attempts: policy.maxAttempts,
+        startedAt,
+        completedAt: iso(startedAtMs + perAttemptDurationMs * policy.maxAttempts),
+        durationMs: perAttemptDurationMs * policy.maxAttempts,
+        error,
+        dependencies,
+      };
+    }
+
+    for (let attempt = 1; attempt <= boundedFailureAttempts; attempt += 1) {
+      appendEvent("NODE_RETRIED", {
+        nodeId: node.id,
+        toolName,
+        middlewareHalt: false,
+        status: "RETRIED",
+        attempt,
+        error: injectedFailureError(node, attempt, options),
+      });
+    }
+
+    const attempts = boundedFailureAttempts + 1;
+    const status: NodeExecutionStatus = "RETRIED";
+    appendEvent("NODE_COMPLETED", { nodeId: node.id, toolName, middlewareHalt: false, status, attempt: attempts });
+    return successfulNodeResult(node, dependencies, startedAtMs, perAttemptDurationMs, attempts, status, options, resultsByNode);
   }
 
-  for (let attempt = 1; attempt <= forcedFailureAttempts; attempt += 1) {
-    appendEvent("NODE_RETRIED", { nodeId: node.id, status: "RETRIED", error: injectedFailureError(node, attempt) });
+  const validationError = validationErrorFor(node, dependencies, resultsByNode, options);
+  if (validationError) {
+    return failedNodeResult(node, dependencies, startedAtMs, perAttemptDurationMs, validationError, policy, appendEvent);
   }
 
-  const attempts = forcedFailureAttempts + 1;
-  const status: NodeExecutionStatus = attempts > 1 ? "RETRIED" : "SUCCESS";
-  appendEvent("NODE_COMPLETED", { nodeId: node.id, status });
+  appendEvent("NODE_COMPLETED", { nodeId: node.id, toolName, middlewareHalt: false, status: "SUCCESS", attempt: 1 });
+  return successfulNodeResult(node, dependencies, startedAtMs, perAttemptDurationMs, 1, "SUCCESS", options, resultsByNode);
+}
+
+function successfulNodeResult(
+  node: DagNode,
+  dependencies: string[],
+  startedAtMs: number,
+  perAttemptDurationMs: number,
+  attempts: number,
+  status: NodeExecutionStatus,
+  options: ExecutorSimulatorOptions,
+  resultsByNode: Map<string, NodeExecutionResult>,
+): NodeExecutionResult {
+  const durationMs = perAttemptDurationMs * attempts;
   return {
     nodeId: node.id,
     status,
     attempts,
-    startedAt,
-    completedAt,
+    startedAt: iso(startedAtMs),
+    completedAt: iso(startedAtMs + durationMs),
     durationMs,
-    output: {
-      simulated: true,
-      nodeType: node.type,
-      expectedOutputs: node.expectedOutputs,
-    },
+    output: simulatedOutputFor(node, dependencies, options, resultsByNode),
     dependencies,
   };
+}
+
+function failedNodeResult(
+  node: DagNode,
+  dependencies: string[],
+  startedAtMs: number,
+  perAttemptDurationMs: number,
+  error: ExecutionError,
+  policy: ExecutionPolicy,
+  appendEvent: (type: ExecutionEvent["type"], event?: Omit<ExecutionEvent, "sequence" | "type" | "at">) => void,
+): NodeExecutionResult {
+  const retryable = isRetryableExecutionError(error, policy);
+  const attempts = retryable ? policy.maxAttempts : 1;
+  const toolName = simulatedToolNameForNode(node);
+
+  for (let attempt = 1; attempt < attempts; attempt += 1) {
+    appendEvent("NODE_RETRIED", { nodeId: node.id, toolName, middlewareHalt: error.code === "PERMISSION_DENIED", status: "RETRIED", attempt, error: { ...error, details: { ...(error.details ?? {}), attempt } } });
+  }
+
+  const finalError = attempts === 1 ? error : { ...error, details: { ...(error.details ?? {}), attempt: attempts } };
+  appendEvent("NODE_FAILED", { nodeId: node.id, toolName, middlewareHalt: finalError.code === "PERMISSION_DENIED", status: "FAILED", attempt: attempts, error: finalError });
+
+  const durationMs = perAttemptDurationMs * attempts;
+  return {
+    nodeId: node.id,
+    status: "FAILED",
+    attempts,
+    startedAt: iso(startedAtMs),
+    completedAt: iso(startedAtMs + durationMs),
+    durationMs,
+    error: finalError,
+    dependencies,
+  };
+}
+
+function resolveExecutionPolicy(node: DagNode, options: ExecutorSimulatorOptions): ExecutionPolicy {
+  const parsed = ExecutionPolicySchema.parse(options.executionPolicy ?? {});
+  return {
+    ...parsed,
+    maxAttempts: Math.max(1, node.retryPolicy?.maxAttempts ?? parsed.maxAttempts ?? DEFAULT_RETRY_ATTEMPTS),
+    retryableErrorCodes: [...parsed.retryableErrorCodes],
+  };
+}
+
+function isRetryableExecutionError(error: ExecutionError, policy: ExecutionPolicy): boolean {
+  return policy.retryableErrorCodes.includes(error.code);
+}
+
+function simulatedOutputFor(
+  node: DagNode,
+  dependencies: string[],
+  options: ExecutorSimulatorOptions,
+  resultsByNode: Map<string, NodeExecutionResult>,
+): Record<string, unknown> {
+  const override = options.simulatedOutputByNodeId?.[node.id] ?? {};
+  const base: Record<string, unknown> = {
+    simulated: true,
+    nodeType: node.type,
+    toolName: simulatedToolNameForNode(node),
+    middlewareHalt: false,
+    expectedOutputs: node.expectedOutputs,
+  };
+
+  if (node.type === "VALIDATION") {
+    base.validation = {
+      passed: true,
+      inspectedDependencies: dependencies,
+      upstreamStatuses: Object.fromEntries(
+        dependencies.map((dependencyId) => [dependencyId, resultsByNode.get(dependencyId)?.status ?? "MISSING"]),
+      ),
+    };
+  }
+
+  return { ...base, ...override };
+}
+
+function simulatedToolNameForNode(node: DagNode): string {
+  const input = recordFrom(node.input);
+  const metadata = recordFrom(node.metadata);
+  const hint = recordFrom(input?.sandboxOperation) ?? recordFrom(metadata?.sandboxOperation) ?? input ?? metadata;
+  const kind = typeof hint?.kind === "string" ? hint.kind : typeof hint?.operationKind === "string" ? hint.operationKind : undefined;
+  if (kind === "READ_FILE") return "workspace.read_file";
+  if (kind === "LIST_DIR") return "workspace.list_dir";
+  if (kind === "PROPOSE_PATCH") return "workspace.apply_patch";
+  if (kind === "RUN_COMMAND") return "sandbox.execute";
+  if (node.type === "FILE_OPERATION") return "workspace.apply_patch";
+  if (node.type === "VALIDATION") return "workspace.validate";
+  if (node.type === "SHELL_COMMAND") return "sandbox.execute";
+  return "simulator.echo";
+}
+
+function validationErrorFor(
+  node: DagNode,
+  dependencies: string[],
+  resultsByNode: Map<string, NodeExecutionResult>,
+  options: ExecutorSimulatorOptions,
+): ExecutionError | undefined {
+  if (node.type !== "VALIDATION") return undefined;
+
+  const explicitFailure = options.validationFailuresByNodeId?.[node.id] ?? explicitValidationFailureMessage(node);
+  if (explicitFailure) {
+    return {
+      code: "VALIDATION_FAILED",
+      message: `Validation node ${node.id} failed: ${explicitFailure}`,
+      nodeId: node.id,
+      details: { reason: explicitFailure },
+    };
+  }
+
+  if (validationHasExecutableSandboxHint(node)) {
+    return undefined;
+  }
+
+  const input = recordFrom(node.input);
+  const targetNodeIds = validationTargetNodeIds(input, dependencies);
+  if (targetNodeIds.length === 0) {
+    return {
+      code: "VALIDATION_FAILED",
+      message: `Validation node ${node.id} has no upstream node to inspect`,
+      nodeId: node.id,
+      details: { dependencies },
+    };
+  }
+
+  const expectedArtifacts = stringArrayFrom(input?.expectedArtifacts);
+  for (const targetNodeId of targetNodeIds) {
+    const upstream = resultsByNode.get(targetNodeId);
+    if (!upstream || (upstream.status !== "SUCCESS" && upstream.status !== "RETRIED")) {
+      return {
+        code: "VALIDATION_FAILED",
+        message: `Validation node ${node.id} could not inspect successful output from ${targetNodeId}`,
+        nodeId: node.id,
+        details: { targetNodeId, upstreamStatus: upstream?.status ?? "MISSING" },
+      };
+    }
+
+    if (expectedArtifacts.length === 0) continue;
+    const upstreamOutput = recordFrom(upstream.output);
+    const upstreamArtifacts = new Set([
+      ...stringArrayFrom(upstreamOutput?.expectedOutputs),
+      ...stringArrayFrom(upstreamOutput?.artifacts),
+    ]);
+    const missing = expectedArtifacts.filter((artifact) => !upstreamArtifacts.has(artifact));
+    if (missing.length > 0) {
+      return {
+        code: "VALIDATION_FAILED",
+        message: `Validation node ${node.id} missing expected artifact(s) from ${targetNodeId}: ${missing.join(", ")}`,
+        nodeId: node.id,
+        details: { targetNodeId, missing, expectedArtifacts },
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function validationHasExecutableSandboxHint(node: DagNode): boolean {
+  if (node.type !== "VALIDATION") return false;
+  const input = recordFrom(node.input);
+  const metadata = recordFrom(node.metadata);
+  return hasRunnableSandboxHint(input) || hasRunnableSandboxHint(metadata);
+}
+
+function hasRunnableSandboxHint(value: Record<string, unknown> | undefined): boolean {
+  if (!value) return false;
+  const sandboxOperation = recordFrom(value.sandboxOperation);
+  const hint = sandboxOperation ?? value;
+  return (
+    hint.kind === "RUN_COMMAND" ||
+    hint.operationKind === "RUN_COMMAND" ||
+    (typeof hint.command === "string" && hint.command.length > 0)
+  );
+}
+
+function explicitValidationFailureMessage(node: DagNode): string | undefined {
+  const input = recordFrom(node.input);
+  const metadata = recordFrom(node.metadata);
+  const value = input?.validationFailure ?? input?.validationShouldFail ?? metadata?.validationFailure ?? metadata?.validationShouldFail;
+  if (typeof value === "string" && value.trim().length > 0) return value;
+  if (value === true) return "validationShouldFail was set";
+  return undefined;
+}
+
+function validationTargetNodeIds(input: Record<string, unknown> | undefined, dependencies: string[]): string[] {
+  const targetNodeId = input?.targetNodeId;
+  if (typeof targetNodeId === "string" && targetNodeId.length > 0) return [targetNodeId];
+  const targetNodeIds = stringArrayFrom(input?.targetNodeIds);
+  return targetNodeIds.length > 0 ? targetNodeIds : dependencies;
+}
+
+function stringArrayFrom(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item)).filter((item) => item.length > 0);
 }
 
 function dependencyMap(dag: Dag): Map<string, Set<string>> {
@@ -337,13 +652,26 @@ function unsafeShellError(node: DagNode, options: ExecutorSimulatorOptions): Exe
   };
 }
 
-function timeoutErrorFor(node: DagNode, durationMs: number): ExecutionError | undefined {
-  if (node.timeoutMs === undefined || durationMs <= node.timeoutMs) return undefined;
+function unsandboxedWorkspaceOpError(node: DagNode, options: ExecutorSimulatorOptions): ExecutionError | undefined {
+  if (options.blockSimulatedWorkspaceOps !== true) return undefined;
+  if (node.type !== "FILE_OPERATION" && node.type !== "SHELL_COMMAND") return undefined;
+  return {
+    code: "PERMISSION_DENIED",
+    message:
+      "CODE_EDIT requires a configured sandbox; simulated file/command execution is not performed when no real sandbox is configured.",
+    nodeId: node.id,
+    details: { nodeType: node.type, sandboxConfigured: false },
+  };
+}
+
+function timeoutErrorFor(node: DagNode, durationMs: number, policy: ExecutionPolicy): ExecutionError | undefined {
+  const timeoutMs = node.timeoutMs ?? policy.perNodeTimeoutMs;
+  if (timeoutMs === undefined || durationMs <= timeoutMs) return undefined;
   return {
     code: "TIMEOUT",
-    message: `Node ${node.id} simulated duration ${durationMs}ms exceeded timeout ${node.timeoutMs}ms`,
+    message: `Node ${node.id} simulated duration ${durationMs}ms exceeded timeout ${timeoutMs}ms`,
     nodeId: node.id,
-    details: { simulatedDurationMs: durationMs, timeoutMs: node.timeoutMs },
+    details: { simulatedDurationMs: durationMs, timeoutMs },
   };
 }
 
@@ -364,9 +692,10 @@ function injectedFailureAttempts(node: DagNode, options: ExecutorSimulatorOption
   return 0;
 }
 
-function injectedFailureError(node: DagNode, attempt: number): ExecutionError {
+function injectedFailureError(node: DagNode, attempt: number, options: ExecutorSimulatorOptions): ExecutionError {
+  const code = options.injectedErrorCodeByNodeId?.[node.id] ?? "INJECTED_FAILURE";
   return {
-    code: "INJECTED_FAILURE",
+    code,
     message: `Injected fake failure for node ${node.id} on attempt ${attempt}`,
     nodeId: node.id,
     details: { attempt, nodeType: node.type },

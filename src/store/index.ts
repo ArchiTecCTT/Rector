@@ -22,11 +22,14 @@ import { redactString } from "../security/redaction";
 import { InMemoryRectorStore } from "./inMemoryRectorStore";
 import { SqlRectorStore, createSqliteDriver, type SqlDriver } from "./sqlRectorStore";
 import { createTiDBDriver } from "./tidbRectorStore";
+import type { SessionSearchHit, SessionSearchQuery } from "./sessionSearch";
 
 export * from "./schemas";
 export * from "./inMemoryRectorStore";
 export * from "./sqlRectorStore";
 export * from "./tidbRectorStore";
+export * from "./sessionSearch";
+export * from "./lineage";
 
 /**
  * The store contract shared by every Rector store implementation.
@@ -41,6 +44,8 @@ export interface RectorStore {
   listConversations(workspaceId?: string): Promise<Conversation[]>;
   updateConversation(id: string, patch: UpdateConversationInput): Promise<Conversation | undefined>;
   deleteConversation(id: string): Promise<boolean>;
+  searchConversations?(query: SessionSearchQuery): Promise<SessionSearchHit[]>;
+  getConversationLineage?(conversationId: string): Promise<Conversation[]>;
 
   createMessage(input: CreateMessageInput): Promise<Message>;
   getMessage(id: string): Promise<Message | undefined>;
@@ -287,7 +292,7 @@ async function verifyStartupTables(store: RectorStore): Promise<void> {
  * The boot-time Startup_Migration step (Req 8.4, 8.8).
  *
  * Constructs the configured {@link RectorStore} and, for the relational paths,
- * provisions the five entity tables (the {@link SqlRectorStore} constructor runs
+ * provisions the six entity tables (the {@link SqlRectorStore} constructor runs
  * idempotent `CREATE TABLE IF NOT EXISTS` DDL) and then verifies each of the
  * {@link STARTUP_MIGRATION_TABLES} exists and is queryable — all **before** the
  * server serves any request. The combined connect + provision work is raced

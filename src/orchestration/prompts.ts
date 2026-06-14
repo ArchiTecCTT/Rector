@@ -5,6 +5,7 @@ import { ContextPackSchema, type ContextPack } from "./contextBuilder";
 import { TriageResultSchema, type TriageResult } from "./triage";
 import type { BrainstemSynthesisInput } from "./synthesizer";
 import { redactSecrets, redactString } from "../security/redaction";
+import { assemblePromptTiers, joinPromptTiers } from "./promptTiers";
 
 const MEMORY_CONTEXT_MAX_ENTRIES = 8;
 const MEMORY_CONTEXT_MAX_CHARS_PER_LINE = 200;
@@ -66,6 +67,7 @@ export const PLANNER_JSON_CONTRACT = `Output a JSON object with this exact shape
     "checks": string[]                  // at least one non-empty plan-level check
   },
   "riskLevel": "low" | "medium" | "high" | "destructive",
+  "requestedSkills": string[],          // optional; skill catalog ids to request from the crucible
   "approvalGates": [
     {
       "id": string,                     // non-empty
@@ -78,8 +80,13 @@ export const PLANNER_JSON_CONTRACT = `Output a JSON object with this exact shape
 }
 
 Hard invariants (the control plane rejects any plan that violates these):
+- Every task "id" must be unique and stable.
 - Every "dependencies[].from" and "dependencies[].to" must reference an existing task "id".
 - Every task's "dependencies" entry must reference an existing task "id".
+- Every approval gate "taskIds" entry must reference an existing task "id".
+- Every task must carry at least one concrete validation check.
+- Every task with "risk" of "high"/"destructive" must set "approvalRequired": true.
+- Only request skills by catalog id when the context provides enough evidence that the skill exists.
 - If ANY task has "approvalRequired": true or "risk" of "high"/"destructive", OR the top-level
   "riskLevel" is "high"/"destructive", then every such unsafe task must be covered by a required
   approval gate (a gate with "required": true whose "taskIds" include the task), or there must be a
@@ -94,8 +101,14 @@ Hard invariants (the control plane rejects any plan that violates these):
  */
 export function buildPlannerPrompt(input: PlannerInput): LLMMessage[] {
   const parsed = PlannerInputSchema.parse(input);
+  const tiers = assemblePromptTiers({
+    stable: { role: "planner", systemRules: PLANNER_SYSTEM_RULES, jsonContract: PLANNER_JSON_CONTRACT },
+    context: { contextPack: parsed.contextPack, contextText: buildContextMessage(parsed) },
+    volatile: { phase: "PLANNING", task: "planner" },
+    tierBudget: parsed.contextPack.contextBudget?.tierBudget,
+  });
   return [
-    { role: "system", content: `${PLANNER_SYSTEM_RULES}\n\n${PLANNER_JSON_CONTRACT}` },
+    { role: "system", content: joinPromptTiers(tiers) },
     { role: "user", content: buildContextMessage(parsed) },
   ];
 }
@@ -246,8 +259,14 @@ export type SkepticPromptInput = z.infer<typeof SkepticPromptInputSchema>;
  */
 export function buildSkepticPrompt(input: SkepticPromptInput): LLMMessage[] {
   const parsed = SkepticPromptInputSchema.parse(input);
+  const tiers = assemblePromptTiers({
+    stable: { role: "skeptic", systemRules: SKEPTIC_SYSTEM_RULES, jsonContract: SKEPTIC_JSON_CONTRACT },
+    context: { contextPack: parsed.contextPack, contextText: buildSkepticContextMessage(parsed) },
+    volatile: { phase: "SKEPTIC_REVIEW", task: "skeptic" },
+    tierBudget: parsed.contextPack.contextBudget?.tierBudget,
+  });
   return [
-    { role: "system", content: `${SKEPTIC_SYSTEM_RULES}\n\n${SKEPTIC_JSON_CONTRACT}` },
+    { role: "system", content: joinPromptTiers(tiers) },
     { role: "user", content: buildSkepticContextMessage(parsed) },
   ];
 }
@@ -305,6 +324,7 @@ function buildSkepticContextMessage(input: SkepticPromptInput): string {
       })),
       dependencies: plannerOutput.dependencies,
       validation: plannerOutput.validation,
+      requestedSkills: plannerOutput.requestedSkills ?? [],
       approvalGates: plannerOutput.approvalGates,
     },
     triage: {
@@ -357,7 +377,8 @@ export const SYNTHESIZER_SYSTEM_RULES = [
   "Cite your evidence: each citation must reference a concrete execution artifact or validation result from the run state (a file path, command, test/node id, failure, risk, or artifact id).",
   "When the run carried any execution or validation evidence, you MUST include at least one citation.",
   "Never hide or omit failed validation output; report failures honestly and surface unresolved risks.",
-  "State what was attempted, what was fixed, and which files changed, and point the reader to the trace drawer for the raw run data.",
+  "Use these section headings in the response text: Summary, Actions, Validation, Risks, Next steps.",
+  "State what was attempted, what was fixed, which files changed, validation status, unresolved risks, and point the reader to the trace drawer for the raw run data.",
   "Keep the answer concise: at most 2000 characters.",
   "Return ONLY a single JSON object that conforms exactly to the contract below.",
   "Do not wrap the JSON in markdown code fences, prose, comments, or trailing text.",
@@ -372,7 +393,7 @@ export const SYNTHESIZER_SYSTEM_RULES = [
 export const SYNTHESIZER_JSON_CONTRACT = `Output a JSON object with this exact shape:
 
 {
-  "response": string,                                  // non-empty; the final answer to the user request (<= 2000 characters); reference the trace drawer for raw run data
+  "response": string,                                  // non-empty; the final answer to the user request (<= 2000 characters); use Summary/Actions/Validation/Risks/Next steps sections and reference the trace drawer for raw run data
   "citations": [
     {
       "kind": "file" | "command" | "test" | "failure" | "risk" | "artifact",
@@ -461,8 +482,14 @@ export const SynthesizerPromptInputSchema = z.object({
  */
 export function buildSynthesizerPrompt(input: SynthesizerPromptInput): LLMMessage[] {
   SynthesizerPromptInputSchema.parse(input);
+  const tiers = assemblePromptTiers({
+    stable: { role: "synthesizer", systemRules: SYNTHESIZER_SYSTEM_RULES, jsonContract: SYNTHESIZER_JSON_CONTRACT },
+    context: { contextPack: input.contextPack, contextText: buildSynthesizerContextMessage(input) },
+    volatile: { phase: "SYNTHESIZING", task: "synthesizer" },
+    tierBudget: input.contextPack.contextBudget?.tierBudget,
+  });
   return [
-    { role: "system", content: `${SYNTHESIZER_SYSTEM_RULES}\n\n${SYNTHESIZER_JSON_CONTRACT}` },
+    { role: "system", content: joinPromptTiers(tiers) },
     { role: "user", content: buildSynthesizerContextMessage(input) },
   ];
 }
@@ -490,6 +517,7 @@ export function buildSynthesizerRepairPrompt(
         `Validation error: ${errorSummary}`,
         "",
         "Fix every issue above and reply again with ONLY the corrected JSON object.",
+        "Use these response sections: Summary, Actions, Validation, Risks, Next steps.",
         "Cite only evidence that appears in the run state, and include at least one citation when execution or validation evidence exists.",
         "Do not include markdown fences, explanations, or any text outside the JSON object.",
       ].join("\n"),
@@ -685,18 +713,26 @@ export function buildRepairPrompt(input: RepairPromptInput): LLMMessage[] {
     symbolicHints: input.symbolicHints ?? [],
   });
 
+  const userContent = [
+    "Propose a single patch that fixes the failed execution step below.",
+    "",
+    "FAILURE AND CONTEXT (JSON):",
+    JSON.stringify(payload, null, 2),
+    "",
+    "Respond with ONLY the patch JSON object described in the system instructions.",
+  ].join("\n");
+  const tiers = assemblePromptTiers({
+    stable: { role: "repair", systemRules: REPAIR_SYSTEM_RULES, jsonContract: REPAIR_JSON_CONTRACT },
+    context: { contextPack: input.contextPack, contextText: userContent },
+    volatile: { phase: "HEALING", task: "repair" },
+    tierBudget: input.contextPack.contextBudget?.tierBudget,
+  });
+
   return [
-    { role: "system", content: `${REPAIR_SYSTEM_RULES}\n\n${REPAIR_JSON_CONTRACT}` },
+    { role: "system", content: joinPromptTiers(tiers) },
     {
       role: "user",
-      content: [
-        "Propose a single patch that fixes the failed execution step below.",
-        "",
-        "FAILURE AND CONTEXT (JSON):",
-        JSON.stringify(payload, null, 2),
-        "",
-        "Respond with ONLY the patch JSON object described in the system instructions.",
-      ].join("\n"),
+      content: userContent,
     },
   ];
 }

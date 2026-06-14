@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { redactSecrets, redactString } from "../security/redaction";
+export * from "./readiness";
 import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
@@ -483,9 +484,9 @@ export function parseOrchestrationConfig(
 ): OrchestrationConfig {
   const rawMode = env.ORCHESTRATOR_MODE;
 
-  // Requirement 1.1: unset, empty, or whitespace-only resolves to local with no providers.
+  // Unset/empty/whitespace resolves to external with no providers (unconfigured baseline).
   if (rawMode === undefined || rawMode.trim().length === 0) {
-    return { mode: "local", configuredProviders: [] };
+    return { mode: "external", configuredProviders: [] };
   }
 
   // Requirement 1.4: reject any value that does not exactly (case-sensitive) match a known mode.

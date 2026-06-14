@@ -26,6 +26,7 @@ interface FetchCall {
 function statusResponse(mode: "local" | "external") {
   return {
     mode,
+    orchestrationProfile: mode === "external" ? "configured" : "unconfigured",
     categories: [
       { category: "provider", status: "Ready", detail: "Provider configured." },
       { category: "persistence", status: "Ready", detail: "SQLite default in use." },
@@ -109,7 +110,7 @@ describe("Deep planning toggle (external mode chat)", () => {
     });
   }
 
-  it("hides the toggle in Local mode after orchestration mode refresh", async () => {
+  it("hides the toggle when the product is unconfigured after readiness refresh", async () => {
     installFetch("local");
     await harness.sandbox.refreshOrchestrationMode();
     await flush();
@@ -117,7 +118,7 @@ describe("Deep planning toggle (external mode chat)", () => {
     expect(harness.getEl("deep-planning-wrap").hidden).toBe(true);
   });
 
-  it("shows the toggle in External mode after orchestration mode refresh", async () => {
+  it("shows the toggle when the product is configured after readiness refresh", async () => {
     installFetch("external");
     await harness.sandbox.refreshOrchestrationMode();
     await flush();
@@ -189,7 +190,7 @@ describe("Deep planning toggle (external mode chat)", () => {
     expect(post?.body).not.toHaveProperty("deepPlanning");
   });
 
-  it("does not send deepPlanning in Local mode even when the preference is true", async () => {
+  it("does not send deepPlanning when unconfigured even when the preference is true", async () => {
     storage.set(DEEP_PLANNING_STORAGE_KEY, "true");
     installFetch("local");
     harness.sandbox.bindDeepPlanning();

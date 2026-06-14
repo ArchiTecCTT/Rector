@@ -14,6 +14,8 @@ import {
 } from "./llm";
 import type { ProviderConfigRecord, ProviderModelRole } from "./config";
 import type { ProviderConfigStore } from "./configStore";
+import { getLlmProviderRegistry } from "../modules/builtin/llmProviderModules";
+import { CredentialPool, type CredentialPoolEntry } from "./credentialPool";
 
 /**
  * Config_Bridge (design section C5/C6).
@@ -159,6 +161,38 @@ export async function resolveProviderEnv(
   return effective;
 }
 
+export function buildCredentialPoolFromProviderRecords(records: readonly ProviderConfigRecord[]): CredentialPool {
+  const entries: CredentialPoolEntry[] = [];
+  for (const record of records) {
+    entries.push({ providerId: record.id, secretRef: record.secretRef, label: record.label });
+    for (const secretRef of record.additionalSecretRefs ?? []) {
+      entries.push({ providerId: record.id, secretRef, label: record.label });
+    }
+  }
+  return new CredentialPool(entries);
+}
+
+export async function buildCredentialPoolFromProviderStore(
+  store: ProviderConfigStore,
+  secrets: SecretStore,
+  options: ResolveProviderOptions = {},
+): Promise<CredentialPool> {
+  const state = await store.getState();
+  const entries: CredentialPoolEntry[] = [];
+  for (const record of state.providers) {
+    for (const secretRef of [record.secretRef, ...(record.additionalSecretRefs ?? [])]) {
+      const secret = await readSecretValue(secrets, secretRef);
+      entries.push({
+        providerId: record.id,
+        secretRef,
+        label: record.label,
+        provider: buildProviderFromRecord(record, secret, options),
+      });
+    }
+  }
+  return new CredentialPool(entries);
+}
+
 /**
  * Construct a single {@link LLMProvider} from one persisted record and its
  * (already-resolved) secret. Shared by {@link resolveTestProvider} and
@@ -176,45 +210,11 @@ function buildProviderFromRecord(
   // candidate is addressed by its deployment name; for the OpenAI-compatible
   // kind it is addressed by its model id. The override is applied here only when
   // supplied, so a plain connection test (no target) builds the record verbatim.
-  const azureTarget = target.deployment ?? target.model;
-  switch (record.kind) {
-    case "together":
-      return new TogetherAIProvider({
-        apiKey: secret,
-        baseUrl: record.baseUrl,
-        enableNetwork,
-        fetchImpl,
-      });
-    case "cloudflare":
-      return new CloudflareWorkersAIProvider({
-        apiToken: secret,
-        accountId: record.cloudflare?.accountId,
-        baseUrl: record.baseUrl,
-        enableNetwork,
-        fetchImpl,
-      });
-    case "azure-openai":
-      return new AzureOpenAIProvider({
-        apiKey: secret,
-        endpoint: record.azure?.endpoint ?? record.baseUrl,
-        apiVersion: record.azure?.apiVersion,
-        deployments: {
-          fast: azureTarget ?? record.models?.slm ?? record.azure?.deployment ?? record.model,
-          flagship: azureTarget ?? record.models?.flagship ?? record.azure?.deployment ?? record.model,
-        },
-        enableNetwork,
-        fetchImpl,
-      });
-    case "openai-compatible":
-      return new OpenAICompatibleProvider({
-        apiKey: secret,
-        baseUrl: record.baseUrl,
-        model: target.model ?? record.model ?? record.models?.flagship,
-        headers: record.headers,
-        enableNetwork,
-        fetchImpl,
-      });
+  const built = getLlmProviderRegistry().build(record, secret, { enableNetwork, fetchImpl }, target);
+  if (!built) {
+    throw new Error(`No LLM provider module registered for kind: ${record.kind}`);
   }
+  return built;
 }
 
 /**
@@ -279,6 +279,7 @@ function selectionFor(provider: LLMProvider, route: ModelRoute, role: ProviderMo
   const model = provider.metadata.models[route] ?? provider.metadata.models.fast ?? provider.metadata.models.fake;
   return {
     provider,
+    providerId: recordId,
     modelRoute: route,
     model,
     reason: `active route ${role} -> ${recordId}`,
@@ -320,16 +321,6 @@ export async function buildConfiguredRouter(options: BuildConfiguredRouterOption
     fetchImpl: options.fetchImpl,
   };
 
-  // Local_Mode refusal (Requirement 5.6): in `local` mode the Config_Bridge
-  // constructs NO external provider and reads NO secret. It returns a
-  // provider-free router backed solely by the FakeLLMProvider so the
-  // Model_Router always selects the provider-free fallback. This is also the
-  // last-line guard for the live path; the boot path normally builds the fake
-  // router directly without consulting the bridge at all (Requirement 9.3).
-  if (mode === "local") {
-    return buildModelRouter({ mode: "local", providers: [new FakeLLMProvider()] });
-  }
-
   const effectiveEnv = await resolveProviderEnv(store, secrets, baseEnv);
   const state = await store.getState();
 
@@ -370,14 +361,7 @@ export async function buildConfiguredRouter(options: BuildConfiguredRouterOption
   for (const record of state.providers) {
     if (record.kind === "openai-compatible") {
       const secret = await readSecretValue(secrets, record.secretRef);
-      const provider = new OpenAICompatibleProvider({
-        apiKey: secret,
-        baseUrl: record.baseUrl,
-        model: record.model ?? record.models?.flagship,
-        headers: record.headers,
-        enableNetwork: resolveOptions.enableNetwork,
-        fetchImpl: resolveOptions.fetchImpl,
-      });
+      const provider = buildProviderFromRecord(record, secret, resolveOptions);
       providers.push(provider);
       providerByRecordId.set(record.id, provider);
     } else if (record.kind === "cloudflare") {

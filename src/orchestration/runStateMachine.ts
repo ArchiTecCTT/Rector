@@ -109,6 +109,17 @@ export async function createDecisionRequest(
   });
 }
 
+export async function abortRun(
+  store: RunStateMachineStore,
+  runId: string,
+  options: Omit<RunTransitionOptions, "lastError"> & { lastError?: string } = {}
+): Promise<RunTransitionResult> {
+  return transitionRun(store, runId, "ABORTED", {
+    ...options,
+    lastError: redactStringOption(options.lastError ?? "Run interrupted by request"),
+  });
+}
+
 /**
  * Resumes a run from a decision request, transitioning to the target phase.
  * Note: Target phases exclude terminal targets (like DONE, FAILED, ABORTED),
@@ -234,4 +245,8 @@ function nextEventId(): string {
     generatedEventCounter += 1;
     return `evt-${Date.now()}-${generatedEventCounter}`;
   }
+}
+
+function redactStringOption(value: string): string {
+  return redactSecrets(value) as string;
 }

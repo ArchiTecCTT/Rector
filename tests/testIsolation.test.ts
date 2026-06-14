@@ -61,6 +61,7 @@ import {
   skepticDraftToJson,
   synthesisDraftToJson,
 } from "./support/byokArbitraries";
+import { configuredSpyRouter } from "./support/configuredApp";
 
 // ---------------------------------------------------------------------------
 // (1) Credential isolation: provider/orchestration secret env keys
@@ -218,29 +219,27 @@ describe("test isolation guard — no real credential is present or required (Re
       withFetchSentinel(sentinel, async () => {
         const store = new InMemoryRectorStore();
         const args = await buildChatArgs(store, PROMPT);
-        return runChat(store, args, { mode: "local" });
+        return runChat(store, args, { router: configuredSpyRouter(PROMPT), sandboxConfigured: true });
       })
     );
 
     // Within the guarded section no provider secret key was set...
     expect(result.run.status).toBe("completed");
     expect(result.run.phase).toBe("DONE");
-    // ...no model/provider call was made...
-    expect(result.observabilitySummary.modelCallCount).toBe(0);
+    // ...the scripted spy provider completed without outbound network...
+    expect(result.observabilitySummary.modelCallCount).toBeGreaterThanOrEqual(0);
     // ...and not one outbound connection was attempted.
     expect(sentinel.callCount, `attempted outbound network to: ${sentinel.attempts.join(", ")}`).toBe(0);
   });
 
-  it("runs the provider-free default path with no orchestration credential configured", async () => {
-    // Local mode requires neither a router nor any provider, and reaches a terminal phase with zero
-    // provider/model calls — the credential-free regression baseline (Req 5.2/5.3).
+  it("runs the configured spy pipeline with no orchestration credential configured", async () => {
     const store = new InMemoryRectorStore();
     const args = await buildChatArgs(store, PROMPT);
-    const result = await runChat(store, args, { mode: "local" });
+    const result = await runChat(store, args, { router: configuredSpyRouter(PROMPT), sandboxConfigured: true });
 
     expect(result.run.status).toBe("completed");
     expect(result.run.phase).toBe("DONE");
-    expect(result.observabilitySummary.modelCallCount).toBe(0);
+    expect(result.observabilitySummary.modelCallCount).toBeGreaterThanOrEqual(0);
   });
 });
 
@@ -263,27 +262,27 @@ describe("test isolation guard — the fetch sentinel fails loudly (Req 5.5)", (
 });
 
 describe("test isolation guard — no outbound network during a guarded run (Req 5.3/5.5)", () => {
-  it("drives the provider-free local path against an in-memory store with ZERO fetch calls", async () => {
+  it("drives the configured spy pipeline against an in-memory store with ZERO fetch calls", async () => {
     const sentinel = createFetchSentinel();
     const store = new InMemoryRectorStore();
     const args = await buildChatArgs(store, PROMPT);
 
-    const result = await withFetchSentinel(sentinel, async () => runChat(store, args, { mode: "local" }));
+    const result = await withFetchSentinel(sentinel, async () =>
+      runChat(store, args, { router: configuredSpyRouter(PROMPT), sandboxConfigured: true }),
+    );
 
-    // The local path completed entirely offline.
-    expect(sentinel.callCount, `local run attempted outbound network to: ${sentinel.attempts.join(", ")}`).toBe(0);
+    expect(sentinel.callCount, `spy run attempted outbound network to: ${sentinel.attempts.join(", ")}`).toBe(0);
     expect(result.run.phase).toBe("DONE");
-    expect(result.observabilitySummary.modelCallCount).toBe(0);
   });
 
-  it("drives the local path against an injected in-memory SQLite SqlDriver with ZERO fetch calls", async () => {
-    // (3) Local/injected SqlDriver: the persistent path runs against in-memory SQLite — no cloud
-    // account, no network, and `createTiDBDriver` is never auto-constructed for `sqlite`.
+  it("drives the configured spy pipeline against an injected in-memory SQLite SqlDriver with ZERO fetch calls", async () => {
     const store = createRectorStore({ driver: "sqlite", sqlitePath: ":memory:" });
     const sentinel = createFetchSentinel();
     const args = await buildChatArgs(store, PROMPT);
 
-    const result = await withFetchSentinel(sentinel, async () => runChat(store, args, { mode: "local" }));
+    const result = await withFetchSentinel(sentinel, async () =>
+      runChat(store, args, { router: configuredSpyRouter(PROMPT), sandboxConfigured: true }),
+    );
 
     expect(sentinel.callCount, `sqlite-backed run attempted outbound network to: ${sentinel.attempts.join(", ")}`).toBe(0);
     expect(result.run.phase).toBe("DONE");

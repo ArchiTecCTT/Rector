@@ -17,6 +17,7 @@
 import { describe, it, expect } from "vitest";
 
 import { runChat, type ChatRunArgs } from "../src/orchestration/chatRunner";
+import { runFakeChatRun } from "./support/fakeChatRun";
 import { InMemoryRectorStore } from "../src/store/inMemoryRectorStore";
 import { triageUserMessage } from "../src/orchestration/triage";
 import { createInMemoryObservabilityTrace } from "../src/observability";
@@ -301,8 +302,7 @@ describe("Task 4.4: clarification event recording (Local_Mode)", () => {
     const args = await buildArgs(store, "Hello");
     expect(args.triage.route).toBe("NEEDS_CLARIFICATION");
 
-    // Local_Mode: no router is wired, so any provider/network reach would throw.
-    const { run, observabilitySummary } = await runChat(store, args, { mode: "local" });
+    const { run, observabilitySummary } = await runFakeChatRun(store, args);
 
     expect(run.phase).toBe("DONE");
     expect(run.status).toBe("completed");

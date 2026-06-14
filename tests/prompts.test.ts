@@ -45,6 +45,10 @@ function inputFor(content: string): PlannerInput {
   return { triage, contextPack: contextPackFor(triage, content), messageContent: content };
 }
 
+function stableAndContextSections(content: string): string {
+  return content.split("\n\n---\n\n[volatile tier]")[0];
+}
+
 describe("planner prompt construction", () => {
   it("builds a system + user prompt with rules, contract, and context", () => {
     const messages = buildPlannerPrompt(inputFor("Fix the bug in src/api/server.ts and update tests."));
@@ -96,7 +100,8 @@ describe("planner prompt construction", () => {
     const initial = buildPlannerPrompt(input);
     const repair = buildPlannerRepairPrompt(input, "bad output", "riskLevel: Invalid enum value");
 
-    expect(repair[0]).toEqual(initial[0]);
+    expect(repair[0].role).toBe(initial[0].role);
+    expect(stableAndContextSections(repair[0].content)).toEqual(stableAndContextSections(initial[0].content));
     expect(repair[1]).toEqual(initial[1]);
   });
 
@@ -180,7 +185,8 @@ describe("skeptic prompt construction", () => {
     const initial = buildSkepticPrompt(input);
     const repair = buildSkepticRepairPrompt(input, "bad output", "verdict: Invalid enum value");
 
-    expect(repair[0]).toEqual(initial[0]);
+    expect(repair[0].role).toBe(initial[0].role);
+    expect(stableAndContextSections(repair[0].content)).toEqual(stableAndContextSections(initial[0].content));
     expect(repair[1]).toEqual(initial[1]);
   });
 });

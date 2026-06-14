@@ -6,8 +6,17 @@ import {
   mapToMemoryEntry,
   memoryEntryToMetadata,
   metadataToMemoryFields,
+  redactMemoryContent,
   type MemoryAdapterDeps,
 } from "./adapterBase";
+import {
+  compareMemoryPruneCandidates,
+  compareMemorySearchResults,
+  memoryPruneScore,
+  normalizeMemorySearchLimit,
+  sanitizeCreateMemoryEntryInput,
+  sanitizeUpdateMemoryEntryInput,
+} from "./entryUtils";
 import { evaluateMemoryBudget, MEMORY_OP_COST_USD, type MemoryBudgetOperation } from "./budget";
 import { defaultMemoryBudgetRun } from "./defaultRun";
 import type { MemoryProviderConfig } from "../providers/memoryConfig";
@@ -77,8 +86,46 @@ function defaultClientFactory(apiKey: string): Mem0Client {
   return loadMem0ClientFactory()(apiKey);
 }
 
-function unwrapResults(payload: { results: Mem0MemoryRecord[] } | Mem0MemoryRecord[]): Mem0MemoryRecord[] {
-  return Array.isArray(payload) ? payload : payload.results ?? [];
+function normalizeRecord(raw: unknown): Mem0MemoryRecord | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const record = raw as Record<string, unknown>;
+
+  // Some SDK versions wrap the actual record under `memory` or `data`.
+  if (record.memory && typeof record.memory === "object") {
+    return normalizeRecord(record.memory);
+  }
+  if (record.data && typeof record.data === "object" && !Array.isArray(record.data)) {
+    return normalizeRecord(record.data);
+  }
+
+  if (typeof record.id !== "string" || record.id.length === 0) return undefined;
+  return {
+    id: record.id,
+    memory: typeof record.memory === "string" ? record.memory : undefined,
+    content: typeof record.content === "string" ? record.content : undefined,
+    metadata:
+      record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)
+        ? (record.metadata as Record<string, unknown>)
+        : undefined,
+    created_at: typeof record.created_at === "string" ? record.created_at : undefined,
+    updated_at: typeof record.updated_at === "string" ? record.updated_at : undefined,
+  };
+}
+
+function unwrapResults(payload: unknown): Mem0MemoryRecord[] {
+  if (Array.isArray(payload)) {
+    return payload.flatMap((item) => {
+      const normalized = normalizeRecord(item);
+      return normalized ? [normalized] : [];
+    });
+  }
+  if (!payload || typeof payload !== "object") return [];
+  const objectPayload = payload as Record<string, unknown>;
+  if (Array.isArray(objectPayload.results)) return unwrapResults(objectPayload.results);
+  if (Array.isArray(objectPayload.memories)) return unwrapResults(objectPayload.memories);
+  if (Array.isArray(objectPayload.data)) return unwrapResults(objectPayload.data);
+  const normalized = normalizeRecord(objectPayload);
+  return normalized ? [normalized] : [];
 }
 
 function recordContent(record: Mem0MemoryRecord): string {
@@ -170,43 +217,54 @@ export class Mem0MemoryProvider implements MemoryProvider {
 
   async createMemoryEntry(input: CreateMemoryEntryInput): Promise<MemoryEntry> {
     this.assertBudget("create");
+    const sanitized = sanitizeCreateMemoryEntryInput(input);
     const now = this.nowFn();
     const metadata = memoryEntryToMetadata({
-      layer: input.layer,
-      timestamp: input.timestamp ?? now,
-      lastMentioned: input.lastMentioned ?? now,
-      accessCount: input.accessCount ?? 0,
-      tags: input.tags ?? [],
-      source: input.source,
-      metadata: input.metadata ?? {},
+      layer: sanitized.layer,
+      timestamp: sanitized.timestamp ?? now,
+      lastMentioned: sanitized.lastMentioned ?? now,
+      accessCount: sanitized.accessCount ?? 0,
+      tags: sanitized.tags ?? [],
+      source: sanitized.source,
+      metadata: sanitized.metadata ?? {},
     });
     try {
       const client = this.getClient();
       const result = await client.add(
-        [{ role: "user", content: input.content }],
+        [{ role: "user", content: sanitized.content }],
         { userId: this.scopeUserId, metadata },
       );
-      const records = unwrapResults(result as { results: Mem0MemoryRecord[] } | Mem0MemoryRecord[]);
+      const records = unwrapResults(result);
       const created = records[0];
       if (created?.id) {
-        const entry = this.toEntry(created);
-        if (!entry.content && input.content) {
-          return mapToMemoryEntry({ ...entry, content: input.content }, this.nowFn);
-        }
-        return entry;
+        const providerContent = recordContent(created);
+        return mapToMemoryEntry(
+          {
+            id: created.id,
+            layer: metadataToMemoryFields(created.metadata ?? metadata, now).layer,
+            content: providerContent || sanitized.content,
+            timestamp: created.created_at ?? sanitized.timestamp ?? now,
+            lastMentioned: created.updated_at ?? sanitized.lastMentioned ?? created.created_at ?? now,
+            accessCount: sanitized.accessCount ?? 0,
+            tags: sanitized.tags ?? [],
+            source: sanitized.source,
+            metadata: sanitized.metadata ?? {},
+          },
+          this.nowFn,
+        );
       }
-      const id = (result as { id?: string }).id ?? `mem0-${Date.now().toString(36)}`;
+      const id = normalizeRecord(result)?.id ?? `mem0-${Date.now().toString(36)}`;
       return mapToMemoryEntry(
         {
           id,
-          layer: input.layer,
-          content: input.content,
-          timestamp: input.timestamp ?? now,
-          lastMentioned: input.lastMentioned ?? now,
-          accessCount: input.accessCount ?? 0,
-          tags: input.tags ?? [],
-          source: input.source,
-          metadata: input.metadata ?? {},
+          layer: sanitized.layer,
+          content: sanitized.content,
+          timestamp: sanitized.timestamp ?? now,
+          lastMentioned: sanitized.lastMentioned ?? now,
+          accessCount: sanitized.accessCount ?? 0,
+          tags: sanitized.tags ?? [],
+          source: sanitized.source,
+          metadata: sanitized.metadata ?? {},
         },
         this.nowFn,
       );
@@ -232,6 +290,7 @@ export class Mem0MemoryProvider implements MemoryProvider {
       const payload = await this.getClient().getAll({ filters: { user_id: this.scopeUserId } });
       let entries = unwrapResults(payload).map((r) => this.toEntry(r));
       if (layer) entries = entries.filter((e) => e.layer === layer);
+      entries.sort(compareMemorySearchResults);
       return entries;
     } catch (error) {
       throw classifyAdapterError(error, "Mem0 listMemoryEntries failed");
@@ -242,11 +301,14 @@ export class Mem0MemoryProvider implements MemoryProvider {
     this.assertBudget("update");
     const current = await this.getMemoryEntry(id);
     if (!current) return undefined;
-    const updated = { ...current, ...patch, id: current.id };
+    const updated = mapToMemoryEntry(
+      { ...current, ...sanitizeUpdateMemoryEntryInput(patch), id: current.id },
+      this.nowFn,
+    );
     const metadata = memoryEntryToMetadata(updated);
     try {
       await this.getClient().update(id, updated.content, { metadata });
-      return mapToMemoryEntry(updated, this.nowFn);
+      return updated;
     } catch (error) {
       throw classifyAdapterError(error, "Mem0 updateMemoryEntry failed");
     }
@@ -267,11 +329,12 @@ export class Mem0MemoryProvider implements MemoryProvider {
     options: { layer?: MemoryLayer; limit?: number } = {},
   ): Promise<MemoryEntry[]> {
     this.assertBudget("search");
-    const { layer, limit = 20 } = options;
+    const { layer } = options;
+    const limit = normalizeMemorySearchLimit(options.limit);
     try {
       let entries: MemoryEntry[];
       if (query && query.trim()) {
-        const payload = await this.getClient().search(query, {
+        const payload = await this.getClient().search(redactMemoryContent(query), {
           filters: { user_id: this.scopeUserId },
           limit,
         });
@@ -280,11 +343,7 @@ export class Mem0MemoryProvider implements MemoryProvider {
         entries = await this.listMemoryEntries(layer);
       }
       if (layer) entries = entries.filter((e) => e.layer === layer);
-      entries.sort((a, b) => {
-        const scoreA = a.accessCount * 2 + (Date.parse(a.lastMentioned) || 0);
-        const scoreB = b.accessCount * 2 + (Date.parse(b.lastMentioned) || 0);
-        return scoreB - scoreA;
-      });
+      entries.sort(compareMemorySearchResults);
       return entries.slice(0, limit);
     } catch (error) {
       throw classifyAdapterError(error, "Mem0 searchMemory failed");
@@ -302,15 +361,9 @@ export class Mem0MemoryProvider implements MemoryProvider {
       return { pruned: 0, summarized: 0 };
     }
 
-    const now = Date.now();
-    const scored = layerEntries.map((entry) => {
-      const ageMs = now - (Date.parse(entry.timestamp) || now);
-      const recency = Math.max(0, 100 - Math.floor(ageMs / (1000 * 60 * 60 * 24)));
-      const accessBonus = Math.min(entry.accessCount * 3, 50);
-      const noteBonus = entry.source === "user-note" || entry.tags.includes("note") ? 30 : 0;
-      return { entry, score: recency + accessBonus + noteBonus };
-    });
-    scored.sort((a, b) => a.score - b.score);
+    const pruneNow = this.nowFn();
+    const scored = layerEntries.map((entry) => ({ entry, score: memoryPruneScore(entry, pruneNow) }));
+    scored.sort(compareMemoryPruneCandidates);
 
     let pruned = 0;
     let summarized = 0;

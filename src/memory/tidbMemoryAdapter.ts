@@ -36,7 +36,7 @@ function parseHostPort(baseUrl: string): { host: string; port: number } {
   const [host, portStr] = stripped.split(":");
   const port = portStr ? Number(portStr) : 4000;
   if (!host || !Number.isFinite(port)) {
-    throw new Error(`Invalid TiDB baseUrl: ${baseUrl}`);
+    throw new Error("Invalid TiDB baseUrl.");
   }
   return { host, port };
 }

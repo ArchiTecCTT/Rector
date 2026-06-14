@@ -1,7 +1,9 @@
+import { spawn } from "node:child_process";
 import nodeFs from "node:fs";
 import nodePath from "node:path";
 import { z } from "zod";
 
+import { evaluateSandboxRuntimeSafety, type SafetyReasonCode } from "../security/budget";
 import { redactSecrets, redactString } from "../security/redaction";
 
 export const SANDBOX_ADAPTER_API_VERSION = "rector.sandbox.v1alpha1";
@@ -108,6 +110,13 @@ export const SandboxDenialReasonSchema = z.enum([
   "COMMAND_NOT_ALLOWLISTED",
   "DESTRUCTIVE_COMMAND_BLOCKED",
   "COMMAND_TIMEOUT",
+  "COMMAND_ABORTED",
+  "COMMAND_ARG_REJECTED",
+  "CWD_NOT_ALLOWLISTED",
+  "NETWORK_DISABLED",
+  "SECRETS_DISABLED",
+  "RUNTIME_BUDGET_EXCEEDED",
+  "POLICY_VIOLATION",
   "NEEDS_APPROVAL",
 ]);
 export type SandboxDenialReason = z.infer<typeof SandboxDenialReasonSchema>;
@@ -140,6 +149,7 @@ export const SandboxOperationResultSchema = z.object({
   networkCalls: z.literal(0),
   startedAt: z.string().datetime(),
   completedAt: z.string().datetime(),
+  metadata: z.record(z.unknown()).default({}),
 });
 export type SandboxOperationResult = z.infer<typeof SandboxOperationResultSchema>;
 
@@ -224,6 +234,23 @@ export function resolveWithinWorkspace(
 export interface SandboxAdapter {
   readonly metadata: SandboxProviderMetadata;
   execute(command: SandboxCommandInput): Promise<SandboxExecutionResult>;
+}
+
+export const SandboxEnvironmentKindSchema = z.enum(["stub", "local", "e2b"]);
+export type SandboxEnvironmentKind = z.infer<typeof SandboxEnvironmentKindSchema>;
+
+export interface SandboxExecutionContext {
+  runId?: string;
+  nodeId?: string;
+  workspaceRoot?: string;
+  abortSignal?: AbortSignal;
+}
+
+export interface SandboxEnvironment {
+  readonly kind: SandboxEnvironmentKind;
+  readonly supportsArbitraryShell: boolean;
+  execute(command: SandboxCommandInput, ctx?: SandboxExecutionContext): Promise<SandboxExecutionResult>;
+  operate(operation: SandboxOperationInput, ctx?: SandboxExecutionContext): Promise<SandboxOperationResult>;
 }
 
 export interface SafeLocalSandboxAdapterOptions {
@@ -570,6 +597,51 @@ export const WORKSPACE_COMMAND_TIMEOUT_MS = 60_000;
 /** Hard upper bound (256 KiB) on each captured stdout/stderr stream. */
 export const MAX_CAPTURED_STREAM_BYTES = 262_144;
 
+export interface SandboxPolicy {
+  /** Exact command names permitted for RUN_COMMAND. Empty means no commands. */
+  allowedCommands: string[];
+  /** Regex patterns denied after destructive-command detection and before execution. */
+  deniedCommandPatterns: RegExp[];
+  /** Absolute cwd roots allowed for command execution. Empty fails closed. */
+  allowedCwdRoots: string[];
+  maxStdoutBytes: number;
+  maxStderrBytes: number;
+  maxRuntimeMs: number;
+  /** Optional runtime approval threshold; 0 disables approval gating. */
+  approvalRequiredAboveRuntimeMs: number;
+  /** Network access is disabled by default for all local workspace operations. */
+  networkAllowed: boolean;
+  /** Secret/env injection is disabled by default for all local workspace operations. */
+  secretsInjectionAllowed: boolean;
+  /** Shell operators in command/args are rejected unless this is explicitly true. */
+  allowShellOperators: boolean;
+}
+
+export interface SandboxPolicyInput {
+  allowedCommands?: string[];
+  deniedCommandPatterns?: Array<string | RegExp>;
+  allowedCwdRoots?: string[];
+  maxStdoutBytes?: number;
+  maxStderrBytes?: number;
+  maxRuntimeMs?: number;
+  approvalRequiredAboveRuntimeMs?: number;
+  networkAllowed?: boolean;
+  secretsInjectionAllowed?: boolean;
+  allowShellOperators?: boolean;
+}
+
+export interface SafeLocalProcessRunnerOptions {
+  enabled: boolean;
+  /** Maps a sandbox command name to an executable path/name. Empty means no process can run. */
+  commandMap: Record<string, string>;
+  /** Process env variable names allowed to reach the child process. Defaults to none. */
+  envAllowlist?: string[];
+  /** Extra env values, still filtered through envAllowlist. */
+  extraEnv?: Record<string, string>;
+  maxStdoutBytes?: number;
+  maxStderrBytes?: number;
+}
+
 /** Result returned by an injected {@link CommandRunner}. */
 export interface CommandRunResult {
   exitCode: number;
@@ -591,6 +663,7 @@ export type CommandRunner = (input: {
   args: string[];
   cwd: string;
   timeoutMs: number;
+  abortSignal?: AbortSignal;
 }) => Promise<CommandRunResult>;
 
 export interface WorkspaceSandboxOptions {
@@ -609,7 +682,11 @@ export interface WorkspaceSandboxOptions {
   now?: () => string;
   /** Injected filesystem surface; defaults to `node:fs`. */
   fsImpl?: WorkspaceFs;
-  /** Injected command runner; defaults to a deterministic local stub. */
+  /** Explicit deny-by-default sandbox policy. Legacy allowlist options feed this when omitted. */
+  policy?: SandboxPolicyInput;
+  /** Opt-in real local process runner. Omitted/disabled keeps the deterministic no-process stub. */
+  safeLocalRunner?: SafeLocalProcessRunnerOptions;
+  /** Injected command runner; defaults to a deterministic local stub unless safeLocalRunner is enabled. */
   commandRunner?: CommandRunner;
 }
 
@@ -619,11 +696,16 @@ export interface WorkspaceSandboxOptions {
  * command that has already cleared every policy gate reports a contained
  * success so the local default never spawns a process or touches the network.
  */
-const defaultCommandRunner: CommandRunner = async ({ command, args }) => ({
-  exitCode: 0,
-  stdout: `${[command, ...args].join(" ").trim()} completed`,
-  stderr: "",
-});
+const defaultCommandRunner: CommandRunner = async ({ command, args, abortSignal }) => {
+  if (abortSignal?.aborted) {
+    return { exitCode: 130, stdout: "", stderr: "command aborted", timedOut: false };
+  }
+  return {
+    exitCode: 0,
+    stdout: `${[command, ...args].join(" ").trim()} completed`,
+    stderr: "",
+  };
+};
 
 const defaultWorkspaceFs: WorkspaceFs = {
   realpathSync: (p) => nodeFs.realpathSync(p),
@@ -632,6 +714,107 @@ const defaultWorkspaceFs: WorkspaceFs = {
   writeFileSync: (p, data) => nodeFs.writeFileSync(p, data, "utf8"),
   existsSync: (p) => nodeFs.existsSync(p),
 };
+
+export function createSandboxPolicy(
+  input: SandboxPolicyInput = {},
+  defaults: { workspaceRoot: string; allowedCommands?: string[] },
+): SandboxPolicy {
+  const allowedCwdRoots = input.allowedCwdRoots?.map((root) => nodePath.resolve(root)) ?? [nodePath.resolve(defaults.workspaceRoot)];
+  return {
+    allowedCommands: uniqueStrings(input.allowedCommands ?? defaults.allowedCommands ?? []),
+    deniedCommandPatterns: (input.deniedCommandPatterns ?? []).map((pattern) =>
+      typeof pattern === "string" ? new RegExp(pattern) : pattern,
+    ),
+    allowedCwdRoots: uniqueStrings(allowedCwdRoots),
+    maxStdoutBytes: boundedPositiveInt(input.maxStdoutBytes, MAX_CAPTURED_STREAM_BYTES, MAX_CAPTURED_STREAM_BYTES),
+    maxStderrBytes: boundedPositiveInt(input.maxStderrBytes, MAX_CAPTURED_STREAM_BYTES, MAX_CAPTURED_STREAM_BYTES),
+    maxRuntimeMs: boundedPositiveInt(input.maxRuntimeMs, WORKSPACE_COMMAND_TIMEOUT_MS, 3_600_000),
+    approvalRequiredAboveRuntimeMs: boundedNonnegativeInt(input.approvalRequiredAboveRuntimeMs, 0, 3_600_000),
+    networkAllowed: input.networkAllowed === true,
+    secretsInjectionAllowed: input.secretsInjectionAllowed === true,
+    allowShellOperators: input.allowShellOperators === true,
+  };
+}
+
+export function createSafeLocalProcessRunner(options: SafeLocalProcessRunnerOptions): CommandRunner {
+  const commandMap = { ...options.commandMap };
+  const envAllowlist = new Set(options.envAllowlist ?? []);
+  const maxStdoutBytes = boundedPositiveInt(options.maxStdoutBytes, MAX_CAPTURED_STREAM_BYTES, MAX_CAPTURED_STREAM_BYTES);
+  const maxStderrBytes = boundedPositiveInt(options.maxStderrBytes, MAX_CAPTURED_STREAM_BYTES, MAX_CAPTURED_STREAM_BYTES);
+
+  return async ({ command, args, cwd, timeoutMs, abortSignal }) => {
+    if (!options.enabled) {
+      return { exitCode: 126, stdout: "", stderr: "safe local process runner is disabled" };
+    }
+
+    const executable = commandMap[command];
+    if (!executable) {
+      return { exitCode: 126, stdout: "", stderr: `command ${command} is not configured for the safe local runner` };
+    }
+
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return { exitCode: 126, stdout: "", stderr: "safe local process runner requires a positive timeout", timedOut: true };
+    }
+
+    if (abortSignal?.aborted) {
+      return { exitCode: 130, stdout: "", stderr: "command aborted" };
+    }
+
+    const env: NodeJS.ProcessEnv = {};
+    for (const name of envAllowlist) {
+      const value = options.extraEnv?.[name] ?? process.env[name];
+      if (value !== undefined) env[name] = value;
+    }
+
+    return new Promise<CommandRunResult>((resolve) => {
+      let settled = false;
+      let timedOut = false;
+      let stdout = "";
+      let stderr = "";
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let abortHandler: (() => void) | undefined;
+      const finish = (result: CommandRunResult): void => {
+        if (settled) return;
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        if (abortHandler) abortSignal?.removeEventListener("abort", abortHandler);
+        resolve(result);
+      };
+
+      const child = spawn(executable, args, {
+        cwd,
+        env,
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      timer = setTimeout(() => {
+        timedOut = true;
+        child.kill();
+      }, timeoutMs);
+
+      abortHandler = () => {
+        child.kill();
+        finish({ exitCode: 130, stdout, stderr: appendBounded(stderr, "command aborted", maxStderrBytes) });
+      };
+      abortSignal?.addEventListener("abort", abortHandler, { once: true });
+
+      child.stdout?.on("data", (chunk) => {
+        stdout = appendBounded(stdout, String(chunk), maxStdoutBytes);
+      });
+      child.stderr?.on("data", (chunk) => {
+        stderr = appendBounded(stderr, String(chunk), maxStderrBytes);
+      });
+      child.on("error", (error) => {
+        finish({ exitCode: 1, stdout, stderr: appendBounded(stderr, error.message, maxStderrBytes), timedOut });
+      });
+      child.on("close", (code) => {
+        finish({ exitCode: code ?? (timedOut ? 124 : 1), stdout, stderr, timedOut });
+      });
+    });
+  };
+}
 
 /**
  * Workspace-anchored sandbox adapter (ORN-37). Funnels every file and command
@@ -648,15 +831,28 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
   private readonly now: () => string;
   private readonly fsImpl: WorkspaceFs;
   private readonly commandRunner: CommandRunner;
+  private readonly policy: SandboxPolicy;
 
   constructor(options: WorkspaceSandboxOptions) {
     this.workspaceRoot = options.workspaceRoot;
-    this.allowlistedCommands = options.allowlistedCommands ?? [];
+    this.policy = createSandboxPolicy(options.policy, {
+      workspaceRoot: options.workspaceRoot,
+      allowedCommands: options.allowlistedCommands ?? [],
+    });
+    this.allowlistedCommands = this.policy.allowedCommands;
     this.riskyCommands = options.riskyCommands ?? [];
     this.approvals = options.approvals ?? [];
     this.now = options.now ?? (() => new Date().toISOString());
     this.fsImpl = options.fsImpl ?? defaultWorkspaceFs;
-    this.commandRunner = options.commandRunner ?? defaultCommandRunner;
+    this.commandRunner =
+      options.commandRunner ??
+      (options.safeLocalRunner?.enabled === true
+        ? createSafeLocalProcessRunner({
+            ...options.safeLocalRunner,
+            maxStdoutBytes: options.safeLocalRunner.maxStdoutBytes ?? this.policy.maxStdoutBytes,
+            maxStderrBytes: options.safeLocalRunner.maxStderrBytes ?? this.policy.maxStderrBytes,
+          })
+        : defaultCommandRunner);
     this.metadata = SandboxProviderMetadataSchema.parse({
       id: "workspace",
       name: "Workspace Sandbox",
@@ -682,7 +878,10 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
       command: command.command,
       args: command.args,
       timeoutMs: command.timeoutMs,
-      metadata: command.kind === "shell" ? { kind: "shell" } : {},
+      metadata: {
+        ...(command.kind === "shell" ? { kind: "shell" } : {}),
+        ...(Object.keys(command.env).length > 0 ? { env: command.env } : {}),
+      },
     });
     const completedAt = this.safeNow();
     return SandboxExecutionResultSchema.parse({
@@ -697,16 +896,22 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
       networkCalls: 0,
       artifacts: result.artifacts,
       approvalGates: result.approvalGates,
-      metadata: result.denialReason ? { deniedReason: result.denialReason } : {},
+      metadata: result.denialReason ? { ...result.metadata, deniedReason: result.denialReason } : result.metadata,
     });
   }
 
-  async operate(operationInput: SandboxOperationInput): Promise<SandboxOperationResult> {
+  async operate(operationInput: SandboxOperationInput, ctx: SandboxExecutionContext = {}): Promise<SandboxOperationResult> {
     const operation = SandboxOperationSchema.parse(operationInput);
     const startedAt = this.safeNow();
 
+    if (ctx.abortSignal?.aborted) {
+      return this.denied(operation.kind, operation.kind === "RUN_COMMAND" ? "COMMAND_ABORTED" : "POLICY_VIOLATION", startedAt, {
+        aborted: true,
+      });
+    }
+
     if (operation.kind === "RUN_COMMAND") {
-      return this.runCommand(operation, startedAt);
+      return this.runCommand(operation, startedAt, ctx);
     }
 
     // READ_FILE / LIST_DIR / PROPOSE_PATCH share the containment gate.
@@ -792,7 +997,11 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
     });
   }
 
-  private async runCommand(operation: SandboxOperation, startedAt: string): Promise<SandboxOperationResult> {
+  private async runCommand(
+    operation: SandboxOperation,
+    startedAt: string,
+    ctx: SandboxExecutionContext = {},
+  ): Promise<SandboxOperationResult> {
     const command = operation.command ?? "";
     const args = operation.args;
 
@@ -803,14 +1012,30 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
       return this.denied("RUN_COMMAND", "DESTRUCTIVE_COMMAND_BLOCKED", startedAt);
     }
 
+    if (operation.metadata.network === true && !this.policy.networkAllowed) {
+      return this.denied("RUN_COMMAND", "NETWORK_DISABLED", startedAt);
+    }
+
+    if (operationRequestsSecretInjection(operation) && !this.policy.secretsInjectionAllowed) {
+      return this.denied("RUN_COMMAND", "SECRETS_DISABLED", startedAt);
+    }
+
     // Arbitrary shell (an explicit shell kind, or metacharacters in the program
-    // string) is denied by default.
-    if (isShellInvocation(operation)) {
+    // string/args) is denied by default.
+    if (isShellInvocation(operation, this.policy.allowShellOperators)) {
       return this.denied("RUN_COMMAND", "ARBITRARY_SHELL_DISABLED", startedAt);
+    }
+
+    if (matchesDeniedCommandPattern(command, args, this.policy.deniedCommandPatterns)) {
+      return this.denied("RUN_COMMAND", "COMMAND_ARG_REJECTED", startedAt);
     }
 
     if (!this.allowlistedCommands.includes(command)) {
       return this.denied("RUN_COMMAND", "COMMAND_NOT_ALLOWLISTED", startedAt);
+    }
+
+    if (!this.isCwdAllowed(this.workspaceRoot)) {
+      return this.denied("RUN_COMMAND", "CWD_NOT_ALLOWLISTED", startedAt);
     }
 
     if (this.isRisky(operation) && !this.hasApproval("COMMAND", command)) {
@@ -831,13 +1056,50 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
             metadata: { command },
           }),
         ],
+        metadata: { safetyReasonCode: "NEEDS_APPROVAL" },
       });
     }
 
     const timeoutMs = operation.timeoutMs ?? WORKSPACE_COMMAND_TIMEOUT_MS;
-    const run = await this.commandRunner({ command, args, cwd: this.workspaceRoot, timeoutMs });
-    const stdout = redactString(truncateToBytes(run.stdout, MAX_CAPTURED_STREAM_BYTES));
-    const stderr = redactString(truncateToBytes(run.stderr, MAX_CAPTURED_STREAM_BYTES));
+    const runtimeGate = evaluateSandboxRuntimeSafety({
+      runtimeMs: timeoutMs,
+      maxRuntimeMs: this.policy.maxRuntimeMs,
+      approvalRequiredAboveMs: this.policy.approvalRequiredAboveRuntimeMs,
+    });
+    if (runtimeGate.status === "denied") {
+      return this.denied("RUN_COMMAND", "RUNTIME_BUDGET_EXCEEDED", startedAt, {
+        safetyReasonCode: runtimeGate.reasonCodes[0],
+        safetyReasons: runtimeGate.reasons,
+        requestedRuntimeMs: timeoutMs,
+        maxRuntimeMs: this.policy.maxRuntimeMs,
+      });
+    }
+    if (runtimeGate.status === "NEEDS_DECISION") {
+      return this.result({
+        kind: "RUN_COMMAND",
+        status: "NEEDS_APPROVAL",
+        denialReason: "NEEDS_APPROVAL",
+        startedAt,
+        metadata: {
+          safetyReasonCode: runtimeGate.reasonCodes[0],
+          safetyReasons: runtimeGate.reasons,
+          requestedRuntimeMs: timeoutMs,
+          maxRuntimeMs: this.policy.maxRuntimeMs,
+        },
+      });
+    }
+
+    const run = await this.commandRunner({ command, args, cwd: this.workspaceRoot, timeoutMs, abortSignal: ctx.abortSignal });
+    const stdoutCapture = captureStream(run.stdout, this.policy.maxStdoutBytes);
+    const stderrCapture = captureStream(run.stderr, this.policy.maxStderrBytes);
+    const stdout = redactString(stdoutCapture.value);
+    const stderr = redactString(stderrCapture.value);
+    const streamMetadata = {
+      stdoutTruncated: stdoutCapture.truncated,
+      stderrTruncated: stderrCapture.truncated,
+      requestedRuntimeMs: timeoutMs,
+      maxRuntimeMs: this.policy.maxRuntimeMs,
+    };
 
     if (run.timedOut) {
       // Partial output produced before termination is preserved.
@@ -848,6 +1110,19 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
         startedAt,
         stdout,
         stderr,
+        metadata: { ...streamMetadata, safetyReasonCode: "COMMAND_TIMEOUT" },
+      });
+    }
+
+    if (ctx.abortSignal?.aborted || run.exitCode === 130) {
+      return this.result({
+        kind: "RUN_COMMAND",
+        status: "DENIED",
+        denialReason: "COMMAND_ABORTED",
+        startedAt,
+        stdout,
+        stderr,
+        metadata: { ...streamMetadata, safetyReasonCode: "COMMAND_ABORTED", aborted: true },
       });
     }
 
@@ -857,6 +1132,7 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
       startedAt,
       stdout,
       stderr,
+      metadata: streamMetadata,
     });
   }
 
@@ -873,9 +1149,25 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
     );
   }
 
-  private denied(kind: SandboxOperationKind, reason: SandboxDenialReason, startedAt: string): SandboxOperationResult {
+  private isCwdAllowed(cwd: string): boolean {
+    const resolved = nodePath.resolve(cwd);
+    return this.policy.allowedCwdRoots.some((root) => isContainedWithin(root, resolved));
+  }
+
+  private denied(
+    kind: SandboxOperationKind,
+    reason: SandboxDenialReason,
+    startedAt: string,
+    metadata: Record<string, unknown> = {},
+  ): SandboxOperationResult {
     // resolvedPath is withheld on denial.
-    return this.result({ kind, status: "DENIED", denialReason: reason, startedAt });
+    return this.result({
+      kind,
+      status: "DENIED",
+      denialReason: reason,
+      startedAt,
+      metadata: { safetyReasonCode: safetyReasonCodeForDenial(reason), ...metadata },
+    });
   }
 
   private result(input: {
@@ -890,6 +1182,7 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
     fileContent?: string;
     artifacts?: SandboxArtifact[];
     approvalGates?: ApprovalGate[];
+    metadata?: Record<string, unknown>;
   }): SandboxOperationResult {
     const completedAt = this.safeNow();
     return SandboxOperationResultSchema.parse({
@@ -906,6 +1199,7 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
       networkCalls: 0,
       startedAt: input.startedAt,
       completedAt,
+      metadata: input.metadata ?? {},
     });
   }
 
@@ -915,19 +1209,150 @@ export class WorkspaceSandboxAdapter implements SandboxAdapter {
   }
 }
 
-// Characters that imply shell interpretation when present in the program string.
+export interface SandboxEnvironmentOptions extends WorkspaceSandboxOptions {
+  adapter?: SandboxAdapter & { operate?: (operation: SandboxOperationInput) => Promise<SandboxOperationResult> };
+}
+
+export class StubSandboxEnvironment implements SandboxEnvironment {
+  readonly kind = "stub" as const;
+  readonly supportsArbitraryShell = false;
+  private readonly adapter: SandboxAdapter;
+
+  constructor(options: SandboxStubOptions = {}) {
+    this.adapter = createE2BSandboxAdapterStub(options);
+  }
+
+  async execute(command: SandboxCommandInput): Promise<SandboxExecutionResult> {
+    return this.adapter.execute(command);
+  }
+
+  async operate(operation: SandboxOperationInput): Promise<SandboxOperationResult> {
+    const parsed = SandboxOperationSchema.parse(operation);
+    const startedAt = new Date().toISOString();
+    return SandboxOperationResultSchema.parse({
+      kind: parsed.kind,
+      status: "DENIED",
+      denialReason: "POLICY_VIOLATION",
+      stdout: "",
+      stderr: "Stub sandbox environment does not execute workspace operations.",
+      networkCalls: 0,
+      startedAt,
+      completedAt: startedAt,
+      metadata: { sandboxEnvironment: this.kind, stub: true },
+    });
+  }
+}
+
+export class LocalSandboxEnvironment implements SandboxEnvironment {
+  readonly kind = "local" as const;
+  readonly supportsArbitraryShell = false;
+  private readonly adapter: WorkspaceSandboxAdapter;
+
+  constructor(options: WorkspaceSandboxOptions) {
+    this.adapter = new WorkspaceSandboxAdapter(options);
+  }
+
+  async execute(command: SandboxCommandInput): Promise<SandboxExecutionResult> {
+    return this.adapter.execute(command);
+  }
+
+  async operate(operation: SandboxOperationInput): Promise<SandboxOperationResult> {
+    return this.adapter.operate(operation);
+  }
+}
+
+export class AdapterSandboxEnvironment implements SandboxEnvironment {
+  readonly supportsArbitraryShell = false;
+
+  constructor(
+    readonly kind: SandboxEnvironmentKind,
+    private readonly adapter: SandboxAdapter & { operate?: (operation: SandboxOperationInput) => Promise<SandboxOperationResult> },
+  ) {}
+
+  async execute(command: SandboxCommandInput): Promise<SandboxExecutionResult> {
+    return this.adapter.execute(command);
+  }
+
+  async operate(operation: SandboxOperationInput): Promise<SandboxOperationResult> {
+    if (this.adapter.operate) return this.adapter.operate(operation);
+    const parsed = SandboxOperationSchema.parse(operation);
+    if (parsed.kind !== "RUN_COMMAND") {
+      const startedAt = new Date().toISOString();
+      return SandboxOperationResultSchema.parse({
+        kind: parsed.kind,
+        status: "DENIED",
+        denialReason: "POLICY_VIOLATION",
+        stdout: "",
+        stderr: "Selected sandbox adapter does not support workspace operations.",
+        networkCalls: 0,
+        startedAt,
+        completedAt: startedAt,
+        metadata: { sandboxEnvironment: this.kind },
+      });
+    }
+    const execution = await this.adapter.execute({
+      kind: parsed.metadata.kind === "shell" ? "shell" : "local",
+      command: parsed.command ?? "",
+      args: parsed.args,
+      timeoutMs: parsed.timeoutMs ?? WORKSPACE_COMMAND_TIMEOUT_MS,
+    });
+    return SandboxOperationResultSchema.parse({
+      kind: "RUN_COMMAND",
+      status: execution.status,
+      stdout: execution.stdout,
+      stderr: execution.stderr,
+      artifacts: execution.artifacts,
+      approvalGates: execution.approvalGates,
+      networkCalls: 0,
+      startedAt: execution.startedAt,
+      completedAt: execution.completedAt,
+      metadata: execution.metadata,
+    });
+  }
+}
+
+export function createSandboxEnvironment(
+  kind: SandboxEnvironmentKind,
+  options: SandboxEnvironmentOptions,
+): SandboxEnvironment {
+  if (kind === "stub") return new StubSandboxEnvironment({ now: options.now });
+  if (kind === "e2b" && options.adapter) return new AdapterSandboxEnvironment("e2b", options.adapter);
+  return new LocalSandboxEnvironment(options);
+}
+
+// Characters/operators that imply shell interpretation when present in command/argv tokens.
 const SHELL_METACHARACTER_PATTERN = /[;&|`$<>(){}*?!\n\r]/;
 
 /**
  * True when an operation requests arbitrary shell execution: an explicit
  * `kind: "shell"` (carried on operation metadata) or shell metacharacters in
- * the program string. Metacharacters inside `args` are treated as literal argv
- * entries (no shell interprets them), so only the `command` string is scanned.
+ * the program string/args. The safe local process runner uses argv arrays and
+ * `shell:false`, but policy still fails closed on shell-looking tokens unless
+ * the caller explicitly opts in via SandboxPolicy.allowShellOperators.
  */
-function isShellInvocation(operation: SandboxOperation): boolean {
+function isShellInvocation(operation: SandboxOperation, allowShellOperators: boolean): boolean {
+  if (allowShellOperators) return false;
   if (operation.metadata.kind === "shell" || operation.metadata.shell === true) return true;
-  return SHELL_METACHARACTER_PATTERN.test(operation.command ?? "");
+  return [operation.command ?? "", ...operation.args].some((token) => SHELL_METACHARACTER_PATTERN.test(token));
 }
+
+function operationRequestsSecretInjection(operation: SandboxOperation): boolean {
+  if (operation.metadata.secrets === true || operation.metadata.injectSecrets === true) return true;
+  const env = operation.metadata.env;
+  return env !== null && typeof env === "object" && !Array.isArray(env) && Object.keys(env).length > 0;
+}
+
+function matchesDeniedCommandPattern(command: string, args: string[], patterns: RegExp[]): boolean {
+  if (patterns.length === 0) return false;
+  const rendered = [command, ...args].join(" ");
+  return patterns.some((pattern) => pattern.test(rendered));
+}
+
+function safetyReasonCodeForDenial(reason: SandboxDenialReason): SafetyReasonCode | SandboxDenialReason {
+  if (reason === "RUNTIME_BUDGET_EXCEEDED") return "SANDBOX_RUNTIME_BUDGET_EXCEEDED";
+  return reason;
+}
+
 
 /** Returns the final path segment of a token, independent of separator style. */
 function commandBaseName(token: string): string {
@@ -983,6 +1408,11 @@ function matchesDestructiveDenylist(command: string, args: string[]): boolean {
   return false;
 }
 
+function captureStream(value: string, maxBytes: number): { value: string; truncated: boolean } {
+  const bounded = truncateToBytes(value, maxBytes);
+  return { value: bounded, truncated: bounded !== value };
+}
+
 /** Truncates `value` so its UTF-8 byte length does not exceed `maxBytes`. */
 function truncateToBytes(value: string, maxBytes: number): string {
   const encoder = new TextEncoder();
@@ -997,4 +1427,22 @@ function truncateToBytes(value: string, maxBytes: number): string {
     result = result.slice(0, Math.max(0, result.length - dropChars));
   }
   return result;
+}
+
+function appendBounded(current: string, chunk: string, maxBytes: number): string {
+  return truncateToBytes(`${current}${chunk}`, maxBytes);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((value) => typeof value === "string" && value.length > 0))];
+}
+
+function boundedPositiveInt(value: unknown, fallback: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return Math.trunc(fallback);
+  return Math.min(Math.trunc(value), max);
+}
+
+function boundedNonnegativeInt(value: unknown, fallback: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return Math.trunc(fallback);
+  return Math.min(Math.trunc(value), max);
 }

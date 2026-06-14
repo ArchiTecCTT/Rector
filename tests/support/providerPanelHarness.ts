@@ -193,15 +193,40 @@ export function createProviderPanelHarness(): ProviderPanelHarness {
 
   // Default fetch: serve init-time GETs (/setup, /chat/conversations) with empty ok bodies so
   // `init()` settles without touching the network. Tests override this for the panel requests.
-  let fetchHandler: FetchHandler = async () => jsonResponse({});
+  let fetchHandler: FetchHandler = async (url) => {
+    if (url === "/api/setup/status") {
+      return jsonResponse({
+        mode: "external",
+        ready: true,
+        orchestrationProfile: "configured",
+        onboardingStep: 4,
+        onboardingComplete: true,
+        blockers: [],
+        categories: [],
+      });
+    }
+    return jsonResponse({});
+  };
 
+  const documentListeners = new Map<string, Array<(ev: any) => void>>();
   const fakeDocument = {
     readyState: "complete",
     getElementById: (id: string) => getEl(id),
     createElement: (tag: string) => new FakeElement(tag),
     querySelector: (_sel: string) => new FakeElement("div"),
-    addEventListener: (_type: string, _handler: (ev: any) => void) => {
-      /* DOMContentLoaded never fires here; readyState is "complete" so init() runs inline. */
+    addEventListener: (type: string, handler: (ev: any) => void) => {
+      const list = documentListeners.get(type) ?? [];
+      list.push(handler);
+      documentListeners.set(type, list);
+    },
+    removeEventListener: (type: string, handler: (ev: any) => void) => {
+      const list = documentListeners.get(type) ?? [];
+      documentListeners.set(type, list.filter((candidate) => candidate !== handler));
+    },
+    dispatchEvent: (event: { type?: string; key?: string; preventDefault?: () => void; stopPropagation?: () => void }) => {
+      const type = event.type ?? "unknown";
+      for (const handler of documentListeners.get(type) ?? []) handler(event);
+      return true;
     },
   };
 
