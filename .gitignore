@@ -13,3 +13,7 @@ test_debug.mjs
 progress.md
 scripts/local/
 docs/specs/UI-Ideas
+.kilo/kilo.json
+.kilo/node_modules/
+.kilo/package.json
+.kilo/package-lock.json
