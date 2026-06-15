@@ -41,6 +41,7 @@ interface BackendRow {
   filter: string | null;
   seq: number;
   payload: unknown;
+  mac: string | null;
 }
 
 interface PooledMysqlDriverDouble extends SqlDriver {
@@ -151,23 +152,29 @@ function createPooledMysqlDriverDouble(
         const name = tableFrom(q, /INSERT INTO (\w+)/i);
         const table = requireTable(name);
         const id = String(p[0]);
+        // With MAC column: INSERT INTO <table> (id, filter, seq, payload, mac) VALUES (?, ?, ?, ?, ?)
+        // Without MAC column: INSERT INTO <table> (id, filter, seq, payload) VALUES (?, ?, ?, ?)
+        const hasMac = p.length >= 5;
         table.set(id, {
           id,
           filter: p[1] === undefined || p[1] === null ? null : String(p[1]),
           seq: Number(p[2]),
           payload: p[3],
+          mac: hasMac ? (p[4] === undefined || p[4] === null ? null : String(p[4])) : null,
         });
         return;
       }
       if (/^UPDATE/i.test(q)) {
-        // Shape: UPDATE <table> SET <col> = ?, payload = ? WHERE id = ?
         const name = tableFrom(q, /UPDATE (\w+)/i);
         const table = requireTable(name);
-        const id = String(p[2]);
-        const row = table.get(id);
+        const row = table.get(String(p[p.length - 1]));
         if (row) {
           row.filter = p[0] === undefined || p[0] === null ? null : String(p[0]);
           row.payload = p[1];
+          // With MAC: UPDATE <table> SET <col> = ?, payload = ?, mac = ? WHERE id = ?
+          if (p.length >= 4) {
+            row.mac = p[2] === undefined || p[2] === null ? null : String(p[2]);
+          }
         }
         return;
       }
@@ -196,11 +203,11 @@ function createPooledMysqlDriverDouble(
         const row = requireTable(name).get(String(p[0]));
         return row ? ({ id: row.id } as unknown as T) : undefined;
       }
-      // readRow: SELECT payload FROM <table> WHERE id = ?
-      if (/^SELECT payload FROM \w+ WHERE id = \?$/i.test(q)) {
+      // readRow: SELECT payload, mac FROM <table> WHERE id = ?
+      if (/^SELECT payload,?\s*mac? FROM \w+ WHERE id = \?$/i.test(q)) {
         const name = tableFrom(q, /FROM (\w+)/i);
         const row = requireTable(name).get(String(p[0]));
-        return row ? ({ payload: row.payload } as unknown as T) : undefined;
+        return row ? ({ payload: row.payload, mac: row.mac } as unknown as T) : undefined;
       }
       throw new Error(`Unsupported get statement: ${q}`);
     },
@@ -215,19 +222,19 @@ function createPooledMysqlDriverDouble(
       if (/^SELECT id FROM \w+$/i.test(q)) {
         return rows.map((row) => ({ id: row.id })) as unknown as T[];
       }
-      // listRows (all): SELECT id, payload FROM <table> ORDER BY seq ASC
-      if (/^SELECT id, payload FROM \w+ ORDER BY seq ASC$/i.test(q)) {
+      // listRows (all): SELECT id, payload, mac FROM <table> ORDER BY seq ASC
+      if (/^SELECT id, payload, mac FROM \w+ ORDER BY seq ASC$/i.test(q)) {
         return [...rows]
           .sort((a, b) => a.seq - b.seq)
-          .map((row) => ({ id: row.id, payload: row.payload })) as unknown as T[];
+          .map((row) => ({ id: row.id, payload: row.payload, mac: row.mac })) as unknown as T[];
       }
-      // listRows (filtered): SELECT id, payload FROM <table> WHERE <col> = ? ORDER BY seq ASC
-      if (/^SELECT id, payload FROM \w+ WHERE \w+ = \? ORDER BY seq ASC$/i.test(q)) {
+      // listRows (filtered): SELECT id, payload, mac FROM <table> WHERE <col> = ? ORDER BY seq ASC
+      if (/^SELECT id, payload, mac FROM \w+ WHERE \w+ = \? ORDER BY seq ASC$/i.test(q)) {
         const filter = p[0] === undefined || p[0] === null ? null : String(p[0]);
         return [...rows]
           .filter((row) => row.filter === filter)
           .sort((a, b) => a.seq - b.seq)
-          .map((row) => ({ id: row.id, payload: row.payload })) as unknown as T[];
+          .map((row) => ({ id: row.id, payload: row.payload, mac: row.mac })) as unknown as T[];
       }
       throw new Error(`Unsupported all statement: ${q}`);
     },
