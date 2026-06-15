@@ -59,5 +59,9 @@
     "tsx": "^4.19.0",
     "typescript": "^5.6.3",
     "vitest": "^4.1.8"
+  },
+  "optionalDependencies": {
+    "ioredis": "^5.6.1",
+    "rate-limiter-flexible": "^5.0.5"
   }
 }

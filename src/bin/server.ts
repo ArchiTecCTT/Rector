@@ -39,6 +39,7 @@ import { redactString } from "../security/redaction";
 import { ensureRestrictedDir, ensureRestrictedFile, fixExistingDirPermissions } from "../security/filePermissions";
 import { parseAuthConfig } from "../security/auth";
 import { createLocalAuditLogService } from "../security/auditLog";
+import { createRateLimiterFromEnv } from "../security/rateLimiter";
 import {
   PersistenceInitializationError,
   StoreConfigError,
@@ -557,6 +558,8 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   const auditLog = createLocalAuditLogService({ filePath: AUDIT_LOG_FILE });
   const toolRegistry = createDefaultToolRegistry();
 
+  const rateLimiter = createRateLimiterFromEnv(process.env);
+
   const app = createApp(manager, {
     orchestration: { mode: orchestrationMode, router: orchestrationRouter, sandbox: orchestrationSandbox },
     persistence: deploymentConfig.persistence,
@@ -573,6 +576,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
     secretEncryptionKey,
     dbEncryptionKey,
     dbMacKey,
+    rateLimiter,
   });
   const server = http.createServer(app);
   const gracefulShutdown = createGracefulShutdownHandler({
