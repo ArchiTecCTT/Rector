@@ -9,7 +9,7 @@ import {
 } from "../../templates";
 import { sendRedactedRouteError, statusForMissingTemplate } from "./routeError";
 
-const TemplateImportBodySchema = z.object({ template: z.string().min(1).max(1_000_000) }).passthrough();
+const TemplateImportBodySchema = z.object({ template: z.union([z.string().min(1).max(1_000_000), z.record(z.unknown())]) }).passthrough();
 
 export interface TemplateRoutesDeps {
   templateServiceFor(req: Request): TemplateService;

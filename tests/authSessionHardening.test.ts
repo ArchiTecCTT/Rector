@@ -37,7 +37,7 @@ describe("auth session hardening", () => {
     expect(verifyPassword("pw", passwordHash)).toBe(true);
     const authConfig = parseAuthConfig({
       RECTOR_AUTH_ENABLED: "true",
-      RECTOR_AUTH_SESSION_SECRET: "session-secret",
+      RECTOR_AUTH_SESSION_SECRET: "session-secret-that-is-at-least-32-characters",
       RECTOR_AUTH_USERS: JSON.stringify([{ username: "alice", passwordHash }]),
     });
     const token = createSessionToken("alice", "alice", authConfig.sessionSecret);
