@@ -63,7 +63,11 @@ export type ProviderErrorCode =
   | "NETWORK_DISABLED"
   | "PROVIDER_HTTP_ERROR"
   | "PROVIDER_RESPONSE_INVALID"
+  | "PROVIDER_RESPONSE_TOO_LARGE"
   | "ABORTED";
+
+/** Default maximum provider response size in bytes (5 MB). */
+export const DEFAULT_MAX_PROVIDER_RESPONSE_BYTES = 5 * 1024 * 1024;
 
 export class ProviderError extends Error {
   readonly name = "ProviderError";
@@ -279,7 +283,7 @@ export class TogetherAIProvider implements LLMProvider {
       });
     }
 
-    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id);
+    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id, DEFAULT_MAX_PROVIDER_RESPONSE_BYTES);
     if (!response.ok) {
       throw new ProviderError({
         code: "PROVIDER_HTTP_ERROR",
@@ -437,7 +441,7 @@ export class CloudflareWorkersAIProvider implements LLMProvider {
       });
     }
 
-    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id);
+    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id, DEFAULT_MAX_PROVIDER_RESPONSE_BYTES);
     if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, "Cloudflare Workers AI");
 
     const raw = await response.json();
@@ -583,7 +587,7 @@ export class AzureOpenAIProvider implements LLMProvider {
       });
     }
 
-    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id);
+    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id, DEFAULT_MAX_PROVIDER_RESPONSE_BYTES);
     if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, "Azure OpenAI");
 
     const raw = await response.json();
@@ -711,7 +715,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       });
     }
 
-    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id);
+    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id, DEFAULT_MAX_PROVIDER_RESPONSE_BYTES);
     if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, this.metadata.displayName);
 
     const raw = await response.json();
@@ -846,9 +850,11 @@ async function fetchWithAbort(
   built: BuiltProviderRequest,
   signal: AbortSignal | undefined,
   provider: string,
+  maxResponseBytes: number = DEFAULT_MAX_PROVIDER_RESPONSE_BYTES,
 ): Promise<Response> {
+  let response: Response;
   try {
-    return await fetchImpl(built.url, withAbortSignal(built.init, signal));
+    response = await fetchImpl(built.url, withAbortSignal(built.init, signal));
   } catch (error) {
     if (isAbortLikeError(error)) {
       throw new ProviderError({
@@ -860,6 +866,65 @@ async function fetchWithAbort(
     }
     throw error;
   }
+
+  // Content-Length pre-check: reject responses that declare themselves too large
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && Number(contentLength) > maxResponseBytes) {
+    throw new ProviderError({
+      code: "PROVIDER_RESPONSE_TOO_LARGE",
+      provider,
+      message: `Provider response Content-Length (${contentLength}) exceeds limit (${maxResponseBytes} bytes)`,
+      retryable: false,
+      details: { contentLength: Number(contentLength), maxResponseBytes },
+    });
+  }
+
+  // Bounded stream consumption: wrap body with byte-counting stream that aborts at limit
+  if (response.body) {
+    const originalBody = response.body;
+    let bytesReceived = 0;
+    const limit = maxResponseBytes;
+    const boundedStream = new ReadableStream({
+      start(controller) {
+        const reader = originalBody.getReader();
+        function pump(): void {
+          reader.read().then(({ done, value }) => {
+            if (done) {
+              controller.close();
+              return;
+            }
+            bytesReceived += value.byteLength;
+            if (bytesReceived > limit) {
+              controller.error(
+                new ProviderError({
+                  code: "PROVIDER_RESPONSE_TOO_LARGE",
+                  provider,
+                  message: `Provider response body exceeded limit (${limit} bytes) after receiving ${bytesReceived} bytes`,
+                  retryable: false,
+                  details: { bytesReceived, maxResponseBytes: limit },
+                }),
+              );
+              reader.cancel();
+              return;
+            }
+            controller.enqueue(value);
+            pump();
+          }, (error) => {
+            controller.error(error);
+          });
+        }
+        pump();
+      },
+    });
+    // Replace the body with the bounded stream while preserving other response properties
+    response = new Response(boundedStream, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }
+
+  return response;
 }
 
 function isAbortLikeError(error: unknown): boolean {

@@ -361,6 +361,11 @@ export interface ApiSecurityOptions {
    *  {@link resolveSecretEncryptionKey} via HKDF. When absent, payloads are
    *  stored as plaintext JSON (legacy / test baseline). */
   dbEncryptionKey?: Buffer;
+
+  /** HMAC-SHA256 key for SQLite payload integrity verification. Derived from
+   *  the master secret key via HKDF with info `"rector.payload-mac.v1"`.
+   *  When absent, MACs are not computed or verified (legacy / test baseline). */
+  dbMacKey?: Buffer;
 }
 
 /**
@@ -1600,6 +1605,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   const runEventBroker = createRunEventBroker();
   const baseStore = securityOptions.store ?? createRectorStore(securityOptions.persistence, {
     encryptionKey: securityOptions.dbEncryptionKey,
+    macKey: securityOptions.dbMacKey,
   });
   const rectorStore = withEventBroadcast(baseStore, runEventBroker);
 
@@ -1826,7 +1832,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       },
     }),
   );
-  app.use(express.json());
+  app.use(express.json({ limit: "1mb" }));
   app.use(malformedJsonBodyHandler);
   const publicDir = resolvePublicDir();
   app.use(express.static(publicDir));
@@ -2220,7 +2226,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       });
       res.status(201).json(conversation);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -2242,7 +2248,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const conversations = (await rectorStore.listConversations()).filter((conversation) => allowedIds.has(conversation.workspaceId));
       res.json({ conversations });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -2301,7 +2307,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const messages = await rectorStore.listMessages(conversation.id);
       res.json({ conversation, messages });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -2539,7 +2545,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         observability: observabilitySummary,
       });
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -2682,7 +2688,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const events = await rectorStore.listEvents(run.id);
       res.json({ run, events });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -2735,11 +2741,13 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   registerOperatorRoutes(app, {
     store: rectorStore,
     authorize,
+    sendRedacted,
   });
 
   registerTaskRoutes(app, {
     manager,
     authorize,
+    sendRedacted,
   });
 
   // --- Setup checklist ---
@@ -3712,7 +3720,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return res.status(400).json({ error: "type must be 'happy' or 'healing'" });
       }
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -3732,7 +3740,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const result = await proactiveAgent.triggerCheckIn({ conversationId });
       res.json({ triggered: true, ...result });
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(err)) });
     }
   });
 
