@@ -204,14 +204,14 @@ describe("SqlRectorStore store semantics (task 2.5)", () => {
   describe("redaction-applied parse error on a corrupt payload", () => {
     // An injected driver double that returns a fixed (corrupt) payload for any read,
     // giving precise control over both the stored payload and the lookup id.
-    function corruptReadDriver(payload: unknown): SqlDriver {
+    function corruptReadDriver(payload: unknown, mac: string | null = null): SqlDriver {
       return {
         dialect: "sqlite",
         exec: () => {},
         run: () => {},
         get: <T = unknown>(sql: string) => {
-          if (/SELECT payload FROM/i.test(sql)) {
-            return { payload } as T;
+          if (/SELECT payload,?\s*mac FROM/i.test(sql) || /SELECT payload FROM/i.test(sql)) {
+            return { payload, mac } as T;
           }
           return undefined;
         },
