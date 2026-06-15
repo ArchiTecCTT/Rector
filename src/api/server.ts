@@ -163,7 +163,7 @@ import {
   type PersistenceConfig,
   type RectorStore,
 } from "../store";
-import { MemoryLayerSchema, RunEventSchema } from "../store/schemas";
+import { MAX_MESSAGE_CONTENT_LENGTH, MemoryLayerSchema, RunEventSchema } from "../store/schemas";
 import type { MemoryLayer, Run, RunEvent } from "../store/schemas";
 import { RunPhaseSchema, isTerminalRunPhase } from "../protocol/phases";
 import { registerCommercialRoutes } from "./routes/commercial";
@@ -2380,6 +2380,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const { content, deepPlanning } = req.body ?? {};
       if (!content || typeof content !== "string") {
         return res.status(400).json({ error: "content (string) is required" });
+      }
+      if (content.length > MAX_MESSAGE_CONTENT_LENGTH) {
+        return res.status(413).json({ error: "Message content exceeds maximum length" });
       }
       const requestDeepPlanning = deepPlanning === true;
 

@@ -16,7 +16,7 @@ import { rememberStableTierHashForRun, clearStableTierHashForRun, assemblePrompt
 export { DEFAULT_EXTERNAL_BUDGET, ProviderCallMetadataSchema, phaseObservabilityPayload, runEvent } from "./externalRunSupport";
 export type { ProviderCallMetadata } from "./externalRunSupport";
 import { runLivePlanner, type LivePlannerResult, type PlannerBlocker, type PlannerOutput } from "./planner";
-import { clearRunControl, createAbortSignal, registerRunControl } from "./runControl";
+import { clearRunControl, createAbortSignal, registerRunControl, type RunControlState } from "./runControl";
 import { createDecisionRequest, transitionRun } from "./runStateMachine";
 import { reviewPlanWithSkeptic, runLiveSkeptic, type SkepticBlocker, type SkepticReview } from "./skeptic";
 import { type BrainstemSynthesis, type BrainstemSynthesisStatus } from "./synthesizer";
@@ -42,6 +42,7 @@ import {
 } from "../sandbox";
 import type { OrchestratorMode } from "../deployment";
 import type { RectorStore } from "../store";
+import { MAX_MESSAGE_CONTENT_LENGTH } from "../store/schemas";
 import type { Budget, Run } from "../store/schemas";
 import type { ModuleRegistry } from "../modules";
 import type { ToolRegistry } from "../tools";
@@ -58,6 +59,9 @@ import {
 import { resolveNeuroFeatureFlags, type NeuroFeatureFlags } from "../modules/featureFlags";
 import { IterationBudget, type TurnBudgetConfig } from "./turnBudget";
 
+/** Default maximum orchestration runtime: 30 minutes (M23). */
+export const DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS = 30 * 60 * 1000;
+
 /** Options that tune executor/healing behaviour for orchestrated runs. */
 export interface ChatRunOptions {
   executorOptions?: ExecutorSimulatorOptions;
@@ -65,6 +69,8 @@ export interface ChatRunOptions {
   turnBudget?: Partial<TurnBudgetConfig>;
   /** Opt-in MCTS-style multi-path planning (external mode only). */
   deepPlanning?: boolean;
+  /** Maximum wall-clock time for the orchestrated run in milliseconds. Defaults to {@link DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS}. */
+  maxRuntimeMs?: number;
 }
 
 /** Inputs to a single chat run, gathered by the chat endpoint before dispatch. */
@@ -166,6 +172,70 @@ export async function runOrchestratedChatRun(
   args: ChatRunArgs,
   deps: ChatRunnerDeps
 ): Promise<ChatRunResult> {
+  const { conversationId, prompt, triage, observability } = args;
+  const options = args.options ?? {};
+  const traceId = observability.traceId;
+  const maxRuntimeMs = options.maxRuntimeMs ?? DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS;
+
+  // M23: Orchestration timeout guard. Create the run control early so we can
+  // wire the timeout into the run's own abort controller.
+  const runControl = registerRunControl(`timeout-pending`);
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    runControl.abortController.abort(new DOMException("Orchestration timeout exceeded", "AbortError"));
+  }, maxRuntimeMs);
+
+  try {
+    const result = await runOrchestratedChatRunInner(store, args, deps, runControl);
+    return result;
+  } catch (error) {
+    if (timedOut || (error instanceof DOMException && error.name === "AbortError") || (error instanceof Error && error.name === "AbortError")) {
+      // Transition run to FAILED with timeout reason
+      const currentRun = await store.getRun(conversationId);
+      if (currentRun && currentRun.status !== "failed" && currentRun.status !== "aborted") {
+        try {
+          await transitionRun(store, currentRun.id, "FAILED", {
+            traceId,
+            now: deps.now,
+            lastError: "Orchestration timeout exceeded",
+            payload: {
+              source: "orchestration-timeout",
+              maxRuntimeMs,
+              note: `Orchestration exceeded ${maxRuntimeMs}ms wall-clock limit`,
+            },
+          });
+        } catch {
+          // Best-effort transition — the run may already be terminal
+        }
+      }
+      const observabilitySummary = observability.getSummary();
+      const synthesis: BrainstemSynthesis = {
+        status: "FAILED",
+        route: triage.route,
+        traceId,
+        evidence: ["orchestration timeout exceeded"],
+        providerCalls: 0,
+        observability: observabilitySummary,
+        response: `Status: FAILED. Route: ${triage.route}. Trace: ${traceId}. Orchestration timeout exceeded (${maxRuntimeMs}ms).`,
+      };
+      const failedRun = (await store.getRun(conversationId))!;
+      return { run: failedRun, synthesis, observabilitySummary };
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    clearRunControl(runControl.runId ?? "timeout-pending");
+  }
+}
+
+/** Inner implementation extracted for timeout wrapping. */
+async function runOrchestratedChatRunInner(
+  store: RectorStore,
+  args: ChatRunArgs,
+  deps: ChatRunnerDeps,
+  outerRunControl: RunControlState
+): Promise<ChatRunResult> {
   const { conversationId, userMessageId, prompt, triage, contextPack, observability } = args;
   const options = args.options ?? {};
   const traceId = observability.traceId;
@@ -224,7 +294,10 @@ export async function runOrchestratedChatRun(
   });
   const activeDeps: ChatRunnerDeps = { ...deps, router: activeRouter };
 
-  const runControl = registerRunControl(run.id);
+  // Register the run control under the real run ID, reusing the outer controller
+  // (which may already have a timeout abort wired to it).
+  outerRunControl.runId = run.id;
+  const runControl = registerRunControl(run.id, outerRunControl);
   const abortSignal = createAbortSignal(runControl);
   const turnBudget = new IterationBudget(options.turnBudget);
 
