@@ -43,10 +43,6 @@ research.md
 research/
 reviews/
 
-# Generated / exported issue data
-docs/issues/linear/
-docs/issues/generated/
-
 # Compiled / generated scripts
 scripts/performance-baseline-cold-start-compiled.mjs
 
