@@ -99,6 +99,7 @@ function createCountingBroker(): { broker: RunEventBroker; activeCount: () => nu
   let active = 0;
   const broker: RunEventBroker = {
     publish: (runId, event) => inner.publish(runId, event),
+    publishRedacted: (runId, event) => inner.publishRedacted(runId, event),
     subscribe: (runId: string, listener: RunEventListener) => {
       active += 1;
       const unsubscribe = inner.subscribe(runId, listener);

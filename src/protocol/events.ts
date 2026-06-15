@@ -41,7 +41,29 @@ export const RunEventSchema = z.object({
   runId: z.string().min(1),
   type: RunEventTypeSchema,
   phase: RunPhaseSchema,
-  payload: z.record(z.unknown()).default({}),
+  payload: z
+    .record(z.unknown())
+    .default({})
+    .refine(
+      (val) => Object.keys(val).length <= 50,
+      { message: "Payload must have at most 50 keys" },
+    )
+    .refine(
+      (val) =>
+        Object.keys(val).every((k) => k.length <= 128) &&
+        Object.values(val).every(
+          (v) =>
+            v === null ||
+            typeof v === "string" ||
+            typeof v === "number" ||
+            typeof v === "boolean",
+        ) &&
+        Object.values(val).every((v) => typeof v !== "string" || v.length <= 10_000),
+      {
+        message:
+          "Payload keys must be ≤128 chars, values must be string(≤10K)|number|boolean|null",
+      },
+    ),
   traceId: z.string().min(1).optional(),
   redactionState: z.string().min(1).optional(),
   createdAt: z.string().datetime(),
