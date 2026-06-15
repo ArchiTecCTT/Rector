@@ -103,6 +103,11 @@ export interface CreateRectorStoreOverrides {
    *  payloads are sealed with AES-256-GCM and prefixed with `ENC1:`; unencrypted
    *  (legacy) rows are still readable for backward compat. */
   encryptionKey?: Buffer;
+  /** HMAC-SHA256 key for SQLite payload integrity verification. When provided,
+   *  MACs are computed on insert/update and verified on read. Rows without a MAC
+   *  (legacy) are accepted with a warning. Derived from the master key via
+   *  `deriveMacKey()` with info `"rector.payload-mac.v1"`. */
+  macKey?: Buffer;
 }
 
 /**
@@ -178,7 +183,7 @@ export function createRectorStore(
 ): RectorStore {
   // An injected driver always wins (tests inject an in-memory SqlDriver double).
   if (overrides?.driver) {
-    return new SqlRectorStore({ driver: overrides.driver, now: overrides?.now, encryptionKey: overrides?.encryptionKey });
+    return new SqlRectorStore({ driver: overrides.driver, now: overrides?.now, encryptionKey: overrides?.encryptionKey, macKey: overrides?.macKey });
   }
 
   const driver = config?.driver ?? "memory";
@@ -195,6 +200,7 @@ export function createRectorStore(
         driver: createSqliteDriver({ path }),
         now: overrides?.now,
         encryptionKey: overrides?.encryptionKey,
+        macKey: overrides?.macKey,
       });
       ensureRestrictedFile(path);
       return store;
@@ -210,6 +216,7 @@ export function createRectorStore(
         driver: createTiDBDriver({ host, port, user, password, database, tls }),
         now: overrides?.now,
         encryptionKey: overrides?.encryptionKey,
+        macKey: overrides?.macKey,
       });
     }
 

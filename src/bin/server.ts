@@ -215,6 +215,15 @@ function deriveDbEncryptionKey(masterKey: Buffer): Buffer {
   return createHmac("sha256", masterKey).update("rector.db-encryption.v1").digest();
 }
 
+/** Derive a 32-byte MAC key from the master secret key using an HKDF-like
+ *  construction (HMAC-SHA256 with domain-separated info string). The derived
+ *  key is independent of the DB encryption key so a MAC key compromise does
+ *  not expose encrypted payloads and vice versa.
+ */
+function derivePayloadMacKey(masterKey: Buffer): Buffer {
+  return createHmac("sha256", masterKey).update("rector.payload-mac.v1").digest();
+}
+
 /**
  * Determine whether DB encryption should be enabled. Logic:
  * - `RECTOR_DB_ENCRYPTION` env var explicitly set: honor it ("true"/"false").
@@ -535,10 +544,12 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   const dbEncryptionKey = shouldEnableDbEncryption(secretEncryptionKey)
     ? deriveDbEncryptionKey(secretEncryptionKey)
     : undefined;
+  const dbMacKey = derivePayloadMacKey(secretEncryptionKey);
   let bootstrappedStore: RectorStore | undefined;
   if (persistenceDriver === "sqlite" || persistenceDriver === "tidb") {
     bootstrappedStore = await runStartupMigration(deploymentConfig.persistence, {
       encryptionKey: dbEncryptionKey,
+      macKey: dbMacKey,
     });
   }
 
@@ -561,6 +572,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
     auth: authConfig,
     secretEncryptionKey,
     dbEncryptionKey,
+    dbMacKey,
   });
   const server = http.createServer(app);
   const gracefulShutdown = createGracefulShutdownHandler({
