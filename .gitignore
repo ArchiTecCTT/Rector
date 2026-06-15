@@ -1,22 +1,57 @@
+# Worktrees & dependencies
 .worktrees/
 node_modules/
+.npm-cache/
+
+# Build output
 dist/
 coverage/
+*.tsbuildinfo
+
+# Environment
 .env
 .env.*
 !.env.example
+
+# Runtime config
 .rector/
+
+# Logs
 *.log
+
+# OS files
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE / editor
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+
+# AI tool configs (personal workspace)
+.cursor/
+.openhands/
+.kilo/
+.kiro/
+skills/
+
+# Research / scratch
+research.md
+research/
 reviews/
+
+# Generated / exported issue data
+docs/issues/linear/
+docs/issues/generated/
+
+# Compiled / generated scripts
+scripts/performance-baseline-cold-start-compiled.mjs
+
+# Legacy scratch files
 test_debug.mjs
 progress.md
 scripts/local/
 docs/specs/UI-Ideas
-.kilo/kilo.json
-.kilo/kilo.jsonc
-.kilo/node_modules/
-.kilo/package.json
-.kilo/package-lock.json
-.npm-cache/
-.vscode/
