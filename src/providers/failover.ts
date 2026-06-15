@@ -45,6 +45,13 @@ export interface CallWithResilienceInput<T> {
   abortSignal?: AbortSignal;
   retryDelayMs?: number;
   emitEvent?: (event: ProviderResilienceEvent) => void | Promise<void>;
+  /**
+   * Budget preflight check called before each retry/fallback attempt.
+   * If the function returns `false`, the retry/fallback is skipped and the
+   * last error is returned instead. This prevents spending budget on retries
+   * when the budget is already exhausted.
+   */
+  budgetPreflight?: () => Promise<boolean>;
   invoke: (selection: ModelSelection) => Promise<T>;
 }
 
@@ -58,6 +65,13 @@ export async function callWithResilience<T>(
   } catch (error) {
     throwIfAbort(error);
     if (isRateLimitError(error) && input.retryState.tryMarkRetried429()) {
+      // Budget preflight: skip retry if budget exhausted
+      if (input.budgetPreflight) {
+        const budgetOk = await input.budgetPreflight();
+        if (!budgetOk) {
+          throw classifyExhaustedError(error, active.provider.metadata.id);
+        }
+      }
       await emit(input, "PROVIDER_RETRY", {
         reason: "rate_limit",
         providerId: providerIdOf(active),
@@ -74,6 +88,13 @@ export async function callWithResilience<T>(
     }
 
     if (isAuthError(error) && input.retryState.tryMarkRetriedAuth()) {
+      // Budget preflight: skip auth retry if budget exhausted
+      if (input.budgetPreflight) {
+        const budgetOk = await input.budgetPreflight();
+        if (!budgetOk) {
+          throw classifyExhaustedError(error, active.provider.metadata.id);
+        }
+      }
       const providerId = providerIdOf(active);
       const failedCredential = input.credentialPool?.acquire(providerId);
       if (failedCredential) {
@@ -103,6 +124,13 @@ export async function callWithResilience<T>(
     }
 
     if (input.fallback && input.retryState.tryMarkActivatedFallback()) {
+      // Budget preflight: skip fallback if budget exhausted
+      if (input.budgetPreflight) {
+        const budgetOk = await input.budgetPreflight();
+        if (!budgetOk) {
+          throw classifyExhaustedError(error, active.provider.metadata.id);
+        }
+      }
       active = input.fallback;
       await emit(input, "PROVIDER_SUBSTITUTED", {
         role: input.role,
@@ -129,6 +157,8 @@ export interface BuildResilientModelRouterInput {
   providerResilienceEnabled?: boolean;
   retryDelayMs?: number;
   emitEvent?: (event: ProviderResilienceEvent) => void | Promise<void>;
+  /** Budget preflight: checked before each retry/fallback attempt. */
+  budgetPreflight?: () => Promise<boolean>;
 }
 
 export function buildResilientModelRouter(input: BuildResilientModelRouterInput): ModelRouter {
@@ -170,6 +200,7 @@ function resilientSelection(
     retryState,
     retryDelayMs: input.retryDelayMs,
     emitEvent: input.emitEvent,
+    budgetPreflight: input.budgetPreflight,
   });
 
   return { ...selection, provider };
@@ -187,6 +218,8 @@ class ResilientLLMProvider implements LLMProvider {
     retryState: TurnRetryState;
     retryDelayMs?: number;
     emitEvent?: (event: ProviderResilienceEvent) => void | Promise<void>;
+    /** Budget preflight: checked before each retry/fallback. */
+    budgetPreflight?: () => Promise<boolean>;
   }) {
     this.metadata = options.primary.provider.metadata;
   }
@@ -210,6 +243,7 @@ class ResilientLLMProvider implements LLMProvider {
       retryDelayMs: this.options.retryDelayMs,
       abortSignal: options.abortSignal,
       emitEvent: this.options.emitEvent,
+      budgetPreflight: this.options.budgetPreflight,
       invoke: (selection) =>
         selection.provider.invoke({ ...request, model: selection.model }, { abortSignal: options.abortSignal }),
     });
