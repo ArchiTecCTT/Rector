@@ -1015,6 +1015,15 @@ export async function handleRunStream(options: RunStreamHandlerOptions): Promise
  * The `store` should be the broker-wrapped store (`withEventBroadcast`) so live appended/committed
  * events flow to subscribers.
  */
+
+/** Default-deny authorization for SSE run streams. When no `authorizeRunRead` is provided,
+ *  all requests are rejected with 403 — callers must explicitly opt in to allow unauthenticated
+ *  read access. */
+async function defaultDenyAuthorizeRunRead(_req: express.Request, res: express.Response, _runId: string): Promise<boolean> {
+  res.status(403).json({ error: "Run access denied" });
+  return false;
+}
+
 export function registerRunStreamRoute(
   app: express.Application,
   deps: {
@@ -1025,7 +1034,8 @@ export function registerRunStreamRoute(
   }
 ): void {
   app.get("/api/runs/:id/stream", codeqlRateLimitGuard, async (req, res) => {
-    if (deps.authorizeRunRead && !(await deps.authorizeRunRead(req, res, req.params.id))) return;
+    const authorize = deps.authorizeRunRead ?? defaultDenyAuthorizeRunRead;
+    if (!(await authorize(req, res, req.params.id))) return;
     void handleRunStream({
       runId: req.params.id,
       req,
