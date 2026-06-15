@@ -436,7 +436,17 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 - **Severity:** Medium for production deployment.
 - **Status:** **RESOLVED** (Chunk 049 — all H1-H8 and M1-M28 findings addressed).
 - **Resolution:** Distributed rate limiter (M2), SSRF protection (H6), CSP/HSTS (H4/M5), error redaction (H5), file permissions (H2/M1), payload integrity (H8), encryption at rest (H1), key rotation (H3), body/response size limits (H7), session entropy (M8), and all other M-findings resolved or accepted with documented residual risk.
-- **Remaining:** Pre-existing modelPicker DOM test (2 failures, not security-related). Production hardening beyond v0.3.0 scope (multi-instance, billing, compliance) remains tracked in roadmap.
+- **Remaining:** Production hardening beyond v0.3.0 scope (multi-instance, billing, compliance) remains tracked in roadmap.
+
+### Pre-existing modelPicker DOM test failure (2 tests in `tests/modelPicker.dom.test.ts`)
+
+- **Source:** Chunk 047f configured-product `app.js` rewrite; present before Chunk 049.
+- **Severity:** Low (test quality, not security).
+- **Status:** Open.
+- **Symptom:** `lastRefreshedAt` element stays hidden and empty after model discovery; refreshed timestamp text not rendered. Two tests fail: "discovers models and renders lastRefreshedAt (Req 19.3)" and "Refresh hits the cache-bypassing refresh endpoint (Req 19.2)".
+- **Root cause:** The `discoverProviderModels()` function in `src/public/app.js:2289-2336` uses raw `fetch()` in the VM sandbox context. The test harness (`tests/support/providerPanelHarness.ts`) injects a mock `fetch` into the sandbox that routes through `setFetchHandler()`. The fetch call succeeds (URL/method assertions pass), but the async response processing (`await res.text()` → `JSON.parse` → `renderModelPickerCandidates()`) may not be completing before the test assertions in the `flush()` cycle. The `renderModelPickerCandidates` function correctly sets `refreshedEl.hidden = false` and `refreshedEl.textContent` when `snapshot.lastRefreshedAt` is present, but the DOM update appears to not propagate.
+- **Fix needed:** Debug the VM sandbox async flush timing between fetch response resolution and DOM element mutation. Possibly needs an additional microtask flush or the `discoverProviderModels` function needs to resolve a promise that the test can await.
+- **Not a security issue:** The model discovery endpoint itself works correctly; this is purely a test harness timing issue.
 
 ### In-memory rate limiter is local-only and requires distributed backend in production
 
