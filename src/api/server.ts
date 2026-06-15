@@ -3758,6 +3758,22 @@ function securityHeadersMiddleware(_req: express.Request, res: express.Response,
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
+
+  // CSP (H4): strict policy — inline scripts disallowed (boot.js is 'self').
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; object-src 'none'",
+  );
+
+  // HSTS (H4): only in production mode.
+  if (process.env.NODE_ENV === "production") {
+    const maxAge = process.env.HSTS_MAX_AGE ?? "31536000";
+    let hsts = `max-age=${maxAge}`;
+    if (process.env.HSTS_INCLUDE_SUB_DOMAINS === "true") hsts += "; includeSubDomains";
+    if (process.env.HSTS_PRELOAD === "true") hsts += "; preload";
+    res.setHeader("Strict-Transport-Security", hsts);
+  }
+
   next();
 }
 
