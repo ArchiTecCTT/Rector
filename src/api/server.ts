@@ -7,7 +7,7 @@ import { TaskManager } from "../thalamus/router";
 import { getSetupChecklist } from "../setupChecklist";
 import { buildContextPack, createContextMaterial } from "../orchestration/contextBuilder";
 import type { ExecutorSimulatorOptions } from "../orchestration/executorSimulator";
-import { runChat } from "../orchestration/chatRunner";
+import { runChat, DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS } from "../orchestration/chatRunner";
 import { triageUserMessage } from "../orchestration/triage";
 import type { CommandRunner, SandboxAdapter, SandboxApproval, WorkspaceFs } from "../sandbox";
 import {
@@ -1702,6 +1702,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         contextCompressionEnabled: true,
         contextCompressionMaxGeneration: 3,
         providerResilienceEnabled: true,
+        orchestration: { maxRuntimeMs: DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS },
         updatedAt: new Date().toISOString(),
       });
     }
@@ -2457,6 +2458,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
               executorOptions: orchestrationRuntime.executorOptions,
               maxHealingAttempts: orchestrationRuntime.maxHealingAttempts,
               ...(requestDeepPlanning ? { deepPlanning: true } : {}),
+              ...(runtimeSettings.orchestration?.maxRuntimeMs ? { maxRuntimeMs: runtimeSettings.orchestration.maxRuntimeMs } : {}),
             },
           },
           {

@@ -177,8 +177,11 @@ export async function runOrchestratedChatRun(
   const traceId = observability.traceId;
   const maxRuntimeMs = options.maxRuntimeMs ?? DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS;
 
-  // M23: Orchestration timeout guard. Create the run control early so we can
-  // wire the timeout into the run's own abort controller.
+  // M23: Orchestration timeout guard. We set up a timer that marks the run as
+  // timed out and aborts the run control. The inner orchestration may catch the
+  // AbortError and return a non-FAILED result (e.g. NEEDS_DECISION from a
+  // provider error blocker), so we check the timedOut flag after the inner
+  // function returns and override with FAILED if the timeout was the cause.
   const runControl = registerRunControl(`timeout-pending`);
   let timedOut = false;
   const timeoutId = setTimeout(() => {
@@ -188,45 +191,88 @@ export async function runOrchestratedChatRun(
 
   try {
     const result = await runOrchestratedChatRunInner(store, args, deps, runControl);
+    // The inner orchestration completed — but if the timeout fired (causing the
+    // inner code to abort and return a non-FAILED result), override with FAILED.
+    if (timedOut) {
+      return await orchestrationTimeoutResult(store, args, deps, maxRuntimeMs, result.run.id);
+    }
     return result;
   } catch (error) {
+    // If the timeout caused the error, convert to a FAILED result
     if (timedOut || (error instanceof DOMException && error.name === "AbortError") || (error instanceof Error && error.name === "AbortError")) {
-      // Transition run to FAILED with timeout reason
-      const currentRun = await store.getRun(conversationId);
-      if (currentRun && currentRun.status !== "failed" && currentRun.status !== "aborted") {
-        try {
-          await transitionRun(store, currentRun.id, "FAILED", {
-            traceId,
-            now: deps.now,
-            lastError: "Orchestration timeout exceeded",
-            payload: {
-              source: "orchestration-timeout",
-              maxRuntimeMs,
-              note: `Orchestration exceeded ${maxRuntimeMs}ms wall-clock limit`,
-            },
-          });
-        } catch {
-          // Best-effort transition — the run may already be terminal
-        }
-      }
-      const observabilitySummary = observability.getSummary();
-      const synthesis: BrainstemSynthesis = {
-        status: "FAILED",
-        route: triage.route,
-        traceId,
-        evidence: ["orchestration timeout exceeded"],
-        providerCalls: 0,
-        observability: observabilitySummary,
-        response: `Status: FAILED. Route: ${triage.route}. Trace: ${traceId}. Orchestration timeout exceeded (${maxRuntimeMs}ms).`,
-      };
-      const failedRun = (await store.getRun(conversationId))!;
-      return { run: failedRun, synthesis, observabilitySummary };
+      // Find the run for this conversation to get the ID
+      const runs = await store.listRuns(conversationId);
+      const runId = runs.length > 0 ? runs[runs.length - 1].id : undefined;
+      return await orchestrationTimeoutResult(store, args, deps, maxRuntimeMs, runId);
     }
     throw error;
   } finally {
     clearTimeout(timeoutId);
     clearRunControl(runControl.runId ?? "timeout-pending");
   }
+}
+
+/** Handles the orchestration timeout: transitions run to FAILED and returns a timeout result. */
+async function orchestrationTimeoutResult(
+  store: RectorStore,
+  args: ChatRunArgs,
+  deps: ChatRunnerDeps,
+  maxRuntimeMs: number,
+  knownRunId?: string
+): Promise<ChatRunResult> {
+  const { conversationId, triage, observability } = args;
+  const traceId = observability.traceId;
+
+  // Find the run — either from the known ID or by listing runs for the conversation
+  let currentRun: Run | undefined;
+  if (knownRunId) {
+    currentRun = await store.getRun(knownRunId);
+  }
+  if (!currentRun) {
+    const runs = await store.listRuns(conversationId);
+    currentRun = runs.length > 0 ? runs[runs.length - 1] : undefined;
+  }
+  let failedRun: Run | undefined;
+  if (currentRun && currentRun.status !== "failed" && currentRun.status !== "aborted") {
+    try {
+      const transitionResult = await transitionRun(store, currentRun.id, "FAILED", {
+        traceId,
+        now: deps.now,
+        lastError: "Orchestration timeout exceeded",
+        decision: { reason: "timeout", approved: false },
+        payload: {
+          source: "orchestration-timeout",
+          maxRuntimeMs,
+          note: `Orchestration exceeded ${maxRuntimeMs}ms wall-clock limit`,
+        },
+      });
+      failedRun = transitionResult.run;
+    } catch {
+      // Best-effort transition — the run may already be terminal
+    }
+  }
+  // If transition didn't work, fetch the latest version from the store
+  if (!failedRun && knownRunId) {
+    failedRun = await store.getRun(knownRunId);
+  }
+  if (!failedRun) {
+    const runs = await store.listRuns(conversationId);
+    failedRun = runs.length > 0 ? runs[runs.length - 1] : undefined;
+  }
+  if (!failedRun) {
+    throw new Error("Orchestration timeout: could not find run to transition");
+  }
+  const observabilitySummary = observability.getSummary();
+  const synthesis: BrainstemSynthesis = {
+    status: "FAILED",
+    route: triage.route,
+    traceId,
+    evidence: ["orchestration timeout exceeded"],
+    providerCalls: 0,
+    observability: observabilitySummary,
+    response: `Status: FAILED. Route: ${triage.route}. Trace: ${traceId}. Orchestration timeout exceeded (${maxRuntimeMs}ms).`,
+  };
+  return { run: failedRun, synthesis, observabilitySummary };
 }
 
 /** Inner implementation extracted for timeout wrapping. */

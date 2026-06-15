@@ -6,6 +6,7 @@ import { z } from "zod";
 import { redactString } from "../security/redaction";
 import { ensureRestrictedDir } from "../security/filePermissions";
 import { SandboxEnvironmentKindSchema } from "../sandbox";
+import { DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS } from "../orchestration/chatRunner";
 
 /**
  * Runtime settings persisted under `.rector/runtime-settings.json`.
@@ -20,6 +21,12 @@ export const RUNTIME_SETTINGS_SCHEMA_VERSION = "rector.runtime.v1" as const;
 export const OrchestrationProfileSchema = z.enum(["unconfigured", "configured"]);
 export type OrchestrationProfile = z.infer<typeof OrchestrationProfileSchema>;
 
+export const OrchestrationSettingsSchema = z.object({
+  /** Maximum wall-clock time for an orchestrated run in milliseconds (M23). Defaults to 30 min. */
+  maxRuntimeMs: z.number().int().positive().default(DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS),
+});
+export type OrchestrationSettings = z.infer<typeof OrchestrationSettingsSchema>;
+
 export const RuntimeSettingsSchema = z.object({
   schemaVersion: z.literal(RUNTIME_SETTINGS_SCHEMA_VERSION),
   orchestrationProfile: OrchestrationProfileSchema,
@@ -29,6 +36,7 @@ export const RuntimeSettingsSchema = z.object({
   contextCompressionEnabled: z.boolean().default(true),
   contextCompressionMaxGeneration: z.number().int().positive().default(3),
   providerResilienceEnabled: z.boolean().default(true),
+  orchestration: OrchestrationSettingsSchema.default({ maxRuntimeMs: DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS }),
   updatedAt: z.string().datetime(),
 });
 export type RuntimeSettings = z.infer<typeof RuntimeSettingsSchema>;
@@ -38,6 +46,7 @@ export const RuntimeSettingsPatchSchema = z
     orchestrationProfile: OrchestrationProfileSchema.optional(),
     sandboxEnvironment: SandboxEnvironmentKindSchema.optional(),
     providerResilienceEnabled: z.boolean().optional(),
+    orchestration: z.object({ maxRuntimeMs: z.number().int().positive() }).optional(),
   })
   .strict();
 export type RuntimeSettingsPatch = z.infer<typeof RuntimeSettingsPatchSchema>;
@@ -104,6 +113,7 @@ export function defaultRuntimeSettings(now: string = new Date().toISOString()): 
     contextCompressionEnabled: true,
     contextCompressionMaxGeneration: 3,
     providerResilienceEnabled: true,
+    orchestration: { maxRuntimeMs: DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS },
     updatedAt: now,
   };
 }
@@ -139,6 +149,7 @@ export function migrateRuntimeSettingsFromEnv(
     contextCompressionEnabled: true,
     contextCompressionMaxGeneration: 3,
     providerResilienceEnabled: true,
+    orchestration: { maxRuntimeMs: DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS },
     updatedAt: new Date().toISOString(),
   };
 }
@@ -156,6 +167,7 @@ export function redactRuntimeSettingsForEgress(settings: RuntimeSettings): Runti
     contextCompressionEnabled: settings.contextCompressionEnabled,
     contextCompressionMaxGeneration: settings.contextCompressionMaxGeneration,
     providerResilienceEnabled: settings.providerResilienceEnabled,
+    orchestration: settings.orchestration,
     updatedAt: settings.updatedAt,
   };
 }
