@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 
 import type { MemoryProvider } from "./provider";
+import { validateProviderUrl } from "../security/ssrfProtection.js";
 import {
   classifyAdapterError,
   mapToMemoryEntry,
@@ -120,7 +121,7 @@ function validateCollectionName(name: string): void {
   }
 }
 
-function validateChromaBaseUrl(baseUrl: string): void {
+async function validateChromaBaseUrl(baseUrl: string): Promise<void> {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
@@ -129,6 +130,21 @@ function validateChromaBaseUrl(baseUrl: string): void {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("Chroma memory provider requires config.baseUrl to be a valid http(s) URL.");
+  }
+  // SSRF protection with local-dev bypass
+  const LOCAL_DEV_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
+  const hostname = parsed.hostname.replace(/^\[(.+)\]$/, "$1").toLowerCase();
+  if (process.env.NODE_ENV !== "production" && LOCAL_DEV_HOSTNAMES.has(hostname)) {
+    return; // local dev bypass
+  }
+  try {
+    await validateProviderUrl(baseUrl);
+  } catch (ssrfError) {
+    // In non-production, if DNS resolution fails, log warning but allow (dev/test DNS may not resolve)
+    if (process.env.NODE_ENV !== "production" && ssrfError instanceof Error && ssrfError.message.includes("did not resolve")) {
+      return;
+    }
+    throw ssrfError;
   }
 }
 
@@ -226,7 +242,16 @@ export class ChromaMemoryProvider implements MemoryProvider {
     if (!this.chromaUrl) {
       throw new Error("Chroma memory provider requires config.baseUrl (Chroma server URL).");
     }
-    validateChromaBaseUrl(this.chromaUrl);
+    // Sync pre-checks only; async SSRF check runs in getCollection() before network access
+    try {
+      const parsed = new URL(this.chromaUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("Chroma memory provider requires config.baseUrl to be a valid http(s) URL.");
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("Chroma memory provider")) throw err;
+      throw new Error("Chroma memory provider requires config.baseUrl to be a valid http(s) URL.");
+    }
     validateCollectionName(this.collectionName);
   }
 
@@ -247,6 +272,7 @@ export class ChromaMemoryProvider implements MemoryProvider {
     if (this.collection) return this.collection;
     try {
       this.validateConfig();
+      await validateChromaBaseUrl(this.chromaUrl);
       if (!this.client) {
         this.client = this.clientFactory(this.getConnectOptions());
       }

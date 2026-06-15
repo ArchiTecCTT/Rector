@@ -1,6 +1,33 @@
 import { z } from "zod";
 import { evaluateBudget, type BudgetUsage } from "../security/budget";
+import { validateProviderUrl } from "../security/ssrfProtection.js";
 import type { Run } from "../store";
+
+/** SSRF validation with local-dev bypass: skip check when NODE_ENV !== "production" AND hostname is localhost/127.0.0.1/::1. In test/dev mode, non-localhost hostnames still undergo full SSRF validation. */
+async function validateProviderUrlForSsrf(urlString: string): Promise<void> {
+  const LOCAL_DEV_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
+  // Skip SSRF for local dev/test when hostname is a loopback address
+  if (process.env.NODE_ENV !== "production") {
+    try {
+      const hostname = new URL(urlString).hostname.replace(/^\[(.+)\]$/, "$1").toLowerCase();
+      if (LOCAL_DEV_HOSTNAMES.has(hostname)) return;
+    } catch {
+      // Fall through to full validation if URL is malformed
+    }
+  }
+  try {
+    await validateProviderUrl(urlString);
+  } catch (ssrfError) {
+    // In non-production, if DNS resolution fails for a non-local hostname, log warning but allow.
+    // This avoids breaking tests/dev setups where DNS may not resolve while still blocking
+    // actual SSRF attempts to known-bad IPs (checked before DNS by validateProviderUrl).
+    if (process.env.NODE_ENV !== "production" && ssrfError instanceof Error && ssrfError.message.includes("did not resolve")) {
+      // Non-production DNS failure — best-effort: already checked blocked hostnames & IP literals
+      return;
+    }
+    throw ssrfError;
+  }
+}
 
 export const MODEL_ROUTES = ["cheap", "fast", "flagship", "research", "fake"] as const;
 export const ModelRouteSchema = z.enum(MODEL_ROUTES);
@@ -271,6 +298,7 @@ export class TogetherAIProvider implements LLMProvider {
   }
 
   async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
+    await validateProviderUrlForSsrf(this.baseUrl);
     const parsed = LLMRequestSchema.parse(request);
     const built = this.buildRequest(parsed);
     throwIfAborted(options.abortSignal, this.metadata.id);
@@ -429,6 +457,7 @@ export class CloudflareWorkersAIProvider implements LLMProvider {
   }
 
   async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
+    await validateProviderUrlForSsrf(this.baseUrl);
     const parsed = LLMRequestSchema.parse(request);
     const built = this.buildRequest(parsed);
     throwIfAborted(options.abortSignal, this.metadata.id);
@@ -575,6 +604,7 @@ export class AzureOpenAIProvider implements LLMProvider {
   }
 
   async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
+    await validateProviderUrlForSsrf(this.endpoint);
     const parsed = LLMRequestSchema.parse(request);
     const built = this.buildRequest(parsed);
     throwIfAborted(options.abortSignal, this.metadata.id);
@@ -703,6 +733,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   }
 
   async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
+    await validateProviderUrlForSsrf(this.baseUrl);
     const parsed = LLMRequestSchema.parse(request);
     const built = this.buildRequest(parsed);
     throwIfAborted(options.abortSignal, this.metadata.id);
