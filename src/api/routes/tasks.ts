@@ -3,6 +3,8 @@ import { STATES } from "../../domain/states";
 import type { Permission } from "../../security/rbac";
 import type { TaskManager } from "../../thalamus/router";
 import { codeqlRateLimitGuard } from "../codeqlRateLimitGuard";
+import { sendRedactedRouteError } from "./routeError";
+import type { SendRedacted } from "./routeError";
 
 
 type Authorize = (
@@ -15,10 +17,11 @@ type Authorize = (
 export interface TaskRoutesDeps {
   manager: TaskManager;
   authorize: Authorize;
+  sendRedacted: SendRedacted;
 }
 
 export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void {
-  const { manager, authorize } = deps;
+  const { manager, authorize, sendRedacted } = deps;
 
   // --- Task routes ---
 
@@ -42,7 +45,7 @@ export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void
       const task = manager.createTask(description);
       res.status(201).json(task);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 400, err);
     }
   });
 
@@ -51,7 +54,7 @@ export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void
       const tasks = await manager.listTasks();
       res.json(tasks);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 500, err);
     }
   });
 
@@ -61,7 +64,7 @@ export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void
       if (!task) return res.status(404).json({ error: "Not found" });
       res.json(task);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 500, err);
     }
   });
 
@@ -77,7 +80,7 @@ export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void
       const updated = await manager.transition(req.params.id, STATES.INTAKE);
       res.json(updated);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 400, err);
     }
   });
 
@@ -88,7 +91,7 @@ export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void
       const updated = await manager.transition(req.params.id, STATES.PAUSED);
       res.json(updated);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 400, err);
     }
   });
 
@@ -102,7 +105,7 @@ export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void
       const approved = await manager.approve(req.params.id);
       res.json(approved);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 400, err);
     }
   });
 
@@ -113,7 +116,7 @@ export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void
       const updated = await manager.transition(req.params.id, STATES.ABORTED);
       res.json(updated);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 400, err);
     }
   });
 
@@ -124,7 +127,7 @@ export function registerTaskRoutes(app: Application, deps: TaskRoutesDeps): void
       const task = await manager.advance(req.params.id);
       res.json(task);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 500, err);
     }
   });
 

@@ -3756,6 +3756,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     app.post("/api/dev/proactive-trigger", codeqlRateLimitGuard, async (_req, res) => res.json({}));
   }
 
+  // Defense-in-depth error middleware: catches any unhandled errors from route handlers
+  // and ensures they are redacted before being sent to the client.
+  app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+  });
+
   return app;
 }
 
