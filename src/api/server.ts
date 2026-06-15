@@ -640,6 +640,8 @@ export type RunEventListener = (event: RunEvent) => void;
 export interface RunEventBroker {
   /** Deliver `event` to every current listener for `runId` only. A no-op when there are none. */
   publish(runId: string, event: RunEvent): void;
+  /** Deliver `event` to every current listener after redacting secrets (M3). Use at SSE/streaming boundaries. */
+  publishRedacted(runId: string, event: RunEvent): void;
   /**
    * Register `listener` for a specific `runId`. Returns an unsubscribe function that removes
    * exactly that listener; after unsubscribe the listener receives no further events.
@@ -664,6 +666,14 @@ export function createRunEventBroker(): RunEventBroker {
       // Snapshot so a listener that subscribes/unsubscribes during delivery cannot disrupt this pass.
       for (const listener of [...listeners]) {
         listener(event);
+      }
+    },
+    publishRedacted(runId, event) {
+      const redacted = redactSecrets(event);
+      const listeners = listenersByRun.get(runId);
+      if (!listeners || listeners.size === 0) return;
+      for (const listener of [...listeners]) {
+        listener(redacted);
       }
     },
     subscribe(runId, listener) {
