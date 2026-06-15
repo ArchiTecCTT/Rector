@@ -10,7 +10,7 @@
  *   current user full control (best-effort, warns on failure)
  */
 
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { platform } from "node:os";
 import { execSync } from "node:child_process";
 
@@ -71,6 +71,7 @@ export function ensureRestrictedFile(filePath: string): void {
  * owner-only ACL.
  */
 export function fixExistingDirPermissions(dirPath: string): void {
+  if (!existsSync(dirPath)) return;
   if (isWin32()) {
     win32RestrictAcl(dirPath);
   } else {

@@ -260,7 +260,8 @@ export class TogetherAIProvider implements LLMProvider {
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: TogetherAIProviderOptions = {}) {
-    this.apiKeyBuffer = Buffer.from(options.apiKey ?? process.env.TOGETHER_API_KEY ?? "", "utf8");
+    const rawKey = (options.apiKey ?? process.env.TOGETHER_API_KEY ?? "").trim();
+    this.apiKeyBuffer = Buffer.from(rawKey, "utf8");
     this.baseUrl = (options.baseUrl ?? process.env.TOGETHER_BASE_URL ?? "https://api.together.xyz/v1").replace(/\/+$/, "");
     this.enableNetwork = options.enableNetwork ?? false;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
@@ -449,7 +450,8 @@ export class CloudflareWorkersAIProvider implements LLMProvider {
 
   constructor(options: CloudflareWorkersAIProviderOptions = {}) {
     this.accountId = options.accountId ?? process.env.CLOUDFLARE_ACCOUNT_ID ?? "";
-    this.apiTokenBuffer = Buffer.from(options.apiToken ?? process.env.CLOUDFLARE_API_TOKEN ?? "", "utf8");
+    const rawToken = (options.apiToken ?? process.env.CLOUDFLARE_API_TOKEN ?? "").trim();
+    this.apiTokenBuffer = Buffer.from(rawToken, "utf8");
     this.baseUrl = (options.baseUrl ?? process.env.CLOUDFLARE_BASE_URL ?? "https://api.cloudflare.com/client/v4").replace(/\/+$/, "");
     this.enableNetwork = options.enableNetwork ?? false;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
@@ -584,7 +586,8 @@ export class AzureOpenAIProvider implements LLMProvider {
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: AzureOpenAIProviderOptions = {}) {
-    this.apiKeyBuffer = Buffer.from(options.apiKey ?? process.env.AZURE_OPENAI_API_KEY ?? "", "utf8");
+    const rawKey = (options.apiKey ?? process.env.AZURE_OPENAI_API_KEY ?? "").trim();
+    this.apiKeyBuffer = Buffer.from(rawKey, "utf8");
     this.endpoint = (options.endpoint ?? process.env.AZURE_OPENAI_ENDPOINT ?? "").replace(/\/+$/, "");
     this.apiVersion = options.apiVersion ?? process.env.AZURE_OPENAI_API_VERSION ?? "2024-10-21";
     this.deployments = {
@@ -745,7 +748,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: OpenAICompatibleProviderOptions = {}) {
-    this.apiKeyBuffer = Buffer.from(options.apiKey ?? process.env.OPENAI_COMPATIBLE_API_KEY ?? "", "utf8");
+    const rawKey = (options.apiKey ?? process.env.OPENAI_COMPATIBLE_API_KEY ?? "").trim();
+    this.apiKeyBuffer = Buffer.from(rawKey, "utf8");
     this.baseUrl = (options.baseUrl ?? process.env.OPENAI_COMPATIBLE_BASE_URL ?? "").replace(/\/+$/, "");
     this.model = (options.model ?? process.env.OPENAI_COMPATIBLE_MODEL ?? "").trim();
     this.headers = { ...(options.headers ?? {}) };

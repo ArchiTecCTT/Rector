@@ -298,7 +298,7 @@ async function performKeyRotation(
 // Tests do not use this entry point — they call `createApp` directly and can inject empty or
 // in-memory stores — so no real disk store is ever forced in the test suite.
 let secretEncryptionKey = resolveSecretEncryptionKey();
-const secretStore = createLocalSecretStore({
+let secretStore = createLocalSecretStore({
   filePath: SECRETS_FILE,
   encryptionKey: secretEncryptionKey,
 });
@@ -507,6 +507,10 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
     try {
       const newKey = await performKeyRotation(secretEncryptionKey, secretStore);
       secretEncryptionKey = newKey;
+      secretStore = createLocalSecretStore({
+        filePath: SECRETS_FILE,
+        encryptionKey: secretEncryptionKey,
+      });
       console.log("[SECURITY] Boot-time key rotation completed.");
     } catch (error) {
       console.warn(`[SECURITY] Boot-time key rotation failed: ${error instanceof Error ? error.message : String(error)}`);

@@ -9,13 +9,14 @@ vi.mock("node:os", () => ({
 vi.mock("node:fs", () => ({
   mkdirSync: vi.fn(),
   chmodSync: vi.fn(),
+  existsSync: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock("node:child_process", () => ({
   execSync: vi.fn(),
 }));
 
-import { mkdirSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, chmodSync } from "node:fs";
 import { platform } from "node:os";
 import { execSync } from "node:child_process";
 import {
@@ -28,6 +29,7 @@ const mockedPlatform = vi.mocked(platform);
 const mockedMkdirSync = vi.mocked(mkdirSync);
 const mockedChmodSync = vi.mocked(chmodSync);
 const mockedExecSync = vi.mocked(execSync);
+const mockedExistsSync = vi.mocked(existsSync);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -159,6 +161,16 @@ describe("fixExistingDirPermissions", () => {
     fixExistingDirPermissions("/Users/test/.rector");
 
     expect(mockedChmodSync).calledOnceWith("/Users/test/.rector", 0o700);
+    expect(mockedExecSync).not.toHaveBeenCalled();
+  });
+
+  it("does not chmod or run icacls if directory does not exist", () => {
+    mockedPlatform.mockReturnValue("linux");
+    mockedExistsSync.mockReturnValueOnce(false);
+
+    fixExistingDirPermissions("/tmp/non-existent-dir");
+
+    expect(mockedChmodSync).not.toHaveBeenCalled();
     expect(mockedExecSync).not.toHaveBeenCalled();
   });
 });
