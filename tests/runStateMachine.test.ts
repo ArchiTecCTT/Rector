@@ -156,24 +156,26 @@ describe("run state machine", () => {
     expect(request.run.decisionRequest).toEqual({ question: "Proceed?", choices: ["yes", "no"] });
     expect(request.event.type).toBe("DECISION_REQUESTED");
 
+    // M20: SKEPTIC_REVIEW is no longer a valid NEEDS_DECISION transition.
+    // Use EXECUTING (approve operation) instead.
     await expect(
-      transitionRun(store, run.id, "SKEPTIC_REVIEW", {
+      transitionRun(store, run.id, "EXECUTING", {
         now: () => "2026-06-03T00:00:04.000Z",
         eventId: () => "evt-missing-decision",
       })
     ).rejects.toThrow("Decision input is required to resume run");
 
-    const resumed = await resumeFromDecision(store, run.id, "SKEPTIC_REVIEW", { answer: "yes" }, {
+    const resumed = await resumeFromDecision(store, run.id, "EXECUTING", { answer: "yes" }, {
       now: () => "2026-06-03T00:00:05.000Z",
       eventId: () => "evt-decision-resume",
     });
 
-    expect(resumed.run.phase).toBe("SKEPTIC_REVIEW");
+    expect(resumed.run.phase).toBe("EXECUTING");
     expect(resumed.run.status).toBe("running");
     expect(resumed.run.decisionRequest).toBeUndefined();
     expect(resumed.event.payload).toMatchObject({
       fromPhase: "NEEDS_DECISION",
-      toPhase: "SKEPTIC_REVIEW",
+      toPhase: "EXECUTING",
       decision: { answer: "yes" },
     });
   });

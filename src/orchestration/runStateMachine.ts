@@ -47,19 +47,16 @@ export const ALLOWED_RUN_PHASE_TRANSITIONS: Readonly<Record<RunPhase, readonly R
   VALIDATING: ["SYNTHESIZING", "HEALING", "NEEDS_DECISION", "FAILED", "ABORTED"],
   HEALING: ["VALIDATING", "NEEDS_DECISION", "FAILED", "ABORTED"],
   SYNTHESIZING: ["DONE", "NEEDS_DECISION", "FAILED", "ABORTED"],
+  // M20: NEEDS_DECISION transitions restricted to minimal set.
+  // Removed: TRIAGE, CONTEXT_BUILDING, SKEPTIC_REVIEW, CRUCIBLE,
+  //   DAG_COMPILATION, VALIDATING, HEALING
+  // These could allow injection to bypass orchestration safeguards.
   NEEDS_DECISION: [
-    "TRIAGE",
-    "CONTEXT_BUILDING",
-    "PLANNING",
-    "SKEPTIC_REVIEW",
-    "CRUCIBLE",
-    "DAG_COMPILATION",
-    "EXECUTING",
-    "VALIDATING",
-    "HEALING",
-    "SYNTHESIZING",
-    "ABORTED",
-    "FAILED",
+    "EXECUTING",    // approve operation
+    "SYNTHESIZING", // deny operation, produce final answer
+    "PLANNING",     // re-plan after decision
+    "FAILED",       // timeout/abort
+    "ABORTED",      // user abort
   ],
   DONE: [],
   FAILED: [],
@@ -122,13 +119,14 @@ export async function abortRun(
 
 /**
  * Resumes a run from a decision request, transitioning to the target phase.
- * Note: Target phases exclude terminal targets (like DONE, FAILED, ABORTED),
- * the initial CHAT_RECEIVED phase, and recursion into NEEDS_DECISION itself.
+ * M20: Target phases restricted to EXECUTING, SYNTHESIZING, PLANNING, FAILED, ABORTED.
+ * Removed: TRIAGE, CONTEXT_BUILDING, SKEPTIC_REVIEW, CRUCIBLE, DAG_COMPILATION,
+ *   VALIDATING, HEALING — these could allow injection to bypass safeguards.
  */
 export async function resumeFromDecision(
   store: RunStateMachineStore,
   runId: string,
-  targetPhase: Exclude<RunPhase, "CHAT_RECEIVED" | "DONE" | "NEEDS_DECISION">,
+  targetPhase: "EXECUTING" | "SYNTHESIZING" | "PLANNING" | "FAILED" | "ABORTED",
   decision: unknown,
   options: Omit<RunTransitionOptions, "decision"> = {}
 ): Promise<RunTransitionResult> {
