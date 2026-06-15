@@ -1,32 +1,63 @@
 import { z } from "zod";
 import { evaluateBudget, type BudgetUsage } from "../security/budget";
-import { validateProviderUrl } from "../security/ssrfProtection.js";
+import { validateProviderUrl, BLOCKED_HOSTNAMES, isPrivateIp } from "../security/ssrfProtection.js";
+import { isIP } from "node:net";
 import type { Run } from "../store";
 
-/** SSRF validation with local-dev bypass: skip check when NODE_ENV !== "production" AND hostname is localhost/127.0.0.1/::1. In test/dev mode, non-localhost hostnames still undergo full SSRF validation. */
+/**
+ * SSRF validation with local-dev bypass.
+ *
+ * In production: full SSRF validation (blocked hostnames, private IP ranges, DNS resolution).
+ * In non-production (test/dev): allow localhost/loopback (local dev), check blocked metadata
+ * hostnames, check raw private IP literals (except loopback), then skip DNS resolution.
+ * This avoids breaking tests/dev where DNS may not resolve while still blocking
+ * obvious SSRF targets (metadata endpoints, 169.254.x.x, etc.).
+ */
 async function validateProviderUrlForSsrf(urlString: string): Promise<void> {
-  const LOCAL_DEV_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
-  // Skip SSRF for local dev/test when hostname is a loopback address
-  if (process.env.NODE_ENV !== "production") {
-    try {
-      const hostname = new URL(urlString).hostname.replace(/^\[(.+)\]$/, "$1").toLowerCase();
-      if (LOCAL_DEV_HOSTNAMES.has(hostname)) return;
-    } catch {
-      // Fall through to full validation if URL is malformed
-    }
-  }
-  try {
+  // Production: run full SSRF validation
+  if (process.env.NODE_ENV === "production") {
     await validateProviderUrl(urlString);
-  } catch (ssrfError) {
-    // In non-production, if DNS resolution fails for a non-local hostname, log warning but allow.
-    // This avoids breaking tests/dev setups where DNS may not resolve while still blocking
-    // actual SSRF attempts to known-bad IPs (checked before DNS by validateProviderUrl).
-    if (process.env.NODE_ENV !== "production" && ssrfError instanceof Error && ssrfError.message.includes("did not resolve")) {
-      // Non-production DNS failure — best-effort: already checked blocked hostnames & IP literals
-      return;
-    }
-    throw ssrfError;
+    return;
   }
+
+  // Non-production: lightweight checks only (no DNS resolution)
+  let url: URL;
+  try {
+    url = new URL(urlString);
+  } catch {
+    throw new Error(`SSRF protection: invalid URL "${urlString}"`);
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(
+      `SSRF protection: protocol "${url.protocol}" is not allowed (only http: and https:)`
+    );
+  }
+
+  const rawHostname = url.hostname.replace(/^\[(.+)]$/, "$1").toLowerCase();
+
+  // Local dev bypass: allow localhost/loopback in non-production
+  const LOCAL_DEV_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
+  if (LOCAL_DEV_HOSTNAMES.has(rawHostname)) return;
+
+  // Check blocked hostnames (metadata endpoints — but not localhost, handled above)
+  if (BLOCKED_HOSTNAMES.has(rawHostname) || BLOCKED_HOSTNAMES.has(rawHostname + ".")) {
+    throw new Error(
+      `SSRF protection: hostname "${rawHostname}" is blocked (cloud metadata / localhost)`
+    );
+  }
+
+  // Check raw IP literals against private ranges (loopback already allowed above)
+  if (isIP(rawHostname) !== 0) {
+    const label = isPrivateIp(rawHostname);
+    if (label) {
+      throw new Error(
+        `SSRF protection: IP address "${rawHostname}" is in a private range (${label})`
+      );
+    }
+  }
+
+  // Non-blocked hostname, not a raw private IP - in dev/test, allow without DNS resolution
 }
 
 export const MODEL_ROUTES = ["cheap", "fast", "flagship", "research", "fake"] as const;
@@ -899,7 +930,7 @@ async function fetchWithAbort(
   }
 
   // Content-Length pre-check: reject responses that declare themselves too large
-  const contentLength = response.headers.get("content-length");
+  const contentLength = response.headers?.get?.("content-length");
   if (contentLength && Number(contentLength) > maxResponseBytes) {
     throw new ProviderError({
       code: "PROVIDER_RESPONSE_TOO_LARGE",

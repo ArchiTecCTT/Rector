@@ -103,7 +103,7 @@ function ipv6End(ip: string): bigint {
   return ipv6ToBigInt(ip);
 }
 
-function isPrivateIp(ip: string): string | null {
+export function isPrivateIp(ip: string): string | null {
   const ipType = isIP(ip);
   let numeric: bigint;
 

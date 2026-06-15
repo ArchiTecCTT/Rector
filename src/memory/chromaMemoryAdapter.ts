@@ -1,7 +1,8 @@
 import { createRequire } from "node:module";
 
 import type { MemoryProvider } from "./provider";
-import { validateProviderUrl } from "../security/ssrfProtection.js";
+import { validateProviderUrl, BLOCKED_HOSTNAMES, isPrivateIp } from "../security/ssrfProtection.js";
+import { isIP } from "node:net";
 import {
   classifyAdapterError,
   mapToMemoryEntry,
@@ -131,21 +132,35 @@ async function validateChromaBaseUrl(baseUrl: string): Promise<void> {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("Chroma memory provider requires config.baseUrl to be a valid http(s) URL.");
   }
-  // SSRF protection with local-dev bypass
-  const LOCAL_DEV_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
-  const hostname = parsed.hostname.replace(/^\[(.+)\]$/, "$1").toLowerCase();
-  if (process.env.NODE_ENV !== "production" && LOCAL_DEV_HOSTNAMES.has(hostname)) {
-    return; // local dev bypass
-  }
-  try {
+
+  // Production: full SSRF validation
+  if (process.env.NODE_ENV === "production") {
     await validateProviderUrl(baseUrl);
-  } catch (ssrfError) {
-    // In non-production, if DNS resolution fails, log warning but allow (dev/test DNS may not resolve)
-    if (process.env.NODE_ENV !== "production" && ssrfError instanceof Error && ssrfError.message.includes("did not resolve")) {
-      return;
-    }
-    throw ssrfError;
+    return;
   }
+
+  // Non-production: lightweight SSRF checks only (no DNS resolution)
+  const rawHostname = parsed.hostname.replace(/^\[(.+)]$/, "$1").toLowerCase();
+
+  // Local dev bypass: allow localhost/loopback in non-production
+  const LOCAL_DEV_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
+  if (LOCAL_DEV_HOSTNAMES.has(rawHostname)) return;
+
+  if (BLOCKED_HOSTNAMES.has(rawHostname) || BLOCKED_HOSTNAMES.has(rawHostname + ".")) {
+    throw new Error(
+      `SSRF protection: hostname "${rawHostname}" is blocked (cloud metadata / localhost)`
+    );
+  }
+
+  if (isIP(rawHostname) !== 0) {
+    const label = isPrivateIp(rawHostname);
+    if (label) {
+      throw new Error(
+        `SSRF protection: IP address "${rawHostname}" is in a private range (${label})`
+      );
+    }
+  }
+  // Non-blocked hostname, not a raw private IP - in dev/test, allow without DNS resolution
 }
 
 function documentFromEntry(entry: MemoryEntry): string {
