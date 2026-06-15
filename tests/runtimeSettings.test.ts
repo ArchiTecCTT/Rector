@@ -50,6 +50,7 @@ describe("runtime settings defaults", () => {
       contextCompressionEnabled: true,
       contextCompressionMaxGeneration: 3,
       providerResilienceEnabled: true,
+      orchestration: { maxRuntimeMs: 1800000 },
       updatedAt: FIXED_TS,
     });
   });
@@ -109,6 +110,7 @@ describe("RuntimeSettingsStore persistence", () => {
       contextCompressionEnabled: true,
       contextCompressionMaxGeneration: 3,
       providerResilienceEnabled: true,
+      orchestration: { maxRuntimeMs: 1800000 },
       updatedAt: FIXED_TS,
     };
 
