@@ -195,14 +195,21 @@ export function createRectorStore(
 
     case "sqlite": {
       const path = config?.sqlitePath ?? DEFAULT_SQLITE_PATH;
-      ensureRestrictedDir(dirname(path));
+      // ":memory:" is the SQLite in-memory sentinel — it is not a real filesystem
+      // path, so skip file-permission operations that would fail or warn on it.
+      const isInMemory = path === ":memory:";
+      if (!isInMemory) {
+        ensureRestrictedDir(dirname(path));
+      }
       const store = new SqlRectorStore({
         driver: createSqliteDriver({ path }),
         now: overrides?.now,
         encryptionKey: overrides?.encryptionKey,
         macKey: overrides?.macKey,
       });
-      ensureRestrictedFile(path);
+      if (!isInMemory) {
+        ensureRestrictedFile(path);
+      }
       return store;
     }
 
