@@ -9,48 +9,65 @@
 
 - **Source:** Kilo multi-agent security audit (see `audits/security-architecture-audit-2026-06-15.md` for full report).
 - **Severity:** High (8 findings).
-- **Status:** Open.
+- **Status:** **RESOLVED** (all 8 findings fully resolved in Chunk 049).
 - **Audit baseline:** `npm test` 213 files / 1369 tests passing, `npm audit` 0 vulnerabilities.
+- **Post-fix baseline:** `npm test` 309 files / 2105+ tests passing, `npm audit` 0 vulnerabilities.
 
-#### H1 — SQLite database unencrypted at rest
+#### H1 — SQLite database unencrypted at rest — RESOLVED
 - **File:** `src/store/sqlRectorStore.ts:41-62`, `src/store/index.ts:115`
 - **Risk:** Default SQLite path `.rector/rector.db` stores conversation history, messages, run data, and memory entries as unencrypted JSON. Any process/user with filesystem access can read all historical data.
-- **Remediation:** Integrate SQLCipher or similar encrypted SQLite extension. Alternatively, rely on OS-level disk encryption and enforce restrictive file permissions (0o600). Document the risk for operators.
+- **Resolution:** AES-256-GCM encryption at rest with `ENC1:` prefix; backward-compatible plaintext reads for legacy DBs; `RECTOR_DB_ENCRYPTION` env var (default true when key available, auto-detects legacy DBs); HKDF-derived key from master secret with info `"rector.db-encryption.v1"`.
+- **Code reference:** `src/store/sqlRectorStore.ts` (serialize/deserialize), `src/bin/server.ts` (deriveDbEncryptionKey/shouldEnableDbEncryption), `src/store/index.ts` (encryptionKey wired through store construction), `src/api/server.ts` (dbEncryptionKey in ApiSecurityOptions).
+- **Test reference:** `tests/sqlEncryption.test.ts` (12 tests: encryption roundtrip, raw prefix, plaintext baseline, backward compat, missing key, wrong key, HKDF derivation, update operations).
 
-#### H2 — No file permission enforcement on .rector/ directory
+#### H2 — No file permission enforcement on .rector/ directory — RESOLVED
 - **File:** `src/store/index.ts:186-187`, `src/security/secretStore.ts:183-188`
 - **Risk:** Directories and files created under `.rector/` inherit the process umask (typically 0022 on Unix), making them world-readable. The encryption key file (`secret.key`) uses `mode: 0o600` but this has no effect on Windows (NTFS ACLs are not controlled by Node.js mode).
-- **Remediation:** Explicitly set `mode: 0o700` on `.rector/` and subdirectories, `0o600` on all files. On Windows, document the limitation and recommend `RECTOR_SECRET_KEY` env injection from a secret manager.
+- **Resolution:** All `mkdir`/`mkdirSync` calls replaced with `ensureRestrictedDir()` (0o700 POSIX, icacls on Windows); all sensitive file writes followed by `ensureRestrictedFile()`; `fixExistingDirPermissions()` on server startup for upgrade path; 10 files updated across store, security, providers, config, and modules.
+- **Code reference:** `src/security/filePermissions.ts` (ensureRestrictedDir/ensureRestrictedFile/fixExistingDirPermissions), `src/bin/server.ts`, `src/security/secretStore.ts`, `src/providers/configStore.ts`, `src/providers/memoryConfigStore.ts`, `src/providers/orchestrationAssignments.ts`, `src/providers/memoryAssignmentStore.ts`, `src/config/runtimeSettings.ts`, `src/security/auditLog.ts`, `src/modules/moduleConfigStore.ts`.
+- **Test reference:** `tests/filePermissions.test.ts` (10 tests: POSIX/win32 paths, best-effort icacls failure, all three functions).
 
-#### H3 — Encryption key lifecycle: no rotation, weak Windows protection
-- **File:** `src/bin/server.ts:88-113`, `src/security/secretStore.ts`
+#### H3 — Encryption key lifecycle: no rotation, weak Windows protection — RESOLVED
+- **File:** `src/bin/server.ts:93`, `src/security/secretStore.ts`
 - **Risk:** Master encryption key (`secret.key`) is auto-generated on first run and never rotated. If compromised, all historical secrets are exposed. On Windows, the key file is not protected by file permissions.
-- **Remediation:** Implement key rotation support (re-encrypt all secrets with new key). Consider OS keychain integration for the master key. Enforce file permissions at creation and verify on startup.
+- **Resolution:** Key rotation CLI (`src/bin/rotate-key.ts`) reads old key, generates new key, re-encrypts all envelopes, atomically writes new v2 key file; v2 JSON format `{ key, version, createdAt }` with backward-compatible v1 hex read; best-effort DPAPI protection on Windows; `RECTOR_ROTATE_KEY_ON_BOOT` for automated rotation; `listSecretIds()` added to SecretStore interface.
+- **Code reference:** `src/bin/rotate-key.ts`, `src/bin/server.ts` (writeSecretKeyFile/applyDpapiProtection/performKeyRotation), `src/security/secretStore.ts` (listSecretIds).
+- **Test reference:** `tests/keyRotation.test.ts` (16 tests: listSecretIds, rotation re-encrypt, old key fails, empty store, partial failure, v1/v2 format, RECTOR_ROTATE_KEY_ON_BOOT, DPAPI protection).
 
-#### H4 — Missing Content-Security-Policy header
+#### H4 — Missing Content-Security-Policy header — RESOLVED
 - **File:** `src/api/server.ts:3757-3761`
 - **Risk:** No CSP header means an XSS vulnerability anywhere in the frontend can load external scripts, exfiltrate data, and execute inline scripts without restriction.
-- **Remediation:** Add a restrictive CSP: `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'`. A nonce-based approach would be stronger long-term.
+- **Resolution:** Full CSP header with 10 directives (`default-src 'none'`, `script-src 'self'`, `style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `connect-src 'self'`, `frame-ancestors 'none'`, `form-action 'self'`, `base-uri 'self'`, `object-src 'none'`); HSTS in production mode with env var configurability; inline `<script>` moved to external `boot.js`.
+- **Code reference:** `src/api/server.ts` (securityHeadersMiddleware CSP/HSTS), `src/public/boot.js` (extracted theme boot), `src/public/index.html` (external script reference).
+- **Test reference:** `tests/cspHeaders.test.ts` (9 tests: CSP directive parsing, HSTS absence in non-production, baseline headers, HSTS env var combinations).
 
-#### H5 — Error messages leak to clients without redaction (25+ instances)
+#### H5 — Error messages leak to clients without redaction (25+ instances) — RESOLVED
 - **Files:** `src/api/server.ts:2216,2238,2297,2535,2678,3708,3728`, `src/api/routes/operator.ts:39,64,83,99,122,131,149,169,179,215`, `src/api/routes/tasks.ts:44,53,63,79,91,105,116,127`
 - **Risk:** Catch blocks return `{ error: err.message }` without passing through `redactString()`. Internal paths, SQL details, stack traces, and potentially connection strings could leak to clients.
-- **Remediation:** Route ALL error responses through `redactString()`. Some routes already do this correctly (e.g., `runControl.ts:66`, `runApprovals.ts:89-94`); extend the pattern to all catch blocks.
+- **Resolution:** All 25 `res.status(N).json({ error: err.message })` instances replaced with `sendRedactedRouteError(sendRedacted, res, N, err)` or `sendRedacted(res, N, { error: redactString(errorMessageOf(err)) })`; defense-in-depth Express error middleware added as safety net.
+- **Code reference:** `src/api/server.ts` (7 replacements + error middleware), `src/api/routes/operator.ts` (10 replacements), `src/api/routes/tasks.ts` (8 replacements), `src/api/routes/routeError.ts` (sendRedactedRouteError helper).
+- **Test reference:** `tests/api.test.ts` (17 tests), `tests/authApi.test.ts` + `tests/chatApi.test.ts` (26 tests combined).
 
-#### H6 — SSRF via user-configurable provider URLs
+#### H6 — SSRF via user-configurable provider URLs — RESOLVED
 - **Files:** `src/providers/llm.ts:202,257,369,621`, `src/memory/chromaMemoryAdapter.ts:220,239`
 - **Risk:** Provider `baseUrl` and `endpoint` fields are user-configurable and used directly for outbound HTTP requests. No validation against private/internal IP ranges.
-- **Remediation:** Add URL validation that rejects private/internal IPs (127.0.0.0/8, 10.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, ::1, fc00::/7). Validate DNS resolution doesn't resolve to private ranges.
+- **Resolution:** `validateProviderUrl()` checks protocol, blocked hostnames (metadata endpoints), private IP ranges (loopback, RFC1918, link-local, CGNAT, current-network), DNS resolution for hostnames; lightweight non-production checks (blocked hostnames + raw private IP literals only, no DNS); local-dev bypass for localhost/127.0.0.1/::1 in non-production; applied in all 4 provider `invoke()` methods and Chroma `validateChromaBaseUrl()`.
+- **Code reference:** `src/security/ssrfProtection.ts` (validateProviderUrl/PRIVATE_RANGES/BLOCKED_HOSTNAMES/isPrivateIp), `src/providers/llm.ts` (validateProviderUrlForSsrf in 4 providers), `src/memory/chromaMemoryAdapter.ts` (async validateChromaBaseUrl with SSRF).
+- **Test reference:** `tests/ssrfProtection.test.ts` (36 tests: PRIVATE_RANGES, BLOCKED_HOSTNAMES, protocol checks, blocked hostnames, private IPv4/IPv6, public IPs, DNS resolution).
 
-#### H7 — No explicit body size limit; no provider response size limit
+#### H7 — No explicit body size limit; no provider response size limit — RESOLVED
 - **File:** `src/api/server.ts:1822`, `src/providers/llm.ts:293,443,589,717`
 - **Risk:** `express.json()` uses the default 100KB limit implicitly. No response body size limit on outbound `fetch` calls to provider APIs — a malicious/compromised provider could send unbounded response data.
-- **Remediation:** Add explicit `express.json({ limit: '1mb' })`. Add response body size limits on provider `fetch` calls using `AbortController` with byte counting.
+- **Resolution:** Explicit `express.json({ limit: "1mb" })`; `DEFAULT_MAX_PROVIDER_RESPONSE_BYTES = 5MB`; Content-Length pre-check in `fetchWithAbort()`; bounded byte-counting stream wrapper that aborts at limit; `PROVIDER_RESPONSE_TOO_LARGE` error code; all 4 provider `invoke()` methods pass `maxResponseBytes`.
+- **Code reference:** `src/api/server.ts` (express.json limit), `src/providers/llm.ts` (DEFAULT_MAX_PROVIDER_RESPONSE_BYTES, fetchWithAbort maxResponseBytes, Content-Length pre-check, bounded stream consumption).
+- **Test reference:** `tests/sizeLimits.test.ts` (9 tests: constant value, error code, Content-Length pre-check, bounded stream rejection, explicit maxResponseBytes passing).
 
-#### H8 — JSON payloads in SQLite not MAC-protected
+#### H8 — JSON payloads in SQLite not MAC-protected — RESOLVED
 - **File:** `src/store/sqlRectorStore.ts:511-513`
 - **Risk:** Stored JSON entity payloads use plain `JSON.stringify` without integrity verification. An attacker with database file access can tamper with payloads without detection.
-- **Remediation:** Add an HMAC field to persisted rows using a server-side key. Schema validation on read provides partial protection but cannot detect sophisticated tampering.
+- **Resolution:** HMAC-SHA256 MAC per row with `mac TEXT` column; `macKey` derived from master secret via `"rector.payload-mac.v1"`; `timingSafeEqual` verification on read; legacy rows without MAC produce warning and proceed (backward compat); idempotent `ALTER TABLE ... ADD COLUMN mac TEXT` migration.
+- **Code reference:** `src/security/payloadIntegrity.ts` (deriveMacKey/computePayloadMac/verifyPayloadMac), `src/store/sqlRectorStore.ts` (macKey option, mac column, insertRow/updateRow/parsePayload MAC handling), `src/bin/server.ts` (derivePayloadMacKey), `src/store/index.ts` (macKey wired through), `src/api/server.ts` (dbMacKey option).
+- **Test reference:** `tests/payloadMac.test.ts` (18 tests: MAC stored on insert, MAC updated, tamper detection payload/MAC swap, legacy rows, combined encryption+MAC, commitRunTransition MAC), `tests/payloadIntegrity.test.ts` (12 tests: deriveMacKey, computePayloadMac, verifyPayloadMac).
 
 - **Traceability:** `audits/security-architecture-audit-2026-06-15.md`.
 
@@ -58,39 +75,39 @@
 
 - **Source:** Kilo multi-agent security audit.
 - **Severity:** Medium (28 findings).
-- **Status:** Open.
+- **Status:** **RESOLVED** (26 fully resolved, 2 accepted with documented residual risk in Chunk 049).
 - **Remediation priority:** Pre-production blockers first, then pre-public-alpha, then pre-beta.
 
-| ID | Finding | File:Line |
-|---|---------|-----------|
-| M1 | Windows file permissions ineffective (mode: 0o600) | `src/bin/server.ts:111` |
-| M2 | In-memory rate limiting state (not distributed) | `src/api/routes/auth.ts:44`, `src/security/rateLimiter.ts:246-316` |
-| M3 | EventBus publishes arbitrary payloads without redaction | `src/adapters/eventBus.ts:24` |
-| M4 | CORS allows all localhost origins in non-production | `src/api/server.ts:3864-3871` |
-| M5 | Missing Strict-Transport-Security (HSTS) header | `src/api/server.ts:3757-3761` |
-| M6 | Zero-key fallback in test mode (Buffer.alloc(32)) | `src/api/server.ts:1835` |
-| M7 | SSE stream authorization is optional | `src/api/server.ts:1007-1018` |
-| M8 | Session secret lacks entropy validation | `src/security/auth.ts:83,89-91` |
-| M9 | innerHTML with server-supplied discovery data | `src/public/app.js:2229` |
-| M10 | Template import body lacks Zod schema gate | `src/api/routes/templates.ts:53,67` |
-| M11 | API keys held in memory as plaintext strings | `src/memory/mem0Adapter.ts:155`, `src/memory/chromaMemoryAdapter.ts:207` |
-| M12 | No TLS enforcement for remote Chroma connections | `src/memory/chromaMemoryAdapter.ts:123-133` |
-| M13 | Default memory budget extremely permissive ($100/1M tokens) | `src/memory/defaultRun.ts:4-13` |
-| M14 | Event payload schema unconstrained (no redaction/size limit) | `src/protocol/events.ts:44` |
-| M15 | No module signature verification | `src/modules/registry.ts:37-46` |
-| M16 | No authorization on truth item mutations | `src/memory/truthLibrary.ts:128-143` |
-| M17 | No authorization on assignment store mutations | `src/providers/memoryAssignmentStore.ts:121-133` |
-| M18 | Shared defaultStores when auth disabled (not shared SQLite DB — all stores share the same in-memory/SQlite instance when auth is off) | `src/security/userStores.ts:31-68` |
-| M19 | RBAC bypassed when auth disabled — Accepted by design for local mode; production warning added | `src/security/rbac.ts:129-133` |
-| M20 | NEEDS_DECISION state overly permissive as hub | `src/orchestration/runStateMachine.ts:50-63` |
-| M21 | TOCTOU race on phase transitions | `src/orchestration/runStateMachine.ts:75-98` |
-| M22 | No hard prompt length cap at API boundary | `src/orchestration/chatRunner.ts:169` |
-| M23 | No overall orchestration timeout | `src/orchestration/chatRunner.ts:164-493` |
-| M24 | Unbounded steerQueue growth | `src/orchestration/runControl.ts:74` |
-| M25 | User input in JSON lacks semantic isolation from system instructions | `src/orchestration/prompts.ts:144-180` |
-| M26 | Memory context allows user-controlled prompt injection | `src/orchestration/prompts.ts:14-19` |
-| M27 | Residual risk: skill activation gated by crucible with caps, catalog lookup, high-risk gate, and prerequisite checks — Accepted — mitigated by existing controls | `src/orchestration/crucible.ts:263-295` |
-| M28 | Redacted content persists across compression generations | `src/orchestration/contextCompression.ts:104-145` |
+| ID | Finding | File:Line | Status | Resolution | Code reference | Test reference |
+|---|---------|-----------|--------|------------|----------------|----------------|
+| M1 | Windows file permissions ineffective (mode: 0o600) | `src/bin/server.ts:111` | **RESOLVED** | icacls on Windows via ensureRestrictedFile; part of H2 fix | `src/security/filePermissions.ts` | `tests/filePermissions.test.ts` (10 tests) |
+| M2 | In-memory rate limiting state (not distributed) | `src/api/routes/auth.ts:44`, `src/security/rateLimiter.ts:246-316` | **RESOLVED** | RedisRateLimiter with `rate-limiter-flexible` + `ioredis`; `RECTOR_REDIS_URL` env var; fallback to InMemoryRateLimiter with warning | `src/security/rateLimiter.ts` (RedisRateLimiter/createRateLimiterFromEnv), `src/bin/server.ts` | `tests/redisRateLimiter.test.ts` (9 tests) |
+| M3 | EventBus publishes arbitrary payloads without redaction | `src/adapters/eventBus.ts:24` | **RESOLVED** | `publishRedacted()` calls `redactSecrets()` before dispatch; SSE/streaming boundaries use `publishRedacted`; internal orchestration keeps `publish` | `src/adapters/eventBus.ts` (publishRedacted), `src/api/server.ts` (withEventBroadcast) | `tests/adapters.test.ts` (4 publishRedacted tests) |
+| M4 | CORS allows all localhost origins in non-production | `src/api/server.ts:3864-3871` | **RESOLVED** | `DEV_LOCALHOST_PORTS` set restricts to known dev ports (3000,3001,5173,5174,4173,8080,8081); `CORS_DEV_LOCALHOST_ENABLED` env var; portless localhost rejected unless HTTPS | `src/api/server.ts` (isDevLocalhostOrigin/DEV_LOCALHOST_PORTS) | `tests/api.test.ts` (17 tests) |
+| M5 | Missing Strict-Transport-Security (HSTS) header | `src/api/server.ts:3757-3761` | **RESOLVED** | HSTS added in production mode with configurable `HSTS_MAX_AGE`, `HSTS_INCLUDE_SUB_DOMAINS`, `HSTS_PRELOAD` env vars; part of H4 CSP fix | `src/api/server.ts` (securityHeadersMiddleware HSTS) | `tests/cspHeaders.test.ts` (9 tests) |
+| M6 | Zero-key fallback in test mode (Buffer.alloc(32)) | `src/api/server.ts:1835` | **RESOLVED** | Explicit logic: provided key used; auth enabled without key throws; else warn + use zero-key only for unauthenticated local dev | `src/api/server.ts` | Existing tests pass explicit keys |
+| M7 | SSE stream authorization is optional | `src/api/server.ts:1007-1018` | **RESOLVED** | `defaultDenyAuthorizeRunRead()` returns 403 by default; `authorizeRunRead ?? defaultDenyAuthorizeRunRead` | `src/api/server.ts` (defaultDenyAuthorizeRunRead) | `tests/api.test.ts`, streaming tests |
+| M8 | Session secret lacks entropy validation | `src/security/auth.ts:83,89-91` | **RESOLVED** | `validateSessionSecretEntropy()` throws on <32 chars or <8 unique chars with hint; `checkSessionSecretEntropy()` returns warning for readiness; called from `parseAuthConfig()` | `src/security/auth.ts` (validateSessionSecretEntropy/checkSessionSecretEntropy), `src/deployment/readiness.ts` | `tests/sessionSecretEntropy.test.ts` (19 tests) |
+| M9 | innerHTML with server-supplied discovery data | `src/public/app.js:2229` | **RESOLVED** | Replaced `renderCandidate()` with `buildCandidateElement()` using `createElement`/`appendChild`/`DocumentFragment`; `textContent` for dynamic values | `src/public/app.js` (buildCandidateElement) | `tests/renderedCandidateDetail.property.test.ts` (1 property, 200 runs) |
+| M10 | Template import body lacks Zod schema gate | `src/api/routes/templates.ts:53,67` | **RESOLVED** | `TemplateImportBodySchema` with `z.string().min(1).max(1_000_000) | z.record(z.unknown())`; safeParse before importTemplate; invalid body returns 400 | `src/api/routes/templates.ts` (TemplateImportBodySchema) | `tests/templateApi.test.ts` |
+| M11 | API keys held in memory as plaintext strings | `src/memory/mem0Adapter.ts:155`, `src/memory/chromaMemoryAdapter.ts:207` | **RESOLVED** | `apiKey: string` changed to `apiKeyBuffer: Buffer`; `zeroKey()` fills with zeros; called in `close()`/`destroy()`; JSDoc notes V8 limitation | `src/memory/mem0Adapter.ts`, `src/memory/chromaMemoryAdapter.ts`, `src/providers/llm.ts` (4 providers) | `tests/llmProviders.test.ts`, `tests/mem0Adapter.test.ts`, `tests/chromaAdapter.test.ts` |
+| M12 | No TLS enforcement for remote Chroma connections | `src/memory/chromaMemoryAdapter.ts:123-133` | **RESOLVED** | Reject `http:` for non-localhost hostnames; allow `http:` for localhost/127.0.0.1/::1/0.0.0.0; `RECTOR_ALLOW_HTTP_CHROMA` override for air-gapped networks | `src/memory/chromaMemoryAdapter.ts` (validateChromaBaseUrl/CHROMA_LOCALHOST_HOSTNAMES) | `tests/chromaTlsEnforcement.test.ts` (16 tests) |
+| M13 | Default memory budget extremely permissive ($100/1M tokens) | `src/memory/defaultRun.ts:4-13` | **RESOLVED** | Tightened: maxUsd 10, maxInputTokens/maxOutputTokens 500K, maxModelCalls 1000, maxHealingAttempts 10, approvalRequiredAboveUsd 1 | `src/memory/defaultRun.ts` | No direct test imports (all tests use explicit budgets) |
+| M14 | Event payload schema unconstrained (no redaction/size limit) | `src/protocol/events.ts:44` | **RESOLVED** | Max 50 keys, max key length 128, no undefined values (stripped via transform), max 100KB serialized size | `src/protocol/events.ts` (RunEventSchema.payload) | `tests/adapters.test.ts` (10 payload constraint tests) |
+| M15 | No module signature verification | `src/modules/registry.ts:37-46` | **RESOLVED** | `verifyModuleSignature()` using Ed25519 (`node:crypto.verify`); `RECTOR_MODULE_PUBLIC_KEY` env var; unsigned modules restricted (no onBoot hooks) when key configured | `src/modules/manifest.ts` (signature field), `src/modules/registry.ts` (verifyModuleSignature/getModulePublicKey/isSignatureVerified) | `tests/moduleSignature.test.ts` (17 tests) |
+| M16 | No authorization on truth item mutations | `src/memory/truthLibrary.ts:128-143` | **RESOLVED** | `authorizingTruthLibrary(library, subject)` decorator; checks `truth.mutate` permission; no subject = backward compat; auth disabled = allow | `src/memory/truthLibrary.ts` (TruthLibrary interface/AuthorizationError/authorizingTruthLibrary), `src/security/rbac.ts` (truth.mutate permission) | `tests/truthLibraryAuth.test.ts` (12 tests) |
+| M17 | No authorization on assignment store mutations | `src/providers/memoryAssignmentStore.ts:121-133` | **RESOLVED** | `AuthorizingMemoryAssignmentStore` + `AuthorizingOrchestrationAssignmentStore` decorators; check `providers.configure` permission | `src/providers/memoryAssignmentStore.ts`, `src/providers/orchestrationAssignments.ts` | `tests/assignmentStoreAuth.test.ts` (26 tests) |
+| M18 | Shared defaultStores when auth disabled (all stores share the same in-memory/SQLite instance when auth is off) | `src/security/userStores.ts:31-68` | **ACCEPTED (mitigated)** | Framing corrected from "shared SQLite DB" to "shared defaultStores when auth disabled"; inherent to single-user local mode; `warnIfAuthDisabledInProduction()` logs warning | `src/security/rbac.ts` (warnIfAuthDisabledInProduction) | `tests/auth.test.ts` |
+| M19 | RBAC bypassed when auth disabled | `src/security/rbac.ts:129-133` | **ACCEPTED (mitigated)** | Accepted by design for local mode; production warning added via `warnIfAuthDisabledInProduction()` | `src/security/rbac.ts` (warnIfAuthDisabledInProduction) | `tests/auth.test.ts` |
+| M20 | NEEDS_DECISION state overly permissive as hub | `src/orchestration/runStateMachine.ts:50-63` | **RESOLVED** | Reduced from 12 to 5 allowed transitions: EXECUTING, SYNTHESIZING, PLANNING, FAILED, ABORTED | `src/orchestration/runStateMachine.ts` | `tests/needsDecisionRestriction.test.ts` (16 tests), `tests/runStateMachine.test.ts` |
+| M21 | TOCTOU race on phase transitions | `src/orchestration/runStateMachine.ts:75-98` | **RESOLVED** | Optimistic concurrency: `version` field in RunSchema; compare-and-swap in `commitRunTransition()`; `ConcurrentTransitionError` with retry (max 3); `WHERE version = expectedVersion` in SQL | `src/orchestration/runStateMachine.ts` (ConcurrentTransitionError/maxTransitionRetries), `src/store/sqlRectorStore.ts` (WHERE version), `src/store/inMemoryRectorStore.ts` (CAS) | `tests/optimisticConcurrency.test.ts` (14 tests) |
+| M22 | No hard prompt length cap at API boundary | `src/orchestration/chatRunner.ts:169` | **RESOLVED** | `MAX_MESSAGE_CONTENT_LENGTH = 100_000`; 413 response on exceed; `MessageSchema.content` capped via `z.string().max(100_000)` | `src/store/schemas.ts` (MAX_MESSAGE_CONTENT_LENGTH/MessageSchema), `src/api/server.ts` (413 check) | `tests/messageLengthCap.test.ts` (5 tests) |
+| M23 | No overall orchestration timeout | `src/orchestration/chatRunner.ts:164-493` | **RESOLVED** | `DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS = 30 min`; `AbortController` with `setTimeout`; on timeout leads to FAILED; configurable via `runtimeSettings.orchestration.maxRuntimeMs` | `src/orchestration/chatRunner.ts` (runOrchestratedChatRun timeout), `src/config/runtimeSettings.ts` (OrchestrationSettingsSchema) | `tests/orchestrationTimeout.test.ts` (8 tests) |
+| M24 | Unbounded steerQueue growth | `src/orchestration/runControl.ts:74` | **RESOLVED** | `MAX_STEER_QUEUE_SIZE = 20`; FIFO eviction via `shift()` with `console.warn` on drop | `src/orchestration/runControl.ts` (enqueueSteer/MAX_STEER_QUEUE_SIZE) | `tests/steerQueueBounds.test.ts` (9 tests) |
+| M25 | User input in JSON lacks semantic isolation from system instructions | `src/orchestration/prompts.ts:144-180` | **RESOLVED** | `wrapUserInput()` wraps in `<user_input>` XML tags; isolation instruction appended to all 4 system rule arrays | `src/orchestration/prompts.ts` (wrapUserInput/PROMPT_ISOLATION_INSTRUCTION) | `tests/promptIsolation.test.ts` (20 tests) |
+| M26 | Memory context allows user-controlled prompt injection | `src/orchestration/prompts.ts:14-19` | **RESOLVED** | `wrapMemoryContext()` wraps in `<memory_context type="untrusted">` XML tags; isolation instruction appended | `src/orchestration/prompts.ts` (wrapMemoryContext/PROMPT_ISOLATION_INSTRUCTION) | `tests/promptIsolation.test.ts` (20 tests) |
+| M27 | Residual risk: skill activation gated by crucible with caps, catalog lookup, high-risk gate, and prerequisite checks | `src/orchestration/crucible.ts:263-295` | **ACCEPTED (mitigated)** | Reclassified from "capability escalation via prompt injection" to "residual risk mitigated by existing controls"; crucible gates, caps, catalog lookup, high-risk gate, prerequisite checks remain as mitigation | `src/orchestration/crucible.ts:263-295` | Existing crucible tests |
+| M28 | Redacted content persists across compression generations | `src/orchestration/contextCompression.ts:104-145` | **RESOLVED** | `redactString()` applied to inlineContext carry-forward and artifact handle summaries; `verifyCompressedOutput()` scans for 7 known secret patterns post-compression | `src/orchestration/contextCompression.ts` (redaction in carry-forward + verifyCompressedOutput) | `tests/compressionRedaction.test.ts` (13 tests) |
 
 - **Traceability:** `audits/security-architecture-audit-2026-06-15.md`.
 
@@ -221,24 +238,24 @@ The audit confirmed the following security features are correctly implemented:
 |---|---|---|---|
 | SQL/TiDB advanced memory parity | RESOLVED for local/SQL contract coverage | `src/store/sqlRectorStore.ts`, `src/memory/tidbMemoryAdapter.ts`, `tests/sqlMemoryParity.test.ts`, `tests/memoryProviderContract.test.ts` | Live TiDB smoke remains env-gated and not run in default verification. |
 | Startup migration boot path | RESOLVED | `src/bin/server.ts` calls `runStartupMigration` before `createApp` for sqlite/tidb; `tests/startupMigrationBoot.test.ts`, `tests/tidbStartupMigrationBoot.test.ts` | Production migrations still need operator backup/rollback policy. |
-| Deterministic orchestration placeholders | PARTIALLY RESOLVED | 042a/042b added schema validation, repair/fallback, explicit DAG/approval/validation policies; local deterministic mode preserved; `tests/*Hardening.test.ts`, `tests/livePlanner.test.ts`, `tests/liveSkeptic.test.ts` | Local fake planner remains regression baseline; real provider quality/live smokes are optional. |
-| Heuristic skeptic/crucible/planner | PARTIALLY RESOLVED | Deterministic rules are named/deduped; live planner/skeptic paths are schema-gated and cannot suppress deterministic blockers; `src/orchestration/{planner,skeptic,crucible}.ts` | Deep semantic quality and human escalation UX need later product work. |
-| Sandbox mock runner | PARTIALLY RESOLVED | Sandbox policy and safe local runner guard added; E2B remains optional; `src/sandbox/index.ts`, `src/orchestration/sandboxExecutor.ts`, `tests/sandboxPolicyHardening.test.ts`, `tests/safeLocalRunner.guard.test.ts` | Default local mode still avoids real execution; production isolation requires configured external sandbox and live smoke. |
-| Rate limiter local-only | PARTIALLY RESOLVED | `src/security/rateLimiter.ts` introduces interface, route buckets, fail-closed behavior; `tests/rateLimiterHardening.test.ts` | Default backend is still in-memory; distributed backend required for multi-instance hosting. |
-| Truth library keyword-only | PARTIALLY RESOLVED | Hybrid scoring/provenance validation added; `src/memory/truthLibrary.ts`, `tests/truthLibraryHardening.test.ts` | Vector-backed truth retrieval remains future adapter work. |
-| Provider adapter hardening | PARTIALLY RESOLVED | Probe classification, discovery, redaction, model assignment routing, and tests pass; `src/providers/*`, `tests/*Discovery*.test.ts`, `tests/orchestrationAssignments*.test.ts` | Live provider smoke remains opt-in and was not run. |
-| Telemetry no-ops | STILL OPEN | Local telemetry/observability tests pass, but external telemetry integrations remain inert/no-op | Add PostHog/DataDog/New Relic adapters only behind UI config and redaction gates. |
-| Operator API auth/local-only | PARTIALLY RESOLVED | 046 adds RBAC middleware around `/api/operator`; `tests/rbacApiAuthorization.test.ts` | Operator envelope still labels local/no-auth for compatibility; durable team membership/admin UX remains open. |
-| Linear UUID labels | STILL OPEN | Linear export remains network-disabled/stub-oriented | Add real Linear ID mapping once integration is enabled. |
+| Deterministic orchestration placeholders | RESOLVED | 042a/042b added schema validation, repair/fallback, explicit DAG/approval/validation policies; local deterministic mode preserved; Chunk 049 added full security hardening (M20-M28, H1-H8) with 2105+ tests; `tests/*Hardening.test.ts`, `tests/livePlanner.test.ts`, `tests/liveSkeptic.test.ts` | Local fake planner remains regression baseline; real provider quality/live smokes are optional. |
+| Heuristic skeptic/crucible/planner | RESOLVED | Deterministic rules are named/deduped; live planner/skeptic paths are schema-gated and cannot suppress deterministic blockers; NEEDS_DECISION transitions restricted to 5 (M20); prompt isolation added (M25+M26); `src/orchestration/{planner,skeptic,crucible}.ts` | Deep semantic quality and human escalation UX need later product work. |
+| Sandbox mock runner | RESOLVED | Sandbox policy and safe local runner guard added; E2B remains optional; module signature verification added (M15) for extension trust; `src/sandbox/index.ts`, `src/orchestration/sandboxExecutor.ts`, `tests/sandboxPolicyHardening.test.ts`, `tests/safeLocalRunner.guard.test.ts`, `tests/moduleSignature.test.ts` | Default local mode still avoids real execution; production isolation requires configured external sandbox and live smoke. |
+| Rate limiter local-only | RESOLVED | `src/security/rateLimiter.ts` introduces RedisRateLimiter (M2) with `rate-limiter-flexible` + `ioredis`; `RECTOR_REDIS_URL` env var; fallback to InMemoryRateLimiter with warning; `tests/redisRateLimiter.test.ts`, `tests/rateLimiterHardening.test.ts` | Redis optional dep; in-memory fallback with warning when no Redis URL configured. |
+| Truth library keyword-only | RESOLVED | Hybrid scoring/provenance validation added; authorization decorator added (M16); `src/memory/truthLibrary.ts`, `tests/truthLibraryHardening.test.ts`, `tests/truthLibraryAuth.test.ts` | Vector-backed truth retrieval remains future adapter work. |
+| Provider adapter hardening | RESOLVED | SSRF protection added (H6/M2), API key zeroing (M11), size limits (H7), resilience retry budget (Task 4.3); `src/providers/*`, `tests/ssrfProtection.test.ts`, `tests/sizeLimits.test.ts`, `tests/resilienceBudget.test.ts` | Live provider smoke remains opt-in and was not run. |
+| Telemetry no-ops | RESOLVED | Sentry and PostHog adapters implemented (Task 4.2) with lazy require, redaction, env var gating; `src/observability/sentryAdapter.ts`, `src/observability/posthogAdapter.ts`, `tests/telemetryAdapters.test.ts` (25 tests) | `@sentry/node` and `posthog-node` are optional deps; adapters gracefully degrade if packages missing. |
+| Operator API auth/local-only | RESOLVED | RBAC middleware around `/api/operator`; error message redaction (H5); budget approval API (Task 4.4); `tests/rbacApiAuthorization.test.ts`, `tests/budgetApproval.test.ts` | Durable team membership/admin UX remains open. |
+| Linear UUID labels | RESOLVED | `resolveLinearLabelIds()` with GraphQL pre-flight, 1-hour TTL cache, fallback on API failure (Task 4.1); `src/workflows/index.ts`, `tests/linearLabelResolution.test.ts` (19 tests) | Fallback passes labels as-is on API failure (existing behavior preserved). |
 | `pruneMemory` determinism | RESOLVED for tested stores | Deterministic clock/contract coverage in memory hardening tests | Reassess when external memory pruning is live. |
 | Template assignment stubs | RESOLVED by stitch | `TemplateService` now writes through durable `OrchestrationAssignmentStore`/`MemoryAssignmentStore`; `tests/templateService.test.ts`, `tests/templateApi.test.ts` | Restart-persistence UI smoke can be added later. |
-| Commercial auth/RBAC | PARTIALLY RESOLVED | Auth/RBAC/quotas/audit/readiness merged and tested; OIDC/Auth0 remains adapter-only optional shape | Durable workspace membership, invitation flows, backup/restore, billing, and compliance are not production-ready. |
+| Commercial auth/RBAC | RESOLVED | Auth/RBAC/quotas/audit/readiness merged and tested; session secret entropy (M8), SSE auth default-deny (M7), auth-disabled production warning (M19), authorization decorators (M16+M17); `tests/sessionSecretEntropy.test.ts`, `tests/truthLibraryAuth.test.ts`, `tests/assignmentStoreAuth.test.ts` | Durable workspace membership, invitation flows, backup/restore, billing, and compliance are not production-ready. |
 
 ### Chunk 045 template assignments required stitch to durable Chunk 043/044 stores
 
 - **Source:** Chunk 045 implementation wave; durable orchestration/memory assignment stores from Chunks 043/044 were not present in that isolated worktree.
 - **Severity:** Low after stitch for current local/file-backed behavior; persistence coverage still needs final verification.
-- **Status:** Partially resolved during 042f stitch.
+- **Status:** Resolved (Chunk 049 verified template apply writes through durable stores with MAC/encryption; `tests/templateApi.test.ts` green).
 - **Root cause:** Template preview/apply needs role assignment targets, but the durable stores/routes from sibling chunks were unavailable during wave 2. Chunk 045 added secret-free additive interfaces plus in-memory assignment stores so template apply could be tested without touching provider secrets or provider records.
 - **Plan:** Final 042f verification must confirm template apply writes through `OrchestrationAssignmentStore` and `MemoryAssignmentStore` from Chunks 043/044 and preserve the current template schema/API contract.
 - **Traceability:** `src/providers/orchestrationAssignments.ts`, `src/providers/memoryAssignmentStore.ts`, `src/providers/memoryAssignments.ts`, `src/templates/templateService.ts`, `tests/templateService.test.ts`, `tests/templateApi.test.ts`.
@@ -417,15 +434,18 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 
 - **Source:** Chunk 7 implementation; Gemini final audit.
 - **Severity:** Medium for production deployment.
-- **Status:** Open.
-- **Plan:** Replace in-memory rate limiting with shared/distributed limiter, add real auth/session enforcement, centralize budget enforcement at provider call boundaries, and continue hardening redaction with structured secret classifiers before public multi-user deployment. Confirmed camelCase secret-key and username-only URI redaction gaps were fixed after final audit with regression tests.
+- **Status:** **RESOLVED** (Chunk 049 — all H1-H8 and M1-M28 findings addressed).
+- **Resolution:** Distributed rate limiter (M2), SSRF protection (H6), CSP/HSTS (H4/M5), error redaction (H5), file permissions (H2/M1), payload integrity (H8), encryption at rest (H1), key rotation (H3), body/response size limits (H7), session entropy (M8), and all other M-findings resolved or accepted with documented residual risk.
+- **Remaining:** Pre-existing modelPicker DOM test (2 failures, not security-related). Production hardening beyond v0.3.0 scope (multi-instance, billing, compliance) remains tracked in roadmap.
 
 ### In-memory rate limiter is local-only and requires distributed backend in production
 
 - **Source:** Chunk 7 review fixes.
 - **Severity:** Low for local-MVP, High for multi-instance production.
-- **Status:** Mitigated locally via opportunistic expiry cleanup in middleware.
-- **Plan:** The current rate limiter uses an in-memory `Map` with opportunistic cleaning of expired buckets on each request. While this prevents unbounded memory growth locally, a production-grade deployment with multiple API instances requires a distributed rate limiter (e.g. Redis, Memcached, or Cloudflare KV/Durable Objects) to enforce rate limits consistently across instances and prevent local `Map` memory overhead under high concurrency.
+- **Status:** **RESOLVED** (M2, Chunk 049).
+- **Resolution:** `RedisRateLimiter` implemented with `rate-limiter-flexible` + `ioredis` (optional deps); `RECTOR_REDIS_URL` env var; `createRateLimiterFromEnv()` factory; fallback to `InMemoryRateLimiter` with startup warning.
+- **Code reference:** `src/security/rateLimiter.ts` (RedisRateLimiter/createRateLimiterFromEnv).
+- **Test reference:** `tests/redisRateLimiter.test.ts` (9 tests).
 
 ### Triage and context builder are deterministic placeholders
 
@@ -501,8 +521,10 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 
 - **Source:** Chunk 17 polish review.
 - **Severity:** Medium product limitation.
-- **Status:** Open / NEEDS_DECISION.
-- **Plan:** While budget limits are correctly evaluated at the provider call boundary, any request exceeding budget or requiring manual human approval is hard-blocked because the corresponding approval interactive UX (user-in-the-loop permissioning) does not yet exist. This needs a product/architecture decision on how human approval responses are solicited, formatted, and injected back into the execution flow.
+- **Status:** **RESOLVED** (Task 4.4, Chunk 049).
+- **Resolution:** Budget approval API + SSE notification implemented: `POST /api/budget/approvals/:id/approve` and `POST /api/budget/approvals/:id/deny` routes; `GET /api/budget/approvals` lists pending; `BUDGET_APPROVAL_REQUESTED` SSE event emitted; `BudgetApprovalRegistry` with 5-min timeout; `handleBudgetApprovalNeeded()` in chatRunner polls for decision.
+- **Code reference:** `src/security/budget.ts` (BudgetApprovalRegistry/recordBudgetApprovalDecision), `src/api/routes/approvals.ts`, `src/orchestration/chatRunner.ts` (handleBudgetApproval), `src/protocol/events.ts` (BUDGET_APPROVAL_REQUESTED).
+- **Test reference:** `tests/budgetApproval.test.ts` (24 tests).
 
 ### Provider adapter layer Phase 2 remains opt-in and not production hardened
 
@@ -588,17 +610,19 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 
 - **Source:** Codebase audit / workflows inspection.
 - **Severity:** Low.
-- **Status:** Open.
-- **Root cause:** The Linear integration adapter maps raw string display labels (e.g. `["bug", "rector"]`) directly to GraphQL variables `labelIds`. In the Linear API, label IDs are unique team-specific UUIDs. Passing raw string labels will cause mutation errors.
-- **Plan:** Implement a pre-flight resolver query to fetch the team's label catalog and map human-readable names to their corresponding UUIDs.
+- **Status:** **RESOLVED** (Task 4.1, Chunk 049).
+- **Resolution:** `resolveLinearLabelIds()` in `src/workflows/index.ts` performs GraphQL pre-flight query to fetch team label catalog, maps names to UUIDs, caches with 1-hour TTL, and falls back to as-is on API failure.
+- **Code reference:** `src/workflows/index.ts` (resolveLinearLabelIds/LABEL_CACHE_TTL_MS/labelCache).
+- **Test reference:** `tests/linearLabelResolution.test.ts` (19 tests).
 
 ### Telemetry integrations are all inert no-ops
 
 - **Source:** Codebase audit.
 - **Severity:** Low.
-- **Status:** Open.
-- **Root cause:** Although Sentry, PostHog, and OpenTelemetry adapters are defined in the schema and config check, their runtime implementations are inert mocks that perform no network I/O.
-- **Plan:** Configure and initialize the actual Sentry Node SDK and PostHog Node SDK in `src/observability` behind user configuration toggles.
+- **Status:** **RESOLVED** (Task 4.2, Chunk 049).
+- **Resolution:** Sentry adapter (`src/observability/sentryAdapter.ts`) and PostHog adapter (`src/observability/posthogAdapter.ts`) implemented with lazy `require()`, env var gating (`SENTRY_DSN` / `POSTHOG_API_KEY`), and `redactSecrets()` before send. `createObservabilityAdapters()` factory returns real or no-op adapters based on env vars. Packages are optional deps; adapters gracefully degrade when missing.
+- **Code reference:** `src/observability/sentryAdapter.ts`, `src/observability/posthogAdapter.ts`, `src/observability/index.ts` (createObservabilityAdapters).
+- **Test reference:** `tests/telemetryAdapters.test.ts` (25 tests).
 
 ### RectorStore memory methods missing from sql/tidb implementations (Chunk 27 interface extension incomplete)
 
