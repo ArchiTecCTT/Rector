@@ -356,6 +356,11 @@ export interface ApiSecurityOptions {
    * The real app supplies {@link resolveSecretEncryptionKey} from `bin/server.ts`.
    */
   secretEncryptionKey?: Buffer;
+
+  /** AES-256-GCM key for SQLite payload encryption at rest. Derived from
+   *  {@link resolveSecretEncryptionKey} via HKDF. When absent, payloads are
+   *  stored as plaintext JSON (legacy / test baseline). */
+  dbEncryptionKey?: Buffer;
 }
 
 /**
@@ -1593,7 +1598,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // synchronous POST chat flow and the `GET /api/runs/:id/events` polling endpoint use it
   // transparently with no behavior change.
   const runEventBroker = createRunEventBroker();
-  const baseStore = securityOptions.store ?? createRectorStore(securityOptions.persistence);
+  const baseStore = securityOptions.store ?? createRectorStore(securityOptions.persistence, {
+    encryptionKey: securityOptions.dbEncryptionKey,
+  });
   const rectorStore = withEventBroadcast(baseStore, runEventBroker);
 
   let setupSecretStore = securityOptions.secretStore;

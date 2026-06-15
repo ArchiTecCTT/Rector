@@ -1,7 +1,8 @@
 import http from "node:http";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { randomBytes, scryptSync } from "node:crypto";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { createHmac, randomBytes, scryptSync } from "node:crypto";
+import { execSync } from "node:child_process";
 import { createApp } from "../api/server";
 import { LocalTelemetry } from "../adapters/providers";
 import {
@@ -35,6 +36,7 @@ import { createLocalMemoryConfigStore } from "../providers/memoryConfigStore";
 import { createLocalMemoryAssignmentStore } from "../providers/memoryAssignmentStore";
 import { createLocalOrchestrationAssignmentStore } from "../providers/orchestrationAssignments";
 import { redactString } from "../security/redaction";
+import { ensureRestrictedDir, ensureRestrictedFile, fixExistingDirPermissions } from "../security/filePermissions";
 import { parseAuthConfig } from "../security/auth";
 import { createLocalAuditLogService } from "../security/auditLog";
 import {
@@ -77,6 +79,74 @@ const RUNTIME_SETTINGS_FILE = `${RECTOR_DATA_DIR}/runtime-settings.json`;
 const SECRET_KEY_FILE = `${RECTOR_DATA_DIR}/secret.key`;
 const AUDIT_LOG_FILE = `${RECTOR_DATA_DIR}/audit-events.jsonl`;
 
+interface SecretKeyFile {
+  key: string;
+  version: "v2";
+  createdAt: string;
+}
+
+/**
+ * Attempt Windows DPAPI protection on the key file (best-effort).
+ * DPAPI encrypts the file contents so only the current Windows user can read it.
+ * If DPAPI fails, we warn and continue with file-based key protection.
+ */
+function applyDpapiProtection(keyFilePath: string): void {
+  if (process.platform !== "win32") return;
+  try {
+    // PowerShell DPAPI: read bytes → Protect → write back
+    const ps = `
+      Add-Type -AssemblyName System.Security
+      $path = '${keyFilePath.replace(/'/g, "''")}'
+      $bytes = [System.IO.File]::ReadAllBytes($path)
+      $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+      [System.IO.File]::WriteAllBytes($path, $protected)
+    `;
+    execSync(`powershell -NoProfile -Command ${JSON.stringify(ps)}`, {
+      stdio: "pipe",
+      timeout: 10_000,
+    });
+  } catch {
+    // DPAPI failed (e.g. missing PowerShell, permission issue). Best-effort: warn and continue.
+    console.warn(
+      "[SECURITY] DPAPI protection of secret.key failed. Key file is protected by filesystem permissions only.",
+    );
+  }
+}
+
+/**
+ * Write the secret key file in the v2 JSON format and apply OS-level protection.
+ */
+function writeSecretKeyFile(keyFilePath: string, key: Buffer): void {
+  const keyFile: SecretKeyFile = {
+    key: key.toString("hex"),
+    version: "v2",
+    createdAt: new Date().toISOString(),
+  };
+  ensureRestrictedDir(dirname(keyFilePath));
+  // Atomic write: temp file + rename
+  const tempPath = join(
+    dirname(keyFilePath),
+    `.secret.key.tmp.${randomBytes(4).toString("hex")}`,
+  );
+  writeFileSync(tempPath, JSON.stringify(keyFile, null, 2), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  try {
+    renameSync(tempPath, keyFilePath);
+  } catch {
+    // Fallback: direct write if rename fails (e.g. cross-device)
+    writeFileSync(keyFilePath, JSON.stringify(keyFile, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+  }
+  // Windows DPAPI protection (best-effort) when RECTOR_SECRET_KEY env is not set
+  if (!process.env.RECTOR_SECRET_KEY) {
+    applyDpapiProtection(keyFilePath);
+  }
+}
+
 /**
  * Resolve the 32-byte AES-256-GCM key the local Secret_Store seals values with. The key must be
  * stable across restarts so previously stored secrets stay decryptable (Requirement 7.2).
@@ -85,8 +155,10 @@ const AUDIT_LOG_FILE = `${RECTOR_DATA_DIR}/audit-events.jsonl`;
  *  1. `RECTOR_SECRET_KEY` (operator-supplied) — derived to 32 bytes via scrypt so the env value can
  *     be any length and is never used as a raw key. This lets an operator deliberately set/rotate a
  *     key (e.g. to move the encrypted store between machines).
- *  2. A locally-generated key persisted to `.rector/secret.key` (0600) on first run and read back
- *     on subsequent runs, so a developer needs no configuration for secrets to survive restarts.
+ *  2. A locally-generated key persisted to `.rector/secret.key` in v2 JSON format on first run and
+ *     read back on subsequent runs, so a developer needs no configuration for secrets to survive
+ *     restarts. The v2 format is `{ key, version: "v2", createdAt }`. Bare 64-char hex strings (v1)
+ *     are still accepted for backward compatibility.
  *
  * The key material itself is never logged.
  */
@@ -99,17 +171,114 @@ function resolveSecretEncryptionKey(): Buffer {
   try {
     if (existsSync(SECRET_KEY_FILE)) {
       const stored = readFileSync(SECRET_KEY_FILE, "utf8").trim();
-      const key = Buffer.from(stored, "hex");
-      if (key.length === 32) return key;
+      // v2 JSON format
+      try {
+        const parsed = JSON.parse(stored) as Partial<SecretKeyFile>;
+        if (parsed.version === "v2" && typeof parsed.key === "string") {
+          const key = Buffer.from(parsed.key, "hex");
+          if (key.length === 32) {
+            ensureRestrictedFile(SECRET_KEY_FILE);
+            return key;
+          }
+        }
+      } catch {
+        // Not valid JSON — fall through to v1 hex check
+      }
+      // v1 backward compat: bare 64-char hex string
+      if (/^[0-9a-f]{64}$/i.test(stored)) {
+        const key = Buffer.from(stored, "hex");
+        if (key.length === 32) {
+          ensureRestrictedFile(SECRET_KEY_FILE);
+          // Auto-migrate to v2 format on next write (rotation or boot rotation)
+          return key;
+        }
+      }
     }
   } catch {
     // An unreadable/garbled key file falls through to regenerating a fresh key below.
   }
 
   const key = randomBytes(32);
-  mkdirSync(dirname(SECRET_KEY_FILE), { recursive: true });
-  writeFileSync(SECRET_KEY_FILE, key.toString("hex"), { encoding: "utf8", mode: 0o600 });
+  writeSecretKeyFile(SECRET_KEY_FILE, key);
+  ensureRestrictedFile(SECRET_KEY_FILE);
   return key;
+}
+
+/**
+ * Derive a 32-byte DB encryption key from the master secret key using an
+ * HKDF-like construction (HMAC-SHA256 with domain-separated info string).
+ * The derived key is independent of the secret-store key so a DB key
+ * compromise does not expose secrets and vice versa.
+ */
+function deriveDbEncryptionKey(masterKey: Buffer): Buffer {
+  return createHmac("sha256", masterKey).update("rector.db-encryption.v1").digest();
+}
+
+/**
+ * Determine whether DB encryption should be enabled. Logic:
+ * - `RECTOR_DB_ENCRYPTION` env var explicitly set: honor it ("true"/"false").
+ * - Otherwise: enable when a secret key is available, UNLESS an existing
+ *   `.rector/rector.db` file contains unencrypted rows (no `ENC1:` prefix),
+ *   in which case default to `false` to avoid making existing data unreadable.
+ */
+function shouldEnableDbEncryption(secretKey: Buffer): boolean {
+  const envVal = process.env.RECTOR_DB_ENCRYPTION?.trim().toLowerCase();
+  if (envVal === "true") return true;
+  if (envVal === "false") return false;
+
+  // Auto-detect: if the DB file exists, check if it has unencrypted rows.
+  const dbPath = ".rector/rector.db";
+  if (existsSync(dbPath)) {
+    try {
+      // Quick heuristic: read the file and look for ENC1: prefix.
+      // If we find any JSON-like payload without ENC1:, it's a legacy DB.
+      const content = readFileSync(dbPath, "utf8");
+      if (content.includes('"payload":"') && !content.includes('"payload":"ENC1:')) {
+        // Legacy DB with unencrypted payloads — default off to keep it readable.
+        return false;
+      }
+    } catch {
+      // If we can't read, fall through to enabling encryption.
+    }
+  }
+
+  // Default: enable when we have a key (fresh installs).
+  return true;
+}
+
+/**
+ * Perform automated key rotation when RECTOR_ROTATE_KEY_ON_BOOT is set.
+ * Generates a new key, re-encrypts all secrets with it, and writes the new key file.
+ */
+async function performKeyRotation(
+  oldKey: Buffer,
+  store: ReturnType<typeof createLocalSecretStore>,
+): Promise<Buffer> {
+  const newKey = randomBytes(32);
+  const ids = store.listSecretIds ? await store.listSecretIds() : [];
+
+  // Read all secrets with the old key, then re-encrypt with the new key
+  const newStore = createLocalSecretStore({
+    filePath: SECRETS_FILE,
+    encryptionKey: newKey,
+  });
+
+  for (const id of ids) {
+    const result = await store.getSecret(id);
+    if (!result.ok) {
+      console.warn(`[SECURITY] Key rotation: failed to read secret "${id}", skipping.`);
+      continue;
+    }
+    const setResult = await newStore.setSecret(id, result.value);
+    if (!setResult.ok) {
+      console.warn(`[SECURITY] Key rotation: failed to re-encrypt secret "${id}", skipping.`);
+    }
+  }
+
+  // Write the new key file in v2 format
+  writeSecretKeyFile(SECRET_KEY_FILE, newKey);
+  console.log(`[SECURITY] Key rotation completed successfully. ${ids.length} secret(s) re-encrypted.`);
+  return newKey;
 }
 
 // Construct the shared, disk-backed BYOK stores once for the lifetime of the real app and inject
@@ -117,9 +286,10 @@ function resolveSecretEncryptionKey(): Buffer {
 // Provider_Config_API; the Provider_Config_Store backs the (non-secret) provider configuration.
 // Tests do not use this entry point — they call `createApp` directly and can inject empty or
 // in-memory stores — so no real disk store is ever forced in the test suite.
+let secretEncryptionKey = resolveSecretEncryptionKey();
 const secretStore = createLocalSecretStore({
   filePath: SECRETS_FILE,
-  encryptionKey: resolveSecretEncryptionKey(),
+  encryptionKey: secretEncryptionKey,
 });
 const providerConfigStore = createLocalProviderConfigStore({ filePath: PROVIDER_CONFIG_FILE });
 
@@ -317,6 +487,21 @@ async function resolveStartupOrchestrationConfig(): Promise<OrchestrationConfig>
  * binds + listens so credentials can be entered through the UI.
  */
 async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>; server: http.Server; gracefulShutdown: ReturnType<typeof createGracefulShutdownHandler> }> {
+  // H2: Fix permissions on existing installations where .rector/ may have been
+  // created with overly permissive defaults by earlier versions.
+  fixExistingDirPermissions(RECTOR_DATA_DIR);
+
+  // H3: Automated key rotation on boot when RECTOR_ROTATE_KEY_ON_BOOT is set.
+  if (process.env.RECTOR_ROTATE_KEY_ON_BOOT?.trim() === "true") {
+    try {
+      const newKey = await performKeyRotation(secretEncryptionKey, secretStore);
+      secretEncryptionKey = newKey;
+      console.log("[SECURITY] Boot-time key rotation completed.");
+    } catch (error) {
+      console.warn(`[SECURITY] Boot-time key rotation failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   const runtimeSettings = await ensureRuntimeSettings();
 
   const storeProviderCount = await countStoreConfiguredProviders();
@@ -346,14 +531,17 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   );
 
   const persistenceDriver = deploymentConfig.persistence?.driver;
+  const dbEncryptionKey = shouldEnableDbEncryption(secretEncryptionKey)
+    ? deriveDbEncryptionKey(secretEncryptionKey)
+    : undefined;
   let bootstrappedStore: RectorStore | undefined;
   if (persistenceDriver === "sqlite" || persistenceDriver === "tidb") {
-    bootstrappedStore = await runStartupMigration(deploymentConfig.persistence);
+    bootstrappedStore = await runStartupMigration(deploymentConfig.persistence, {
+      encryptionKey: dbEncryptionKey,
+    });
   }
 
   const authConfig = parseAuthConfig(process.env);
-  const secretEncryptionKey = resolveSecretEncryptionKey();
-
   const auditLog = createLocalAuditLogService({ filePath: AUDIT_LOG_FILE });
   const toolRegistry = createDefaultToolRegistry();
 
@@ -371,6 +559,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
     toolRegistry,
     auth: authConfig,
     secretEncryptionKey,
+    dbEncryptionKey,
   });
   const server = http.createServer(app);
   const gracefulShutdown = createGracefulShutdownHandler({

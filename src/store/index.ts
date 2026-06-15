@@ -19,6 +19,8 @@ import type {
 } from "./schemas";
 import type { DeploymentConfig, TiDBConnectionConfig } from "../deployment";
 import { redactString } from "../security/redaction";
+import { ensureRestrictedDir, ensureRestrictedFile } from "../security/filePermissions";
+import { dirname } from "node:path";
 import { InMemoryRectorStore } from "./inMemoryRectorStore";
 import { SqlRectorStore, createSqliteDriver, type SqlDriver } from "./sqlRectorStore";
 import { createTiDBDriver } from "./tidbRectorStore";
@@ -97,6 +99,10 @@ export interface CreateRectorStoreOverrides {
   driver?: SqlDriver;
   /** Deterministic clock forwarded to the constructed store (tests). */
   now?: () => string;
+  /** AES-256-GCM key for SQLite payload encryption at rest. When provided, all
+   *  payloads are sealed with AES-256-GCM and prefixed with `ENC1:`; unencrypted
+   *  (legacy) rows are still readable for backward compat. */
+  encryptionKey?: Buffer;
 }
 
 /**
@@ -172,7 +178,7 @@ export function createRectorStore(
 ): RectorStore {
   // An injected driver always wins (tests inject an in-memory SqlDriver double).
   if (overrides?.driver) {
-    return new SqlRectorStore({ driver: overrides.driver, now: overrides?.now });
+    return new SqlRectorStore({ driver: overrides.driver, now: overrides?.now, encryptionKey: overrides?.encryptionKey });
   }
 
   const driver = config?.driver ?? "memory";
@@ -184,7 +190,14 @@ export function createRectorStore(
 
     case "sqlite": {
       const path = config?.sqlitePath ?? DEFAULT_SQLITE_PATH;
-      return new SqlRectorStore({ driver: createSqliteDriver({ path }), now: overrides?.now });
+      ensureRestrictedDir(dirname(path));
+      const store = new SqlRectorStore({
+        driver: createSqliteDriver({ path }),
+        now: overrides?.now,
+        encryptionKey: overrides?.encryptionKey,
+      });
+      ensureRestrictedFile(path);
+      return store;
     }
 
     case "tidb": {
@@ -196,6 +209,7 @@ export function createRectorStore(
       return new SqlRectorStore({
         driver: createTiDBDriver({ host, port, user, password, database, tls }),
         now: overrides?.now,
+        encryptionKey: overrides?.encryptionKey,
       });
     }
 

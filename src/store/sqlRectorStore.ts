@@ -61,6 +61,7 @@ export function createSqliteDriver(input: { path: string }): SqlDriver {
   };
 }
 
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { redactString } from "../security/redaction";
 import {
@@ -116,6 +117,10 @@ import {
 export interface SqlRectorStoreOptions {
   driver: SqlDriver;
   now?: () => string;
+  /** Optional AES-256-GCM key for payload encryption at rest. When provided,
+   *  all payloads are sealed with AES-256-GCM and prefixed with `ENC1:`;
+   *  unencrypted (legacy) rows are still readable for backward compat. */
+  encryptionKey?: Buffer;
 }
 
 /** Prefixes used for store-generated entity ids, mirroring `InMemoryRectorStore`. */
@@ -140,11 +145,19 @@ interface EntityRow {
  * preserves `InMemoryRectorStore` semantics: insertion-order list results,
  * duplicate-event-id rejection, and an atomic-and-rollback run transition.
  */
+/** Prefix identifying an AES-256-GCM encrypted payload in the DB. */
+const ENC1_PREFIX = "ENC1:";
+
+/** Nonce length for AES-256-GCM (96 bits / 12 bytes). */
+const GCM_NONCE_LENGTH = 12;
+
 export class SqlRectorStore implements RectorStore {
   private readonly driver: SqlDriver;
+  private readonly encryptionKey: Buffer | undefined;
 
   constructor(options: SqlRectorStoreOptions) {
     this.driver = options.driver;
+    this.encryptionKey = options.encryptionKey;
     this.nowFn = options.now ?? (() => new Date().toISOString());
     this.migrate();
   }
@@ -509,7 +522,15 @@ export class SqlRectorStore implements RectorStore {
   }
 
   private serialize(entity: unknown): string {
-    return JSON.stringify(entity);
+    const json = JSON.stringify(entity);
+    if (!this.encryptionKey) return json;
+    // AES-256-GCM seal: nonce(12) + ciphertext + authTag(16)
+    const nonce = randomBytes(GCM_NONCE_LENGTH);
+    const cipher = createCipheriv("aes-256-gcm", this.encryptionKey, nonce);
+    const ciphertext = Buffer.concat([cipher.update(json, "utf8"), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    const sealed = Buffer.concat([nonce, ciphertext, tag]);
+    return ENC1_PREFIX + sealed.toString("base64");
   }
 
   private nextSeq(table: string): number {
@@ -641,8 +662,26 @@ export class SqlRectorStore implements RectorStore {
 
   private deserialize(label: string, id: string, payload: string): unknown {
     try {
+      if (payload.startsWith(ENC1_PREFIX)) {
+        if (!this.encryptionKey) {
+          throw new Error(
+            `Encrypted ${label} payload for id ${redactString(id)} cannot be decrypted: no encryption key provided. ` +
+            `Set RECTOR_DB_ENCRYPTION=true and ensure the secret key is available.`
+          );
+        }
+        const sealed = Buffer.from(payload.slice(ENC1_PREFIX.length), "base64");
+        // Layout: nonce(12) + ciphertext + authTag(16)
+        const nonce = sealed.subarray(0, GCM_NONCE_LENGTH);
+        const tag = sealed.subarray(sealed.length - 16);
+        const ciphertext = sealed.subarray(GCM_NONCE_LENGTH, sealed.length - 16);
+        const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey, nonce);
+        decipher.setAuthTag(tag);
+        const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+        return JSON.parse(plaintext.toString("utf8"));
+      }
       return JSON.parse(payload);
     } catch (error) {
+      if (error instanceof Error && error.message.includes("no encryption key provided")) throw error;
       const message = redactString(error instanceof Error ? error.message : String(error));
       throw new Error(`Corrupt ${label} payload for id ${redactString(id)}: ${message}`);
     }
