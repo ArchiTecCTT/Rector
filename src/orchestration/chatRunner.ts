@@ -12,6 +12,12 @@ import {
   runEvent,
   type ProviderCallMetadata,
 } from "./externalRunSupport";
+import {
+  budgetApprovalRegistry,
+  waitForBudgetApproval,
+  BUDGET_APPROVAL_TIMEOUT_MS,
+  type BudgetDecision as BudgetDecisionType,
+} from "../security/budget";
 import { rememberStableTierHashForRun, clearStableTierHashForRun, assemblePromptTiers } from "./promptTiers";
 export { DEFAULT_EXTERNAL_BUDGET, ProviderCallMetadataSchema, phaseObservabilityPayload, runEvent } from "./externalRunSupport";
 export type { ProviderCallMetadata } from "./externalRunSupport";
@@ -275,7 +281,44 @@ async function orchestrationTimeoutResult(
   return { run: failedRun, synthesis, observabilitySummary };
 }
 
-/** Inner implementation extracted for timeout wrapping. */
+/**
+ * Handle a `NEEDS_DECISION` result from budget evaluation by:
+ * 1. Creating a budget approval request in the registry
+ * 2. Emitting a `BUDGET_APPROVAL_REQUESTED` SSE event via the store
+ * 3. Polling for a decision with a 5-minute timeout
+ * 4. Returning `"approved"` or `"denied"`/`"timeout"`
+ *
+ * If approved: the caller proceeds. If denied or timeout: the caller fails with a budget exceeded error.
+ */
+export async function handleBudgetApprovalNeeded(
+  store: RectorStore,
+  run: Run,
+  decision: BudgetDecisionType,
+  traceId: string,
+  timeoutMs: number = BUDGET_APPROVAL_TIMEOUT_MS,
+): Promise<"approved" | "denied" | "timeout"> {
+  // 1. Create approval request in registry
+  const approvalId = budgetApprovalRegistry.createApproval(
+    run.id,
+    decision.reasons,
+    decision.usage,
+  );
+
+  // 2. Emit BUDGET_APPROVAL_REQUESTED SSE event
+  await store.appendEvent(
+    runEvent(run, "BUDGET_APPROVAL_REQUESTED", run.phase, {
+      approvalId,
+      reasons: decision.reasons,
+      estimatedUsd: decision.usage.estimatedUsd,
+      source: "budget-approval-flow",
+    }),
+  );
+
+  // 3. Poll for decision with timeout
+  const result = await waitForBudgetApproval(approvalId, timeoutMs);
+
+  return result;
+}
 async function runOrchestratedChatRunInner(
   store: RectorStore,
   args: ChatRunArgs,

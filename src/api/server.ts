@@ -172,6 +172,7 @@ import { registerMemoryAssignmentRoutes } from "./routes/memoryAssignments";
 import { registerOrchestrationModelRoutes } from "./routes/orchestrationModels";
 import { registerTemplateRoutes } from "./routes/templates";
 import { registerRunApprovalRoutes } from "./routes/runApprovals";
+import { registerBudgetApprovalRoutes } from "./routes/approvals";
 import { registerRunControlRoutes } from "./routes/runControl";
 import { registerOperatorRoutes } from "./routes/operator";
 import { registerTaskRoutes } from "./routes/tasks";
@@ -2765,6 +2766,11 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     workspaceIdForRun,
     authorize,
     auditRequest,
+    sendRedacted,
+  });
+
+  registerBudgetApprovalRoutes(app, {
+    authorize,
     sendRedacted,
   });
 

@@ -31,6 +31,7 @@ export const RUN_EVENT_TYPES = [
   "PROVIDER_RETRY",
   "PROVIDER_SUBSTITUTED",
   "CREDENTIAL_ROTATED",
+  "BUDGET_APPROVAL_REQUESTED",
 ] as const;
 
 export const RunEventTypeSchema = z.enum(RUN_EVENT_TYPES);
