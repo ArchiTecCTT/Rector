@@ -723,7 +723,7 @@ export function withEventBroadcast(store: RectorStore, broker: RunEventBroker): 
     // canonical persisted (already-redacted) event the store returned. A throw never publishes.
     async commitRunTransition(runId, patch, event) {
       const result = await store.commitRunTransition(runId, patch, event);
-      broker.publish(result.event.runId, result.event);
+      broker.publishRedacted(result.event.runId, result.event);
       return result;
     },
 
@@ -731,7 +731,7 @@ export function withEventBroadcast(store: RectorStore, broker: RunEventBroker): 
     // (already-redacted) event the store returned. If the append throws, nothing is published.
     async appendEvent(event) {
       const persistedEvent = await store.appendEvent(event);
-      broker.publish(persistedEvent.runId, persistedEvent);
+      broker.publishRedacted(persistedEvent.runId, persistedEvent);
       return persistedEvent;
     },
     getEvent: (id) => store.getEvent(id),
@@ -1845,7 +1845,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   };
   const resolveUserStores = createUserStoresResolver({
     authEnabled: authConfig.enabled,
-    encryptionKey: securityOptions.secretEncryptionKey ?? Buffer.alloc(32),
+    encryptionKey: (() => {
+      if (securityOptions.secretEncryptionKey) return securityOptions.secretEncryptionKey;
+      if (authConfig.enabled) throw new Error("secretEncryptionKey is required when auth is enabled.");
+      console.warn("[SECURITY] secretEncryptionKey not provided — using insecure zero-key. Only acceptable for unauthenticated local development.");
+      return Buffer.alloc(32);
+    })(),
     defaultStores: defaultUserStores,
   });
   const storesFor = (req: express.Request): UserStores => req.rectorStores ?? defaultUserStores;
@@ -3898,11 +3903,26 @@ function parseCsvEnv(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+const DEV_LOCALHOST_PORTS: Set<number> = new Set([3000, 3001, 5173, 5174, 4173, 8080, 8081]);
+
+function isDevLocalhostEnabled(): boolean {
+  const env = process.env.CORS_DEV_LOCALHOST_ENABLED;
+  if (env !== undefined) return env !== "false" && env !== "0";
+  // Default: true in development, false in staging/production
+  return process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "staging";
+}
+
 function isDevLocalhostOrigin(origin: string): boolean {
-  if (process.env.NODE_ENV === "production") return false;
+  if (!isDevLocalhostEnabled()) return false;
   try {
     const url = new URL(origin);
-    return ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+    const isLocalhost = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+    if (!isLocalhost) return false;
+    const port = url.port ? Number(url.port) : (url.protocol === "https:" ? 443 : 80);
+    // Portless localhost (port 80/443): reject unless HTTPS
+    if (port === 80) return false;
+    if (port === 443 && url.protocol !== "https:") return false;
+    return DEV_LOCALHOST_PORTS.has(port);
   } catch {
     return false;
   }
