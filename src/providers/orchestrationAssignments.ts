@@ -5,6 +5,8 @@ import { z } from "zod";
 
 import { redactString } from "../security/redaction";
 import { ensureRestrictedDir } from "../security/filePermissions";
+import type { AuthorizationSubject } from "../security/rbac.js";
+import { can } from "../security/rbac.js";
 import { FakeLLMProvider, type LLMProvider, type ModelRoute, type ModelRouter, type ModelRouterInput, type ModelSelection } from "./llm";
 import type { ProviderConfigRecord, ProviderConfigState } from "./config";
 import type { ProviderConfigStore } from "./configStore";
@@ -1301,4 +1303,58 @@ export function createOrchestrationModelRouter(input: {
       return resolveEffectiveAssignment({ role, assignments: assignmentState.assignments, providerState, scope: context });
     },
   };
+}
+
+/**
+ * Authorizing decorator for OrchestrationAssignmentStore.
+ *
+ * - If `subject` is provided and has `providers.configure` permission → proceed.
+ * - If `subject` is absent → allow (backward compat: caller didn't opt in to auth checks).
+ * - If auth is disabled (local mode) → allow all mutations.
+ */
+export class AuthorizingOrchestrationAssignmentStore implements OrchestrationAssignmentStore {
+  private readonly inner: OrchestrationAssignmentStore;
+  private readonly subject: AuthorizationSubject | undefined;
+
+  constructor(inner: OrchestrationAssignmentStore, subject: AuthorizationSubject | undefined) {
+    this.inner = inner;
+    this.subject = subject;
+  }
+
+  private checkMutate(): void {
+    if (!this.subject) return; // No subject = backward compat, allow
+    if (!this.subject.authEnabled) return; // Local mode: allow all
+    if (!can(this.subject, "providers.configure")) {
+      throw new Error(
+        `Role "${this.subject.role}" does not have permission "providers.configure".`,
+      );
+    }
+  }
+
+  async getState(): Promise<OrchestrationAssignmentState> {
+    return this.inner.getState();
+  }
+
+  async listAssignments(scope?: OrchestrationAssignmentScope): Promise<OrchestrationModelAssignment[]> {
+    return this.inner.listAssignments(scope);
+  }
+
+  async getAssignment(role: OrchestrationRole, scope?: OrchestrationAssignmentScope): Promise<OrchestrationModelAssignment | undefined> {
+    return this.inner.getAssignment(role, scope);
+  }
+
+  async upsertAssignment(role: OrchestrationRole, input: OrchestrationAssignmentUpsert, scope?: OrchestrationAssignmentScope): Promise<OrchestrationAssignmentResult<OrchestrationModelAssignment>> {
+    this.checkMutate();
+    return this.inner.upsertAssignment(role, input, scope);
+  }
+
+  async removeAssignment(role: OrchestrationRole, scope?: OrchestrationAssignmentScope): Promise<OrchestrationAssignmentResult<void>> {
+    this.checkMutate();
+    return this.inner.removeAssignment(role, scope);
+  }
+
+  async resetAssignments(scope?: OrchestrationAssignmentScope): Promise<OrchestrationAssignmentResult<void>> {
+    this.checkMutate();
+    return this.inner.resetAssignments(scope);
+  }
 }
