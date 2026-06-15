@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 
 import { redactString } from "../security/redaction";
+import { ensureRestrictedDir } from "../security/filePermissions";
 import { FakeLLMProvider, type LLMProvider, type ModelRoute, type ModelRouter, type ModelRouterInput, type ModelSelection } from "./llm";
 import type { ProviderConfigRecord, ProviderConfigState } from "./config";
 import type { ProviderConfigStore } from "./configStore";
@@ -190,7 +191,7 @@ function defaultAssignmentFs(): OrchestrationAssignmentFs {
       await rename(fromPath, toPath);
     },
     async mkdir(dirPath: string): Promise<void> {
-      await mkdir(dirPath, { recursive: true });
+      ensureRestrictedDir(dirPath);
     },
   };
 }

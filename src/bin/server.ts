@@ -145,6 +145,7 @@ function writeSecretKeyFile(keyFilePath: string, key: Buffer): void {
   if (!process.env.RECTOR_SECRET_KEY) {
     applyDpapiProtection(keyFilePath);
   }
+  ensureRestrictedFile(keyFilePath);
 }
 
 /**

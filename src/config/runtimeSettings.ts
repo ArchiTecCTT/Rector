@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 
 import { redactString } from "../security/redaction";
+import { ensureRestrictedDir } from "../security/filePermissions";
 import { SandboxEnvironmentKindSchema } from "../sandbox";
 
 /**
@@ -83,7 +84,7 @@ function defaultRuntimeSettingsFs(): RuntimeSettingsFs {
       await rename(fromPath, toPath);
     },
     async mkdir(dirPath: string): Promise<void> {
-      await mkdir(dirPath, { recursive: true });
+      ensureRestrictedDir(dirPath);
     },
   };
 }
