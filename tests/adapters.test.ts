@@ -145,29 +145,36 @@ describe("RunEventSchema payload constraints (M14)", () => {
     expect(result.success).toBe(true);
   });
 
-  it("rejects payload with object value", () => {
+  it("accepts payload with object value", () => {
     const result = RunEventSchema.safeParse(makeEvent({ nested: { inner: true } }));
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects payload with array value", () => {
-    const result = RunEventSchema.safeParse(makeEvent({ items: [1, 2, 3] }));
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects string value longer than 10000 chars", () => {
-    const result = RunEventSchema.safeParse(makeEvent({ data: "x".repeat(10_001) }));
-    expect(result.success).toBe(false);
-  });
-
-  it("accepts string value of exactly 10000 chars", () => {
-    const result = RunEventSchema.safeParse(makeEvent({ data: "x".repeat(10_000) }));
     expect(result.success).toBe(true);
   });
 
-  it("rejects undefined value in payload", () => {
-    const result = RunEventSchema.safeParse(makeEvent({ missing: undefined } as any));
+  it("accepts payload with array value", () => {
+    const result = RunEventSchema.safeParse(makeEvent({ items: [1, 2, 3] }));
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects payload exceeding 100KB serialized size", () => {
+    const payload: Record<string, unknown> = {};
+    for (let i = 0; i < 50; i++) payload[`key${i}`] = "x".repeat(2100);
+    const result = RunEventSchema.safeParse(makeEvent(payload));
     expect(result.success).toBe(false);
+  });
+
+  it("accepts payload within 100KB serialized size", () => {
+    const payload: Record<string, unknown> = {};
+    for (let i = 0; i < 50; i++) payload[`key${i}`] = "x".repeat(1000);
+    const result = RunEventSchema.safeParse(makeEvent(payload));
+    expect(result.success).toBe(true);
+  });
+
+  it("strips undefined values from payload", () => {
+    const result = RunEventSchema.safeParse(makeEvent({ missing: undefined } as any));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as any).payload).not.toHaveProperty("missing");
+    }
   });
 });
 

@@ -50,19 +50,19 @@ export const RunEventSchema = z.object({
     )
     .refine(
       (val) =>
-        Object.keys(val).every((k) => k.length <= 128) &&
-        Object.values(val).every(
-          (v) =>
-            v === null ||
-            typeof v === "string" ||
-            typeof v === "number" ||
-            typeof v === "boolean",
-        ) &&
-        Object.values(val).every((v) => typeof v !== "string" || v.length <= 10_000),
-      {
-        message:
-          "Payload keys must be ≤128 chars, values must be string(≤10K)|number|boolean|null",
-      },
+        Object.keys(val).every((k) => k.length <= 128),
+      { message: "Payload keys must be ≤128 chars" },
+    )
+    .transform((val) => {
+      const cleaned: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(val)) {
+        if (v !== undefined) cleaned[k] = v;
+      }
+      return cleaned;
+    })
+    .refine(
+      (val) => JSON.stringify(val).length <= 100_000,
+      { message: "Payload must be ≤100KB when serialized" },
     ),
   traceId: z.string().min(1).optional(),
   redactionState: z.string().min(1).optional(),
