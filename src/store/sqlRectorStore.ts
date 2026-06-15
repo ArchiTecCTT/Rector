@@ -493,7 +493,8 @@ export class SqlRectorStore implements RectorStore {
       `id ${idType} PRIMARY KEY, ` +
       `${filterColumn} ${filterType}, ` +
       `seq INTEGER NOT NULL, ` +
-      `payload ${jsonType} NOT NULL)`;
+      `payload ${jsonType} NOT NULL, ` +
+      `mac TEXT)`;
 
     this.driver.exec(table("conversations", "workspace_id"));
     this.driver.exec(table("messages", "conversation_id"));
