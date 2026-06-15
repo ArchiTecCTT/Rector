@@ -2,7 +2,124 @@
 
 > Running register for implementation concerns, security risks, review notes, and deferred fixes discovered while implementing chunks. Keep updated through final chunk.
 
+
 ## Open
+
+### Full security/architecture audit 2026-06-15 — HIGH findings
+
+- **Source:** Kilo multi-agent security audit (see `audits/security-architecture-audit-2026-06-15.md` for full report).
+- **Severity:** High (8 findings).
+- **Status:** Open.
+- **Audit baseline:** `npm test` 213 files / 1369 tests passing, `npm audit` 0 vulnerabilities.
+
+#### H1 — SQLite database unencrypted at rest
+- **File:** `src/store/sqlRectorStore.ts:41-62`, `src/store/index.ts:115`
+- **Risk:** Default SQLite path `.rector/rector.db` stores conversation history, messages, run data, and memory entries as unencrypted JSON. Any process/user with filesystem access can read all historical data.
+- **Remediation:** Integrate SQLCipher or similar encrypted SQLite extension. Alternatively, rely on OS-level disk encryption and enforce restrictive file permissions (0o600). Document the risk for operators.
+
+#### H2 — No file permission enforcement on .rector/ directory
+- **File:** `src/store/index.ts:186-187`, `src/security/secretStore.ts:183-188`
+- **Risk:** Directories and files created under `.rector/` inherit the process umask (typically 0022 on Unix), making them world-readable. The encryption key file (`secret.key`) uses `mode: 0o600` but this has no effect on Windows (NTFS ACLs are not controlled by Node.js mode).
+- **Remediation:** Explicitly set `mode: 0o700` on `.rector/` and subdirectories, `0o600` on all files. On Windows, document the limitation and recommend `RECTOR_SECRET_KEY` env injection from a secret manager.
+
+#### H3 — Encryption key lifecycle: no rotation, weak Windows protection
+- **File:** `src/bin/server.ts:88-113`, `src/security/secretStore.ts`
+- **Risk:** Master encryption key (`secret.key`) is auto-generated on first run and never rotated. If compromised, all historical secrets are exposed. On Windows, the key file is not protected by file permissions.
+- **Remediation:** Implement key rotation support (re-encrypt all secrets with new key). Consider OS keychain integration for the master key. Enforce file permissions at creation and verify on startup.
+
+#### H4 — Missing Content-Security-Policy header
+- **File:** `src/api/server.ts:3757-3761`
+- **Risk:** No CSP header means an XSS vulnerability anywhere in the frontend can load external scripts, exfiltrate data, and execute inline scripts without restriction.
+- **Remediation:** Add a restrictive CSP: `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'`. A nonce-based approach would be stronger long-term.
+
+#### H5 — Error messages leak to clients without redaction (25+ instances)
+- **Files:** `src/api/server.ts:2216,2238,2297,2535,2678,3708,3728`, `src/api/routes/operator.ts:39,64,83,99,122,131,149,169,179,215`, `src/api/routes/tasks.ts:44,53,63,79,91,105,116,127`
+- **Risk:** Catch blocks return `{ error: err.message }` without passing through `redactString()`. Internal paths, SQL details, stack traces, and potentially connection strings could leak to clients.
+- **Remediation:** Route ALL error responses through `redactString()`. Some routes already do this correctly (e.g., `runControl.ts:66`, `runApprovals.ts:89-94`); extend the pattern to all catch blocks.
+
+#### H6 — SSRF via user-configurable provider URLs
+- **Files:** `src/providers/llm.ts:202,257,369,621`, `src/memory/chromaMemoryAdapter.ts:220,239`
+- **Risk:** Provider `baseUrl` and `endpoint` fields are user-configurable and used directly for outbound HTTP requests. No validation against private/internal IP ranges.
+- **Remediation:** Add URL validation that rejects private/internal IPs (127.0.0.0/8, 10.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, ::1, fc00::/7). Validate DNS resolution doesn't resolve to private ranges.
+
+#### H7 — No explicit body size limit; no provider response size limit
+- **File:** `src/api/server.ts:1822`, `src/providers/llm.ts:293,443,589,717`
+- **Risk:** `express.json()` uses the default 100KB limit implicitly. No response body size limit on outbound `fetch` calls to provider APIs — a malicious/compromised provider could send unbounded response data.
+- **Remediation:** Add explicit `express.json({ limit: '1mb' })`. Add response body size limits on provider `fetch` calls using `AbortController` with byte counting.
+
+#### H8 — JSON payloads in SQLite not MAC-protected
+- **File:** `src/store/sqlRectorStore.ts:511-513`
+- **Risk:** Stored JSON entity payloads use plain `JSON.stringify` without integrity verification. An attacker with database file access can tamper with payloads without detection.
+- **Remediation:** Add an HMAC field to persisted rows using a server-side key. Schema validation on read provides partial protection but cannot detect sophisticated tampering.
+
+- **Traceability:** `audits/security-architecture-audit-2026-06-15.md`.
+
+### Full security/architecture audit 2026-06-15 — MEDIUM findings
+
+- **Source:** Kilo multi-agent security audit.
+- **Severity:** Medium (28 findings).
+- **Status:** Open.
+- **Remediation priority:** Pre-production blockers first, then pre-public-alpha, then pre-beta.
+
+| ID | Finding | File:Line |
+|---|---------|-----------|
+| M1 | Windows file permissions ineffective (mode: 0o600) | `src/bin/server.ts:111` |
+| M2 | In-memory rate limiting state (not distributed) | `src/api/routes/auth.ts:44`, `src/security/rateLimiter.ts:246-316` |
+| M3 | EventBus publishes arbitrary payloads without redaction | `src/adapters/eventBus.ts:24` |
+| M4 | CORS allows all localhost origins in non-production | `src/api/server.ts:3864-3871` |
+| M5 | Missing Strict-Transport-Security (HSTS) header | `src/api/server.ts:3757-3761` |
+| M6 | Zero-key fallback in test mode (Buffer.alloc(32)) | `src/api/server.ts:1835` |
+| M7 | SSE stream authorization is optional | `src/api/server.ts:1007-1018` |
+| M8 | Session secret lacks entropy validation | `src/security/auth.ts:83,89-91` |
+| M9 | innerHTML with server-supplied discovery data | `src/public/app.js:2229` |
+| M10 | Template import body lacks Zod schema gate | `src/api/routes/templates.ts:53,67` |
+| M11 | API keys held in memory as plaintext strings | `src/memory/mem0Adapter.ts:155`, `src/memory/chromaMemoryAdapter.ts:207` |
+| M12 | No TLS enforcement for remote Chroma connections | `src/memory/chromaMemoryAdapter.ts:123-133` |
+| M13 | Default memory budget extremely permissive ($100/1M tokens) | `src/memory/defaultRun.ts:4-13` |
+| M14 | Event payload schema unconstrained (no redaction/size limit) | `src/protocol/events.ts:44` |
+| M15 | No module signature verification | `src/modules/registry.ts:37-46` |
+| M16 | No authorization on truth item mutations | `src/memory/truthLibrary.ts:128-143` |
+| M17 | No authorization on assignment store mutations | `src/providers/memoryAssignmentStore.ts:121-133` |
+| M18 | Shared SQLite DB with workspace-only scoping (no row-level security) | `src/security/userStores.ts:31-68` |
+| M19 | RBAC bypassed when auth disabled (by design) | `src/security/rbac.ts:129-133` |
+| M20 | NEEDS_DECISION state overly permissive as hub | `src/orchestration/runStateMachine.ts:50-63` |
+| M21 | TOCTOU race on phase transitions | `src/orchestration/runStateMachine.ts:75-98` |
+| M22 | No hard prompt length cap at API boundary | `src/orchestration/chatRunner.ts:169` |
+| M23 | No overall orchestration timeout | `src/orchestration/chatRunner.ts:164-493` |
+| M24 | Unbounded steerQueue growth | `src/orchestration/runControl.ts:74` |
+| M25 | User input in JSON lacks semantic isolation from system instructions | `src/orchestration/prompts.ts:144-180` |
+| M26 | Memory context allows user-controlled prompt injection | `src/orchestration/prompts.ts:14-19` |
+| M27 | Planner-controlled skill activation (capability escalation via prompt injection) | `src/orchestration/crucible.ts:263-295` |
+| M28 | Redacted content persists across compression generations | `src/orchestration/contextCompression.ts:104-145` |
+
+- **Traceability:** `audits/security-architecture-audit-2026-06-15.md`.
+
+### Full security/architecture audit 2026-06-15 — confirmed architecture strengths
+
+The audit confirmed the following security features are correctly implemented:
+
+1. AES-256-GCM encrypted secret store with atomic writes
+2. Scrypt password hashing with timingSafeEqual (per-user salts, 64-byte key length)
+3. HMAC-SHA256 signed session tokens (HttpOnly, SameSite=Lax, conditional Secure)
+4. Comprehensive redaction layer (URI credentials, Bearer/Basic tokens, API keys, passwords, connection strings)
+5. CSRF protection via Origin validation for state-changing requests
+6. Sandbox command allowlisting with `shell: false`, destructive command denylist, metacharacter detection
+7. Zod `.strict()` on all input schemas (prevents prototype pollution)
+8. Parameterized SQL everywhere (no SQL injection vectors)
+9. Secret/config separation (config records contain only secretRef, never key value)
+10. Budget gates before every LLM call (planner, skeptic, preprocessor, repair, synthesizer)
+11. Deterministic skeptic verdicts (LLM cannot override BLOCKER findings)
+12. Bounded healing loops (DEFAULT_MAX_HEALING_ATTEMPTS = 2, clamped to 1..10)
+13. Task decomposition caps (sub-goals <= 8, concurrency <= 8, risk-flagged capped to 3)
+14. Stable tier mutation detection (detects mid-run corruption of system instructions)
+15. Atomic file writes everywhere (temp file + rename pattern)
+16. Audit logging with hashed IP/UA and redacted reason fields
+17. Login rate limiting (5 attempts / 15 min with audit trail)
+18. Duplicate event rejection (prevents event replay/injection)
+19. User ID sanitization (prevents path traversal via user IDs)
+20. Core modules cannot be disabled
+21. enableNetwork: false by default on all providers
+22. npm audit: 0 vulnerabilities; no eval()/Function()/vm.* usage in production code
 
 ### Chunk 048 configured product readiness and gating (G1)
 
