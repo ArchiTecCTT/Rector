@@ -80,8 +80,8 @@
 | M15 | No module signature verification | `src/modules/registry.ts:37-46` |
 | M16 | No authorization on truth item mutations | `src/memory/truthLibrary.ts:128-143` |
 | M17 | No authorization on assignment store mutations | `src/providers/memoryAssignmentStore.ts:121-133` |
-| M18 | Shared SQLite DB with workspace-only scoping (no row-level security) | `src/security/userStores.ts:31-68` |
-| M19 | RBAC bypassed when auth disabled (by design) | `src/security/rbac.ts:129-133` |
+| M18 | Shared defaultStores when auth disabled (not shared SQLite DB — all stores share the same in-memory/SQlite instance when auth is off) | `src/security/userStores.ts:31-68` |
+| M19 | RBAC bypassed when auth disabled — Accepted by design for local mode; production warning added | `src/security/rbac.ts:129-133` |
 | M20 | NEEDS_DECISION state overly permissive as hub | `src/orchestration/runStateMachine.ts:50-63` |
 | M21 | TOCTOU race on phase transitions | `src/orchestration/runStateMachine.ts:75-98` |
 | M22 | No hard prompt length cap at API boundary | `src/orchestration/chatRunner.ts:169` |
