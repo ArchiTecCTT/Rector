@@ -29,6 +29,7 @@ export function defaultMemoryBudgetRun(overrides: Partial<Run> = {}): Run {
     attempts: 1,
     healingAttempts: 0,
     validationAttempts: 0,
+    version: 0,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,

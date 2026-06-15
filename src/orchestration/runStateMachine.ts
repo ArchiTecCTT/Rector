@@ -4,6 +4,24 @@ import type { RunPhase } from "../protocol/phases";
 import { redactSecrets } from "../security/redaction";
 import type { Run, UpdateRunInput } from "../store/schemas";
 
+/** Thrown when an optimistic-concurrency transition detects a version mismatch (M21).
+ *  Callers should retry the transition up to `maxTransitionRetries` times. */
+export class ConcurrentTransitionError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly expectedVersion: number,
+    public readonly actualVersion: number
+  ) {
+    super(
+      `Concurrent transition conflict for run ${runId}: expected version ${expectedVersion}, actual ${actualVersion}`
+    );
+    this.name = "ConcurrentTransitionError";
+  }
+}
+
+/** Maximum number of retries for a run transition when a ConcurrentTransitionError occurs (M21). */
+export const maxTransitionRetries = 3;
+
 export type RunStateMachineStore = {
   getRun(id: string): Promise<Run | undefined>;
   updateRun(id: string, patch: UpdateRunInput): Promise<Run | undefined>;
@@ -75,23 +93,38 @@ export async function transitionRun(
   targetPhase: RunPhase,
   options: RunTransitionOptions = {}
 ): Promise<RunTransitionResult> {
-  const run = await store.getRun(runId);
-  if (!run) {
-    throw new Error(`Run not found: ${runId}`);
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxTransitionRetries; attempt++) {
+    const run = await store.getRun(runId);
+    if (!run) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+
+    validateTransition(run.phase, targetPhase, options);
+
+    const patch = buildRunPatch(targetPhase, options);
+    // Increment version for optimistic concurrency (M21)
+    patch.version = (run.version ?? 0) + 1;
+    const event = buildRunEvent(
+      run,
+      run.phase,
+      targetPhase,
+      eventTypeForTargetPhase(targetPhase),
+      options
+    );
+
+    try {
+      return await store.commitRunTransition(runId, patch, event);
+    } catch (error) {
+      if (error instanceof ConcurrentTransitionError) {
+        lastError = error;
+        // Retry: re-read the run and try again
+        continue;
+      }
+      throw error;
+    }
   }
-
-  validateTransition(run.phase, targetPhase, options);
-
-  const patch = buildRunPatch(targetPhase, options);
-  const event = buildRunEvent(
-    run,
-    run.phase,
-    targetPhase,
-    eventTypeForTargetPhase(targetPhase),
-    options
-  );
-
-  return store.commitRunTransition(runId, patch, event);
+  throw lastError;
 }
 
 export async function createDecisionRequest(

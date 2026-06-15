@@ -63,6 +63,7 @@ export function createSqliteDriver(input: { path: string }): SqlDriver {
 
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { computePayloadMac, verifyPayloadMac } from "../security/payloadIntegrity.js";
+import { ConcurrentTransitionError } from "../orchestration/runStateMachine";
 import { z } from "zod";
 import { redactString } from "../security/redaction";
 import {
@@ -380,12 +381,18 @@ export class SqlRectorStore implements RectorStore {
       throw new Error(`Run not found: ${runId}`);
     }
 
+    // Optimistic concurrency (M21): patch.version is the new version,
+    // current.version is the expected existing version.
+    const expectedVersion = (current.version ?? 0);
+    const newVersion = patch.version ?? expectedVersion + 1;
+
     const updated = RunSchema.parse({
       ...current,
       ...structuredClone(patch),
       id: current.id,
       createdAt: current.createdAt,
       updatedAt: this.nowFn(),
+      version: newVersion,
     });
     const parsedEvent = RunEventSchema.parse(structuredClone(event));
 
@@ -398,12 +405,20 @@ export class SqlRectorStore implements RectorStore {
     try {
       const updatedPayload = this.serialize(updated);
       const updatedMac = this.macKey ? computePayloadMac(updatedPayload, this.macKey) : null;
-      this.driver.run("UPDATE runs SET conversation_id = ?, payload = ?, mac = ? WHERE id = ?", [
-        updated.conversationId,
-        updatedPayload,
-        updatedMac,
-        updated.id,
-      ]);
+      this.driver.run(
+        "UPDATE runs SET conversation_id = ?, payload = ?, mac = ?, version = ? WHERE id = ? AND version = ?",
+        [updated.conversationId, updatedPayload, updatedMac, newVersion, updated.id, expectedVersion]
+      );
+      // Verify that the row was actually updated (version matched)
+      const checkRow = this.driver.get<{ id: string }>(
+        "SELECT id FROM runs WHERE id = ? AND version = ?",
+        [updated.id, newVersion]
+      );
+      if (!checkRow) {
+        // Version mismatch — another transition occurred concurrently
+        this.driver.exec("ROLLBACK");
+        throw new ConcurrentTransitionError(runId, expectedVersion, -1);
+      }
       const eventPayload = this.serialize(parsedEvent);
       const eventMac = this.macKey ? computePayloadMac(eventPayload, this.macKey) : null;
       this.driver.run(
@@ -412,7 +427,7 @@ export class SqlRectorStore implements RectorStore {
       );
       this.driver.exec("COMMIT");
     } catch (error) {
-      this.driver.exec("ROLLBACK");
+      try { this.driver.exec("ROLLBACK"); } catch { /* already rolled back */ }
       throw error;
     }
 
@@ -525,6 +540,13 @@ export class SqlRectorStore implements RectorStore {
       } catch {
         // Column already exists — expected for subsequent boots.
       }
+    }
+
+    // Idempotent version column addition for optimistic concurrency (M21).
+    try {
+      this.driver.exec("ALTER TABLE runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0");
+    } catch {
+      // Column already exists — expected for subsequent boots.
     }
   }
 

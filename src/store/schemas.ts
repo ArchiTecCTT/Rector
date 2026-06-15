@@ -115,7 +115,7 @@ export type UpdateConversationInput = Partial<Omit<Conversation, "id" | "created
 export type CreateMessageInput = Omit<Message, "id" | "createdAt">;
 export type UpdateMessageInput = Partial<Omit<Message, "id" | "createdAt">>;
 
-export type CreateRunInput = Omit<Run, "id" | "createdAt" | "updatedAt">;
+export type CreateRunInput = Omit<Run, "id" | "createdAt" | "updatedAt" | "version"> & { version?: number };
 export type UpdateRunInput = Partial<Omit<Run, "id" | "createdAt" | "updatedAt">>;
 
 export type CreateArtifactInput = Omit<Artifact, "id" | "createdAt">;
