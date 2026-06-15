@@ -7,6 +7,7 @@ import { runEvent } from "./externalRunSupport";
 
 const DEFAULT_STATE_TTL_MS = 10 * 60 * 1000;
 const STEER_MESSAGE_MAX_LENGTH = 4_000;
+export const MAX_STEER_QUEUE_SIZE = 20;
 const STEER_PREVIEW_MAX_LENGTH = 180;
 
 export type RunControlState = {
@@ -71,6 +72,10 @@ export function requestInterrupt(state: RunControlState, reason?: string): void 
 export function enqueueSteer(state: RunControlState, message: string): void {
   const redacted = redactString(message).trim().slice(0, STEER_MESSAGE_MAX_LENGTH);
   if (redacted.length === 0) return;
+  if (state.steerQueue.length >= MAX_STEER_QUEUE_SIZE) {
+    state.steerQueue.shift();
+    console.warn("[RUN_CONTROL] Steer queue at capacity, dropping oldest message");
+  }
   state.steerQueue.push(redacted);
   touch(state);
 }
