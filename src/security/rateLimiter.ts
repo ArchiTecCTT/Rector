@@ -524,6 +524,22 @@ export class RedisRateLimiter implements DistributedRateLimiter {
 }
 
 /**
+ * Helper object to check if the optional Redis packages (ioredis and rate-limiter-flexible) are installed.
+ * Defined as an object property to allow mocking in tests.
+ */
+export const redisPackageCheck = {
+  check(): boolean {
+    try {
+      require.resolve("ioredis");
+      require.resolve("rate-limiter-flexible");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+
+/**
  * Create the appropriate rate limiter based on environment.
  * If RECTOR_REDIS_URL is set and the optional packages are available, returns a Redis-backed limiter.
  * Otherwise returns an InMemoryRateLimiter with a startup warning.
@@ -534,12 +550,10 @@ export function createRateLimiterFromEnv(
 ): RateLimiter {
   const redisUrl = env.RECTOR_REDIS_URL;
   if (redisUrl) {
-    try {
-      require.resolve("ioredis");
-      require.resolve("rate-limiter-flexible");
+    if (redisPackageCheck.check()) {
       console.log("[RATE_LIMIT] Using Redis distributed rate limiter");
       return new RedisRateLimiter(redisUrl, policy);
-    } catch {
+    } else {
       console.warn(
         "[RATE_LIMIT] RECTOR_REDIS_URL is set but ioredis/rate-limiter-flexible are not installed. " +
           "Falling back to in-memory rate limiter. Install optional deps: npm install ioredis rate-limiter-flexible",

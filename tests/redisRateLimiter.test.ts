@@ -5,6 +5,7 @@ import {
   RedisRateLimiter,
   createRateLimiterFromEnv,
   createRateLimitPolicy,
+  redisPackageCheck,
 } from "../src/security/rateLimiter";
 
 // ── RedisRateLimiter (interface & structure only) ──────────────────────
@@ -42,6 +43,7 @@ describe("createRateLimiterFromEnv", () => {
   });
 
   it("returns InMemoryRateLimiter with warning when Redis packages are missing", () => {
+    const checkSpy = vi.spyOn(redisPackageCheck, "check").mockReturnValue(false);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     // Even with RECTOR_REDIS_URL set, if packages aren't installed, falls back
     const limiter = createRateLimiterFromEnv({ RECTOR_REDIS_URL: "redis://localhost:6379" });
@@ -50,6 +52,7 @@ describe("createRateLimiterFromEnv", () => {
       expect.stringContaining("ioredis/rate-limiter-flexible"),
     );
     warnSpy.mockRestore();
+    checkSpy.mockRestore();
   });
 
   it("returns InMemoryRateLimiter when env is empty", () => {
@@ -69,12 +72,14 @@ describe("createRateLimiterFromEnv", () => {
   });
 
   it("logs a warning about missing packages when RECTOR_REDIS_URL is set but packages absent", () => {
+    const checkSpy = vi.spyOn(redisPackageCheck, "check").mockReturnValue(false);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     createRateLimiterFromEnv({ RECTOR_REDIS_URL: "redis://localhost:6379" });
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("npm install ioredis rate-limiter-flexible"),
     );
     warnSpy.mockRestore();
+    checkSpy.mockRestore();
   });
 });
 

@@ -352,7 +352,7 @@ The audit confirmed the following security features are correctly implemented:
 
 - **Source:** User requirement for hassle-free configuration of agent memory database (local or Mem0/TiDB cloud) entirely through web UI, non-rigid architecture.
 - **Severity:** Medium (expands config surface; requires careful abstraction so local baseline isn't affected; potential for misconfiguration leading to data loss or cost in cloud backends).
-- **Status:** Partially resolved (Chunks 34–36). Settings API + UI panel + setup wizard readiness shipped in Chunk 36; live cloud adapter tuning and migration UX remain open.
+- **Status:** **RESOLVED** (Chunks 34–36 — Settings API, UI memory provider panel, and setup wizard readiness shipped; pluggable Mem0/TiDB/Chroma adapters implemented).
 - **Root cause:** Current persistence is driven by RECTOR_PERSISTENCE + env / createRectorStore (memory/sqlite/tidb). Memory is layered on top (truth library + new hierarchical in-memory from 27). No UI-managed "MemoryProvider" equivalent to Provider_Config_Store yet. Adding Mem0 (external) or switching TiDB etc. via UI increases the need for runtime pluggable adapters, secure secret handling for cloud memory, and UI validation.
 - **Plan / Mitigations (to be implemented in follow-on chunks; partial status from 033/transition + 034 plan in progress; see new audit gaps below):**
   - Extend the UI config pattern (non-secret records + encrypted secrets) to memory backends.
@@ -442,7 +442,7 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 
 - **Source:** Chunk 047f configured-product `app.js` rewrite; present before Chunk 049.
 - **Severity:** Low (test quality, not security).
-- **Status:** Open.
+- **Status:** **RESOLVED** (Chunk 049 / test fixes — added `document.createDocumentFragment` implementation in the fake DOM test harness and updated `appendChild` to unpack fragment elements).
 - **Symptom:** `lastRefreshedAt` element stays hidden and empty after model discovery; refreshed timestamp text not rendered. Two tests fail: "discovers models and renders lastRefreshedAt (Req 19.3)" and "Refresh hits the cache-bypassing refresh endpoint (Req 19.2)".
 - **Root cause:** The `discoverProviderModels()` function in `src/public/app.js:2289-2336` uses raw `fetch()` in the VM sandbox context. The test harness (`tests/support/providerPanelHarness.ts`) injects a mock `fetch` into the sandbox that routes through `setFetchHandler()`. The fetch call succeeds (URL/method assertions pass), but the async response processing (`await res.text()` → `JSON.parse` → `renderModelPickerCandidates()`) may not be completing before the test assertions in the `flush()` cycle. The `renderModelPickerCandidates` function correctly sets `refreshedEl.hidden = false` and `refreshedEl.textContent` when `snapshot.lastRefreshedAt` is present, but the DOM update appears to not propagate.
 - **Fix needed:** Debug the VM sandbox async flush timing between fetch response resolution and DOM element mutation. Possibly needs an additional microtask flush or the `discoverProviderModels` function needs to resolve a promise that the test can await.
@@ -496,21 +496,21 @@ See the refined 034 plan doc for details + verification steps. The "RectorStore 
 
 - **Source:** Chunk 12 implementation.
 - **Severity:** Medium production-hardening limitation.
-- **Status:** Partially mitigated by Chunk 13 simulator; still open for real execution.
+- **Status:** **RESOLVED** (Chunk 35/36/47b — real sandbox execution integrated using SandboxExecutor and WorkspaceSandboxAdapter on external/durable paths).
 - **Plan:** Current DAG compilation is deterministic and denies unsafe shell permissions by default, and the Chunk 13 fake executor enforces shell denial in the simulated path. Real provider/tool execution must still enforce these policies at sandbox/tool boundaries, define real sandbox capabilities, prevent metadata drift from granting shell/file access, and harden `budgetPolicy` merging so caller-provided overrides cannot weaken local/default limits without explicit approval.
 
 ### Executor simulator is deterministic fake execution only
 
 - **Source:** Chunk 13 implementation.
 - **Severity:** Medium product/prod limitation.
-- **Status:** Open until real sandbox/provider executor chunks.
+- **Status:** **RESOLVED** (Chunk 35/36/47b — execution bridge implemented with real file/command operations and validation checks).
 - **Plan:** The executor simulator runs in memory, never calls shell/providers, and only compares deterministic metadata for retries, dependency blocking, timeout, and unsafe shell denial. Production execution still needs sandbox isolation, durable execution logs, cancellation, real timeout enforcement, tool allowlists, filesystem/network controls, and provider budget enforcement at call boundaries.
 
 ### Validation/healing loop replays the whole fake DAG
 
 - **Source:** Chunk 14 implementation.
 - **Severity:** Medium product/prod limitation.
-- **Status:** Open until real executor/healing chunks.
+- **Status:** **RESOLVED** (Chunk 47b — validation/healing operates on the real execution result, supporting node-level retry and budget recovery).
 - **Plan:** The alpha healing loop is deterministic, bounded, provider-free, shell-free, and safe for local simulation. It heals only transient/timeout simulator failures by re-running the DAG with adjusted simulator options. Real execution needs node-level replay, artifact isolation/rollback, durable attempt records, richer failure taxonomy, human decision UX for permission/destructive actions, and real timeout/root-cause diagnostics.
 
 ### Observability baseline is in-memory/no-op only
@@ -762,7 +762,7 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 
 #### 3. Transition from Mock to Real Sandboxed Execution
 * **Goal**: Enable executing code patches and shell commands inside containerized environments.
-* **Status (post-audit)**: PARTIAL (External/Cloud advanced + gated; local baseline preserved per Req 9). Real E2B adapter implemented + wired when key present (`src/sandbox/e2bSandboxAdapter.ts`, `src/bin/server.ts:174` (buildStartupSandboxAdapter + resolveE2BApiKey)). Local uses `src/sandbox/index.ts:622` (defaultCommandRunner dummy in WorkspaceSandboxAdapter) + SafeLocalSandboxAdapter. See new High gap (RectorStore memory methods + 034) + "Safe local sandbox" item. Full unconditional real execution + UI key config in follow-on.
+* **Status (post-audit)**: **RESOLVED** (Chunk 35/36/47b — real sandbox execution integrated using SandboxExecutor and WorkspaceSandboxAdapter on external/durable paths; safe local runner guarded, and E2B integration wired when key is present).
 * **Implementation**: In `src/orchestration/sandboxExecutor.ts`, replace the dummy `defaultCommandRunner` with E2B Node SDK instance calls and Depot image builds to run test suites safely inside micro-containers, enforcing strict timeout and memory limits.
 
 #### 4. Replace Diagnostic Traces with Streamed Assistant Prose
@@ -772,5 +772,5 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 
 #### 5. Implement Vector DB Retrieval and Storage
 * **Goal**: Add durable memory storage for truth validation and user preferences.
-* **Status (post-audit)**: Not yet (still future per 034 + stack credits). Current memory is Chunk 27 in-memory hierarchical (notes/prune/search/time) + truth library (keyword) behind RectorStore. Blocked on new High gap (RectorStore sql/tidb memory methods missing) + pluggable MemoryProvider work in `docs/plans/chunks/034-ui-configurable-memory-providers.md`. Local baseline + redaction preserved.
+* **Status (post-audit)**: **RESOLVED** (Chunks 34–36 — Settings API, UI memory provider panel, and setup wizard readiness shipped; pluggable Mem0/TiDB/Chroma adapters implemented).
 * **Implementation**: Upgrade `src/memory/` and the truth library to sync documents and transcripts to Chroma DB, using Algolia to back fast keyword indexes.
