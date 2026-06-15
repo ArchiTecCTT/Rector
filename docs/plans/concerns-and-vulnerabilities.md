@@ -89,7 +89,7 @@
 | M24 | Unbounded steerQueue growth | `src/orchestration/runControl.ts:74` |
 | M25 | User input in JSON lacks semantic isolation from system instructions | `src/orchestration/prompts.ts:144-180` |
 | M26 | Memory context allows user-controlled prompt injection | `src/orchestration/prompts.ts:14-19` |
-| M27 | Planner-controlled skill activation (capability escalation via prompt injection) | `src/orchestration/crucible.ts:263-295` |
+| M27 | Residual risk: skill activation gated by crucible with caps, catalog lookup, high-risk gate, and prerequisite checks — Accepted — mitigated by existing controls | `src/orchestration/crucible.ts:263-295` |
 | M28 | Redacted content persists across compression generations | `src/orchestration/contextCompression.ts:104-145` |
 
 - **Traceability:** `audits/security-architecture-audit-2026-06-15.md`.
