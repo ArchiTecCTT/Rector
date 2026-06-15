@@ -174,6 +174,43 @@ export function createNoopObservabilityAdapters(): NoopObservabilityAdapters {
   };
 }
 
+/**
+ * Create observability adapters based on environment configuration.
+ *
+ * Checks for `SENTRY_DSN` and `POSTHOG_API_KEY` environment variables. When set,
+ * returns real adapters backed by the respective SDKs (lazy-loaded via `require()`).
+ * When not set, returns no-op adapters with zero overhead.
+ *
+ * Optional dependencies `@sentry/node` and `posthog-node` are NOT installed by
+ * default — they are loaded lazily only when the corresponding env var is set.
+ */
+// Re-export adapter factories for direct consumption
+export { createSentryAdapter } from "./sentryAdapter.js";
+export type { SentryAdapterOptions } from "./sentryAdapter.js";
+export { createPostHogAdapter } from "./posthogAdapter.js";
+export type { PostHogAdapterOptions } from "./posthogAdapter.js";
+
+import { createSentryAdapter } from "./sentryAdapter.js";
+import { createPostHogAdapter } from "./posthogAdapter.js";
+
+/**
+ * Create observability adapters based on environment configuration.
+ *
+ * Checks for `SENTRY_DSN` and `POSTHOG_API_KEY` environment variables. When set,
+ * returns real adapters backed by the respective SDKs (lazy-loaded via `require()`).
+ * When not set, returns no-op adapters with zero overhead.
+ *
+ * Optional dependencies `@sentry/node` and `posthog-node` are NOT installed by
+ * default — they are loaded lazily only when the corresponding env var is set.
+ */
+export function createObservabilityAdapters(): NoopObservabilityAdapters {
+  return {
+    sentry: createSentryAdapter(),
+    postHog: createPostHogAdapter(),
+    openTelemetry: createNoopAdapter("opentelemetry"),
+  };
+}
+
 function createNoopAdapter(name: string): ObservabilityAdapter {
   return {
     name,
