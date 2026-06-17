@@ -104,11 +104,16 @@ describe("MySQL-dialect DDL is emitted for all six tables (task 15.3, Req 11.3)"
     const store = createRectorStore({ driver: "memory" }, { driver });
     expect(store).toBeInstanceOf(SqlRectorStore);
 
-    // Exactly the six entity tables were provisioned, one DDL statement each.
-    expect(driver.ddl).toHaveLength(ENTITY_TABLES.length);
+    // Six CREATE TABLE statements plus six idempotent ALTER TABLE ADD COLUMN mac TEXT
+    // for payload integrity (H8) — the ALTER is wrapped in try/catch so it's harmless
+    // when the column already exists.
+    const createStatements = driver.ddl.filter((sql) =>
+      /^CREATE TABLE IF NOT EXISTS/i.test(sql)
+    );
+    expect(createStatements).toHaveLength(ENTITY_TABLES.length);
 
     for (const table of ENTITY_TABLES) {
-      const statement = driver.ddl.find((sql) =>
+      const statement = createStatements.find((sql) =>
         new RegExp(`^CREATE TABLE IF NOT EXISTS ${table}\\b`, "i").test(sql)
       );
       expect(statement, `missing DDL for ${table}`).toBeTruthy();
@@ -117,6 +122,8 @@ describe("MySQL-dialect DDL is emitted for all six tables (task 15.3, Req 11.3)"
       expect(statement).toContain("CREATE TABLE IF NOT EXISTS");
       expect(statement).toMatch(/id VARCHAR\(255\) PRIMARY KEY/i);
       expect(statement).toMatch(/payload JSON NOT NULL/i);
+      // MAC column for payload integrity (H8).
+      expect(statement).toMatch(/mac TEXT/i);
       // Idempotent provisioning so a re-boot never errors on existing tables.
       expect(statement).toMatch(/IF NOT EXISTS/i);
     }

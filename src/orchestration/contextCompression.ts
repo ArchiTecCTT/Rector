@@ -116,6 +116,13 @@ export async function compressContextLineage(input: CompressionInput): Promise<C
   }
 
   const summaryHandle = artifactToHandle(artifact);
+  const redactedSummary = redactString(summary);
+  const redactedArtifactSummary = redactString(artifact.summary);
+  const redactedCarriedContext = contextPack.inlineContext.slice(0, 2).map((entry) => ({
+    ...entry,
+    summary: redactString(entry.summary),
+    content: redactString(entry.content),
+  }));
   const newContextPack = ContextPackSchema.parse({
     ...contextPack,
     id: `ctx-${sha256(`${child.id}:${artifact.id}:${summaryMessage.id}`).slice(0, 16)}`,
@@ -135,16 +142,18 @@ export async function compressContextLineage(input: CompressionInput): Promise<C
     inlineContext: [
       {
         kind: "CONTEXT_SUMMARY",
-        summary: artifact.summary,
-        content: summary,
+        summary: redactedArtifactSummary,
+        content: redactedSummary,
         hash,
-        sizeBytes: Buffer.byteLength(summary, "utf8"),
+        sizeBytes: Buffer.byteLength(redactedSummary, "utf8"),
         provenance: { source: "contextCompression", sourceType: "system" },
       },
-      ...contextPack.inlineContext.slice(0, 2),
+      ...redactedCarriedContext,
     ],
     compressionRecommended: false,
   });
+
+  verifyCompressedOutput(newContextPack);
 
   await store.appendEvent(contextCompressedEvent(runId, parent, child, artifact, input.now));
 
@@ -211,7 +220,7 @@ function artifactToHandle(artifact: Artifact): ArtifactHandle {
     artifactId: artifact.id,
     kind: artifact.kind,
     uri: artifact.uri,
-    summary: artifact.summary,
+    summary: redactString(artifact.summary),
     hash: artifact.hash,
     sizeBytes: artifact.sizeBytes,
     piiState: artifact.piiState,
@@ -219,6 +228,38 @@ function artifactToHandle(artifact: Artifact): ArtifactHandle {
     provenance: { source: "contextCompression", sourceType: "system" },
     createdAt: artifact.createdAt,
   };
+}
+
+/** Known secret patterns to scan for in post-compression verification. */
+const SECRET_VERIFICATION_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /sk-[a-zA-Z0-9]{20,}/g, label: "OpenAI-style API key" },
+  { pattern: /AKIA[A-Z0-9]{12,}/g, label: "AWS access key ID" },
+  { pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g, label: "PEM private key" },
+  { pattern: /Bearer\s+[A-Za-z0-9\-._~+/]+=*\b/g, label: "Bearer token" },
+  { pattern: /Basic\s+[A-Za-z0-9+/]+=*\b/g, label: "Basic auth credential" },
+  { pattern: /[a-z][a-z0-9+.-]*:\/\/[^\s/@]*@/gi, label: "Credential URI" },
+  { pattern: /(?:api[_-]?key|token|secret|password)=[^\s,;&]+/gi, label: "Inline secret assignment" },
+];
+
+/**
+ * Post-compression verification: scan the compressed context pack for known secret patterns.
+ * Warns (console.warn) if any are detected — does not throw, since redaction is best-effort.
+ */
+export function verifyCompressedOutput(pack: ContextPack): void {
+  const textsToScan: string[] = [
+    ...pack.inlineContext.map((entry) => `${entry.summary ?? ""} ${entry.content ?? ""}`),
+    ...pack.artifactHandles.map((handle) => handle.summary ?? ""),
+  ];
+  const combined = textsToScan.join("\n");
+  for (const { pattern, label } of SECRET_VERIFICATION_PATTERNS) {
+    // Reset regex lastIndex for patterns with /g flag
+    const regex = new RegExp(pattern.source, pattern.flags);
+    if (regex.test(combined)) {
+      console.warn(
+        `[SECURITY] Post-compression verification detected ${label} in compressed context. Redaction may be incomplete.`,
+      );
+    }
+  }
 }
 
 function capText(value: string, maxChars: number): string {

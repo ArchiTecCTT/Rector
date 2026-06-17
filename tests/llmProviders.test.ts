@@ -111,11 +111,14 @@ describe("LLM provider layer", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("Together config validation fails cleanly when API key is missing", () => {
-    const provider = new TogetherAIProvider({ apiKey: "" });
+  it("Together config validation fails cleanly when API key is missing or only whitespace", () => {
+    const provider1 = new TogetherAIProvider({ apiKey: "" });
+    expect(() => provider1.validateConfig()).toThrow(ProviderError);
+    expect(() => provider1.validateConfig()).toThrow(/TOGETHER_API_KEY is required/);
 
-    expect(() => provider.validateConfig()).toThrow(ProviderError);
-    expect(() => provider.validateConfig()).toThrow(/TOGETHER_API_KEY is required/);
+    const provider2 = new TogetherAIProvider({ apiKey: "   " });
+    expect(() => provider2.validateConfig()).toThrow(ProviderError);
+    expect(() => provider2.validateConfig()).toThrow(/TOGETHER_API_KEY is required/);
   });
 
   it("Together request builder emits OpenAI-compatible chat shape without network", () => {
@@ -167,11 +170,14 @@ describe("LLM provider layer", () => {
     expect(response.content).toContain("Fake provider response");
   });
 
-  it("Cloudflare config validation fails cleanly when account id or token is missing", () => {
-    const provider = new CloudflareWorkersAIProvider({ accountId: "", apiToken: "" });
+  it("Cloudflare config validation fails cleanly when account id or token is missing or only whitespace", () => {
+    const provider1 = new CloudflareWorkersAIProvider({ accountId: "", apiToken: "" });
+    expect(() => provider1.validateConfig()).toThrow(ProviderError);
+    expect(() => provider1.validateConfig()).toThrow(/CLOUDFLARE_ACCOUNT_ID is required/);
 
-    expect(() => provider.validateConfig()).toThrow(ProviderError);
-    expect(() => provider.validateConfig()).toThrow(/CLOUDFLARE_ACCOUNT_ID is required/);
+    const provider2 = new CloudflareWorkersAIProvider({ accountId: "acc", apiToken: "   " });
+    expect(() => provider2.validateConfig()).toThrow(ProviderError);
+    expect(() => provider2.validateConfig()).toThrow(/CLOUDFLARE_API_TOKEN is required/);
   });
 
   it("Cloudflare request builder emits Workers AI chat shape without network", () => {
@@ -254,11 +260,14 @@ describe("LLM provider layer", () => {
     expect(response.usage.totalTokens).toBe(30);
   });
 
-  it("Azure OpenAI config validation fails cleanly when endpoint or key is missing", () => {
-    const provider = new AzureOpenAIProvider({ apiKey: "", endpoint: "" });
+  it("Azure OpenAI config validation fails cleanly when endpoint or key is missing or only whitespace", () => {
+    const provider1 = new AzureOpenAIProvider({ apiKey: "", endpoint: "" });
+    expect(() => provider1.validateConfig()).toThrow(ProviderError);
+    expect(() => provider1.validateConfig()).toThrow(/AZURE_OPENAI_API_KEY is required/);
 
-    expect(() => provider.validateConfig()).toThrow(ProviderError);
-    expect(() => provider.validateConfig()).toThrow(/AZURE_OPENAI_API_KEY is required/);
+    const provider2 = new AzureOpenAIProvider({ apiKey: "   ", endpoint: "https://unit-resource.openai.azure.com" });
+    expect(() => provider2.validateConfig()).toThrow(ProviderError);
+    expect(() => provider2.validateConfig()).toThrow(/AZURE_OPENAI_API_KEY is required/);
   });
 
   it("Azure OpenAI request builder emits deployment chat shape without network", () => {

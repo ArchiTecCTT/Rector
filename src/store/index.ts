@@ -19,6 +19,8 @@ import type {
 } from "./schemas";
 import type { DeploymentConfig, TiDBConnectionConfig } from "../deployment";
 import { redactString } from "../security/redaction";
+import { ensureRestrictedDir, ensureRestrictedFile } from "../security/filePermissions";
+import { dirname } from "node:path";
 import { InMemoryRectorStore } from "./inMemoryRectorStore";
 import { SqlRectorStore, createSqliteDriver, type SqlDriver } from "./sqlRectorStore";
 import { createTiDBDriver } from "./tidbRectorStore";
@@ -97,6 +99,15 @@ export interface CreateRectorStoreOverrides {
   driver?: SqlDriver;
   /** Deterministic clock forwarded to the constructed store (tests). */
   now?: () => string;
+  /** AES-256-GCM key for SQLite payload encryption at rest. When provided, all
+   *  payloads are sealed with AES-256-GCM and prefixed with `ENC1:`; unencrypted
+   *  (legacy) rows are still readable for backward compat. */
+  encryptionKey?: Buffer;
+  /** HMAC-SHA256 key for SQLite payload integrity verification. When provided,
+   *  MACs are computed on insert/update and verified on read. Rows without a MAC
+   *  (legacy) are accepted with a warning. Derived from the master key via
+   *  `deriveMacKey()` with info `"rector.payload-mac.v1"`. */
+  macKey?: Buffer;
 }
 
 /**
@@ -172,7 +183,7 @@ export function createRectorStore(
 ): RectorStore {
   // An injected driver always wins (tests inject an in-memory SqlDriver double).
   if (overrides?.driver) {
-    return new SqlRectorStore({ driver: overrides.driver, now: overrides?.now });
+    return new SqlRectorStore({ driver: overrides.driver, now: overrides?.now, encryptionKey: overrides?.encryptionKey, macKey: overrides?.macKey });
   }
 
   const driver = config?.driver ?? "memory";
@@ -184,7 +195,22 @@ export function createRectorStore(
 
     case "sqlite": {
       const path = config?.sqlitePath ?? DEFAULT_SQLITE_PATH;
-      return new SqlRectorStore({ driver: createSqliteDriver({ path }), now: overrides?.now });
+      // ":memory:" is the SQLite in-memory sentinel — it is not a real filesystem
+      // path, so skip file-permission operations that would fail or warn on it.
+      const isInMemory = path === ":memory:";
+      if (!isInMemory) {
+        ensureRestrictedDir(dirname(path));
+      }
+      const store = new SqlRectorStore({
+        driver: createSqliteDriver({ path }),
+        now: overrides?.now,
+        encryptionKey: overrides?.encryptionKey,
+        macKey: overrides?.macKey,
+      });
+      if (!isInMemory) {
+        ensureRestrictedFile(path);
+      }
+      return store;
     }
 
     case "tidb": {
@@ -196,6 +222,8 @@ export function createRectorStore(
       return new SqlRectorStore({
         driver: createTiDBDriver({ host, port, user, password, database, tls }),
         now: overrides?.now,
+        encryptionKey: overrides?.encryptionKey,
+        macKey: overrides?.macKey,
       });
     }
 

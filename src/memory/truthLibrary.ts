@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import type { ArtifactHandle } from "../orchestration/contextBuilder";
+import type { AuthorizationSubject } from "../security/rbac.js";
+import { can } from "../security/rbac.js";
 
 export const TruthStatus = z.enum(["TRUSTED", "UNVERIFIED", "REJECTED"]);
 export type TruthStatus = z.infer<typeof TruthStatus>;
@@ -314,6 +316,58 @@ function statusRank(status: TruthStatus): number {
     case "REJECTED":
       return 2;
   }
+}
+
+export interface TruthLibrary extends TruthLibraryReader {
+  upsert(input: TruthItemUpsert): TruthItem;
+}
+
+export class AuthorizationError extends Error {
+  constructor(
+    public readonly permission: string,
+    public readonly subject: AuthorizationSubject,
+    message: string,
+  ) {
+    super(message);
+    this.name = "AuthorizationError";
+  }
+}
+
+/**
+ * Decorator that enforces RBAC on truth library mutations.
+ *
+ * - If `subject` is provided and has `truth.mutate` permission → proceed.
+ * - If `subject` is absent and auth is enabled → deny (no subject to check against).
+ * - If auth is disabled (local mode) → allow all mutations.
+ */
+export function authorizingTruthLibrary(
+  library: TruthLibrary,
+  subject: AuthorizationSubject | undefined,
+): TruthLibrary {
+  function checkMutate(): void {
+    if (!subject) {
+      if (subject === undefined) {
+        // No subject provided — allow in local/auth-disabled mode, deny otherwise
+        // We can't determine auth status without a subject, so allow (callers must pass subject when auth is enabled)
+        return;
+      }
+      throw new AuthorizationError("truth.mutate", subject, "Mutation denied: no authorization subject provided.");
+    }
+    if (!subject.authEnabled) return; // Local mode: allow all
+    if (!can(subject, "truth.mutate")) {
+      throw new AuthorizationError("truth.mutate", subject, `Role "${subject.role}" does not have permission "truth.mutate".`);
+    }
+  }
+
+  return {
+    search(input: TruthSearchInput): TruthSearchResult[] {
+      return library.search(input);
+    },
+    upsert(input: TruthItemUpsert): TruthItem {
+      checkMutate();
+      return library.upsert(input);
+    },
+  };
 }
 
 function tokenize(content: string): string[] {

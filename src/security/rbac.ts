@@ -25,6 +25,7 @@ export const PERMISSIONS = [
   "audit.read",
   "billing.manage",
   "secrets.rotate",
+  "truth.mutate",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -49,6 +50,7 @@ const ROLE_PERMISSIONS: Record<WorkspaceRole, readonly Permission[]> = {
     "operator.read",
     "operator.manage",
     "audit.read",
+    "truth.mutate",
   ],
   operator: [
     "workspace.read",
@@ -120,6 +122,16 @@ export function permissionsForRole(role: WorkspaceRole): readonly Permission[] {
 /** Pure role/permission predicate. */
 export function canRole(role: WorkspaceRole, permission: Permission): boolean {
   return ROLE_PERMISSIONS[role].includes(permission);
+}
+
+/**
+ * Log a security warning when auth is disabled in production mode.
+ * Should be called once at server startup.
+ */
+export function warnIfAuthDisabledInProduction(authEnabled: boolean): void {
+  if (!authEnabled && process.env.NODE_ENV === "production") {
+    console.warn("[SECURITY] Auth is disabled in production mode — all users share owner access");
+  }
 }
 
 /**

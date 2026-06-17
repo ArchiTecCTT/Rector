@@ -244,3 +244,139 @@ function stringFrom(...values: unknown[]): string | undefined {
   }
   return undefined;
 }
+
+// --- Budget Approval Flow (Task 4.4) ---
+
+/** A pending or resolved budget approval request. */
+export interface BudgetApprovalRequest {
+  id: string;
+  runId: string;
+  reasons: string[];
+  /** The budget usage snapshot at the time the approval was requested. */
+  usage: BudgetDecision["usage"];
+  status: "pending" | "approved" | "denied";
+  decidedBy?: string;
+  decidedAt?: string;
+  createdAt: string;
+}
+
+/** In-memory budget approval registry. Shared across the process for route + chatRunner access. */
+class BudgetApprovalRegistry {
+  private approvals = new Map<string, BudgetApprovalRequest>();
+  private resolvers = new Map<string, Set<(decision: "approved" | "denied" | "timeout") => void>>();
+
+  /** Create a new approval request and return its ID. */
+  createApproval(runId: string, reasons: string[], usage: BudgetDecision["usage"]): string {
+    const id = `budget-approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const request: BudgetApprovalRequest = {
+      id,
+      runId,
+      reasons,
+      usage,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+    };
+    this.approvals.set(id, request);
+    return id;
+  }
+
+  /** Record a decision on a pending approval. Returns the updated request or undefined if not found. */
+  recordDecision(approvalId: string, decision: "approved" | "denied", decidedBy?: string): BudgetApprovalRequest | undefined {
+    const request = this.approvals.get(approvalId);
+    if (!request) return undefined;
+    if (request.status !== "pending") return request;
+    request.status = decision;
+    request.decidedBy = decidedBy ?? "unknown";
+    request.decidedAt = new Date().toISOString();
+    // Resolve any waiting pollers
+    const list = this.resolvers.get(approvalId);
+    if (list) {
+      for (const resolver of list) {
+        resolver(decision);
+      }
+      this.resolvers.delete(approvalId);
+    }
+    return request;
+  }
+
+  /** Get a specific approval request. */
+  getApproval(approvalId: string): BudgetApprovalRequest | undefined {
+    return this.approvals.get(approvalId);
+  }
+
+  /** List all pending approval requests. */
+  listPendingApprovals(): BudgetApprovalRequest[] {
+    return [...this.approvals.values()].filter((a) => a.status === "pending");
+  }
+
+  /**
+   * Wait for a decision on a pending approval with a timeout.
+   * Resolves with "approved", "denied", or "timeout".
+   */
+  waitForDecision(approvalId: string, timeoutMs: number): Promise<"approved" | "denied" | "timeout"> {
+    const request = this.approvals.get(approvalId);
+    if (!request) return Promise.resolve("timeout");
+    if (request.status !== "pending") return Promise.resolve(request.status as "approved" | "denied");
+
+    return new Promise<"approved" | "denied" | "timeout">((resolve) => {
+      let timer: NodeJS.Timeout;
+      const resolver = (decision: "approved" | "denied" | "timeout") => {
+        clearTimeout(timer);
+        resolve(decision);
+      };
+
+      let list = this.resolvers.get(approvalId);
+      if (!list) {
+        list = new Set();
+        this.resolvers.set(approvalId, list);
+      }
+      list.add(resolver);
+
+      timer = setTimeout(() => {
+        const currentList = this.resolvers.get(approvalId);
+        if (currentList) {
+          currentList.delete(resolver);
+          if (currentList.size === 0) {
+            this.resolvers.delete(approvalId);
+          }
+        }
+        if (request.status === "pending") {
+          request.status = "denied";
+          request.decidedBy = "timeout";
+          request.decidedAt = new Date().toISOString();
+        }
+        resolve("timeout");
+      }, timeoutMs);
+    });
+  }
+}
+
+/** Global budget approval registry singleton. */
+export const budgetApprovalRegistry = new BudgetApprovalRegistry();
+
+/** Default timeout for budget approval polling (5 minutes). */
+export const BUDGET_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Record an approval decision on the global registry.
+ * Convenience wrapper for use from API routes.
+ */
+export function recordBudgetApprovalDecision(
+  approvalId: string,
+  decision: "approved" | "denied",
+  decidedBy?: string,
+): BudgetApprovalRequest | undefined {
+  return budgetApprovalRegistry.recordDecision(approvalId, decision, decidedBy);
+}
+
+/**
+ * Wait for a budget approval decision with a timeout.
+ * Returns "approved", "denied", or "timeout".
+ * Used by chatRunner to poll for budget decisions.
+ */
+export function waitForBudgetApproval(
+  approvalId: string,
+  timeoutMs: number = BUDGET_APPROVAL_TIMEOUT_MS,
+): Promise<"approved" | "denied" | "timeout"> {
+  return budgetApprovalRegistry.waitForDecision(approvalId, timeoutMs);
+}

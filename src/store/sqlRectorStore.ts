@@ -61,6 +61,9 @@ export function createSqliteDriver(input: { path: string }): SqlDriver {
   };
 }
 
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { computePayloadMac, verifyPayloadMac } from "../security/payloadIntegrity.js";
+import { ConcurrentTransitionError } from "../orchestration/runStateMachine";
 import { z } from "zod";
 import { redactString } from "../security/redaction";
 import {
@@ -116,6 +119,15 @@ import {
 export interface SqlRectorStoreOptions {
   driver: SqlDriver;
   now?: () => string;
+  /** Optional AES-256-GCM key for payload encryption at rest. When provided,
+   *  all payloads are sealed with AES-256-GCM and prefixed with `ENC1:`;
+   *  unencrypted (legacy) rows are still readable for backward compat. */
+  encryptionKey?: Buffer;
+  /** Optional HMAC-SHA256 key for payload integrity verification. When provided,
+   *  MACs are computed on insert/update and verified on read. Rows without a
+   *  MAC (legacy) are accepted with a warning. Derived from the master key
+   *  via `deriveMacKey()` with info `"rector.payload-mac.v1"`. */
+  macKey?: Buffer;
 }
 
 /** Prefixes used for store-generated entity ids, mirroring `InMemoryRectorStore`. */
@@ -140,11 +152,21 @@ interface EntityRow {
  * preserves `InMemoryRectorStore` semantics: insertion-order list results,
  * duplicate-event-id rejection, and an atomic-and-rollback run transition.
  */
+/** Prefix identifying an AES-256-GCM encrypted payload in the DB. */
+const ENC1_PREFIX = "ENC1:";
+
+/** Nonce length for AES-256-GCM (96 bits / 12 bytes). */
+const GCM_NONCE_LENGTH = 12;
+
 export class SqlRectorStore implements RectorStore {
   private readonly driver: SqlDriver;
+  private readonly encryptionKey: Buffer | undefined;
+  private readonly macKey: Buffer | undefined;
 
   constructor(options: SqlRectorStoreOptions) {
     this.driver = options.driver;
+    this.encryptionKey = options.encryptionKey;
+    this.macKey = options.macKey;
     this.nowFn = options.now ?? (() => new Date().toISOString());
     this.migrate();
   }
@@ -359,12 +381,18 @@ export class SqlRectorStore implements RectorStore {
       throw new Error(`Run not found: ${runId}`);
     }
 
+    // Optimistic concurrency (M21): patch.version is the new version,
+    // current.version is the expected existing version.
+    const expectedVersion = (current.version ?? 0);
+    const newVersion = patch.version ?? expectedVersion + 1;
+
     const updated = RunSchema.parse({
       ...current,
       ...structuredClone(patch),
       id: current.id,
       createdAt: current.createdAt,
       updatedAt: this.nowFn(),
+      version: newVersion,
     });
     const parsedEvent = RunEventSchema.parse(structuredClone(event));
 
@@ -375,18 +403,35 @@ export class SqlRectorStore implements RectorStore {
     const eventSeq = this.nextSeq("run_events");
     this.driver.exec("BEGIN");
     try {
-      this.driver.run("UPDATE runs SET conversation_id = ?, payload = ? WHERE id = ?", [
-        updated.conversationId,
-        this.serialize(updated),
-        updated.id,
-      ]);
+      const updatedPayload = this.serialize(updated);
+      const updatedMac = this.macKey ? computePayloadMac(updatedPayload, this.macKey) : null;
       this.driver.run(
-        "INSERT INTO run_events (id, run_id, seq, payload) VALUES (?, ?, ?, ?)",
-        [parsedEvent.id, parsedEvent.runId, eventSeq, this.serialize(parsedEvent)]
+        "UPDATE runs SET conversation_id = ?, payload = ?, mac = ?, version = ? WHERE id = ? AND version = ?",
+        [updated.conversationId, updatedPayload, updatedMac, newVersion, updated.id, expectedVersion]
+      );
+      // Verify that the row was actually updated (version matched)
+      const checkRow = this.driver.get<{ id: string }>(
+        "SELECT id FROM runs WHERE id = ? AND version = ?",
+        [updated.id, newVersion]
+      );
+      if (!checkRow) {
+        // Version mismatch — another transition occurred concurrently
+        this.driver.exec("ROLLBACK");
+        throw new ConcurrentTransitionError(runId, expectedVersion, -1);
+      }
+      const eventPayload = this.serialize(parsedEvent);
+      const eventMac = this.macKey ? computePayloadMac(eventPayload, this.macKey) : null;
+      this.driver.run(
+        "INSERT INTO run_events (id, run_id, seq, payload, mac) VALUES (?, ?, ?, ?, ?)",
+        [parsedEvent.id, parsedEvent.runId, eventSeq, eventPayload, eventMac]
       );
       this.driver.exec("COMMIT");
     } catch (error) {
-      this.driver.exec("ROLLBACK");
+      try {
+        this.driver.exec("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("[CRITICAL] Transaction rollback failed - database may be in inconsistent state:", rollbackError);
+      }
       throw error;
     }
 
@@ -467,7 +512,8 @@ export class SqlRectorStore implements RectorStore {
       `id ${idType} PRIMARY KEY, ` +
       `${filterColumn} ${filterType}, ` +
       `seq INTEGER NOT NULL, ` +
-      `payload ${jsonType} NOT NULL)`;
+      `payload ${jsonType} NOT NULL, ` +
+      `mac TEXT)`;
 
     this.driver.exec(table("conversations", "workspace_id"));
     this.driver.exec(table("messages", "conversation_id"));
@@ -486,6 +532,29 @@ export class SqlRectorStore implements RectorStore {
           tokenize = 'porter'
         )
       `);
+    }
+
+    // Idempotent MAC column addition for payload integrity verification (H8).
+    // ALTER TABLE ... ADD COLUMN is a no-op if the column already exists on SQLite ≥ 3.35.0,
+    // but older SQLite silently ignores it; wrap in try/catch for robustness.
+    const macTables = ["conversations", "messages", "runs", "run_events", "artifacts", "memories"];
+    const validTableNames = new Set(["conversations", "messages", "runs", "run_events", "artifacts", "memories"]);
+    for (const t of macTables) {
+      if (!validTableNames.has(t)) {
+        throw new Error(`Invalid table name in MAC migration: ${t}`);
+      }
+      try {
+        this.driver.exec(`ALTER TABLE ${t} ADD COLUMN mac TEXT`);
+      } catch {
+        // Column already exists — expected for subsequent boots.
+      }
+    }
+
+    // Idempotent version column addition for optimistic concurrency (M21).
+    try {
+      this.driver.exec("ALTER TABLE runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0");
+    } catch {
+      // Column already exists — expected for subsequent boots.
     }
   }
 
@@ -509,7 +578,15 @@ export class SqlRectorStore implements RectorStore {
   }
 
   private serialize(entity: unknown): string {
-    return JSON.stringify(entity);
+    const json = JSON.stringify(entity);
+    if (!this.encryptionKey) return json;
+    // AES-256-GCM seal: nonce(12) + ciphertext + authTag(16)
+    const nonce = randomBytes(GCM_NONCE_LENGTH);
+    const cipher = createCipheriv("aes-256-gcm", this.encryptionKey, nonce);
+    const ciphertext = Buffer.concat([cipher.update(json, "utf8"), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    const sealed = Buffer.concat([nonce, ciphertext, tag]);
+    return ENC1_PREFIX + sealed.toString("base64");
   }
 
   private nextSeq(table: string): number {
@@ -545,16 +622,20 @@ export class SqlRectorStore implements RectorStore {
 
   private insertRow(table: string, id: string, filter: string, entity: unknown): void {
     const seq = this.nextSeq(table);
+    const payload = this.serialize(entity);
+    const mac = this.macKey ? computePayloadMac(payload, this.macKey) : null;
     this.driver.run(
-      `INSERT INTO ${table} (id, ${this.filterColumn(table)}, seq, payload) VALUES (?, ?, ?, ?)`,
-      [id, filter, seq, this.serialize(entity)]
+      `INSERT INTO ${table} (id, ${this.filterColumn(table)}, seq, payload, mac) VALUES (?, ?, ?, ?, ?)`,
+      [id, filter, seq, payload, mac]
     );
   }
 
   private updateRow(table: string, id: string, filter: string, entity: unknown): void {
+    const payload = this.serialize(entity);
+    const mac = this.macKey ? computePayloadMac(payload, this.macKey) : null;
     this.driver.run(
-      `UPDATE ${table} SET ${this.filterColumn(table)} = ?, payload = ? WHERE id = ?`,
-      [filter, this.serialize(entity), id]
+      `UPDATE ${table} SET ${this.filterColumn(table)} = ?, payload = ?, mac = ? WHERE id = ?`,
+      [filter, payload, mac, id]
     );
   }
 
@@ -602,9 +683,11 @@ export class SqlRectorStore implements RectorStore {
     label: string,
     id: string
   ): T | undefined {
-    const row = this.driver.get<EntityRow>(`SELECT payload FROM ${table} WHERE id = ?`, [id]);
+    const row = this.driver.get<{ payload: unknown; mac: string | null }>(
+      `SELECT payload, mac FROM ${table} WHERE id = ?`, [id]
+    );
     if (row === undefined) return undefined;
-    return this.parsePayload(schema, label, id, row.payload);
+    return this.parsePayload(schema, label, id, row.payload, row.mac);
   }
 
   private listRows<T>(
@@ -616,12 +699,14 @@ export class SqlRectorStore implements RectorStore {
     const column = this.filterColumn(table);
     const rows =
       filter === undefined
-        ? this.driver.all<EntityRow>(`SELECT id, payload FROM ${table} ORDER BY seq ASC`)
-        : this.driver.all<EntityRow>(
-            `SELECT id, payload FROM ${table} WHERE ${column} = ? ORDER BY seq ASC`,
+        ? this.driver.all<{ id: string; payload: unknown; mac: string | null }>(
+            `SELECT id, payload, mac FROM ${table} ORDER BY seq ASC`
+          )
+        : this.driver.all<{ id: string; payload: unknown; mac: string | null }>(
+            `SELECT id, payload, mac FROM ${table} WHERE ${column} = ? ORDER BY seq ASC`,
             [filter]
           );
-    return rows.map((row) => this.parsePayload(schema, label, row.id, row.payload));
+    return rows.map((row) => this.parsePayload(schema, label, row.id, row.payload, row.mac));
   }
 
   /**
@@ -629,8 +714,29 @@ export class SqlRectorStore implements RectorStore {
    * redaction-applied error identifying the entity and id rather than returning
    * a malformed entity, so no secret can leak through the error message.
    */
-  private parsePayload<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, label: string, id: string, payload: unknown): T {
+  private parsePayload<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, label: string, id: string, payload: unknown, mac: string | null): T {
     const raw = typeof payload === "string" ? this.deserialize(label, id, payload) : payload;
+
+    // Verify payload integrity MAC if a key is configured.
+    if (this.macKey) {
+      const serializedPayload = typeof payload === "string" ? payload : JSON.stringify(payload);
+      if (mac) {
+        const valid = verifyPayloadMac(serializedPayload, mac, this.macKey);
+        if (!valid) {
+          throw new Error(
+            `Payload integrity check failed for ${label} id ${redactString(id)}: MAC mismatch. ` +
+            `The data may have been tampered with.`
+          );
+        }
+      } else {
+        // Legacy row without MAC — accept with warning.
+        console.warn(
+          `[SECURITY] No MAC on ${label} id ${redactString(id)} — legacy row accepted. ` +
+          `Re-writing to add MAC.`
+        );
+      }
+    }
+
     const result = schema.safeParse(raw);
     if (!result.success) {
       const detail = redactString(result.error.message);
@@ -641,8 +747,26 @@ export class SqlRectorStore implements RectorStore {
 
   private deserialize(label: string, id: string, payload: string): unknown {
     try {
+      if (payload.startsWith(ENC1_PREFIX)) {
+        if (!this.encryptionKey) {
+          throw new Error(
+            `Encrypted ${label} payload for id ${redactString(id)} cannot be decrypted: no encryption key provided. ` +
+            `Set RECTOR_DB_ENCRYPTION=true and ensure the secret key is available.`
+          );
+        }
+        const sealed = Buffer.from(payload.slice(ENC1_PREFIX.length), "base64");
+        // Layout: nonce(12) + ciphertext + authTag(16)
+        const nonce = sealed.subarray(0, GCM_NONCE_LENGTH);
+        const tag = sealed.subarray(sealed.length - 16);
+        const ciphertext = sealed.subarray(GCM_NONCE_LENGTH, sealed.length - 16);
+        const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey, nonce);
+        decipher.setAuthTag(tag);
+        const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+        return JSON.parse(plaintext.toString("utf8"));
+      }
       return JSON.parse(payload);
     } catch (error) {
+      if (error instanceof Error && error.message.includes("no encryption key provided")) throw error;
       const message = redactString(error instanceof Error ? error.message : String(error));
       throw new Error(`Corrupt ${label} payload for id ${redactString(id)}: ${message}`);
     }

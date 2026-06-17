@@ -36,7 +36,7 @@ describe("auth core", () => {
     const hash = hashPassword("pw");
     const config = parseAuthConfig({
       RECTOR_AUTH_ENABLED: "true",
-      RECTOR_AUTH_SESSION_SECRET: "session-secret",
+      RECTOR_AUTH_SESSION_SECRET: "session-secret-that-is-at-least-32-characters",
       RECTOR_AUTH_USERS: JSON.stringify([{ username: "Alice", passwordHash: hash }]),
     });
     expect(config.enabled).toBe(true);
@@ -54,7 +54,7 @@ describe("auth responses contain no password hash substrings", () => {
     const passwordHash = hashPassword(password);
     const auth = parseAuthConfig({
       RECTOR_AUTH_ENABLED: "true",
-      RECTOR_AUTH_SESSION_SECRET: "integration-secret",
+      RECTOR_AUTH_SESSION_SECRET: "integration-secret-that-is-at-least-32-char",
       RECTOR_AUTH_USERS: JSON.stringify([{ username: "ops", passwordHash }]),
     });
 

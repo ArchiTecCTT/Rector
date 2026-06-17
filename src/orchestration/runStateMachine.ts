@@ -4,6 +4,24 @@ import type { RunPhase } from "../protocol/phases";
 import { redactSecrets } from "../security/redaction";
 import type { Run, UpdateRunInput } from "../store/schemas";
 
+/** Thrown when an optimistic-concurrency transition detects a version mismatch (M21).
+ *  Callers should retry the transition up to `maxTransitionRetries` times. */
+export class ConcurrentTransitionError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly expectedVersion: number,
+    public readonly actualVersion: number
+  ) {
+    super(
+      `Concurrent transition conflict for run ${runId}: expected version ${expectedVersion}, actual ${actualVersion}`
+    );
+    this.name = "ConcurrentTransitionError";
+  }
+}
+
+/** Maximum number of retries for a run transition when a ConcurrentTransitionError occurs (M21). */
+export const maxTransitionRetries = 3;
+
 export type RunStateMachineStore = {
   getRun(id: string): Promise<Run | undefined>;
   updateRun(id: string, patch: UpdateRunInput): Promise<Run | undefined>;
@@ -47,19 +65,16 @@ export const ALLOWED_RUN_PHASE_TRANSITIONS: Readonly<Record<RunPhase, readonly R
   VALIDATING: ["SYNTHESIZING", "HEALING", "NEEDS_DECISION", "FAILED", "ABORTED"],
   HEALING: ["VALIDATING", "NEEDS_DECISION", "FAILED", "ABORTED"],
   SYNTHESIZING: ["DONE", "NEEDS_DECISION", "FAILED", "ABORTED"],
+  // M20: NEEDS_DECISION transitions restricted to minimal set.
+  // Removed: TRIAGE, CONTEXT_BUILDING, SKEPTIC_REVIEW, CRUCIBLE,
+  //   DAG_COMPILATION, VALIDATING, HEALING
+  // These could allow injection to bypass orchestration safeguards.
   NEEDS_DECISION: [
-    "TRIAGE",
-    "CONTEXT_BUILDING",
-    "PLANNING",
-    "SKEPTIC_REVIEW",
-    "CRUCIBLE",
-    "DAG_COMPILATION",
-    "EXECUTING",
-    "VALIDATING",
-    "HEALING",
-    "SYNTHESIZING",
-    "ABORTED",
-    "FAILED",
+    "EXECUTING",    // approve operation
+    "SYNTHESIZING", // deny operation, produce final answer
+    "PLANNING",     // re-plan after decision
+    "FAILED",       // timeout/abort
+    "ABORTED",      // user abort
   ],
   DONE: [],
   FAILED: [],
@@ -78,23 +93,38 @@ export async function transitionRun(
   targetPhase: RunPhase,
   options: RunTransitionOptions = {}
 ): Promise<RunTransitionResult> {
-  const run = await store.getRun(runId);
-  if (!run) {
-    throw new Error(`Run not found: ${runId}`);
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxTransitionRetries; attempt++) {
+    const run = await store.getRun(runId);
+    if (!run) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+
+    validateTransition(run.phase, targetPhase, options);
+
+    const patch = buildRunPatch(targetPhase, options);
+    // Increment version for optimistic concurrency (M21)
+    patch.version = (run.version ?? 0) + 1;
+    const event = buildRunEvent(
+      run,
+      run.phase,
+      targetPhase,
+      eventTypeForTargetPhase(targetPhase),
+      options
+    );
+
+    try {
+      return await store.commitRunTransition(runId, patch, event);
+    } catch (error) {
+      if (error instanceof ConcurrentTransitionError) {
+        lastError = error;
+        // Retry: re-read the run and try again
+        continue;
+      }
+      throw error;
+    }
   }
-
-  validateTransition(run.phase, targetPhase, options);
-
-  const patch = buildRunPatch(targetPhase, options);
-  const event = buildRunEvent(
-    run,
-    run.phase,
-    targetPhase,
-    eventTypeForTargetPhase(targetPhase),
-    options
-  );
-
-  return store.commitRunTransition(runId, patch, event);
+  throw lastError;
 }
 
 export async function createDecisionRequest(
@@ -122,13 +152,14 @@ export async function abortRun(
 
 /**
  * Resumes a run from a decision request, transitioning to the target phase.
- * Note: Target phases exclude terminal targets (like DONE, FAILED, ABORTED),
- * the initial CHAT_RECEIVED phase, and recursion into NEEDS_DECISION itself.
+ * M20: Target phases restricted to EXECUTING, SYNTHESIZING, PLANNING, FAILED, ABORTED.
+ * Removed: TRIAGE, CONTEXT_BUILDING, SKEPTIC_REVIEW, CRUCIBLE, DAG_COMPILATION,
+ *   VALIDATING, HEALING — these could allow injection to bypass safeguards.
  */
 export async function resumeFromDecision(
   store: RunStateMachineStore,
   runId: string,
-  targetPhase: Exclude<RunPhase, "CHAT_RECEIVED" | "DONE" | "NEEDS_DECISION">,
+  targetPhase: "EXECUTING" | "SYNTHESIZING" | "PLANNING" | "FAILED" | "ABORTED",
   decision: unknown,
   options: Omit<RunTransitionOptions, "decision"> = {}
 ): Promise<RunTransitionResult> {

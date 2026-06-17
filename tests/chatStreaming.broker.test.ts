@@ -174,7 +174,8 @@ describe("RunEventBroker + withEventBroadcast (task 6.3)", () => {
 
       // The decorator returns and publishes the store's canonical persisted event...
       expect(returned).toBe(persistedEvent);
-      expect(received).toBe(persistedEvent);
+      // publishRedacted creates a redacted copy, so check deep equality (not identity)
+      expect(received).toStrictEqual(persistedEvent);
       // ...not the raw input argument.
       expect(received).not.toBe(input);
       expect(received?.payload).toEqual({ redacted: true });

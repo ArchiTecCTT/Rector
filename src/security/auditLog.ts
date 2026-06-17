@@ -1,8 +1,9 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { redactString } from "./redaction";
+import { ensureRestrictedDir } from "./filePermissions";
 
 export const AuditOutcomeSchema = z.enum(["success", "denied", "failed"]);
 export type AuditOutcome = z.infer<typeof AuditOutcomeSchema>;
@@ -146,7 +147,7 @@ function defaultAuditFs(): LocalAuditLogFs {
       await appendFile(path, data, "utf8");
     },
     async mkdir(path: string): Promise<void> {
-      await mkdir(path, { recursive: true });
+      ensureRestrictedDir(path);
     },
   };
 }

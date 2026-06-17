@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { auditHashSaltReadiness } from "../security/auditLog";
+import { checkSessionSecretEntropy } from "../security/auth";
 
 export const DeploymentReadinessCheckSchema = z.object({
   id: z.string().min(1),
@@ -105,13 +106,21 @@ function sessionSecretCheck(context: ReadinessContext): DeploymentReadinessCheck
   }
 
   const configured = present(context.env.RECTOR_AUTH_SESSION_SECRET);
-  return check(
-    "session-secret",
-    productionBlockerOrWarning(context, configured),
-    configured
-      ? "RECTOR_AUTH_SESSION_SECRET is configured."
-      : "RECTOR_AUTH_SESSION_SECRET is required for secure cookie sessions.",
-  );
+  if (!configured) {
+    return check(
+      "session-secret",
+      productionBlockerOrWarning(context, configured),
+      "RECTOR_AUTH_SESSION_SECRET is required for secure cookie sessions.",
+    );
+  }
+
+  // Check entropy and emit a warning (not a hard block) for low-entropy secrets
+  const entropyWarning = checkSessionSecretEntropy(context.env.RECTOR_AUTH_SESSION_SECRET!);
+  if (entropyWarning) {
+    return check("session-secret", "warning", entropyWarning);
+  }
+
+  return check("session-secret", "pass", "RECTOR_AUTH_SESSION_SECRET is configured.");
 }
 
 function configuredPersistenceDriver(env: ReadinessEnv): string {

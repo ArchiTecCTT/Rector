@@ -84,6 +84,7 @@ exports[`In-memory baseline regression (Requirements 5.2, 5.4) > locks the exact
       "attempts": 0,
       "healingAttempts": 0,
       "validationAttempts": 0,
+      "version": 0,
       "createdAt": "2026-01-01T00:00:04.000Z",
       "updatedAt": "2026-01-01T00:00:04.000Z"
     },
@@ -125,6 +126,7 @@ exports[`In-memory baseline regression (Requirements 5.2, 5.4) > locks the exact
       "attempts": 0,
       "healingAttempts": 0,
       "validationAttempts": 0,
+      "version": 0,
       "createdAt": "2026-01-01T00:00:04.000Z",
       "updatedAt": "2026-01-01T00:00:05.000Z"
     },
@@ -166,6 +168,7 @@ exports[`In-memory baseline regression (Requirements 5.2, 5.4) > locks the exact
       "attempts": 0,
       "healingAttempts": 0,
       "validationAttempts": 0,
+      "version": 0,
       "createdAt": "2026-01-01T00:00:04.000Z",
       "updatedAt": "2026-01-01T00:00:07.000Z"
     }
@@ -340,6 +343,7 @@ exports[`In-memory baseline regression (Requirements 5.2, 5.4) > locks the exact
       "attempts": 0,
       "healingAttempts": 0,
       "validationAttempts": 0,
+      "version": 0,
       "createdAt": "2026-01-01T00:00:04.000Z",
       "updatedAt": "2026-01-01T00:00:07.000Z"
     }
@@ -383,6 +387,7 @@ exports[`In-memory baseline regression (Requirements 5.2, 5.4) > locks the exact
       "attempts": 0,
       "healingAttempts": 0,
       "validationAttempts": 0,
+      "version": 0,
       "createdAt": "2026-01-01T00:00:04.000Z",
       "updatedAt": "2026-01-01T00:00:07.000Z"
     }

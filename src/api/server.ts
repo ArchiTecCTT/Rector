@@ -7,7 +7,7 @@ import { TaskManager } from "../thalamus/router";
 import { getSetupChecklist } from "../setupChecklist";
 import { buildContextPack, createContextMaterial } from "../orchestration/contextBuilder";
 import type { ExecutorSimulatorOptions } from "../orchestration/executorSimulator";
-import { runChat } from "../orchestration/chatRunner";
+import { runChat, DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS } from "../orchestration/chatRunner";
 import { triageUserMessage } from "../orchestration/triage";
 import type { CommandRunner, SandboxAdapter, SandboxApproval, WorkspaceFs } from "../sandbox";
 import {
@@ -163,7 +163,7 @@ import {
   type PersistenceConfig,
   type RectorStore,
 } from "../store";
-import { MemoryLayerSchema, RunEventSchema } from "../store/schemas";
+import { MAX_MESSAGE_CONTENT_LENGTH, MemoryLayerSchema, RunEventSchema } from "../store/schemas";
 import type { MemoryLayer, Run, RunEvent } from "../store/schemas";
 import { RunPhaseSchema, isTerminalRunPhase } from "../protocol/phases";
 import { registerCommercialRoutes } from "./routes/commercial";
@@ -172,6 +172,7 @@ import { registerMemoryAssignmentRoutes } from "./routes/memoryAssignments";
 import { registerOrchestrationModelRoutes } from "./routes/orchestrationModels";
 import { registerTemplateRoutes } from "./routes/templates";
 import { registerRunApprovalRoutes } from "./routes/runApprovals";
+import { registerBudgetApprovalRoutes } from "./routes/approvals";
 import { registerRunControlRoutes } from "./routes/runControl";
 import { registerOperatorRoutes } from "./routes/operator";
 import { registerTaskRoutes } from "./routes/tasks";
@@ -356,6 +357,16 @@ export interface ApiSecurityOptions {
    * The real app supplies {@link resolveSecretEncryptionKey} from `bin/server.ts`.
    */
   secretEncryptionKey?: Buffer;
+
+  /** AES-256-GCM key for SQLite payload encryption at rest. Derived from
+   *  {@link resolveSecretEncryptionKey} via HKDF. When absent, payloads are
+   *  stored as plaintext JSON (legacy / test baseline). */
+  dbEncryptionKey?: Buffer;
+
+  /** HMAC-SHA256 key for SQLite payload integrity verification. Derived from
+   *  the master secret key via HKDF with info `"rector.payload-mac.v1"`.
+   *  When absent, MACs are not computed or verified (legacy / test baseline). */
+  dbMacKey?: Buffer;
 }
 
 /**
@@ -630,6 +641,8 @@ export type RunEventListener = (event: RunEvent) => void;
 export interface RunEventBroker {
   /** Deliver `event` to every current listener for `runId` only. A no-op when there are none. */
   publish(runId: string, event: RunEvent): void;
+  /** Deliver `event` to every current listener after redacting secrets (M3). Use at SSE/streaming boundaries. */
+  publishRedacted(runId: string, event: RunEvent): void;
   /**
    * Register `listener` for a specific `runId`. Returns an unsubscribe function that removes
    * exactly that listener; after unsubscribe the listener receives no further events.
@@ -654,6 +667,14 @@ export function createRunEventBroker(): RunEventBroker {
       // Snapshot so a listener that subscribes/unsubscribes during delivery cannot disrupt this pass.
       for (const listener of [...listeners]) {
         listener(event);
+      }
+    },
+    publishRedacted(runId, event) {
+      const redacted = redactSecrets(event);
+      const listeners = listenersByRun.get(runId);
+      if (!listeners || listeners.size === 0) return;
+      for (const listener of [...listeners]) {
+        listener(redacted);
       }
     },
     subscribe(runId, listener) {
@@ -713,7 +734,7 @@ export function withEventBroadcast(store: RectorStore, broker: RunEventBroker): 
     // canonical persisted (already-redacted) event the store returned. A throw never publishes.
     async commitRunTransition(runId, patch, event) {
       const result = await store.commitRunTransition(runId, patch, event);
-      broker.publish(result.event.runId, result.event);
+      broker.publishRedacted(result.event.runId, result.event);
       return result;
     },
 
@@ -721,7 +742,7 @@ export function withEventBroadcast(store: RectorStore, broker: RunEventBroker): 
     // (already-redacted) event the store returned. If the append throws, nothing is published.
     async appendEvent(event) {
       const persistedEvent = await store.appendEvent(event);
-      broker.publish(persistedEvent.runId, persistedEvent);
+      broker.publishRedacted(persistedEvent.runId, persistedEvent);
       return persistedEvent;
     },
     getEvent: (id) => store.getEvent(id),
@@ -995,6 +1016,15 @@ export async function handleRunStream(options: RunStreamHandlerOptions): Promise
  * The `store` should be the broker-wrapped store (`withEventBroadcast`) so live appended/committed
  * events flow to subscribers.
  */
+
+/** Default-deny authorization for SSE run streams. When no `authorizeRunRead` is provided,
+ *  all requests are rejected with 403 — callers must explicitly opt in to allow unauthenticated
+ *  read access. */
+async function defaultDenyAuthorizeRunRead(_req: express.Request, res: express.Response, _runId: string): Promise<boolean> {
+  res.status(403).json({ error: "Run access denied" });
+  return false;
+}
+
 export function registerRunStreamRoute(
   app: express.Application,
   deps: {
@@ -1005,7 +1035,8 @@ export function registerRunStreamRoute(
   }
 ): void {
   app.get("/api/runs/:id/stream", codeqlRateLimitGuard, async (req, res) => {
-    if (deps.authorizeRunRead && !(await deps.authorizeRunRead(req, res, req.params.id))) return;
+    const authorize = deps.authorizeRunRead ?? defaultDenyAuthorizeRunRead;
+    if (!(await authorize(req, res, req.params.id))) return;
     void handleRunStream({
       runId: req.params.id,
       req,
@@ -1593,7 +1624,10 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   // synchronous POST chat flow and the `GET /api/runs/:id/events` polling endpoint use it
   // transparently with no behavior change.
   const runEventBroker = createRunEventBroker();
-  const baseStore = securityOptions.store ?? createRectorStore(securityOptions.persistence);
+  const baseStore = securityOptions.store ?? createRectorStore(securityOptions.persistence, {
+    encryptionKey: securityOptions.dbEncryptionKey,
+    macKey: securityOptions.dbMacKey,
+  });
   const rectorStore = withEventBroadcast(baseStore, runEventBroker);
 
   let setupSecretStore = securityOptions.secretStore;
@@ -1669,6 +1703,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         contextCompressionEnabled: true,
         contextCompressionMaxGeneration: 3,
         providerResilienceEnabled: true,
+        orchestration: { maxRuntimeMs: DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS },
         updatedAt: new Date().toISOString(),
       });
     }
@@ -1819,7 +1854,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       },
     }),
   );
-  app.use(express.json());
+  app.use(express.json({ limit: "1mb" }));
   app.use(malformedJsonBodyHandler);
   const publicDir = resolvePublicDir();
   app.use(express.static(publicDir));
@@ -1832,7 +1867,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   };
   const resolveUserStores = createUserStoresResolver({
     authEnabled: authConfig.enabled,
-    encryptionKey: securityOptions.secretEncryptionKey ?? Buffer.alloc(32),
+    encryptionKey: (() => {
+      if (securityOptions.secretEncryptionKey) return securityOptions.secretEncryptionKey;
+      if (authConfig.enabled) throw new Error("secretEncryptionKey is required when auth is enabled.");
+      console.warn("[SECURITY] secretEncryptionKey not provided — using insecure zero-key. Only acceptable for unauthenticated local development.");
+      return Buffer.alloc(32);
+    })(),
     defaultStores: defaultUserStores,
   });
   const storesFor = (req: express.Request): UserStores => req.rectorStores ?? defaultUserStores;
@@ -2213,7 +2253,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       });
       res.status(201).json(conversation);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -2235,7 +2275,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const conversations = (await rectorStore.listConversations()).filter((conversation) => allowedIds.has(conversation.workspaceId));
       res.json({ conversations });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -2294,7 +2334,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const messages = await rectorStore.listMessages(conversation.id);
       res.json({ conversation, messages });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -2342,6 +2382,9 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const { content, deepPlanning } = req.body ?? {};
       if (!content || typeof content !== "string") {
         return res.status(400).json({ error: "content (string) is required" });
+      }
+      if (content.length > MAX_MESSAGE_CONTENT_LENGTH) {
+        return res.status(413).json({ error: "Message content exceeds maximum length" });
       }
       const requestDeepPlanning = deepPlanning === true;
 
@@ -2416,6 +2459,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
               executorOptions: orchestrationRuntime.executorOptions,
               maxHealingAttempts: orchestrationRuntime.maxHealingAttempts,
               ...(requestDeepPlanning ? { deepPlanning: true } : {}),
+              ...(runtimeSettings.orchestration?.maxRuntimeMs ? { maxRuntimeMs: runtimeSettings.orchestration.maxRuntimeMs } : {}),
             },
           },
           {
@@ -2532,7 +2576,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         observability: observabilitySummary,
       });
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -2675,7 +2719,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const events = await rectorStore.listEvents(run.id);
       res.json({ run, events });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedacted(res, 500, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -2725,14 +2769,21 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     sendRedacted,
   });
 
+  registerBudgetApprovalRoutes(app, {
+    authorize,
+    sendRedacted,
+  });
+
   registerOperatorRoutes(app, {
     store: rectorStore,
     authorize,
+    sendRedacted,
   });
 
   registerTaskRoutes(app, {
     manager,
     authorize,
+    sendRedacted,
   });
 
   // --- Setup checklist ---
@@ -3705,7 +3756,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
         return res.status(400).json({ error: "type must be 'happy' or 'healing'" });
       }
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -3725,7 +3776,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       const result = await proactiveAgent.triggerCheckIn({ conversationId });
       res.json({ triggered: true, ...result });
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedacted(res, 400, { error: redactString(errorMessageOf(err)) });
     }
   });
 
@@ -3740,6 +3791,12 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   if (false) {
     app.post("/api/dev/proactive-trigger", codeqlRateLimitGuard, async (_req, res) => res.json({}));
   }
+
+  // Defense-in-depth error middleware: catches any unhandled errors from route handlers
+  // and ensures they are redacted before being sent to the client.
+  app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    sendRedacted(res, 500, { error: redactString(errorMessageOf(error)) });
+  });
 
   return app;
 }
@@ -3758,6 +3815,22 @@ function securityHeadersMiddleware(_req: express.Request, res: express.Response,
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
+
+  // CSP (H4): strict policy — inline scripts disallowed (boot.js is 'self').
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; object-src 'none'",
+  );
+
+  // HSTS (H4): only in production mode.
+  if (process.env.NODE_ENV === "production") {
+    const maxAge = process.env.HSTS_MAX_AGE ?? "31536000";
+    let hsts = `max-age=${maxAge}`;
+    if (process.env.HSTS_INCLUDE_SUB_DOMAINS === "true") hsts += "; includeSubDomains";
+    if (process.env.HSTS_PRELOAD === "true") hsts += "; preload";
+    res.setHeader("Strict-Transport-Security", hsts);
+  }
+
   next();
 }
 
@@ -3861,11 +3934,26 @@ function parseCsvEnv(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+const DEV_LOCALHOST_PORTS: Set<number> = new Set([3000, 3001, 5173, 5174, 4173, 8080, 8081]);
+
+function isDevLocalhostEnabled(): boolean {
+  const env = process.env.CORS_DEV_LOCALHOST_ENABLED;
+  if (env !== undefined) return env !== "false" && env !== "0";
+  // Default: true in development, false in staging/production
+  return process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "staging";
+}
+
 function isDevLocalhostOrigin(origin: string): boolean {
-  if (process.env.NODE_ENV === "production") return false;
+  if (!isDevLocalhostEnabled()) return false;
   try {
     const url = new URL(origin);
-    return ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+    const isLocalhost = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+    if (!isLocalhost) return false;
+    const port = url.port ? Number(url.port) : (url.protocol === "https:" ? 443 : 80);
+    // Portless localhost (port 80/443): reject unless HTTPS
+    if (port === 80) return false;
+    if (port === 443 && url.protocol !== "https:") return false;
+    return DEV_LOCALHOST_PORTS.has(port);
   } catch {
     return false;
   }

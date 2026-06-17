@@ -37,6 +37,8 @@ export const ModuleManifestSchema = z.object({
   defaultEnabled: z.boolean().default(true),
   /** External-mode only modules skip invocation in local deterministic baseline. */
   externalModeOnly: z.boolean().default(false),
+  /** Ed25519 signature of the manifest payload (id + version + apiVersion). Verified via RECTOR_MODULE_PUBLIC_KEY. */
+  signature: z.string().optional(),
 });
 export type ParsedModuleManifest = z.infer<typeof ModuleManifestSchema>;
 export type ModuleManifest = Omit<ParsedModuleManifest, "providesTools"> & {

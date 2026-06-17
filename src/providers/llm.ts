@@ -1,6 +1,64 @@
 import { z } from "zod";
 import { evaluateBudget, type BudgetUsage } from "../security/budget";
+import { validateProviderUrl, BLOCKED_HOSTNAMES, isPrivateIp } from "../security/ssrfProtection.js";
+import { isIP } from "node:net";
 import type { Run } from "../store";
+
+/**
+ * SSRF validation with local-dev bypass.
+ *
+ * In production: full SSRF validation (blocked hostnames, private IP ranges, DNS resolution).
+ * In non-production (test/dev): allow localhost/loopback (local dev), check blocked metadata
+ * hostnames, check raw private IP literals (except loopback), then skip DNS resolution.
+ * This avoids breaking tests/dev where DNS may not resolve while still blocking
+ * obvious SSRF targets (metadata endpoints, 169.254.x.x, etc.).
+ */
+async function validateProviderUrlForSsrf(urlString: string): Promise<void> {
+  // Production: run full SSRF validation
+  if (process.env.NODE_ENV === "production") {
+    await validateProviderUrl(urlString);
+    return;
+  }
+
+  // Non-production: lightweight checks only (no DNS resolution)
+  let url: URL;
+  try {
+    url = new URL(urlString);
+  } catch {
+    throw new Error(`SSRF protection: invalid URL "${urlString}"`);
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(
+      `SSRF protection: protocol "${url.protocol}" is not allowed (only http: and https:)`
+    );
+  }
+
+  const rawHostname = url.hostname.replace(/^\[(.+)]$/, "$1").toLowerCase();
+
+  // Local dev bypass: allow localhost/loopback in non-production
+  const LOCAL_DEV_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
+  if (LOCAL_DEV_HOSTNAMES.has(rawHostname)) return;
+
+  // Check blocked hostnames (metadata endpoints — but not localhost, handled above)
+  if (BLOCKED_HOSTNAMES.has(rawHostname) || BLOCKED_HOSTNAMES.has(rawHostname + ".")) {
+    throw new Error(
+      `SSRF protection: hostname "${rawHostname}" is blocked (cloud metadata / localhost)`
+    );
+  }
+
+  // Check raw IP literals against private ranges (loopback already allowed above)
+  if (isIP(rawHostname) !== 0) {
+    const label = isPrivateIp(rawHostname);
+    if (label) {
+      throw new Error(
+        `SSRF protection: IP address "${rawHostname}" is in a private range (${label})`
+      );
+    }
+  }
+
+  // Non-blocked hostname, not a raw private IP - in dev/test, allow without DNS resolution
+}
 
 export const MODEL_ROUTES = ["cheap", "fast", "flagship", "research", "fake"] as const;
 export const ModelRouteSchema = z.enum(MODEL_ROUTES);
@@ -63,7 +121,11 @@ export type ProviderErrorCode =
   | "NETWORK_DISABLED"
   | "PROVIDER_HTTP_ERROR"
   | "PROVIDER_RESPONSE_INVALID"
+  | "PROVIDER_RESPONSE_TOO_LARGE"
   | "ABORTED";
+
+/** Default maximum provider response size in bytes (5 MB). */
+export const DEFAULT_MAX_PROVIDER_RESPONSE_BYTES = 5 * 1024 * 1024;
 
 export class ProviderError extends Error {
   readonly name = "ProviderError";
@@ -192,20 +254,36 @@ export class TogetherAIProvider implements LLMProvider {
     estimatedUsdPer1kOutputTokens: 0.0009,
   });
 
-  private readonly apiKey: string;
+  private readonly apiKeyBuffer: Buffer;
   private readonly baseUrl: string;
   private readonly enableNetwork: boolean;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: TogetherAIProviderOptions = {}) {
-    this.apiKey = options.apiKey ?? process.env.TOGETHER_API_KEY ?? "";
+    const rawKey = (options.apiKey ?? process.env.TOGETHER_API_KEY ?? "").trim();
+    this.apiKeyBuffer = Buffer.from(rawKey, "utf8");
     this.baseUrl = (options.baseUrl ?? process.env.TOGETHER_BASE_URL ?? "https://api.together.xyz/v1").replace(/\/+$/, "");
     this.enableNetwork = options.enableNetwork ?? false;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
   }
 
+  /**
+   * Zero the API key buffer. Best-effort: V8 may have copied the key string
+   * before we received it, so this cannot guarantee full purging.
+   */
+  zeroKey(): void {
+    this.apiKeyBuffer.fill(0);
+  }
+
+  /**
+   * Close the provider and zero the API key from memory (best-effort).
+   */
+  close(): void {
+    this.zeroKey();
+  }
+
   validateConfig(): void {
-    if (!this.apiKey.trim()) {
+    if (this.apiKeyBuffer.length === 0 || this.apiKeyBuffer.every((b: number) => b === 0)) {
       throw new ProviderError({
         code: "CONFIG_INVALID",
         provider: this.metadata.id,
@@ -258,7 +336,7 @@ export class TogetherAIProvider implements LLMProvider {
       init: {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.apiKeyBuffer.toString("utf8")}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
@@ -267,6 +345,7 @@ export class TogetherAIProvider implements LLMProvider {
   }
 
   async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
+    await validateProviderUrlForSsrf(this.baseUrl);
     const parsed = LLMRequestSchema.parse(request);
     const built = this.buildRequest(parsed);
     throwIfAborted(options.abortSignal, this.metadata.id);
@@ -279,7 +358,7 @@ export class TogetherAIProvider implements LLMProvider {
       });
     }
 
-    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id);
+    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id, DEFAULT_MAX_PROVIDER_RESPONSE_BYTES);
     if (!response.ok) {
       throw new ProviderError({
         code: "PROVIDER_HTTP_ERROR",
@@ -358,17 +437,39 @@ export class CloudflareWorkersAIProvider implements LLMProvider {
   });
 
   private readonly accountId: string;
-  private readonly apiToken: string;
+  /**
+   * Best-effort API token buffer. V8 may have copied the original string into
+   * internal structures before we receive it, so zeroing the buffer does NOT
+   * guarantee the key is fully purged from memory. This is a defence-in-depth
+   * measure — the known Node.js / V8 limitation is documented.
+   */
+  private readonly apiTokenBuffer: Buffer;
   private readonly baseUrl: string;
   private readonly enableNetwork: boolean;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: CloudflareWorkersAIProviderOptions = {}) {
     this.accountId = options.accountId ?? process.env.CLOUDFLARE_ACCOUNT_ID ?? "";
-    this.apiToken = options.apiToken ?? process.env.CLOUDFLARE_API_TOKEN ?? "";
+    const rawToken = (options.apiToken ?? process.env.CLOUDFLARE_API_TOKEN ?? "").trim();
+    this.apiTokenBuffer = Buffer.from(rawToken, "utf8");
     this.baseUrl = (options.baseUrl ?? process.env.CLOUDFLARE_BASE_URL ?? "https://api.cloudflare.com/client/v4").replace(/\/+$/, "");
     this.enableNetwork = options.enableNetwork ?? false;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  }
+
+  /**
+   * Zero the API token buffer. Best-effort: V8 may have copied the token string
+   * before we received it, so this cannot guarantee full purging.
+   */
+  zeroKey(): void {
+    this.apiTokenBuffer.fill(0);
+  }
+
+  /**
+   * Close the provider and zero the API token from memory (best-effort).
+   */
+  close(): void {
+    this.zeroKey();
   }
 
   validateConfig(): void {
@@ -379,7 +480,7 @@ export class CloudflareWorkersAIProvider implements LLMProvider {
         message: "CLOUDFLARE_ACCOUNT_ID is required to use Cloudflare Workers AI provider",
       });
     }
-    if (!this.apiToken.trim()) {
+    if (this.apiTokenBuffer.length === 0 || this.apiTokenBuffer.every((b: number) => b === 0)) {
       throw new ProviderError({
         code: "CONFIG_INVALID",
         provider: this.metadata.id,
@@ -416,7 +517,7 @@ export class CloudflareWorkersAIProvider implements LLMProvider {
       init: {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${this.apiToken}`,
+          Authorization: `Bearer ${this.apiTokenBuffer.toString("utf8")}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
@@ -425,6 +526,7 @@ export class CloudflareWorkersAIProvider implements LLMProvider {
   }
 
   async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
+    await validateProviderUrlForSsrf(this.baseUrl);
     const parsed = LLMRequestSchema.parse(request);
     const built = this.buildRequest(parsed);
     throwIfAborted(options.abortSignal, this.metadata.id);
@@ -437,7 +539,7 @@ export class CloudflareWorkersAIProvider implements LLMProvider {
       });
     }
 
-    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id);
+    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id, DEFAULT_MAX_PROVIDER_RESPONSE_BYTES);
     if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, "Cloudflare Workers AI");
 
     const raw = await response.json();
@@ -470,7 +572,13 @@ export class AzureOpenAIProvider implements LLMProvider {
     estimatedUsdPer1kOutputTokens: 0.01,
   });
 
-  private readonly apiKey: string;
+  /**
+   * Best-effort API key buffer. V8 may have copied the original string into
+   * internal structures before we receive it, so zeroing the buffer does NOT
+   * guarantee the key is fully purged from memory. This is a defence-in-depth
+   * measure — the known Node.js / V8 limitation is documented.
+   */
+  private readonly apiKeyBuffer: Buffer;
   private readonly endpoint: string;
   private readonly apiVersion: string;
   private readonly deployments: Partial<Record<ModelRoute, string>>;
@@ -478,7 +586,8 @@ export class AzureOpenAIProvider implements LLMProvider {
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: AzureOpenAIProviderOptions = {}) {
-    this.apiKey = options.apiKey ?? process.env.AZURE_OPENAI_API_KEY ?? "";
+    const rawKey = (options.apiKey ?? process.env.AZURE_OPENAI_API_KEY ?? "").trim();
+    this.apiKeyBuffer = Buffer.from(rawKey, "utf8");
     this.endpoint = (options.endpoint ?? process.env.AZURE_OPENAI_ENDPOINT ?? "").replace(/\/+$/, "");
     this.apiVersion = options.apiVersion ?? process.env.AZURE_OPENAI_API_VERSION ?? "2024-10-21";
     this.deployments = {
@@ -492,8 +601,23 @@ export class AzureOpenAIProvider implements LLMProvider {
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
   }
 
+
+  /**
+   * Zero the API key buffer. Best-effort: V8 may have copied the key string
+   * before we received it, so this cannot guarantee full purging.
+   */
+  zeroKey(): void {
+    this.apiKeyBuffer.fill(0);
+  }
+
+  /**
+   * Close the provider and zero the API key from memory (best-effort).
+   */
+  close(): void {
+    this.zeroKey();
+  }
   validateConfig(): void {
-    if (!this.apiKey.trim()) {
+    if (this.apiKeyBuffer.length === 0 || this.apiKeyBuffer.every((b: number) => b === 0)) {
       throw new ProviderError({
         code: "CONFIG_INVALID",
         provider: this.metadata.id,
@@ -562,7 +686,7 @@ export class AzureOpenAIProvider implements LLMProvider {
       init: {
         method: "POST",
         headers: {
-          "api-key": this.apiKey,
+          "api-key": this.apiKeyBuffer.toString("utf8"),
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
@@ -571,6 +695,7 @@ export class AzureOpenAIProvider implements LLMProvider {
   }
 
   async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
+    await validateProviderUrlForSsrf(this.endpoint);
     const parsed = LLMRequestSchema.parse(request);
     const built = this.buildRequest(parsed);
     throwIfAborted(options.abortSignal, this.metadata.id);
@@ -583,7 +708,7 @@ export class AzureOpenAIProvider implements LLMProvider {
       });
     }
 
-    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id);
+    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id, DEFAULT_MAX_PROVIDER_RESPONSE_BYTES);
     if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, "Azure OpenAI");
 
     const raw = await response.json();
@@ -609,7 +734,13 @@ const OPENAI_COMPATIBLE_PLACEHOLDER_MODEL = "openai-compatible-model";
 export class OpenAICompatibleProvider implements LLMProvider {
   readonly metadata: ProviderCapabilityMetadata;
 
-  private readonly apiKey: string;
+  /**
+   * Best-effort API key buffer. V8 may have copied the original string into
+   * internal structures before we receive it, so zeroing the buffer does NOT
+   * guarantee the key is fully purged from memory. This is a defence-in-depth
+   * measure — the known Node.js / V8 limitation is documented.
+   */
+  private readonly apiKeyBuffer: Buffer;
   private readonly baseUrl: string;
   private readonly model: string;
   private readonly headers: Record<string, string>;
@@ -617,7 +748,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: OpenAICompatibleProviderOptions = {}) {
-    this.apiKey = options.apiKey ?? process.env.OPENAI_COMPATIBLE_API_KEY ?? "";
+    const rawKey = (options.apiKey ?? process.env.OPENAI_COMPATIBLE_API_KEY ?? "").trim();
+    this.apiKeyBuffer = Buffer.from(rawKey, "utf8");
     this.baseUrl = (options.baseUrl ?? process.env.OPENAI_COMPATIBLE_BASE_URL ?? "").replace(/\/+$/, "");
     this.model = (options.model ?? process.env.OPENAI_COMPATIBLE_MODEL ?? "").trim();
     this.headers = { ...(options.headers ?? {}) };
@@ -643,8 +775,23 @@ export class OpenAICompatibleProvider implements LLMProvider {
     });
   }
 
+
+  /**
+   * Zero the API key buffer. Best-effort: V8 may have copied the key string
+   * before we received it, so this cannot guarantee full purging.
+   */
+  zeroKey(): void {
+    this.apiKeyBuffer.fill(0);
+  }
+
+  /**
+   * Close the provider and zero the API key from memory (best-effort).
+   */
+  close(): void {
+    this.zeroKey();
+  }
   validateConfig(): void {
-    if (!this.apiKey.trim()) {
+    if (this.apiKeyBuffer.length === 0 || this.apiKeyBuffer.every((b: number) => b === 0)) {
       throw new ProviderError({
         code: "CONFIG_INVALID",
         provider: this.metadata.id,
@@ -690,7 +837,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         method: "POST",
         headers: {
           ...this.headers,
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.apiKeyBuffer.toString("utf8")}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
@@ -699,6 +846,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   }
 
   async invoke(request: LLMRequest, options: LLMInvokeOptions = {}): Promise<LLMResponse> {
+    await validateProviderUrlForSsrf(this.baseUrl);
     const parsed = LLMRequestSchema.parse(request);
     const built = this.buildRequest(parsed);
     throwIfAborted(options.abortSignal, this.metadata.id);
@@ -711,7 +859,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       });
     }
 
-    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id);
+    const response = await fetchWithAbort(this.fetchImpl, built, options.abortSignal, this.metadata.id, DEFAULT_MAX_PROVIDER_RESPONSE_BYTES);
     if (!response.ok) throwProviderHttpError(this.metadata.id, response.status, this.metadata.displayName);
 
     const raw = await response.json();
@@ -846,9 +994,11 @@ async function fetchWithAbort(
   built: BuiltProviderRequest,
   signal: AbortSignal | undefined,
   provider: string,
+  maxResponseBytes: number = DEFAULT_MAX_PROVIDER_RESPONSE_BYTES,
 ): Promise<Response> {
+  let response: Response;
   try {
-    return await fetchImpl(built.url, withAbortSignal(built.init, signal));
+    response = await fetchImpl(built.url, withAbortSignal(built.init, signal));
   } catch (error) {
     if (isAbortLikeError(error)) {
       throw new ProviderError({
@@ -860,6 +1010,65 @@ async function fetchWithAbort(
     }
     throw error;
   }
+
+  // Content-Length pre-check: reject responses that declare themselves too large
+  const contentLength = response.headers?.get?.("content-length");
+  if (contentLength && Number(contentLength) > maxResponseBytes) {
+    throw new ProviderError({
+      code: "PROVIDER_RESPONSE_TOO_LARGE",
+      provider,
+      message: `Provider response Content-Length (${contentLength}) exceeds limit (${maxResponseBytes} bytes)`,
+      retryable: false,
+      details: { contentLength: Number(contentLength), maxResponseBytes },
+    });
+  }
+
+  // Bounded stream consumption: wrap body with byte-counting stream that aborts at limit
+  if (response.body) {
+    const originalBody = response.body;
+    let bytesReceived = 0;
+    const limit = maxResponseBytes;
+    const boundedStream = new ReadableStream({
+      start(controller) {
+        const reader = originalBody.getReader();
+        function pump(): void {
+          reader.read().then(({ done, value }) => {
+            if (done) {
+              controller.close();
+              return;
+            }
+            bytesReceived += value.byteLength;
+            if (bytesReceived > limit) {
+              controller.error(
+                new ProviderError({
+                  code: "PROVIDER_RESPONSE_TOO_LARGE",
+                  provider,
+                  message: `Provider response body exceeded limit (${limit} bytes) after receiving ${bytesReceived} bytes`,
+                  retryable: false,
+                  details: { bytesReceived, maxResponseBytes: limit },
+                }),
+              );
+              reader.cancel();
+              return;
+            }
+            controller.enqueue(value);
+            pump();
+          }, (error) => {
+            controller.error(error);
+          });
+        }
+        pump();
+      },
+    });
+    // Replace the body with the bounded stream while preserving other response properties
+    response = new Response(boundedStream, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }
+
+  return response;
 }
 
 function isAbortLikeError(error: unknown): boolean {

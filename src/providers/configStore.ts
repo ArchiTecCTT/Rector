@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { redactString } from "../security/redaction";
+import { ensureRestrictedDir } from "../security/filePermissions";
 import {
   ProviderConfigStateSchema,
   emptyProviderConfigState,
@@ -113,7 +114,7 @@ function defaultProviderConfigFs(): ProviderConfigFs {
       await rename(fromPath, toPath);
     },
     async mkdir(dirPath: string): Promise<void> {
-      await mkdir(dirPath, { recursive: true });
+      ensureRestrictedDir(dirPath);
     },
   };
 }

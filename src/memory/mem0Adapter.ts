@@ -152,7 +152,13 @@ export class Mem0MemoryProvider implements MemoryProvider {
   readonly id: string;
   readonly metadata: { id: string; kind: string; label?: string };
 
-  private readonly apiKey: string;
+  /**
+   * Best-effort API key buffer. V8 may have copied the original string into
+   * internal structures before we receive it, so zeroing the buffer does NOT
+   * guarantee the key is fully purged from memory. This is a defence-in-depth
+   * measure — the known Node.js / V8 limitation is documented.
+   */
+  private readonly apiKeyBuffer: Buffer;
   private readonly nowFn: () => string;
   private readonly run: Run;
   private readonly clientFactory: Mem0ClientFactory;
@@ -163,15 +169,31 @@ export class Mem0MemoryProvider implements MemoryProvider {
     this.id = options.id;
     this.kind = options.kind ?? "mem0";
     this.metadata = { id: options.id, kind: this.kind, label: options.label };
-    this.apiKey = options.apiKey;
+    this.apiKeyBuffer = Buffer.from(options.apiKey, "utf8");
     this.nowFn = options.now ?? (() => new Date().toISOString());
     this.run = options.run ?? defaultMemoryBudgetRun();
     this.clientFactory = options.clientFactory ?? defaultClientFactory;
     this.scopeUserId = `rector:${options.id}`;
   }
 
+  /**
+   * Zero the API key buffer. Best-effort: V8 may have copied the key string
+   * before we received it, so this cannot guarantee full purging.
+   */
+  zeroKey(): void {
+    this.apiKeyBuffer.fill(0);
+  }
+
+  /**
+   * Close the adapter and zero the API key from memory (best-effort).
+   */
+  close(): void {
+    this.zeroKey();
+  }
+
   validateConfig(): void {
-    if (!this.apiKey || this.apiKey.trim().length === 0) {
+    if (this.apiKeyBuffer.length === 0 ||
+        this.apiKeyBuffer.every((b: number) => b === 0)) {
       throw new Error("Mem0 memory provider requires an API key (secretRef must resolve to a non-empty value).");
     }
   }
@@ -179,7 +201,7 @@ export class Mem0MemoryProvider implements MemoryProvider {
   private getClient(): Mem0Client {
     if (!this.client) {
       try {
-        this.client = this.clientFactory(this.apiKey);
+        this.client = this.clientFactory(this.apiKeyBuffer.toString("utf8"));
       } catch (error) {
         throw classifyAdapterError(error, "Mem0 client initialization failed");
       }

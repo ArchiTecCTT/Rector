@@ -184,6 +184,7 @@ function createPonderRun(completedRun: Run | undefined, now: () => string): Run 
     attempts: 0,
     healingAttempts: 0,
     validationAttempts: 0,
+    version: 0,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
