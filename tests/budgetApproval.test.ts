@@ -182,6 +182,27 @@ describe("BudgetApprovalRegistry", () => {
     expect(result).toBe("timeout");
   });
 
+  it("waitForDecision handles multiple concurrent waiters for the same approval", async () => {
+    const run = makeTestRun();
+    const decision = evaluateBudget(run, { estimatedUsd: 5 });
+    const approvalId = budgetApprovalRegistry.createApproval(
+      run.id,
+      decision.reasons,
+      decision.usage,
+    );
+
+    const promise1 = waitForBudgetApproval(approvalId, 1000);
+    const promise2 = waitForBudgetApproval(approvalId, 1000);
+
+    setTimeout(() => {
+      recordBudgetApprovalDecision(approvalId, "approved", "admin");
+    }, 50);
+
+    const results = await Promise.all([promise1, promise2]);
+    expect(results[0]).toBe("approved");
+    expect(results[1]).toBe("approved");
+  });
+
   it("waitForDecision returns timeout for non-existent approval", async () => {
     const result = await waitForBudgetApproval("non-existent", 100);
     expect(result).toBe("timeout");

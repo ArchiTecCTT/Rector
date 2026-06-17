@@ -54,6 +54,7 @@ export const BLOCKED_HOSTNAMES: ReadonlySet<string> = new Set([
   "metadata.google.internal.",
   "metadata.azure.internal",
   "metadata.azure.internal.",
+  "169.254.169.254",
 ]);
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -76,7 +77,6 @@ function ipv6ToBigInt(ip: string): bigint {
     const leftParts = left ? left.split(":") : [];
     const rightParts = right ? right.split(":") : [];
     const missing = 8 - leftParts.length - rightParts.length;
-    const middle = Array(missing).fill("0").join(":");
     expanded = [...leftParts, ...Array(missing).fill("0"), ...rightParts].join(":");
   }
   const parts = expanded.split(":");

@@ -364,7 +364,7 @@ export class RedisRateLimiter implements DistributedRateLimiter {
 
     this.policy = policy;
     this._keyPrefix = options?.prefix ?? "rl";
-    this._redis = new IORedis.default(redisUrl, { lazyConnect: true, maxRetriesPerRequest: 3 });
+    this._redis = new IORedis(redisUrl, { lazyConnect: true, maxRetriesPerRequest: 3 });
     this._limiter = new RateLimiterRedis({
       storeClient: this._redis,
       keyPrefix: this._keyPrefix,

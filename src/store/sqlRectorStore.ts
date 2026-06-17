@@ -427,7 +427,11 @@ export class SqlRectorStore implements RectorStore {
       );
       this.driver.exec("COMMIT");
     } catch (error) {
-      try { this.driver.exec("ROLLBACK"); } catch { /* already rolled back */ }
+      try {
+        this.driver.exec("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("[CRITICAL] Transaction rollback failed - database may be in inconsistent state:", rollbackError);
+      }
       throw error;
     }
 
@@ -534,7 +538,11 @@ export class SqlRectorStore implements RectorStore {
     // ALTER TABLE ... ADD COLUMN is a no-op if the column already exists on SQLite ≥ 3.35.0,
     // but older SQLite silently ignores it; wrap in try/catch for robustness.
     const macTables = ["conversations", "messages", "runs", "run_events", "artifacts", "memories"];
+    const validTableNames = new Set(["conversations", "messages", "runs", "run_events", "artifacts", "memories"]);
     for (const t of macTables) {
+      if (!validTableNames.has(t)) {
+        throw new Error(`Invalid table name in MAC migration: ${t}`);
+      }
       try {
         this.driver.exec(`ALTER TABLE ${t} ADD COLUMN mac TEXT`);
       } catch {

@@ -263,7 +263,7 @@ export interface BudgetApprovalRequest {
 /** In-memory budget approval registry. Shared across the process for route + chatRunner access. */
 class BudgetApprovalRegistry {
   private approvals = new Map<string, BudgetApprovalRequest>();
-  private resolvers = new Map<string, (decision: "approved" | "denied" | "timeout") => void>();
+  private resolvers = new Map<string, Set<(decision: "approved" | "denied" | "timeout") => void>>();
 
   /** Create a new approval request and return its ID. */
   createApproval(runId: string, reasons: string[], usage: BudgetDecision["usage"]): string {
@@ -288,10 +288,12 @@ class BudgetApprovalRegistry {
     request.status = decision;
     request.decidedBy = decidedBy ?? "unknown";
     request.decidedAt = new Date().toISOString();
-    // Resolve any waiting poller
-    const resolver = this.resolvers.get(approvalId);
-    if (resolver) {
-      resolver(decision);
+    // Resolve any waiting pollers
+    const list = this.resolvers.get(approvalId);
+    if (list) {
+      for (const resolver of list) {
+        resolver(decision);
+      }
       this.resolvers.delete(approvalId);
     }
     return request;
@@ -317,8 +319,27 @@ class BudgetApprovalRegistry {
     if (request.status !== "pending") return Promise.resolve(request.status as "approved" | "denied");
 
     return new Promise<"approved" | "denied" | "timeout">((resolve) => {
-      const timer = setTimeout(() => {
-        this.resolvers.delete(approvalId);
+      let timer: NodeJS.Timeout;
+      const resolver = (decision: "approved" | "denied" | "timeout") => {
+        clearTimeout(timer);
+        resolve(decision);
+      };
+
+      let list = this.resolvers.get(approvalId);
+      if (!list) {
+        list = new Set();
+        this.resolvers.set(approvalId, list);
+      }
+      list.add(resolver);
+
+      timer = setTimeout(() => {
+        const currentList = this.resolvers.get(approvalId);
+        if (currentList) {
+          currentList.delete(resolver);
+          if (currentList.size === 0) {
+            this.resolvers.delete(approvalId);
+          }
+        }
         if (request.status === "pending") {
           request.status = "denied";
           request.decidedBy = "timeout";
@@ -326,11 +347,6 @@ class BudgetApprovalRegistry {
         }
         resolve("timeout");
       }, timeoutMs);
-
-      this.resolvers.set(approvalId, (decision) => {
-        clearTimeout(timer);
-        resolve(decision);
-      });
     });
   }
 }

@@ -78,6 +78,10 @@ describe("BLOCKED_HOSTNAMES", () => {
   it("contains Azure metadata endpoint", () => {
     expect(BLOCKED_HOSTNAMES.has("metadata.azure.internal")).toBe(true);
   });
+
+  it("contains AWS IMDSv2 metadata IP", () => {
+    expect(BLOCKED_HOSTNAMES.has("169.254.169.254")).toBe(true);
+  });
 });
 
 // ── validateProviderUrl tests ───────────────────────────────────────────
@@ -163,10 +167,16 @@ describe("validateProviderUrl", () => {
     ).rejects.toThrow(/private range/);
   });
 
-  it("rejects 169.254.169.254 (link-local / cloud metadata)", async () => {
+  it("rejects 169.254.1.1 (link-local)", async () => {
+    await expect(
+      validateProviderUrl("http://169.254.1.1/api")
+    ).rejects.toThrow(/private range/);
+  });
+
+  it("rejects 169.254.169.254 (link-local / cloud metadata) via blocked hostname", async () => {
     await expect(
       validateProviderUrl("http://169.254.169.254/metadata")
-    ).rejects.toThrow(/private range/);
+    ).rejects.toThrow(/blocked/);
   });
 
   it("rejects 100.64.0.1 (CGNAT)", async () => {
