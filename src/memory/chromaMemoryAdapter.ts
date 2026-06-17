@@ -1,6 +1,8 @@
 import { createRequire } from "node:module";
 
 import type { MemoryProvider } from "./provider";
+import { validateProviderUrl, BLOCKED_HOSTNAMES, isPrivateIp } from "../security/ssrfProtection.js";
+import { isIP } from "node:net";
 import {
   classifyAdapterError,
   mapToMemoryEntry,
@@ -120,7 +122,13 @@ function validateCollectionName(name: string): void {
   }
 }
 
-function validateChromaBaseUrl(baseUrl: string): void {
+const CHROMA_LOCALHOST_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+
+function isChromaLocalhost(hostname: string): boolean {
+  return CHROMA_LOCALHOST_HOSTNAMES.has(hostname);
+}
+
+async function validateChromaBaseUrl(baseUrl: string): Promise<void> {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
@@ -130,6 +138,46 @@ function validateChromaBaseUrl(baseUrl: string): void {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("Chroma memory provider requires config.baseUrl to be a valid http(s) URL.");
   }
+
+  // TLS enforcement: reject http: for non-localhost hostnames
+  const rawHostname = parsed.hostname.replace(/^\[(.+)]$/, "$1").toLowerCase();
+  if (parsed.protocol === "http:" && !isChromaLocalhost(rawHostname)) {
+    if (!process.env.RECTOR_ALLOW_HTTP_CHROMA) {
+      throw new Error(
+        `Chroma memory provider requires HTTPS for non-localhost URLs. ` +
+        `URL "${baseUrl}" uses HTTP which exposes credentials and data in transit. ` +
+        `Use HTTPS or set RECTOR_ALLOW_HTTP_CHROMA=1 for air-gapped networks (not recommended).`
+      );
+    }
+    // RECTOR_ALLOW_HTTP_CHROMA set — warn but allow
+  }
+
+  // Production: full SSRF validation
+  if (process.env.NODE_ENV === "production") {
+    await validateProviderUrl(baseUrl);
+    return;
+  }
+
+  // Non-production: lightweight SSRF checks only (no DNS resolution)
+
+  // Local dev bypass: allow localhost/loopback in non-production
+  if (isChromaLocalhost(rawHostname)) return;
+
+  if (BLOCKED_HOSTNAMES.has(rawHostname) || BLOCKED_HOSTNAMES.has(rawHostname + ".")) {
+    throw new Error(
+      `SSRF protection: hostname "${rawHostname}" is blocked (cloud metadata / localhost)`
+    );
+  }
+
+  if (isIP(rawHostname) !== 0) {
+    const label = isPrivateIp(rawHostname);
+    if (label) {
+      throw new Error(
+        `SSRF protection: IP address "${rawHostname}" is in a private range (${label})`
+      );
+    }
+  }
+  // Non-blocked hostname, not a raw private IP - in dev/test, allow without DNS resolution
 }
 
 function documentFromEntry(entry: MemoryEntry): string {
@@ -204,7 +252,14 @@ export class ChromaMemoryProvider implements MemoryProvider {
   private readonly run: Run;
   private readonly clientFactory: ChromaClientFactory;
   private readonly chromaUrl: string;
-  private readonly apiKey?: string;
+
+  /**
+   * Best-effort API key buffer. V8 may have copied the original string into
+   * internal structures before we receive it, so zeroing the buffer does NOT
+   * guarantee the key is fully purged from memory. This is a defence-in-depth
+   * measure — the known Node.js / V8 limitation is documented.
+   */
+  private readonly apiKeyBuffer?: Buffer;
   private readonly collectionName: string;
   private client: ChromaClient | undefined;
   private collection: ChromaCollection | undefined;
@@ -218,15 +273,39 @@ export class ChromaMemoryProvider implements MemoryProvider {
     this.run = options.run ?? defaultMemoryBudgetRun();
     this.clientFactory = options.clientFactory ?? defaultClientFactory;
     this.chromaUrl = options.config?.baseUrl?.trim() ?? "";
-    this.apiKey = options.apiKey;
+    this.apiKeyBuffer = options.apiKey ? Buffer.from(options.apiKey, "utf8") : undefined;
     this.collectionName = collectionNameForRecord(options.id);
+  }
+
+  /**
+   * Zero the API key buffer. Best-effort: V8 may have copied the key string
+   * before we received it, so this cannot guarantee full purging.
+   */
+  zeroKey(): void {
+    this.apiKeyBuffer?.fill(0);
+  }
+
+  /**
+   * Close the adapter and zero the API key from memory (best-effort).
+   */
+  close(): void {
+    this.zeroKey();
   }
 
   validateConfig(): void {
     if (!this.chromaUrl) {
       throw new Error("Chroma memory provider requires config.baseUrl (Chroma server URL).");
     }
-    validateChromaBaseUrl(this.chromaUrl);
+    // Sync pre-checks only; async SSRF check runs in getCollection() before network access
+    try {
+      const parsed = new URL(this.chromaUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("Chroma memory provider requires config.baseUrl to be a valid http(s) URL.");
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("Chroma memory provider")) throw err;
+      throw new Error("Chroma memory provider requires config.baseUrl to be a valid http(s) URL.");
+    }
     validateCollectionName(this.collectionName);
   }
 
@@ -237,8 +316,8 @@ export class ChromaMemoryProvider implements MemoryProvider {
 
   private getConnectOptions(): ChromaClientConnectOptions {
     const opts: ChromaClientConnectOptions = { path: this.chromaUrl };
-    if (this.apiKey) {
-      opts.auth = { provider: "token", credentials: this.apiKey };
+    if (this.apiKeyBuffer && this.apiKeyBuffer.length > 0 && !this.apiKeyBuffer.every((b: number) => b === 0)) {
+      opts.auth = { provider: "token", credentials: this.apiKeyBuffer.toString("utf8") };
     }
     return opts;
   }
@@ -247,6 +326,7 @@ export class ChromaMemoryProvider implements MemoryProvider {
     if (this.collection) return this.collection;
     try {
       this.validateConfig();
+      await validateChromaBaseUrl(this.chromaUrl);
       if (!this.client) {
         this.client = this.clientFactory(this.getConnectOptions());
       }

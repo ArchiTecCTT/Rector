@@ -161,6 +161,29 @@ export interface LinearWorkflowAdapterOptions {
   fetchImpl?: typeof fetch;
 }
 
+/** Label cache: outer key = teamId, inner map = label name → Linear UUID */
+export const labelCache = new Map<string, { mapping: Map<string, string>; fetchedAt: number }>();
+
+/** Cache TTL in milliseconds (1 hour) */
+export const LABEL_CACHE_TTL_MS = 60 * 60 * 1000;
+
+/** GraphQL query to fetch all labels for a team */
+export const LINEAR_LABELS_QUERY = `query TeamLabels($teamId: String!) {
+  team(id: $teamId) {
+    labels {
+      nodes {
+        id
+        name
+      }
+    }
+  }
+}`;
+
+/** Clear the label cache (for testing) */
+export function clearLabelCache(): void {
+  labelCache.clear();
+}
+
 export class LinearWorkflowAdapter {
   readonly metadata = WorkflowIntegrationMetadataSchema.parse({
     id: "linear",
@@ -206,6 +229,84 @@ export class LinearWorkflowAdapter {
     }
   }
 
+  /**
+   * Resolve human-readable label names to Linear UUIDs via the Linear GraphQL API.
+   * Results are cached per teamId with a 1-hour TTL.
+   * If the API call fails, logs a warning and returns the labels as-is (fallback).
+   */
+  async resolveLinearLabelIds(labels: string[], teamId: string): Promise<string[]> {
+    if (labels.length === 0) return [];
+
+    // Check cache
+    const now = Date.now();
+    let cached = labelCache.get(teamId);
+    if (cached && (now - cached.fetchedAt) < LABEL_CACHE_TTL_MS) {
+      return labels.map((label) => cached!.mapping.get(label) ?? label);
+    }
+
+    // Fetch from Linear API
+    try {
+      if (!this.apiKey.trim()) {
+        console.warn("[LINEAR] Cannot resolve label IDs: LINEAR_API_KEY not configured. Passing labels as-is.");
+        return labels;
+      }
+
+      const response = await this.fetchImpl(this.baseUrl, {
+        method: "POST",
+        headers: {
+          Authorization: this.apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: LINEAR_LABELS_QUERY,
+          variables: { teamId },
+        }),
+      });
+
+      if (!response.ok) {
+        console.warn(`[LINEAR] Label resolution query failed with HTTP ${response.status}. Passing labels as-is.`);
+        return labels;
+      }
+
+      const raw = await response.json() as Record<string, unknown>;
+      const data = (raw as { data?: { team?: { labels?: { nodes?: Array<{ id: string; name: string }> } } } }).data;
+      const nodes = data?.team?.labels?.nodes;
+
+      if (!nodes || !Array.isArray(nodes)) {
+        console.warn("[LINEAR] Label resolution response missing expected structure. Passing labels as-is.");
+        return labels;
+      }
+
+      // Build mapping and update cache
+      const mapping = new Map<string, string>();
+      for (const node of nodes) {
+        if (node.id && node.name) {
+          mapping.set(node.name, node.id);
+        }
+      }
+      labelCache.set(teamId, { mapping, fetchedAt: now });
+
+      return labels.map((label) => mapping.get(label) ?? label);
+    } catch (err) {
+      console.warn(`[LINEAR] Label resolution failed: ${err instanceof Error ? err.message : String(err)}. Passing labels as-is.`);
+      return labels;
+    }
+  }
+
+  /**
+   * Synchronous version that uses cached labels only (no network call).
+   * Used by buildCreateIssueRequest which must remain sync for backward compat.
+   * The async resolveLinearLabelIds should be called before buildCreateIssueRequest
+   * to populate the cache.
+   */
+  resolveLinearLabelIdsFromCache(labels: string[], teamId: string): string[] {
+    if (labels.length === 0) return [];
+    const cached = labelCache.get(teamId);
+    if (!cached) return labels;
+    if ((Date.now() - cached.fetchedAt) >= LABEL_CACHE_TTL_MS) return labels;
+    return labels.map((label) => cached.mapping.get(label) ?? label);
+  }
+
   buildCreateIssueRequest(payloadInput: EscalationTicketPayload): BuiltWorkflowRequest {
     this.validateConfig();
     const payload = EscalationTicketPayloadSchema.parse(payloadInput);
@@ -217,6 +318,9 @@ export class LinearWorkflowAdapter {
         message: "LINEAR_TEAM_ID or payload.metadata.teamId is required to build a Linear issue request",
       });
     }
+
+    // Resolve labels from cache if available; otherwise pass as-is (fallback)
+    const resolvedLabelIds = this.resolveLinearLabelIdsFromCache(payload.labels, teamId);
 
     return {
       url: this.baseUrl,
@@ -233,10 +337,7 @@ export class LinearWorkflowAdapter {
               teamId,
               title: payload.title,
               description: linearIssueDescription(payload),
-              // Note: Linear API expects UUIDs for `labelIds`. If the caller provides
-              // raw display name strings (like "bug"), the request will fail on the provider.
-              // Resolving human-readable names to Linear UUIDs is deferred for future implementation.
-              labelIds: payload.labels,
+              labelIds: resolvedLabelIds,
               priority: linearPriority(payload.priority),
             },
           },

@@ -49,6 +49,7 @@ interface StoredRow {
   filter: string | null;
   seq: number;
   payload: unknown;
+  mac: string | null;
 }
 
 type Table = Map<string, StoredRow>;
@@ -122,19 +123,31 @@ function createInMemorySqlDriverDouble(): SqlDriver {
 
       if (/^INSERT INTO/i.test(trimmed)) {
         const name = matchTable(trimmed, /INSERT INTO (\w+)/i);
-        const [id, filter, seq, payload] = params as [string, string | null, number, unknown];
-        tableOf(name).set(id, { id, filter, seq: Number(seq), payload });
+        const [id, filter, seq, payload, mac] = params as [string, string | null, number, unknown, string | null];
+        tableOf(name).set(id, { id, filter, seq: Number(seq), payload, mac: mac ?? null });
         return;
       }
 
       if (/^UPDATE/i.test(trimmed)) {
         const name = matchTable(trimmed, /UPDATE (\w+)/i);
-        // SET {filterColumn} = ?, payload = ? WHERE id = ?  ->  [filter, payload, id]
-        const [filter, payload, id] = params as [string | null, unknown, string];
-        const row = tableOf(name).get(id);
-        if (row) {
-          row.filter = filter;
-          row.payload = payload;
+        // SET {filterColumn} = ?, payload = ?, mac = ? WHERE id = ?  ->  [filter, payload, mac, id]
+        // or (commitRunTransition): SET conversation_id = ?, payload = ?, mac = ? WHERE id = ? -> [convId, payload, mac, id]
+        if (trimmed.includes("mac = ?")) {
+          const [filter, payload, mac, id] = params as [string | null, unknown, string | null, string];
+          const row = tableOf(name).get(id);
+          if (row) {
+            row.filter = filter;
+            row.payload = payload;
+            row.mac = mac ?? null;
+          }
+        } else {
+          // Fallback for UPDATE statements without mac (shouldn't happen post-H8, but defensive)
+          const [filter, payload, id] = params as [string | null, unknown, string];
+          const row = tableOf(name).get(id);
+          if (row) {
+            row.filter = filter;
+            row.payload = payload;
+          }
         }
         return;
       }
@@ -168,7 +181,15 @@ function createInMemorySqlDriverDouble(): SqlDriver {
         return row ? ({ id: row.id } as T) : undefined;
       }
 
-      // SELECT payload FROM {table} WHERE id = ?
+      // SELECT payload, mac FROM {table} WHERE id = ?
+      if (/^SELECT payload, mac FROM/i.test(trimmed) && /WHERE id = \?/i.test(trimmed)) {
+        const name = matchTable(trimmed, /FROM (\w+)/i);
+        const [id] = params as [string];
+        const row = tableOf(name).get(id);
+        return row ? ({ payload: row.payload, mac: row.mac } as T) : undefined;
+      }
+
+      // SELECT payload FROM {table} WHERE id = ?  (legacy path without mac)
       if (/^SELECT payload FROM/i.test(trimmed) && /WHERE id = \?/i.test(trimmed)) {
         const name = matchTable(trimmed, /FROM (\w+)/i);
         const [id] = params as [string];
@@ -188,7 +209,19 @@ function createInMemorySqlDriverDouble(): SqlDriver {
         return [...tableOf(name).values()].map((row) => ({ id: row.id }) as T);
       }
 
-      // SELECT id, payload FROM {table} [WHERE {col} = ?] ORDER BY seq ASC
+      // SELECT id, payload, mac FROM {table} [WHERE {col} = ?] ORDER BY seq ASC
+      if (/^SELECT id, payload, mac FROM/i.test(trimmed)) {
+        const name = matchTable(trimmed, /FROM (\w+)/i);
+        let rows = [...tableOf(name).values()];
+        if (/WHERE/i.test(trimmed)) {
+          const [filter] = params as [string];
+          rows = rows.filter((row) => row.filter === filter);
+        }
+        rows.sort((a, b) => a.seq - b.seq);
+        return rows.map((row) => ({ id: row.id, payload: row.payload, mac: row.mac }) as T);
+      }
+
+      // SELECT id, payload FROM {table} [WHERE {col} = ?] ORDER BY seq ASC (legacy path without mac)
       if (/^SELECT id, payload FROM/i.test(trimmed)) {
         const name = matchTable(trimmed, /FROM (\w+)/i);
         let rows = [...tableOf(name).values()];

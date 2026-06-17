@@ -1,11 +1,11 @@
 import {
-  mkdir as fsMkdir,
   readFile as fsReadFile,
   rename as fsRename,
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { dirname } from "node:path";
 import { redactString } from "../security/redaction";
+import { ensureRestrictedDir } from "../security/filePermissions";
 import {
   ModuleConfigStateSchema,
   emptyModuleConfigState,
@@ -40,7 +40,7 @@ const defaultFs: ModuleConfigFs = {
   writeFile: (path, data) => fsWriteFile(path, data, "utf8"),
   rename: (from, to) => fsRename(from, to),
   mkdir: async (dir) => {
-    await fsMkdir(dir, { recursive: true });
+    ensureRestrictedDir(dir);
   },
 };
 

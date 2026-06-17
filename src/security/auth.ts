@@ -2,6 +2,12 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { existsSync, readFileSync } from "node:fs";
 import { redactString } from "./redaction";
 
+/** Minimum length for a session secret. */
+const MIN_SESSION_SECRET_LENGTH = 32;
+
+/** Minimum number of unique characters in a session secret. */
+const MIN_SESSION_SECRET_UNIQUE_CHARS = 8;
+
 /** Cookie name for the signed session token. */
 export const SESSION_COOKIE_NAME = "rector_session";
 
@@ -89,6 +95,8 @@ export function parseAuthConfig(env: Record<string, string | undefined> = proces
   if (!sessionSecret) {
     throw new Error("RECTOR_AUTH_SESSION_SECRET is required when RECTOR_AUTH_ENABLED=true");
   }
+
+  validateSessionSecretEntropy(sessionSecret);
 
   const envUsers = env.RECTOR_AUTH_USERS?.trim();
   const users = envUsers
@@ -182,6 +190,45 @@ export function verifySessionToken(token: string | undefined, sessionSecret: str
   } catch {
     return null;
   }
+}
+
+/**
+ * Validate that a session secret has sufficient entropy.
+ *
+ * Throws a descriptive error if the secret is too short or too predictable,
+ * with a hint for generating a strong secret.
+ */
+export function validateSessionSecretEntropy(secret: string): void {
+  if (secret.length < MIN_SESSION_SECRET_LENGTH) {
+    throw new Error(
+      `RECTOR_AUTH_SESSION_SECRET must be at least ${MIN_SESSION_SECRET_LENGTH} characters (got ${secret.length}). ` +
+        `Generate one with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`,
+    );
+  }
+
+  const uniqueChars = new Set(secret).size;
+  if (uniqueChars < MIN_SESSION_SECRET_UNIQUE_CHARS) {
+    throw new Error(
+      `RECTOR_AUTH_SESSION_SECRET must contain at least ${MIN_SESSION_SECRET_UNIQUE_CHARS} unique characters (got ${uniqueChars}). ` +
+        `Generate one with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`,
+    );
+  }
+}
+
+/**
+ * Check session secret entropy without throwing. Returns a warning string if
+ * the secret has low entropy, or null if it passes.
+ */
+export function checkSessionSecretEntropy(secret: string): string | null {
+  if (!secret) return null;
+  if (secret.length < MIN_SESSION_SECRET_LENGTH) {
+    return `Session secret is shorter than ${MIN_SESSION_SECRET_LENGTH} characters — consider generating a stronger secret.`;
+  }
+  const uniqueChars = new Set(secret).size;
+  if (uniqueChars < MIN_SESSION_SECRET_UNIQUE_CHARS) {
+    return `Session secret has only ${uniqueChars} unique characters (minimum ${MIN_SESSION_SECRET_UNIQUE_CHARS}) — consider generating a stronger secret.`;
+  }
+  return null;
 }
 
 /** Redacted, secret-free auth error message suitable for API responses. */

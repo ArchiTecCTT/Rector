@@ -2,14 +2,14 @@ import type { Budget, Run } from "../store/schemas";
 
 /** Permissive default budget used when no active run context is available. */
 export const DEFAULT_MEMORY_BUDGET: Budget = {
-  maxUsd: 100,
-  maxInputTokens: 1_000_000,
-  maxOutputTokens: 1_000_000,
-  maxModelCalls: 10_000,
+  maxUsd: 10,
+  maxInputTokens: 500_000,
+  maxOutputTokens: 500_000,
+  maxModelCalls: 1_000,
   maxRuntimeMs: 3_600_000,
-  maxHealingAttempts: 100,
+  maxHealingAttempts: 10,
   allowedProviders: [],
-  approvalRequiredAboveUsd: 0,
+  approvalRequiredAboveUsd: 1,
 };
 
 /** A minimal run shell for memory-provider budget preflight when no live run exists. */
@@ -29,6 +29,7 @@ export function defaultMemoryBudgetRun(overrides: Partial<Run> = {}): Run {
     attempts: 1,
     healingAttempts: 0,
     validationAttempts: 0,
+    version: 0,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,

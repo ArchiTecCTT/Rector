@@ -1,4 +1,5 @@
 import type { Application, Request, Response } from "express";
+import { z } from "zod";
 import {
   TemplateApplyRequestSchema,
   TemplateImportSecretError,
@@ -7,6 +8,8 @@ import {
   type TemplateService,
 } from "../../templates";
 import { sendRedactedRouteError, statusForMissingTemplate } from "./routeError";
+
+const TemplateImportBodySchema = z.object({ template: z.union([z.string().min(1).max(1_000_000), z.record(z.unknown())]) }).passthrough();
 
 export interface TemplateRoutesDeps {
   templateServiceFor(req: Request): TemplateService;
@@ -49,8 +52,10 @@ export function registerTemplateRoutes(app: Application, deps: TemplateRoutesDep
 
   app.post("/api/templates/import/preview", async (req, res) => {
     try {
+      const parsed = TemplateImportBodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) return sendRedacted(res, 400, { error: "Invalid import body" });
       const service = templateServiceFor(req);
-      const template = service.importTemplate(req.body ?? {});
+      const template = service.importTemplate(parsed.data);
       const preview: TemplatePreview = await service.preview(template, undefined, scopeIdFor(req));
       sendTemplateResponse(res, 200, { template, preview });
     } catch (error) {
@@ -63,8 +68,10 @@ export function registerTemplateRoutes(app: Application, deps: TemplateRoutesDep
 
   app.post("/api/templates/import/apply", async (req, res) => {
     try {
+      const parsed = TemplateImportBodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) return sendRedacted(res, 400, { error: "Invalid import body" });
       const service = templateServiceFor(req);
-      const template = service.importTemplate(req.body ?? {});
+      const template = service.importTemplate(parsed.data);
       const rawBody = req.body && typeof req.body === "object" ? { ...(req.body as Record<string, unknown>) } : {};
       delete rawBody.template;
       const body = TemplateApplyRequestSchema.parse(rawBody);

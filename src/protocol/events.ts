@@ -31,6 +31,7 @@ export const RUN_EVENT_TYPES = [
   "PROVIDER_RETRY",
   "PROVIDER_SUBSTITUTED",
   "CREDENTIAL_ROTATED",
+  "BUDGET_APPROVAL_REQUESTED",
 ] as const;
 
 export const RunEventTypeSchema = z.enum(RUN_EVENT_TYPES);
@@ -41,7 +42,29 @@ export const RunEventSchema = z.object({
   runId: z.string().min(1),
   type: RunEventTypeSchema,
   phase: RunPhaseSchema,
-  payload: z.record(z.unknown()).default({}),
+  payload: z
+    .record(z.unknown())
+    .default({})
+    .refine(
+      (val) => Object.keys(val).length <= 50,
+      { message: "Payload must have at most 50 keys" },
+    )
+    .refine(
+      (val) =>
+        Object.keys(val).every((k) => k.length <= 128),
+      { message: "Payload keys must be ≤128 chars" },
+    )
+    .transform((val) => {
+      const cleaned: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(val)) {
+        if (v !== undefined) cleaned[k] = v;
+      }
+      return cleaned;
+    })
+    .refine(
+      (val) => JSON.stringify(val).length <= 100_000,
+      { message: "Payload must be ≤100KB when serialized" },
+    ),
   traceId: z.string().min(1).optional(),
   redactionState: z.string().min(1).optional(),
   createdAt: z.string().datetime(),

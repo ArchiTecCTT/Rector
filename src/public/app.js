@@ -2146,42 +2146,62 @@ function formatCandidatePricing(pricing) {
 // context window and/or pricing when present (20.3), and a region/deployment note when the candidate
 // requires one (20.4). Returns an HTML string; carries no secret material and never throws on a
 // partially-populated candidate.
-function renderCandidate(candidate) {
-  if (!candidate || typeof candidate !== "object") return "";
+function buildCandidateElement(candidate) {
+  if (!candidate || typeof candidate !== "object") return document.createDocumentFragment();
   const c = candidate;
   const modelId = typeof c.modelId === "string" ? c.modelId : "";
-  const name = escapeHtml(String(c.displayName || modelId || "Unknown model"));
-  const out = [];
-  out.push(`<div class="model-candidate" data-model-id="${escapeHtml(modelId)}">`);
 
-  out.push(`<div class="model-candidate__head">`);
-  out.push(`<span class="model-candidate__name">${name}</span>`);
+  const el = document.createElement("div");
+  el.className = "model-candidate";
+  el.setAttribute("data-model-id", modelId);
+
+  const head = document.createElement("div");
+  head.className = "model-candidate__head";
+
+  const nameSpan = document.createElement("span");
+  nameSpan.className = "model-candidate__name";
+  nameSpan.textContent = String(c.displayName || modelId || "Unknown model");
+  head.appendChild(nameSpan);
+
   // Lifecycle status with an explicit deprecated indicator (Req 20.2).
   if (c.lifecycle != null && String(c.lifecycle).length > 0) {
     const life = String(c.lifecycle);
     const deprecated = life === "deprecated";
-    const cls = deprecated ? "model-candidate__lifecycle is-deprecated" : "model-candidate__lifecycle";
-    const text = deprecated ? `⚠ ${life}` : life;
-    out.push(`<span class="${cls}" data-lifecycle="${escapeHtml(life)}">${escapeHtml(text)}</span>`);
+    const lifeSpan = document.createElement("span");
+    lifeSpan.className = deprecated ? "model-candidate__lifecycle is-deprecated" : "model-candidate__lifecycle";
+    lifeSpan.setAttribute("data-lifecycle", life);
+    lifeSpan.textContent = deprecated ? `⚠ ${life}` : life;
+    head.appendChild(lifeSpan);
   }
-  out.push(`</div>`);
+  el.appendChild(head);
 
   // Capability tags (Req 20.1).
   const caps = Array.isArray(c.capabilities) ? c.capabilities.filter((t) => typeof t === "string" && t) : [];
   if (caps.length) {
-    out.push(`<div class="model-candidate__caps">`);
-    for (const tag of caps) out.push(`<span class="model-candidate__cap">${escapeHtml(tag)}</span>`);
-    out.push(`</div>`);
+    const capsDiv = document.createElement("div");
+    capsDiv.className = "model-candidate__caps";
+    for (const tag of caps) {
+      const capSpan = document.createElement("span");
+      capSpan.className = "model-candidate__cap";
+      capSpan.textContent = tag;
+      capsDiv.appendChild(capSpan);
+    }
+    el.appendChild(capsDiv);
   }
 
   // Context window and/or pricing when present (Req 20.3).
   const meta = [];
   if (typeof c.contextWindow === "number" && c.contextWindow > 0) {
-    meta.push(`Context: ${escapeHtml(String(c.contextWindow))} tokens`);
+    meta.push(`Context: ${String(c.contextWindow)} tokens`);
   }
   const pricing = formatCandidatePricing(c.pricing);
-  if (pricing) meta.push(`Pricing: ${escapeHtml(pricing)}`);
-  if (meta.length) out.push(`<div class="model-candidate__meta">${meta.join(" · ")}</div>`);
+  if (pricing) meta.push(`Pricing: ${pricing}`);
+  if (meta.length) {
+    const metaDiv = document.createElement("div");
+    metaDiv.className = "model-candidate__meta";
+    metaDiv.textContent = meta.join(" · ");
+    el.appendChild(metaDiv);
+  }
 
   // Region / deployment note when the candidate requires one (Req 20.4).
   const notes = [];
@@ -2190,10 +2210,14 @@ function renderCandidate(candidate) {
     const region = c.scope && typeof c.scope === "object" && c.scope.region ? ` (${String(c.scope.region)})` : "";
     notes.push(`Requires a region${region}`);
   }
-  if (notes.length) out.push(`<div class="model-candidate__note">${escapeHtml(notes.join("; "))}</div>`);
+  if (notes.length) {
+    const noteDiv = document.createElement("div");
+    noteDiv.className = "model-candidate__note";
+    noteDiv.textContent = notes.join("; ");
+    el.appendChild(noteDiv);
+  }
 
-  out.push(`</div>`);
-  return out.join("");
+  return el;
 }
 
 // Human-readable, non-secret label for one candidate in a role <select> option.
@@ -2226,7 +2250,10 @@ function renderModelPickerCandidates(spec, ui) {
   const candidates = Array.isArray(snapshot.candidates) ? snapshot.candidates : [];
 
   if (candidates.length) {
-    ui.candidatesEl.innerHTML = candidates.map(renderCandidate).join("");
+    ui.candidatesEl.innerHTML = "";
+    const frag = document.createDocumentFragment();
+    for (const c of candidates) frag.appendChild(buildCandidateElement(c));
+    ui.candidatesEl.appendChild(frag);
   } else {
     ui.candidatesEl.innerHTML = "";
   }

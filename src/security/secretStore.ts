@@ -1,7 +1,8 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { redactSecrets, redactString } from "./redaction";
+import { ensureRestrictedDir } from "./filePermissions";
 
 /**
  * Secret Store abstraction (Requirement 7).
@@ -53,6 +54,12 @@ export interface SecretStore {
   getSecret(providerId: string): Promise<SecretStoreResult<string>>;
   /** Report whether a secret value is currently stored for `providerId`. Presence only. */
   hasSecret(providerId: string): Promise<boolean>;
+  /**
+   * List all provider IDs that have a stored secret. Used for key rotation
+   * to enumerate envelopes that must be re-encrypted (H3).
+   * Optional so existing test doubles remain valid SecretStores.
+   */
+  listSecretIds?(): Promise<string[]>;
   /**
    * Remove the stored secret for `providerId`, if any. Optional so existing presence-only doubles
    * remain valid `SecretStore`s; the shipped local backing implements it so deleting a provider
@@ -134,7 +141,7 @@ function defaultSecretFs(): SecretFs {
       await rename(fromPath, toPath);
     },
     async mkdir(dirPath: string): Promise<void> {
-      await mkdir(dirPath, { recursive: true });
+      ensureRestrictedDir(dirPath);
     },
   };
 }
@@ -249,6 +256,15 @@ export function createLocalSecretStore(options: LocalSecretStoreOptions): Secret
         // Presence is a best-effort boolean; an unreadable backing reports "absent"
         // rather than surfacing an error or a value.
         return false;
+      }
+    },
+
+    async listSecretIds(): Promise<string[]> {
+      try {
+        const contents = await readFileContents();
+        return Object.keys(contents.entries);
+      } catch {
+        return [];
       }
     },
 

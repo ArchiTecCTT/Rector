@@ -3,3 +3,9 @@
 
 # Binary assets (never apply text/EOL normalization)
 *.woff2 binary
+
+# Lock files — don't diff, mark as generated
+package-lock.json -diff linguist-generated=true
+
+# Generated issue exports
+docs/issues/generated/** linguist-generated=true

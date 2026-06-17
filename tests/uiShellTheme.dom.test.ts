@@ -319,10 +319,19 @@ describe("Property 8: the no-flash boot script is present and unchanged (Req 12.
   // Slice out the <head> so we only consider boot-time scripts.
   const head = (/<head[\s\S]*?<\/head>/i.exec(INDEX_HTML) ?? [""])[0];
 
-  // The exact inline boot script the redesign must preserve verbatim. Compared
-  // after whitespace normalization, so re-indentation is allowed but any change
-  // to the logic (keys read, attributes set, theme list) fails this guard.
-  const EXPECTED_BOOT = `(function () {
+  // The exact boot script content the redesign must preserve verbatim. Compared
+  // against src/public/boot.js after whitespace normalization, so re-indentation
+  // is allowed but any change to the logic (keys read, attributes set, theme list)
+  // fails this guard.
+  const EXPECTED_BOOT = `/**
+ * No-flash theme boot (design A3, Req 3.2). Inline, no external fetch:
+ * reads the persisted appearance from localStorage and applies data-theme +
+ * override custom properties on <html> BEFORE first paint. Never throws on
+ * unreadable/missing storage (Req 3.5) — it falls back to the Halo default
+ * and the theme's own tokens. Kept tiny and self-contained; the constants
+ * mirror theme.js (which cannot be imported here without an external fetch).
+ */
+(function () {
         var KEY = "rector.appearance";
         var DEFAULT_THEME = "halo";
         var THEMES = ["halo", "aether", "cairn", "penumbra", "vellum"];
@@ -364,32 +373,40 @@ describe("Property 8: the no-flash boot script is present and unchanged (Req 12.
 
   const normalize = (s: string): string => s.replace(/\s+/g, " ").trim();
 
-  // Every inline (no-src) <script> declared in the <head>.
-  const headInlineScripts = [...head.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*[^>]*>/gi)]
-    .filter((m) => !/\bsrc\s*=/.test(m[1]))
-    .map((m) => m[2]);
+  // The <script src="boot.js"> tag in <head> (CSP-compliant external boot).
+  const headScriptTags = [...head.matchAll(/<script\b([^>]*)>/gi)];
+  const bootScriptTag = headScriptTags.find((m) => /src\s*=\s*"boot\.js"/.test(m[1]));
+  const BOOT_JS = readPublic("boot.js");
 
-  it("ships exactly one inline boot script in <head> (no external fetch)", () => {
-    expect(headInlineScripts.length).toBe(1);
+  it("ships exactly one external boot script in <head> (CSP-compliant, no inline script)", () => {
+    // No inline (no-src) <script> in <head> — CSP script-src 'self' forbids inline.
+    const inlineScripts = headScriptTags.filter((m) => !/\bsrc\s*=/.test(m[1]));
+    expect(inlineScripts.length).toBe(0);
+    // Exactly one <script src="boot.js"> tag.
+    expect(bootScriptTag).toBeTruthy();
   });
 
   it("the boot script applies the theme before first paint", () => {
-    const boot = headInlineScripts[0] ?? "";
-    // Reads the persisted appearance and sets data-theme on <html> at boot.
-    expect(boot).toContain("rector.appearance");
-    expect(boot).toContain('setAttribute("data-theme"');
+    expect(bootScriptTag).toBeTruthy();
+    // boot.js is synchronous (no defer/async) so it blocks rendering — theme applies before first paint.
+    const tagText = bootScriptTag![0];
+    expect(tagText).not.toContain("defer");
+    expect(tagText).not.toContain("async");
+    // The boot script itself reads the persisted appearance and sets data-theme on <html>.
+    expect(BOOT_JS).toContain("rector.appearance");
+    expect(BOOT_JS).toContain('setAttribute("data-theme"');
     // Re-points the single lazy theme stylesheet so only the active theme loads.
-    expect(boot).toContain("theme-stylesheet");
+    expect(BOOT_JS).toContain("theme-stylesheet");
     // Applies the reduced-motion hook before paint too.
-    expect(boot).toContain('setAttribute("data-reduced-motion"');
+    expect(BOOT_JS).toContain('setAttribute("data-reduced-motion"');
     // Knows all five themes.
     for (const { id } of THEME_FILES) {
-      expect(boot).toContain(`"${id}"`);
+      expect(BOOT_JS).toContain(`"${id}"`);
     }
   });
 
   it("the boot script content is unchanged", () => {
-    expect(normalize(headInlineScripts[0] ?? "")).toBe(normalize(EXPECTED_BOOT));
+    expect(normalize(BOOT_JS)).toBe(normalize(EXPECTED_BOOT));
   });
 
   it("runs at boot — before the body application scripts (theme.js / app.js)", () => {

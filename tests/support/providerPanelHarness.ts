@@ -99,6 +99,14 @@ class FakeElement {
 
   // --- tree ---
   appendChild(child: FakeElement): FakeElement {
+    if (child.tagName === "FRAGMENT") {
+      for (const grandChild of child.children) {
+        grandChild.parent = this;
+        this.children.push(grandChild);
+      }
+      child.children = [];
+      return child;
+    }
     child.parent = this;
     this.children.push(child);
     return child;
@@ -213,6 +221,7 @@ export function createProviderPanelHarness(): ProviderPanelHarness {
     readyState: "complete",
     getElementById: (id: string) => getEl(id),
     createElement: (tag: string) => new FakeElement(tag),
+    createDocumentFragment: () => new FakeElement("FRAGMENT"),
     querySelector: (_sel: string) => new FakeElement("div"),
     addEventListener: (type: string, handler: (ev: any) => void) => {
       const list = documentListeners.get(type) ?? [];

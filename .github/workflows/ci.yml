@@ -7,9 +7,9 @@ name: CI
 
 on:
   push:
-    branches: [main, rector-0.1.0, rector-0.2.0]
+    branches: [main, rector-0.3.0]
   pull_request:
-    branches: [main, rector-0.1.0, rector-0.2.0]
+    branches: [main, rector-0.3.0]
 
 # Least privilege: read-only token cannot push commits, create tags, or publish releases.
 permissions:

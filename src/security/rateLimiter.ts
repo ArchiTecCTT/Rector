@@ -330,6 +330,241 @@ export function createUnavailableDistributedRateLimiter(
   };
 }
 
+/**
+ * Redis-backed distributed rate limiter using rate-limiter-flexible + ioredis.
+ *
+ * Requires `rate-limiter-flexible` and `ioredis` to be installed (optional peer deps).
+ * If they are missing, construction throws — callers should use {@link createRateLimiterFromEnv}
+ * which guards against missing packages.
+ *
+ * Types are intentionally `any` to avoid compile-time module resolution when the optional
+ * dependencies are not installed.
+ */
+export class RedisRateLimiter implements DistributedRateLimiter {
+  readonly kind = "distributed" as const;
+
+  private readonly _limiter: any;
+  private readonly _redis: any;
+  private readonly _keyPrefix: string;
+  private readonly policy: RateLimitPolicy;
+
+  constructor(
+    redisUrl: string,
+    policy: RateLimitPolicy = createRateLimitPolicy(),
+    options?: {
+      /** Key prefix in Redis to avoid collisions. */
+      prefix?: string;
+    },
+  ) {
+    // Dynamic require — these packages are optional and may not be installed.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const IORedis = require("ioredis");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { RateLimiterRedis } = require("rate-limiter-flexible");
+
+    this.policy = policy;
+    this._keyPrefix = options?.prefix ?? "rl";
+    this._redis = new IORedis.default(redisUrl, { lazyConnect: true, maxRetriesPerRequest: 3 });
+    this._limiter = new RateLimiterRedis({
+      storeClient: this._redis,
+      keyPrefix: this._keyPrefix,
+      points: 0, // overridden per-route in check/commit
+      duration: 1, // overridden per-route in check/commit
+    });
+  }
+
+  async check(key: string, route: string, now: number): Promise<RateLimitDecision> {
+    return this._performOperation(key, route, now, false);
+  }
+
+  async commit(key: string, route: string, now: number): Promise<RateLimitDecision> {
+    return this._performOperation(key, route, now, true);
+  }
+
+  async reset(key?: string, route?: string): Promise<void> {
+    if (!key && !route) {
+      const stream = this._redis.scanStream({ match: `${this._keyPrefix}:*`, count: 100 });
+      const keys: string[] = [];
+      for await (const batch of stream as AsyncIterable<string[]>) {
+        keys.push(...batch);
+      }
+      if (keys.length > 0) {
+        await this._redis.del(...keys);
+      }
+      return;
+    }
+
+    const matchKey = route
+      ? `${this._keyPrefix}:${route}\u0000${key ?? "*"}`
+      : `${this._keyPrefix}:*\u0000${key}`;
+    const stream = this._redis.scanStream({ match: matchKey, count: 100 });
+    const keys: string[] = [];
+    for await (const batch of stream as AsyncIterable<string[]>) {
+      keys.push(...batch);
+    }
+    if (keys.length > 0) {
+      await this._redis.del(...keys);
+    }
+  }
+
+  /** Disconnect the Redis client. Call on graceful shutdown. */
+  async disconnect(): Promise<void> {
+    await this._redis.quit();
+  }
+
+  private async _performOperation(
+    key: string,
+    route: string,
+    now: number,
+    consumePoint: boolean,
+  ): Promise<RateLimitDecision> {
+    const rule = rateLimitRuleFor(this.policy, route);
+    if (rule.maxRequests <= 0) {
+      return disabledDecision(key, route, normalizeNow(now));
+    }
+
+    const redisKey = `${route}\u0000${key}`;
+    const durationSec = Math.ceil(rule.windowMs / 1000);
+
+    try {
+      const limiterForRoute = new (this._limiter.constructor as any)({
+        storeClient: this._redis,
+        keyPrefix: this._keyPrefix,
+        points: rule.maxRequests,
+        duration: durationSec,
+      });
+
+      let result: any;
+      if (consumePoint) {
+        result = await limiterForRoute.consume(redisKey, 1);
+      } else {
+        // Peek: check remaining without consuming a point
+        const res = await limiterForRoute.get(redisKey);
+        if (res) {
+          result = res;
+        } else {
+          // No record exists yet — fully available
+          return {
+            key,
+            route,
+            allowed: true,
+            limit: rule.maxRequests,
+            remaining: rule.maxRequests,
+            resetAt: now + rule.windowMs,
+            retryAfterMs: 0,
+            disabled: false,
+          };
+        }
+      }
+
+      const remaining = result.remainingPoints ?? 0;
+      const msBeforeNext = result.msBeforeNext ?? rule.windowMs;
+      const resetAt = now + msBeforeNext;
+
+      if (remaining <= 0) {
+        return {
+          key,
+          route,
+          allowed: false,
+          limit: rule.maxRequests,
+          remaining: 0,
+          resetAt,
+          retryAfterMs: Math.max(0, msBeforeNext),
+          disabled: false,
+          reason: "RATE_LIMITED",
+        };
+      }
+
+      return {
+        key,
+        route,
+        allowed: true,
+        limit: rule.maxRequests,
+        remaining: Math.max(0, remaining),
+        resetAt,
+        retryAfterMs: 0,
+        disabled: false,
+      };
+    } catch (error: unknown) {
+      if (error && typeof error === "object" && "msBeforeNext" in error) {
+        // RateLimiterRes when rate-limited
+        const rlRes = error as { msBeforeNext: number; remainingPoints: number; consumedPoints: number };
+        return {
+          key,
+          route,
+          allowed: false,
+          limit: rule.maxRequests,
+          remaining: 0,
+          resetAt: now + rlRes.msBeforeNext,
+          retryAfterMs: Math.max(0, rlRes.msBeforeNext),
+          disabled: false,
+          reason: "RATE_LIMITED",
+        };
+      }
+
+      // Redis/backend failure
+      if (rule.failClosed) {
+        throw error;
+      }
+      // Fail open: allow the request
+      console.warn(`[RATE_LIMIT] Redis error, failing open: ${error instanceof Error ? error.message : String(error)}`);
+      return {
+        key,
+        route,
+        allowed: true,
+        limit: rule.maxRequests,
+        remaining: rule.maxRequests,
+        resetAt: now + rule.windowMs,
+        retryAfterMs: 0,
+        disabled: false,
+        reason: "RATE_LIMIT_BACKEND_ERROR",
+      };
+    }
+  }
+}
+
+/**
+ * Helper object to check if the optional Redis packages (ioredis and rate-limiter-flexible) are installed.
+ * Defined as an object property to allow mocking in tests.
+ */
+export const redisPackageCheck = {
+  check(): boolean {
+    try {
+      require.resolve("ioredis");
+      require.resolve("rate-limiter-flexible");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+
+/**
+ * Create the appropriate rate limiter based on environment.
+ * If RECTOR_REDIS_URL is set and the optional packages are available, returns a Redis-backed limiter.
+ * Otherwise returns an InMemoryRateLimiter with a startup warning.
+ */
+export function createRateLimiterFromEnv(
+  env: Record<string, string | undefined> = process.env,
+  policy: RateLimitPolicy = createRateLimitPolicy(env),
+): RateLimiter {
+  const redisUrl = env.RECTOR_REDIS_URL;
+  if (redisUrl) {
+    if (redisPackageCheck.check()) {
+      console.log("[RATE_LIMIT] Using Redis distributed rate limiter");
+      return new RedisRateLimiter(redisUrl, policy);
+    } else {
+      console.warn(
+        "[RATE_LIMIT] RECTOR_REDIS_URL is set but ioredis/rate-limiter-flexible are not installed. " +
+          "Falling back to in-memory rate limiter. Install optional deps: npm install ioredis rate-limiter-flexible",
+      );
+      return new InMemoryRateLimiter(policy);
+    }
+  }
+  console.warn("[RATE_LIMIT] RECTOR_REDIS_URL not set — using in-memory rate limiter (not distributed across instances)");
+  return new InMemoryRateLimiter(policy);
+}
+
 interface RateLimitRuleEnvKeys {
   windowMs: string;
   maxRequests: string;

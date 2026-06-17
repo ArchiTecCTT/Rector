@@ -24,6 +24,7 @@ import {
   type UpdateRunInput,
 } from "./schemas";
 import type { RectorStore } from "./index";
+import { ConcurrentTransitionError } from "../orchestration/runStateMachine";
 import {
   compareMemoryPruneCandidates,
   compareMemorySearchResults,
@@ -250,6 +251,16 @@ export class InMemoryRectorStore implements RectorStore {
     const current = this.runs.get(runId);
     if (!current) {
       throw new Error(`Run not found: ${runId}`);
+    }
+
+    // Optimistic concurrency check (M21): compare-and-swap on version.
+    // If patch specifies a version, it must match the current version.
+    if (patch.version !== undefined && current.version !== patch.version - 1) {
+      throw new ConcurrentTransitionError(
+        runId,
+        patch.version - 1,
+        current.version ?? 0
+      );
     }
 
     const updated = RunSchema.parse({

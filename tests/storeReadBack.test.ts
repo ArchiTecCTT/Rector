@@ -80,8 +80,13 @@ function tamperingReadDriver(
     run: (sql, params) => inner.run(sql, params),
     get<T = unknown>(sql: string, params?: unknown[]): T | undefined {
       const row = inner.get<T>(sql, params);
-      // The store reads an entity back with `SELECT payload FROM <table> WHERE id = ?`; only those
+      // The store reads an entity back with `SELECT payload, mac FROM <table> WHERE id = ?`; only those
       // payload-bearing single-row reads are tampered with.
+      if (row !== undefined && /select\s+payload,?\s*mac\s+from/i.test(sql)) {
+        const record = row as { payload: unknown; mac: string | null };
+        return { ...record, payload: tamper(record.payload) } as T;
+      }
+      // Legacy path without mac column
       if (row !== undefined && /select\s+payload\s+from/i.test(sql)) {
         const record = row as { payload: unknown };
         return { ...record, payload: tamper(record.payload) } as T;

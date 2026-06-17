@@ -1,8 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { redactString } from "../security/redaction";
+import { ensureRestrictedDir } from "../security/filePermissions";
+import type { AuthorizationSubject } from "../security/rbac.js";
+import { can } from "../security/rbac.js";
 import {
   MemoryAssignmentStateSchema,
   MemoryRoleAssignmentSchema,
@@ -62,7 +65,7 @@ function defaultMemoryAssignmentFs(): MemoryAssignmentFs {
       await rename(fromPath, toPath);
     },
     async mkdir(dirPath: string): Promise<void> {
-      await mkdir(dirPath, { recursive: true });
+      ensureRestrictedDir(dirPath);
     },
   };
 }
@@ -241,4 +244,54 @@ export function selectMemoryAssignmentForRole(
   return assignments
     .filter((assignment) => memoryAssignmentMatchesRoleScope(assignment, input))
     .sort(compareMemoryAssignmentPriority)[0];
+}
+
+/**
+ * Authorizing decorator for MemoryAssignmentStore.
+ *
+ * - If `subject` is provided and has `providers.configure` permission → proceed.
+ * - If `subject` is absent → allow (backward compat: caller didn't opt in to auth checks).
+ * - If auth is disabled (local mode) → allow all mutations.
+ */
+export class AuthorizingMemoryAssignmentStore implements MemoryAssignmentStore {
+  private readonly inner: MemoryAssignmentStore;
+  private readonly subject: AuthorizationSubject | undefined;
+
+  constructor(inner: MemoryAssignmentStore, subject: AuthorizationSubject | undefined) {
+    this.inner = inner;
+    this.subject = subject;
+  }
+
+  private checkMutate(): void {
+    if (!this.subject) return; // No subject = backward compat, allow
+    if (!this.subject.authEnabled) return; // Local mode: allow all
+    if (!can(this.subject, "providers.configure")) {
+      throw new Error(
+        `Role "${this.subject.role}" does not have permission "providers.configure".`,
+      );
+    }
+  }
+
+  async getState(): Promise<MemoryAssignmentState> {
+    return this.inner.getState();
+  }
+
+  async listAssignments(filter?: MemoryAssignmentFilter): Promise<MemoryRoleAssignment[]> {
+    return this.inner.listAssignments(filter);
+  }
+
+  async upsertAssignment(assignment: MemoryRoleAssignment): Promise<MemoryAssignmentResult<MemoryRoleAssignment>> {
+    this.checkMutate();
+    return this.inner.upsertAssignment(assignment);
+  }
+
+  async removeAssignment(id: string): Promise<MemoryAssignmentResult<void>> {
+    this.checkMutate();
+    return this.inner.removeAssignment(id);
+  }
+
+  async resetAssignments(filter?: MemoryAssignmentFilter): Promise<MemoryAssignmentResult<void>> {
+    this.checkMutate();
+    return this.inner.resetAssignments(filter);
+  }
 }

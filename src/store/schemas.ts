@@ -19,11 +19,14 @@ export const ConversationSchema = z.object({
 });
 export type Conversation = z.infer<typeof ConversationSchema>;
 
+/** Maximum allowed message content length in characters (M22). */
+export const MAX_MESSAGE_CONTENT_LENGTH = 100_000;
+
 export const MessageSchema = z.object({
   id: NonEmptyStringSchema,
   conversationId: NonEmptyStringSchema,
   role: NonEmptyStringSchema,
-  content: z.string(),
+  content: z.string().max(MAX_MESSAGE_CONTENT_LENGTH),
   status: NonEmptyStringSchema,
   runId: NonEmptyStringSchema.optional(),
   redactionState: NonEmptyStringSchema,
@@ -66,6 +69,8 @@ export const RunSchema = z.object({
   parentRunId: NonEmptyStringSchema.optional(),
   lastError: z.string().optional(),
   decisionRequest: MetadataSchema.optional(),
+  /** Monotonic version counter for optimistic concurrency (M21). Incremented on each transition. */
+  version: z.number().int().nonnegative().default(0),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
@@ -110,7 +115,7 @@ export type UpdateConversationInput = Partial<Omit<Conversation, "id" | "created
 export type CreateMessageInput = Omit<Message, "id" | "createdAt">;
 export type UpdateMessageInput = Partial<Omit<Message, "id" | "createdAt">>;
 
-export type CreateRunInput = Omit<Run, "id" | "createdAt" | "updatedAt">;
+export type CreateRunInput = Omit<Run, "id" | "createdAt" | "updatedAt" | "version"> & { version?: number };
 export type UpdateRunInput = Partial<Omit<Run, "id" | "createdAt" | "updatedAt">>;
 
 export type CreateArtifactInput = Omit<Artifact, "id" | "createdAt">;

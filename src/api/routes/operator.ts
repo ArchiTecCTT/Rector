@@ -6,6 +6,8 @@ import { interruptRun } from "../../orchestration/runControl";
 import type { RectorStore } from "../../store";
 import type { Artifact, Run, RunEvent } from "../../store/schemas";
 import { codeqlRateLimitGuard } from "../codeqlRateLimitGuard";
+import { sendRedactedRouteError } from "./routeError";
+import type { SendRedacted } from "./routeError";
 
 
 type Authorize = (
@@ -18,10 +20,11 @@ type Authorize = (
 export interface OperatorRoutesDeps {
   store: RectorStore;
   authorize: Authorize;
+  sendRedacted: SendRedacted;
 }
 
 export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDeps): void {
-  const { store, authorize } = deps;
+  const { store, authorize, sendRedacted } = deps;
 
   // --- Local-only operator routes for optional Retool console ---
 
@@ -37,7 +40,7 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
       const runs = await store.listRuns();
       res.json(operatorEnvelope({ runs: runs.map(summarizeOperatorRun) }));
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 500, err);
     }
   });
 
@@ -62,7 +65,7 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
         }),
       );
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 500, err);
     }
   });
 
@@ -80,7 +83,7 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
 
       res.json(operatorEnvelope({ failures }));
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 500, err);
     }
   });
 
@@ -96,7 +99,7 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
 
       res.json(operatorEnvelope({ approvals }));
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 500, err);
     }
   });
 
@@ -119,7 +122,7 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
         }),
       );
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 400, err);
     }
   });
 
@@ -128,7 +131,7 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
       const runs = await store.listRuns();
       res.json(operatorEnvelope({ summary: summarizeOperatorCosts(runs), runs: runs.map(summarizeOperatorRun) }));
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 500, err);
     }
   });
 
@@ -146,7 +149,7 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
         }),
       );
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 400, err);
     }
   });
 
@@ -166,7 +169,7 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
         }),
       );
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 400, err);
     }
   });
 
@@ -176,7 +179,7 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
       if (!artifact) return res.status(404).json({ error: "Artifact not found" });
       res.json(operatorEnvelope({ artifact: artifactMetadataOnly(artifact) }));
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 500, err);
     }
   });
 
@@ -212,7 +215,7 @@ export function registerOperatorRoutes(app: Application, deps: OperatorRoutesDep
         }),
       );
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      sendRedactedRouteError(sendRedacted, res, 400, err);
     }
   });
 }
