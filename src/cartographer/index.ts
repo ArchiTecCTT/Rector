@@ -30,5 +30,6 @@ export * from "./ignorePolicy";
 export * from "./fileClassifier";
 export * from "./fileHasher";
 export { InMemoryCartographerInventoryStore, type InMemoryCartographerInventoryStoreOptions } from "./inventoryStore";
+export { SqliteCartographerInventoryStore, type SqliteCartographerInventoryStoreOptions } from "./sqliteInventoryStore";
 export { scanRepository } from "./repoScanner";
 export { buildScanSummary } from "./scanResult";
