@@ -29,5 +29,6 @@ export {
 export * from "./ignorePolicy";
 export * from "./fileClassifier";
 export * from "./fileHasher";
+export { InMemoryCartographerInventoryStore, type InMemoryCartographerInventoryStoreOptions } from "./inventoryStore";
 export { scanRepository } from "./repoScanner";
 export { buildScanSummary } from "./scanResult";
