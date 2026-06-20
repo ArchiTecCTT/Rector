@@ -171,6 +171,16 @@ describe("Cartographer T8 incremental indexer", () => {
       });
     });
   }
+
+  it("does not mutate inventory files when snapshot persistence fails", async () => {
+    // Given: a store whose snapshot write fails before file mutations are allowed.
+    const repoRoot = await makeFixtureRepo();
+    const store = new SnapshotFailingStore();
+
+    // When/Then: the scan rejects and no file mutation methods ran.
+    await expect(scanChangedFiles({ repoRoot, store, now: () => fixedNow })).rejects.toThrow("snapshot denied");
+    expect(store.mutatingCalls).toEqual([]);
+  });
 });
 
 const fixtureIndexedPaths = [".env.example", ".gitignore", ".rectorignore", "docs/architecture.md", "package.json", "src/app.test.ts", "src/app.ts", "src/index.ts", "tsconfig.json"] as const;
@@ -216,4 +226,40 @@ function expectedDeletionEvents(repoRoot: string): ReturnType<typeof labelForEve
     { type: "CARTOGRAPHER_FILE_DELETED", path: "docs/architecture.md" },
     { type: "CARTOGRAPHER_SCAN_COMPLETED", path: resolvedRoot },
   ];
+}
+
+class SnapshotFailingStore implements CartographerInventoryStore {
+  readonly mutatingCalls: string[] = [];
+
+  async getLatestSnapshot(): Promise<undefined> {
+    return undefined;
+  }
+
+  async listSnapshots(): Promise<readonly []> {
+    return [];
+  }
+
+  async listFiles(): Promise<readonly []> {
+    return [];
+  }
+
+  async upsertFiles(): Promise<void> {
+    this.mutatingCalls.push("upsertFiles");
+  }
+
+  async removeFiles(): Promise<void> {
+    this.mutatingCalls.push("removeFiles");
+  }
+
+  async createSnapshot(): Promise<never> {
+    throw new Error("snapshot denied");
+  }
+
+  async recordErrors(): Promise<void> {
+    this.mutatingCalls.push("recordErrors");
+  }
+
+  async listErrors(): Promise<readonly []> {
+    return [];
+  }
 }

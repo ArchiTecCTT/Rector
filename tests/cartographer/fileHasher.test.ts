@@ -93,11 +93,11 @@ describe("Cartographer T4 file hasher", () => {
   });
 
   it("rejects from hashFile for missing paths and directories", async () => {
-    // Given: a missing absolute path and a directory path.
+    // Given: a repo-local missing path and a directory path.
     const root = await makeTempRoot();
 
     // When/Then: convenience hashing preserves fs rejection semantics.
-    await expect(hashFile("/nonexistent/path")).rejects.toBeInstanceOf(Error);
+    await expect(hashFile(path.join(root, "definitely-missing.txt"))).rejects.toBeInstanceOf(Error);
     await expect(hashFile(root)).rejects.toBeInstanceOf(Error);
   });
 });

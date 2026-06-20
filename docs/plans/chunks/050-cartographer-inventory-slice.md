@@ -127,11 +127,12 @@ Ship the deterministic Cartographer repository inventory slice: a public API tha
 - `tests/cartographer/fileClassifier.test.ts`
 - `tests/cartographer/fileHasher.test.ts`
 - `tests/cartographer/ignorePolicy.test.ts`
-- `tests/cartographer/inventoryStore.test.ts`
-- `tests/cartographer/sqliteInventoryStore.test.ts`
+- `tests/cartographer/inventoryStore.inMemory.test.ts`
+- `tests/cartographer/inventoryStore.sqlite.test.ts`
 - `tests/cartographer/repoScanner.test.ts`
 - `tests/cartographer/incrementalIndex.test.ts`
 - `tests/cartographer/publicApi.test.ts`
+- `tests/cartographer/types.test.ts`
 - `tests/cartographer/cartographer.integration.test.ts`
 
 ## Limitations and Deferred Work

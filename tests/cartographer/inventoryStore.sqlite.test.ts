@@ -117,6 +117,16 @@ describe("SqliteCartographerInventoryStore", () => {
     expect((await store.listFiles(otherRepoRoot)).map((file) => file.normalizedPath)).toEqual(["remove.ts"]);
   });
 
+  it("chunks large path deletions under SQLite variable limits", async () => {
+    const store = sqliteStore();
+    const files = Array.from({ length: 1_005 }, (_unused, index) => makeFile(`src/remove-${index}.ts`, `hash-${index}`));
+    await store.upsertFiles(repoRoot, files);
+
+    await expect(store.removeFiles(repoRoot, files.map((file) => file.normalizedPath))).resolves.toBeUndefined();
+
+    expect(await store.listFiles(repoRoot)).toEqual([]);
+  });
+
   it("appends scan errors across calls using per-snapshot sequence ordering", async () => {
     const store = sqliteStore();
 
@@ -130,6 +140,16 @@ describe("SqliteCartographerInventoryStore", () => {
       makeError("src/a.ts", "hash", "hash denied"),
       makeUnrecoverableError("src/b.ts", "read", "read denied"),
     ]);
+  });
+
+  it("uses snapshot and seq as the scan-error primary key", () => {
+    const driver = createSqliteDriver({ path: ":memory:" });
+    openDrivers.add(driver);
+    new SqliteCartographerInventoryStore({ driver });
+
+    const columns = driver.all<{ name: string }>("PRAGMA table_info(cartographer_scan_errors)").map((row) => row.name);
+
+    expect(columns).toEqual(["snapshot_id", "seq", "path", "stage", "message", "recoverable", "created_at"]);
   });
 
   it("returns empty or undefined values for unknown roots and snapshots", async () => {

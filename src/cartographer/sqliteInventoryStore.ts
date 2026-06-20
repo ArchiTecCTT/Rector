@@ -6,6 +6,9 @@ import { createSqliteDriver, type SqlDriver } from "../store/sqlRectorStore";
 import { hashString } from "./fileHasher";
 import type { CartographerInventoryStore, CreateSnapshotInput, FileNode, RepoSnapshot, ScanError } from "./types";
 
+const SQLITE_MAX_VARIABLES = 999;
+const DELETE_PATHS_PER_STATEMENT = SQLITE_MAX_VARIABLES - 1;
+
 export type SqliteCartographerInventoryStoreOptions = {
   readonly driver?: SqlDriver;
   readonly path?: string;
@@ -102,8 +105,11 @@ export class SqliteCartographerInventoryStore implements CartographerInventorySt
 
   async removeFiles(repoRoot: string, normalizedPaths: readonly string[]): Promise<void> {
     if (normalizedPaths.length === 0) return;
-    const placeholders = normalizedPaths.map(() => "?").join(", ");
-    this.driver.run(`DELETE FROM cartographer_files WHERE repo_root = ? AND normalized_path IN (${placeholders})`, [repoRoot, ...normalizedPaths]);
+    for (let offset = 0; offset < normalizedPaths.length; offset += DELETE_PATHS_PER_STATEMENT) {
+      const chunk = normalizedPaths.slice(offset, offset + DELETE_PATHS_PER_STATEMENT);
+      const placeholders = chunk.map(() => "?").join(", ");
+      this.driver.run(`DELETE FROM cartographer_files WHERE repo_root = ? AND normalized_path IN (${placeholders})`, [repoRoot, ...chunk]);
+    }
   }
 
   async createSnapshot(input: CreateSnapshotInput): Promise<RepoSnapshot> {
@@ -151,7 +157,7 @@ export class SqliteCartographerInventoryStore implements CartographerInventorySt
   async listErrors(snapshotId: string): Promise<readonly ScanError[]> {
     return this.driver
       .all<ErrorRow>(
-        "SELECT path, stage, message, recoverable FROM cartographer_scan_errors WHERE snapshot_id = ? ORDER BY seq ASC, id ASC",
+        "SELECT path, stage, message, recoverable FROM cartographer_scan_errors WHERE snapshot_id = ? ORDER BY seq ASC",
         [snapshotId],
       )
       .map(errorFromRow);
@@ -160,7 +166,7 @@ export class SqliteCartographerInventoryStore implements CartographerInventorySt
   private migrate(): void {
     this.driver.exec("CREATE TABLE IF NOT EXISTS cartographer_snapshots(id TEXT PRIMARY KEY, repo_root TEXT NOT NULL, created_at TEXT NOT NULL, file_count INTEGER NOT NULL, indexed_file_count INTEGER NOT NULL, ignored_file_count INTEGER NOT NULL, deleted_file_count INTEGER, changed_file_count INTEGER)");
     this.driver.exec("CREATE TABLE IF NOT EXISTS cartographer_files(id TEXT NOT NULL, repo_root TEXT NOT NULL, path TEXT NOT NULL, normalized_path TEXT NOT NULL, hash TEXT NOT NULL, size_bytes INTEGER NOT NULL, mtime_ms REAL, language TEXT NOT NULL, kind TEXT NOT NULL, ignored INTEGER NOT NULL DEFAULT 0, ignore_reason TEXT, last_indexed_at TEXT NOT NULL, PRIMARY KEY(repo_root, normalized_path))");
-    this.driver.exec("CREATE TABLE IF NOT EXISTS cartographer_scan_errors(id INTEGER PRIMARY KEY, snapshot_id TEXT NOT NULL, seq INTEGER NOT NULL, path TEXT NOT NULL, stage TEXT NOT NULL, message TEXT NOT NULL, recoverable INTEGER NOT NULL, created_at TEXT NOT NULL)");
+    this.driver.exec("CREATE TABLE IF NOT EXISTS cartographer_scan_errors(snapshot_id TEXT NOT NULL, seq INTEGER NOT NULL, path TEXT NOT NULL, stage TEXT NOT NULL, message TEXT NOT NULL, recoverable INTEGER NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(snapshot_id, seq))");
   }
 
   private upsertFile(repoRoot: string, file: FileNode): void {

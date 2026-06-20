@@ -19,9 +19,19 @@ export const defaultFileReader: FileReader = {
 };
 
 export function normalizeRepositoryPath(repoRoot: string, absolutePath: string): string {
-  if (repoRoot.includes("\\") || absolutePath.includes("\\") || /^[A-Za-z]:/.test(repoRoot)) {
-    return path.win32.relative(repoRoot, absolutePath).split(path.win32.sep).join("/");
+  const platformPath = isWindowsStylePath(repoRoot, absolutePath) ? path.win32 : path;
+  const normalizedRoot = platformPath.resolve(repoRoot);
+  const normalizedAbsolute = platformPath.resolve(absolutePath);
+  if (!isSameOrChildPath(normalizedRoot, normalizedAbsolute, platformPath.sep)) {
+    throw new Error(`Path escapes repository root: ${absolutePath}`);
   }
-  const relativePath = path.relative(repoRoot, absolutePath);
-  return relativePath.split(path.sep).join("/").replace(/\\/g, "/");
+  return platformPath.relative(normalizedRoot, normalizedAbsolute).replace(/\\/g, "/");
+}
+
+function isWindowsStylePath(repoRoot: string, absolutePath: string): boolean {
+  return repoRoot.includes("\\") || absolutePath.includes("\\") || /^[A-Za-z]:/.test(repoRoot);
+}
+
+function isSameOrChildPath(root: string, candidate: string, separator: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}${separator}`);
 }

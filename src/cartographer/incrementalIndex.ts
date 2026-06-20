@@ -121,10 +121,10 @@ async function emitOutputEvents(input: { readonly emitter?: CartographerScanEmit
 }
 
 async function persistResult(input: { readonly store: ScanChangedFilesInput["store"]; readonly repoRoot: string; readonly result: ScanResult }): Promise<void> {
-  await input.store.upsertFiles(input.repoRoot, input.result.files);
-  await input.store.removeFiles(input.repoRoot, input.result.deletedFiles);
   await input.store.createSnapshot({ repoRoot: input.repoRoot, files: input.result.files, ignoredFiles: input.result.ignoredFiles, deletedFiles: input.result.deletedFiles, changedFiles: input.result.changedFiles, id: input.result.snapshot.id, createdAt: input.result.snapshot.createdAt });
   await input.store.recordErrors(input.result.snapshot.id, input.result.errors);
+  await input.store.upsertFiles(input.repoRoot, input.result.files);
+  await input.store.removeFiles(input.repoRoot, input.result.deletedFiles);
 }
 
 async function collectEmitterError(errors: ScanError[], emitter: CartographerScanEmitter | undefined, event: CartographerScanEvent): Promise<void> {

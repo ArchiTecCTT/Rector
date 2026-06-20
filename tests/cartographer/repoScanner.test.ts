@@ -86,6 +86,15 @@ describe("Cartographer T5 repo scanner", () => {
     expect(headCalls.every((call) => call.maxBytes === DEFAULT_HEAD_SNIFF_BYTES)).toBe(true);
   });
 
+  it("rejects normalized paths that escape the repository root", () => {
+    // Given: a repository root and a sibling path outside that root.
+    const repoRoot = path.resolve("/repo/root");
+    const outsidePath = path.resolve("/repo/outside.ts");
+
+    // When/Then: normalization rejects paths outside the repository boundary.
+    expect(() => normalizeRepositoryPath(repoRoot, outsidePath)).toThrow("Path escapes repository root");
+  });
+
   it("continues after readAll, readHead, descendant readdir, and emitter failures", async () => {
     // Given: scanner dependencies that fail at each recoverable seam.
     const hashRoot = await makeFixtureRepo();
