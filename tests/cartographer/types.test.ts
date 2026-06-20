@@ -7,9 +7,12 @@ import {
   ScanResultSchema,
   isCurrentlyIgnored,
   type CartographerScanEvent,
+  type CartographerInventoryStore,
+  type ClassifyFileInput,
   type FileNode,
   type IgnoredFileRef,
   type RepoSnapshot,
+  type ScanChangedFilesInput,
   type ScanError,
   type ScanResult,
 } from "../../src/cartographer";
@@ -63,6 +66,27 @@ const sampleScanResult = {
   errors: [sampleError],
 } satisfies ScanResult;
 
+const sampleStore: CartographerInventoryStore = {
+  async getLatestSnapshot(_repoRoot: string): Promise<RepoSnapshot | undefined> {
+    return sampleSnapshot;
+  },
+  async listSnapshots(_repoRoot: string): Promise<readonly RepoSnapshot[]> {
+    return [sampleSnapshot];
+  },
+  async listFiles(_repoRoot: string): Promise<readonly FileNode[]> {
+    return [sampleFileNode];
+  },
+  async upsertFiles(_repoRoot: string, _files: readonly FileNode[]): Promise<void> {},
+  async removeFiles(_repoRoot: string, _normalizedPaths: readonly string[]): Promise<void> {},
+  async createSnapshot(_input: Parameters<CartographerInventoryStore["createSnapshot"]>[0]): Promise<RepoSnapshot> {
+    return sampleSnapshot;
+  },
+  async recordErrors(_snapshotId: string, _errors: readonly ScanError[]): Promise<void> {},
+  async listErrors(_snapshotId: string): Promise<readonly ScanError[]> {
+    return [sampleError];
+  },
+};
+
 function eventLabel(event: CartographerScanEvent): string {
   switch (event.type) {
     case "CARTOGRAPHER_SCAN_STARTED":
@@ -91,7 +115,7 @@ describe("Cartographer T1 data model", () => {
       type: "CARTOGRAPHER_FILE_INDEXED",
       path: sampleFileNode.path,
       file: sampleFileNode,
-      at: indexedAt,
+      timestamp: indexedAt,
     } satisfies CartographerScanEvent;
 
     // When: callers inspect the record shape and discriminate events.
@@ -183,22 +207,23 @@ describe("Cartographer T1 data model", () => {
   it("validates every scan event runtime shape", () => {
     // Given: one representative event for each event variant.
     const events = [
-      { type: "CARTOGRAPHER_SCAN_STARTED", repoRoot: "/repo/root", at: indexedAt },
-      { type: "CARTOGRAPHER_FILE_INDEXED", path: "src/index.ts", file: sampleFileNode, at: indexedAt },
-      { type: "CARTOGRAPHER_FILE_IGNORED", path: "dist", ignoredFile: sampleIgnoredFile, at: indexedAt },
-      { type: "CARTOGRAPHER_FILE_DELETED", path: "old/file.ts", at: indexedAt },
+      { type: "CARTOGRAPHER_SCAN_STARTED", repoRoot: "/repo/root", timestamp: indexedAt },
+      { type: "CARTOGRAPHER_FILE_INDEXED", path: "src/index.ts", file: sampleFileNode, timestamp: indexedAt },
+      { type: "CARTOGRAPHER_FILE_IGNORED", path: "dist", ignoredFile: sampleIgnoredFile, timestamp: indexedAt },
+      { type: "CARTOGRAPHER_FILE_DELETED", path: "old/file.ts", timestamp: indexedAt },
       {
         type: "CARTOGRAPHER_SCAN_COMPLETED",
         summary: {
+          repoRoot: "/repo/root",
           fileCount: 2,
           indexedFileCount: 1,
           ignoredFileCount: 1,
           deletedFileCount: 0,
           changedFileCount: 1,
         },
-        at: indexedAt,
+        timestamp: indexedAt,
       },
-      { type: "CARTOGRAPHER_SCAN_FAILED", error: sampleError, at: indexedAt },
+      { type: "CARTOGRAPHER_SCAN_FAILED", error: sampleError, timestamp: indexedAt },
     ] satisfies readonly CartographerScanEvent[];
 
     // When: the event schema validates each variant.
@@ -206,6 +231,27 @@ describe("Cartographer T1 data model", () => {
 
     // Then: all known variants are accepted and an unknown type is rejected.
     expect(parsedEvents.every((event) => event.success)).toBe(true);
-    expect(CartographerScanEventSchema.safeParse({ type: "CARTOGRAPHER_UNKNOWN", at: indexedAt }).success).toBe(false);
+    expect(CartographerScanEventSchema.safeParse({ type: "CARTOGRAPHER_UNKNOWN", timestamp: indexedAt }).success).toBe(false);
+  });
+
+  it("requires scanner inputs to carry store and normalized extension contracts", async () => {
+    // Given: T1 input contracts consumed by later scanner tasks.
+    const changedInput = {
+      repoRoot: "/repo/root",
+      store: sampleStore,
+      fastPrecheck: false,
+    } satisfies ScanChangedFilesInput;
+    const classifyInput = {
+      normalizedPath: "README",
+      basename: "README",
+      extension: "",
+    } satisfies ClassifyFileInput;
+
+    // When: callers use the typed inputs.
+    const latestSnapshotPromise = changedInput.store.getLatestSnapshot(changedInput.repoRoot);
+
+    // Then: the required store and empty-extension semantics are available.
+    expect(classifyInput.extension).toBe("");
+    await expect(latestSnapshotPromise).resolves.toEqual(sampleSnapshot);
   });
 });
