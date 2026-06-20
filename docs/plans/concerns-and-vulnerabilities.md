@@ -774,3 +774,19 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 * **Goal**: Add durable memory storage for truth validation and user preferences.
 * **Status (post-audit)**: **RESOLVED** (Chunks 34–36 — Settings API, UI memory provider panel, and setup wizard readiness shipped; pluggable Mem0/TiDB/Chroma adapters implemented).
 * **Implementation**: Upgrade `src/memory/` and the truth library to sync documents and transcripts to Chroma DB, using Algolia to back fast keyword indexes.
+
+## Cartographer
+
+### Cartographer inventory slice deferred risks and limitations
+
+- **Source:** Chunk 050 Cartographer inventory slice finalization.
+- **Severity:** Medium implementation/operational risk; low security risk for the current deterministic inventory slice.
+- **Status:** Open follow-ups before large-repo production use.
+- **Root-only `.gitignore`:** The scanner loads only the repository-root `.gitignore` in this slice. Nested `.gitignore` files under subdirectories are deferred, so subdirectory-specific ignore behavior can differ from Git until the ignore policy is expanded.
+- **TOCTOU hash window:** A file can change between the walker's `lstat` metadata read and the later hash `readAll`, so the recorded size/mtime and hash can reflect different instants for a concurrently modified file.
+- **Synchronous SQLite:** `SqliteCartographerInventoryStore` uses synchronous `node:sqlite` driver calls. This is simple and deterministic for the slice, but can block the event loop on very large repositories or high-frequency inventory writes.
+- **Size cap:** Files larger than `DEFAULT_MAX_FILE_SIZE_BYTES` (5 MiB by default) are ignored rather than indexed. This keeps scans bounded, but large source/data files are absent from the inventory until configurable sizing or streaming support is added.
+- **Limited `LanguageId` set:** The classifier maps a fixed extension set to `LanguageId`; unknown extensions classify as `"unknown"` even when the file is source for an unsupported language.
+- **Emitter-error isolation:** A throwing or rejecting Cartographer scan emitter is swallowed and recorded as a recoverable `ScanError` with `stage: "store"` and a message beginning with `"emitter failed:"`. This prevents observability hooks from aborting scans, but callers must inspect `ScanResult.errors` to notice emitter failures.
+- **New dependency:** The `ignore` npm dependency was added in T0 to support `.gitignore` and `.rectorignore` matching. Keep it in dependency audits and supply-chain review.
+- **`fastPrecheck` caveat:** `scanChangedFiles({ fastPrecheck: true })` can miss a same-size content edit that preserves mtime because it skips hashing when size and mtime match. The default mode always hashes and remains correctness-first.
