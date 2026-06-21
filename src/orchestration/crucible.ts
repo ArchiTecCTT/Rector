@@ -441,6 +441,5 @@ function platformMatches(candidate: string, current: string): boolean {
   if (normalized === platform) return true;
   if (normalized === "windows" && platform === "win32") return true;
   if (normalized === "macos" && platform === "darwin") return true;
-  if (normalized === "linux" && platform === "linux") return true;
-  return false;
+  return normalized === "linux" && platform === "linux";
 }

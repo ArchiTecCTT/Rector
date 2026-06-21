@@ -669,9 +669,7 @@ function isUnsafeToAutoHeal(compiledDag: Dag, nodeId: string | undefined): boole
   if (metadata?.approvalRequired === true || metadata?.risk === "destructive" || metadata?.risk === "high") return true;
 
   const input = recordFrom(node.input);
-  if (input?.approvalRequired === true || input?.risk === "destructive" || input?.risk === "high") return true;
-
-  return false;
+  return input?.approvalRequired === true || input?.risk === "destructive" || input?.risk === "high";
 }
 
 function healingOptions(

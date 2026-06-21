@@ -507,8 +507,7 @@ function isSafeRelativePath(path: string | undefined): path is string {
  */
 function isAbsolutePath(path: string): boolean {
   if (path.startsWith("/") || path.startsWith("\\")) return true;
-  if (/^[A-Za-z]:[\\/]/.test(path)) return true;
-  return false;
+  return /^[A-Za-z]:[\\/]/.test(path);
 }
 
 function hasParentTraversalSegment(path: string): boolean {

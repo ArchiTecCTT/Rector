@@ -3976,9 +3976,7 @@ function skillPrerequisitesResolved(
 
   // Env-var readiness is intentionally not inferred from process.env here; product state is
   // UI-managed and secret values must not be consulted for catalog egress.
-  if ((prerequisites.env_vars ?? []).length > 0) return false;
-
-  return true;
+  return (prerequisites.env_vars ?? []).length === 0;
 }
 
 function apiCommandAllowed(command: string, allowlistedCommands: string[]): boolean {
