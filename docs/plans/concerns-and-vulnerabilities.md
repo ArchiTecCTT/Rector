@@ -791,3 +791,43 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 - **New dependency:** The `ignore` npm dependency was added in T0 to support `.gitignore` and `.rectorignore` matching. Keep it in dependency audits and supply-chain review.
 - **`fastPrecheck` caveat:** `scanChangedFiles({ fastPrecheck: true })` can miss a same-size content edit that preserves mtime because it skips hashing when size and mtime match. The default mode always hashes and remains correctness-first.
 - **Incremental persistence transactionality:** `scanChangedFiles` persists snapshots, scan errors, file upserts, and file removals as multiple store calls rather than a single transaction. A failure after snapshot creation but before file upsert/removal can leave snapshot history and current inventory out of sync. Follow-up should add transaction support for the SQLite inventory store or introduce a store-level transactional persistence method.
+
+## Chunk 051 — Inspection Cleanup
+
+### Baseline
+
+- **Source:** Chunk 051 inspection cleanup.
+- **Status:** Behavior-preserving cleanup completed for the inspected `src/` findings in scope.
+- **Verification:** `npm run check` (`tsc --noEmit`) exited 0 after every commit.
+- **Security-relevant characterization:** Three simplifications were locked with characterization tests committed before the simplification: `dagCompiler` `allowFileWrite`, `shouldHalt`, and `isPublicAuthRoute`.
+
+### Inline suppressions added for intentional false positives
+
+- **Label:** SUPPRESSED — `src/templates/templateService.ts:906` has `// noinspection UnnecessaryLocalVariableJS` on `const _exhaustive: never = mode;`. This is an intentional TypeScript exhaustiveness guard; the `never` assignment is load-bearing because `tsc` fails if the switch becomes non-exhaustive. It is not redundant.
+- **Label:** SUPPRESSED — `src/bin/server.ts` server-listen banner has `// noinspection HttpUrlsUsage` on the `http://${host}:${port}` `console.log`. This is a local bind-address startup banner, not a network target; forcing HTTPS would misrepresent the actual bind.
+
+### JSUnusedGlobalSymbols triage
+
+- **Label:** FIXED — Eight exported symbols were deleted after verifying zero references repo-wide: `isSupportedProviderId`, `MemoryEntriesLayerQuery`, `bootstrapPromise`, `TERMINAL_STATES`, `PromptTierName`, `isWorkspaceRole`, `UserStatus`, and `ToolRisk`.
+- **Label:** KEPT-false-positive — The remaining approximately 24 symbols were kept as intentional public surface. See `.omo/evidence/task-8-051-inspection-cleanup.md` for the full per-symbol decision table.
+- **Kept categories:** Re-exported public barrels via `src/index.ts` and domain barrels, such as `ObservabilityEvent`, `ModuleTier`, `StoreEvent`, `TemplateRiskLevel`, and `TemplateCostTier`.
+- **Kept categories:** Class/interface members and SDK callback shapes, such as `readSkillReference`, `workspaceRelativePath`, `listEnabled`, `invokeOnExternalRunPhase`, `usedIterations`, `usedToolCalls`, `stopTimer`, `unregister`, and Sentry `beforeSend`.
+- **Kept categories:** Protocol, provider, sandbox, and template contract types or factories, such as `ProtocolEnvelope`, `OrchestrationProviderSelectionSchema`, `OrchestrationProviderSelection`, `SandboxCommandKind`, `ApprovalGateType`, `createSandboxEnvironment`, `TemplateApplyRequest`, and `TemplateSaveCurrentRequest`.
+- **Kept categories:** Symbols referenced in tests or docs, including examples such as `TruthItemKind` and documented tool registry surface.
+
+### ExceptionCaughtLocallyJS triage
+
+- **Label:** KEPT-false-positive — All six `ExceptionCaughtLocallyJS` `src/` sites were kept as intentional; 0 were fixed. See `.omo/evidence/task-11-051-inspection-cleanup.md` for the full decision table.
+- **Optional-dependency loaders:** Four sites are friendly-error loader patterns for optional dependencies in the Chroma, Mem0, and E2B adapters. The local throw intentionally routes to a catch that emits an install hint or normalized domain error.
+- **Transactional/error-handling paths:** Two sites in `sqlRectorStore` are load-bearing: one performs transaction `ROLLBACK` before propagating a concurrent transition error, and one handles decryption failure with redaction context.
+
+### Deferred empty-scope inspections
+
+- **Label:** DEFERRED — `JSDeprecatedSymbols` had zero `src/` findings; occurrences were limited to `tests/chatApi.test.ts`, which was out of scope for this chunk.
+- **Label:** DEFERRED — `BadExpressionStatementJS` had zero `src/` findings; occurrences were in `tests/`, which was out of scope for this chunk.
+- **Label:** DEFERRED — `JSCheckFunctionSignatures` had zero `src/` findings, so no `src/` action was needed.
+- **Label:** DEFERRED — `DuplicatedCode_aggregate` had zero `src/` findings, so no `src/` action was needed.
+
+### Qodana test-scope config gap
+
+- **Label:** DEFERRED — The merged `qodana.yaml` on `origin/main` does not contain exclude/scope rules for `tests/`. The chunk honored the user's stated intent that tests were out of scope; that scope is not enforced by configuration. If `tests/` findings should be permanently suppressed, `qodana.yaml` needs an explicit exclude block in a follow-up.
