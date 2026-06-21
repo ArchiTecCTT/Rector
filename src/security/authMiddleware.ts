@@ -56,8 +56,7 @@ export function isPublicAuthRoute(method: string, path: string): boolean {
   if (method === "POST" && path === "/api/auth/login") return true;
   if (method === "GET" && path === "/api/setup/status") return true;
   // Static assets are served before auth middleware; allow any non-API GET for safety.
-  if (method === "GET" && !path.startsWith("/api/")) return true;
-  return false;
+  return method === "GET" && !path.startsWith("/api/");
 }
 
 /**
