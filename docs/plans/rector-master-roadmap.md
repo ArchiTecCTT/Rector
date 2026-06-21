@@ -247,7 +247,7 @@ Kill local mode as default product. Deliverables:
 - `SpyLLMProvider` for CI only; deprecate `ORCHESTRATOR_MODE` env knob
 - User docs: `docs/getting-started/first-run-setup.md`
 
-Branch: `rector-0.3.0-configured-product`
+Branch: `rector-0.3.0-cartographer`
 
 ## Chunk 047 — Runtime Maturity (post-042a/042b)
 
