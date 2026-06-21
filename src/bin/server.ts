@@ -591,6 +591,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   });
 
   server.listen({ port, host }, () => {
+    // noinspection HttpUrlsUsage -- local bind-address startup banner, not a network target
     console.log(
       `Rector MVP running on http://${host}:${port} ` +
         `(orchestration profile: ${runtimeSettings.orchestrationProfile})`,
