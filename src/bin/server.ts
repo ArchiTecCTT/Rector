@@ -468,8 +468,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   // H3: Automated key rotation on boot when RECTOR_ROTATE_KEY_ON_BOOT is set.
   if (process.env.RECTOR_ROTATE_KEY_ON_BOOT?.trim() === "true") {
     try {
-      const newKey = await performKeyRotation(secretEncryptionKey, secretStore);
-      secretEncryptionKey = newKey;
+      secretEncryptionKey = await performKeyRotation(secretEncryptionKey, secretStore);
       secretStore = createLocalSecretStore({
         filePath: SECRETS_FILE,
         encryptionKey: secretEncryptionKey,

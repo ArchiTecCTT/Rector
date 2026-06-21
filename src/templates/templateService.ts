@@ -902,6 +902,7 @@ export class TemplateService {
     const now = this.now();
     if (mode === "replaceAssignments") return this.applyReplaceAssignments(template, scopeId, now, skipped);
     if (mode === "mergeMissing") return this.applyMergeMissing(template, scopeId, now, skipped);
+    // noinspection UnnecessaryLocalVariableJS -- intentional exhaustiveness guard; keeps the `never` assignment
     const _exhaustive: never = mode;
     throw new Error(`Unsupported template apply mode: ${String(_exhaustive)}`);
   }

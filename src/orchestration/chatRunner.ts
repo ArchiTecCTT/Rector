@@ -313,9 +313,7 @@ export async function handleBudgetApprovalNeeded(
   );
 
   // 3. Poll for decision with timeout
-  const result = await waitForBudgetApproval(approvalId, timeoutMs);
-
-  return result;
+  return waitForBudgetApproval(approvalId, timeoutMs);
 }
 async function runOrchestratedChatRunInner(
   store: RectorStore,
