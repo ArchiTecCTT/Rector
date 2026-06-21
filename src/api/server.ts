@@ -1183,7 +1183,7 @@ function sendRedacted(res: express.Response, status: number, payload: unknown): 
 }
 
 const malformedJsonBodyHandler: express.ErrorRequestHandler = (error, _req, res, next) => {
-  if (error instanceof SyntaxError && typeof error === "object" && error !== null && "body" in error) {
+  if (error instanceof SyntaxError && "body" in error) {
     sendRedacted(res, 400, { error: "Malformed JSON request body." });
     return;
   }
@@ -3784,13 +3784,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
   app.get("*", (_req, res) => {
     res.sendFile(path.join(publicDir, "index.html"));
   });
-
-  // Manual trigger for proactive "alive" behavior (Chunk 28). Useful for demo and tests.
-  // (Placed late so it doesn't interfere with earlier routes during registration.)
-  // Note: duplicate safety - the real one is registered earlier; this is a no-op guard.
-  if (false) {
-    app.post("/api/dev/proactive-trigger", codeqlRateLimitGuard, async (_req, res) => res.json({}));
-  }
 
   // Defense-in-depth error middleware: catches any unhandled errors from route handlers
   // and ensures they are redacted before being sent to the client.
