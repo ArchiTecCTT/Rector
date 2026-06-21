@@ -4,7 +4,6 @@ import { redactSecrets, redactString } from "../security/redaction";
 import type { ContextPack } from "./contextBuilder";
 
 export const PromptTierNameSchema = z.enum(["stable", "context", "volatile"]);
-export type PromptTierName = z.infer<typeof PromptTierNameSchema>;
 
 export const PromptTierBudgetSchema = z.object({
   maxStableChars: z.number().int().positive().default(4_000),

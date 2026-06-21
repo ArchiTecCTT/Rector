@@ -13,7 +13,6 @@ import type { Budget } from "../store/schemas";
 import type { IterationBudget } from "../orchestration/turnBudget";
 
 export const ToolRiskSchema = z.enum(["low", "medium", "high", "destructive"]);
-export type ToolRisk = z.infer<typeof ToolRiskSchema>;
 
 export const ToolSchemaDefinitionSchema = z.object({
   name: z.string().min(1),

@@ -401,17 +401,6 @@ function createEmptySecretStore(): SecretStore {
  */
 export const SUPPORTED_PROVIDER_IDS = ["together", "cloudflare", "azure-openai"] as const;
 
-/** Type guard for the supported provider id set, used to reject unsupported ids with a 400.
- *
- * Retained as a public helper for the {@link SUPPORTED_PROVIDER_IDS} kind-level guard and the
- * env-based fallback resolution. The upgraded `POST /api/setup/test-connection` route now keys
- * selection off persisted Provider_Config_Records via the Config_Bridge (so any configured kind,
- * including `openai-compatible`, is testable); an id with no matching persisted record is rejected
- * pre-build by the route instead. */
-export function isSupportedProviderId(providerId: string): boolean {
-  return (SUPPORTED_PROVIDER_IDS as readonly string[]).includes(providerId);
-}
-
 export const TestConnectionRequestSchema = z.object({
   providerId: z.string().min(1), // "together" | "cloudflare" | "azure-openai"
   // Optional per-model Model_Probe targeting (Req 22.1, 22.2). When the Setup_UI tests a selected
@@ -1375,7 +1364,6 @@ export const MEMORY_ENTRIES_API_LIMIT = 50;
 
 /** Allowed `layer` query values for the memory browser list endpoint. */
 export const MemoryEntriesLayerQuerySchema = z.enum(["episodic", "core"]);
-export type MemoryEntriesLayerQuery = z.infer<typeof MemoryEntriesLayerQuerySchema>;
 
 /** Response body for `GET /api/memory/entries`. */
 export const MemoryEntriesListResponseSchema = z.object({

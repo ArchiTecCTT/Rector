@@ -104,11 +104,6 @@ export interface PermissionDenial {
 
 export type PermissionResult = PermissionGrant | PermissionDenial;
 
-/** True when `value` is one of Rector's fixed workspace roles. */
-export function isWorkspaceRole(value: unknown): value is WorkspaceRole {
-  return typeof value === "string" && (WORKSPACE_ROLES as readonly string[]).includes(value);
-}
-
 /** True when `value` is a known permission string. */
 export function isPermission(value: unknown): value is Permission {
   return typeof value === "string" && (PERMISSIONS as readonly string[]).includes(value);

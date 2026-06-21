@@ -16,9 +16,6 @@ export const STATES = {
 
 export const ALL_STATES = Object.values(STATES) as readonly string[];
 
-/** Terminal states — no further processing */
-export const TERMINAL_STATES = [STATES.HUMAN_HANDOFF, STATES.ABORTED] as const;
-
 /** Manual-control states */
 export const MANUAL_STATES = [STATES.PAUSED, STATES.ABORTED] as const;
 

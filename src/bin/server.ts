@@ -566,7 +566,7 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   return { app, server, gracefulShutdown };
 }
 
-const bootstrapPromise = bootstrap().catch((error) => {
+void bootstrap().catch((error) => {
   const message =
     error instanceof PersistenceInitializationError || error instanceof StoreConfigError
       ? redactString(error instanceof Error ? error.message : String(error))
@@ -578,7 +578,6 @@ const bootstrapPromise = bootstrap().catch((error) => {
 });
 
 export {
-  bootstrapPromise,
   deploymentConfig,
   manager,
   orchestrationConfig,

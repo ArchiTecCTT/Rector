@@ -5,7 +5,6 @@ import { WORKSPACE_ROLES, type WorkspaceRole } from "./rbac";
 
 const NonEmptyStringSchema = z.string().min(1);
 export const UserStatusSchema = z.enum(["active", "disabled", "invited"]);
-export type UserStatus = z.infer<typeof UserStatusSchema>;
 export const WorkspaceRoleSchema = z.enum(WORKSPACE_ROLES);
 
 export const UserSchema = z.object({
