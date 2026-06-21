@@ -2554,7 +2554,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       }
 
       // Synchronous (non-stream) path — unchanged behavior, preserved as the streaming fallback.
-      const { run, synthesis, observabilitySummary, assistantMessage } = await runChatPipeline(rectorStore);
+      const { run, observabilitySummary, assistantMessage } = await runChatPipeline(rectorStore);
       await quotaService.recordRunCreated(access.workspaceId, { estimatedUsd: numericField(run.costEstimate, "usd") });
       await moduleRegistry.invokeOnRunCompleted({
         store: rectorStore,

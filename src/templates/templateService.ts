@@ -304,10 +304,6 @@ function cloneTemplate(template: RectorTemplate): RectorTemplate {
   return structuredClone(template);
 }
 
-function costRank(tier: "free" | "low" | "medium" | "high"): number {
-  return { free: 0, low: 1, medium: 2, high: 3 }[tier];
-}
-
 function costTierFromBudget(budget: TemplateBudgetPolicy | undefined): "free" | "low" | "medium" | "high" {
   return budget?.estimatedCostTier ?? "free";
 }

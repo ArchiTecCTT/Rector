@@ -5,12 +5,7 @@ import { createHmac, randomBytes, scryptSync } from "node:crypto";
 import { execSync } from "node:child_process";
 import { createApp } from "../api/server";
 import { LocalTelemetry } from "../adapters/providers";
-import {
-  OrchestrationConfigError,
-  createGracefulShutdownHandler,
-  parseDeploymentEnvironment,
-  type OrchestrationConfig,
-} from "../deployment";
+import { createGracefulShutdownHandler, parseDeploymentEnvironment, type OrchestrationConfig } from "../deployment";
 import {
   createLocalRuntimeSettingsStore,
   migrateRuntimeSettingsFromEnv,
@@ -57,9 +52,8 @@ const host = process.env.HOST?.trim() || "127.0.0.1";
 // constructed: the boot-tolerant resolver (design C1; Req 1.1-1.3, 1.8) awaits both the
 // Provider_Config_Store and the Secret_Store (presence-only) so credentials that live only in the
 // UI configuration stores still count as "configured". The resolver halts startup for exactly one
-// reason — an ORCHESTRATOR_MODE value that is neither `local` nor `external` (Req 1.6) — and that
-// hard-exit is handled in `resolveStartupOrchestrationConfig`. The binding is assigned once during
-// bootstrap and exported for downstream consumers/tests.
+// reason — an ORCHESTRATOR_MODE value that is neither `local` nor `external` (Req 1.6). The binding
+// is assigned once during bootstrap and exported for downstream consumers/tests.
 let orchestrationConfig: OrchestrationConfig = { mode: "external", configuredProviders: [] };
 
 const telemetry = new LocalTelemetry();
@@ -232,7 +226,7 @@ function derivePayloadMacKey(masterKey: Buffer): Buffer {
  *   `.rector/rector.db` file contains unencrypted rows (no `ENC1:` prefix),
  *   in which case default to `false` to avoid making existing data unreadable.
  */
-function shouldEnableDbEncryption(secretKey: Buffer): boolean {
+function shouldEnableDbEncryption(_secretKey: Buffer): boolean {
   const envVal = process.env.RECTOR_DB_ENCRYPTION?.trim().toLowerCase();
   if (envVal === "true") return true;
   if (envVal === "false") return false;
@@ -457,37 +451,6 @@ async function buildStartupSandboxAdapter(
   // Local mode (Req 6.7) — and external mode with no configured E2B key — use the network-free
   // local runner and initialize no E2B container client.
   return new WorkspaceSandboxAdapter({ workspaceRoot: SANDBOX_WORKSPACE_ROOT });
-}
-
-/**
- * Resolve the orchestration config on the live boot path (design C1; Req 1.1-1.8).
- *
- * Unlike the legacy synchronous `parseOrchestrationConfig`, the boot-tolerant
- * {@link resolveOrchestrationConfig} consults the initialized Provider_Config_Store and Secret_Store
- * (presence-only via `hasSecret`) in addition to `process.env`, so credentials entered through the
- * UI count as configured. The ONLY condition that halts startup is an `ORCHESTRATOR_MODE` value that
- * is neither `local` nor `external` (`ORCHESTRATOR_MODE_INVALID` — Req 1.6): we log the redacted,
- * secret-free error/setup hint (which names the accepted values `local`/`external`) and exit
- * non-zero. Every other condition — including external mode with zero configured providers — resolves
- * normally so the server can bind, listen, and let the operator enter credentials in the UI.
- */
-async function resolveStartupOrchestrationConfig(): Promise<OrchestrationConfig> {
-  try {
-    return await resolveOrchestrationConfig({
-      env: process.env,
-      providerConfigStore,
-      secretStore,
-    });
-  } catch (error) {
-    if (error instanceof OrchestrationConfigError && error.code === "ORCHESTRATOR_MODE_INVALID") {
-      // Req 1.6: invalid mode value is the sole hard-exit path. Both message and setupHint are
-      // already routed through the Redaction_Layer by OrchestrationConfigError.
-      console.error(`Rector startup failed (${error.code}): ${error.message}`);
-      console.error(error.setupHint);
-      process.exit(1);
-    }
-    throw error;
-  }
 }
 
 /**

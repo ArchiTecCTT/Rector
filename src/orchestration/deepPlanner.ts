@@ -347,7 +347,7 @@ function scoreCandidate(candidate: DeepPlanCandidate, config: MultiCandidatePlan
   };
 }
 
-function selectBestCandidate(scored: ScoredCandidate[], input: PlannerInput, basePlan: PlannerOutput): ScoredCandidate {
+function selectBestCandidate(scored: ScoredCandidate[], input: PlannerInput, _basePlan: PlannerOutput): ScoredCandidate {
   const eligible = scored.filter((candidate) => !candidate.trace.rejected);
   if (eligible.length === 0) {
     const fallbackPlan = createFakePlan(input);

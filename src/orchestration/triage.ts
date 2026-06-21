@@ -244,7 +244,7 @@ export function triageUserMessage(content: string): TriageResult {
     );
   }
 
-  const { wordCount, hasQuestionMark } = signals;
+  const { wordCount } = signals;
   const longRunningScore = signals.matchedSignals.longRunning;
   const codeScore = signals.matchedSignals.codeEdit;
   const researchScore = signals.matchedSignals.research;

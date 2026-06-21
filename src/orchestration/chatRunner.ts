@@ -177,9 +177,8 @@ export async function runOrchestratedChatRun(
   args: ChatRunArgs,
   deps: ChatRunnerDeps
 ): Promise<ChatRunResult> {
-  const { conversationId, prompt, triage, observability } = args;
+  const { conversationId } = args;
   const options = args.options ?? {};
-  const traceId = observability.traceId;
   const maxRuntimeMs = options.maxRuntimeMs ?? DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS;
 
   // M23: Orchestration timeout guard. We set up a timer that marks the run as

@@ -52,11 +52,6 @@ export const ALLOWED_PREPROCESSOR_TOOLS = [
 
 export type AllowedPreprocessorTool = (typeof ALLOWED_PREPROCESSOR_TOOLS)[number];
 
-const PreprocessorToolCallSchema = z.object({
-  tool: z.string().min(1),
-  args: z.record(z.unknown()),
-});
-
 export const PreprocessorInputSchema = z.object({
   rawPrompt: z.string(),
   contextPack: z.any(), // validated upstream

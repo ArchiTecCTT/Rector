@@ -133,13 +133,6 @@ export interface SqlRectorStoreOptions {
 /** Prefixes used for store-generated entity ids, mirroring `InMemoryRectorStore`. */
 type IdPrefix = "conv" | "msg" | "run" | "art" | "mem";
 
-/** A persisted row: the indexable filter column plus the canonical JSON payload. */
-interface EntityRow {
-  id: string;
-  filter: string | null;
-  payload: unknown;
-}
-
 /**
  * A `RectorStore` that persists every entity over an injectable `SqlDriver`.
  *
