@@ -349,7 +349,7 @@ function capabilityPolicyFor(type: DagNode["type"], task: PlannerTask): Record<s
     default: "deny",
     nodeType: type,
     plannerTaskId: task.id,
-    allowFileWrite: type === "FILE_OPERATION" && task.approvalRequired === false,
+    allowFileWrite: type === "FILE_OPERATION" && !task.approvalRequired,
     allowProposedPatch: type === "FILE_OPERATION",
     allowShell: false,
     approvalRequired: task.approvalRequired,
