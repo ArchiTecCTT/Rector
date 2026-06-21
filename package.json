@@ -25,6 +25,10 @@
     "./deployment": {
       "types": "./dist/deployment/index.d.ts",
       "import": "./dist/deployment/index.js"
+    },
+    "./cartographer": {
+      "types": "./dist/cartographer/index.d.ts",
+      "import": "./dist/cartographer/index.js"
     }
   },
   "scripts": {

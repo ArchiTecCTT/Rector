@@ -27,9 +27,9 @@ export async function scanChangedFiles(input: ScanChangedFilesInput): Promise<Sc
     const diff = await diffCurrentFiles({ input, repoRoot, now, prior, included: walk.included, errors });
     const deletedFiles = removedInventoryPaths({ prior, currentNonIgnoredPaths: new Set(walk.included.map((entry) => entry.normalizedPath)), ignoredFiles: walk.ignoredFiles });
     const result = assembleScanResult({ repoRoot, files: diff.files, ignoredFiles: walk.ignoredFiles, errors, now, changedFiles: diff.changedFiles, deletedFiles });
-    await emitOutputEvents({ emitter: input.emitter, errors, events: outputEvents(walk.ignoredFiles, diff.files), deletedFiles: result.deletedFiles, result, now });
     const finalResult = { ...result, errors } satisfies ScanResult;
     await persistResult({ store: input.store, repoRoot, result: finalResult });
+    await emitOutputEvents({ emitter: input.emitter, errors, events: outputEvents(walk.ignoredFiles, diff.files), deletedFiles: finalResult.deletedFiles, result: finalResult, now });
     return finalResult;
   } catch (error) {
     const scanError = { path: repoRoot, stage: "walk", message: messageFromUnknown(error), recoverable: false } satisfies ScanError;

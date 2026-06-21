@@ -176,9 +176,18 @@ describe("Cartographer T8 incremental indexer", () => {
     // Given: a store whose snapshot write fails before file mutations are allowed.
     const repoRoot = await makeFixtureRepo();
     const store = new SnapshotFailingStore();
+    const { events, emitter } = collectEvents();
 
     // When/Then: the scan rejects and no file mutation methods ran.
-    await expect(scanChangedFiles({ repoRoot, store, now: () => fixedNow })).rejects.toThrow("snapshot denied");
+    await expect(
+      scanChangedFiles({ repoRoot, store, emitter, now: () => fixedNow }),
+    ).rejects.toThrow("snapshot denied");
+
+    const eventTypes = events.map((event) => event.type);
+
+    expect(eventTypes).toContain("CARTOGRAPHER_SCAN_STARTED");
+    expect(eventTypes).not.toContain("CARTOGRAPHER_SCAN_COMPLETED");
+    expect(eventTypes).toContain("CARTOGRAPHER_SCAN_FAILED");
     expect(store.mutatingCalls).toEqual([]);
   });
 });
