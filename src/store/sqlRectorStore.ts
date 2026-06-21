@@ -61,7 +61,7 @@ export function createSqliteDriver(input: { path: string }): SqlDriver {
   };
 }
 
-import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { computePayloadMac, verifyPayloadMac } from "../security/payloadIntegrity.js";
 import { ConcurrentTransitionError } from "../orchestration/runStateMachine";
 import { z } from "zod";

@@ -5,7 +5,6 @@ import { dirname } from "node:path";
 import { redactString } from "../security/redaction";
 import { ensureRestrictedDir } from "../security/filePermissions";
 import {
-  MemoryProviderRecordSchema,
   MemoryProviderStateSchema,
   emptyMemoryProviderState,
   type MemoryProviderRecord,

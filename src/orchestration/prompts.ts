@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { LLMMessage } from "../providers/llm";
-import { PlannerInputSchema, PlannerOutputSchema, type PlannerInput, type PlannerOutput } from "./planner";
+import { PlannerInputSchema, PlannerOutputSchema, type PlannerInput } from "./planner";
 import { ContextPackSchema, type ContextPack } from "./contextBuilder";
-import { TriageResultSchema, type TriageResult } from "./triage";
+import { TriageResultSchema } from "./triage";
 import type { BrainstemSynthesisInput } from "./synthesizer";
 import { redactSecrets, redactString } from "../security/redaction";
 import { assemblePromptTiers, joinPromptTiers } from "./promptTiers";

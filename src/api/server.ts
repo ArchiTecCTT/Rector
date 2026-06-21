@@ -109,7 +109,6 @@ import {
   type MemoryProviderRecord,
   createInMemoryMemoryConfigStore,
   type MemoryConfigStore,
-  MemoryRoleSchema,
   createMemoryRoleAssignment,
   createInMemoryMemoryAssignmentStore,
   MemoryRoleRouter,
@@ -136,7 +135,6 @@ import { createBuiltinModuleRegistry, type ModuleRegistry } from "../modules";
 import { getNeuroAliveState } from "../modules/builtin/neuro-alive";
 import {
   applyModuleConfigToRegistry,
-  createInMemoryModuleConfigStore,
   createLocalModuleConfigStore,
   type ModuleConfigStore,
 } from "../modules/moduleConfigStore";

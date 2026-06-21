@@ -10,7 +10,6 @@ import {
 import type { MemoryConfigStore } from "./memoryConfigStore";
 import type { MemoryProviderRecord } from "./memoryConfig";
 import {
-  MEMORY_ROLE_DEFINITIONS,
   memoryCapabilityWarningsForRole,
   memoryProviderCapabilitiesForKind,
   type MemoryCapabilityWarning,

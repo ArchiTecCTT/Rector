@@ -1,6 +1,6 @@
 import { appendApprovedSkillContextToPack, type ContextPack, type SkillContextCatalog } from "./contextBuilder";
 import { compressContextLineage, evaluateContextPressure } from "./contextCompression";
-import { approvedSkillIdsFromDecision, arbitratePlanWithCrucible, type CrucibleDecision } from "./crucible";
+import { approvedSkillIdsFromDecision, arbitratePlanWithCrucible } from "./crucible";
 
 import type { ExecutorSimulatorOptions } from "./executorSimulator";
 import { runExternalPostPlanningPhases } from "./externalPostPlanning";
@@ -48,7 +48,6 @@ import {
 } from "../sandbox";
 import type { OrchestratorMode } from "../deployment";
 import type { RectorStore } from "../store";
-import { MAX_MESSAGE_CONTENT_LENGTH } from "../store/schemas";
 import type { Budget, Run } from "../store/schemas";
 import type { ModuleRegistry } from "../modules";
 import type { ToolRegistry } from "../tools";

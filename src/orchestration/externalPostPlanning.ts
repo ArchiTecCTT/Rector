@@ -25,7 +25,6 @@ import {
   type LLMRequest,
   type LLMResponse,
   type LLMUsage,
-  type ModelRouter,
   type ModelSelection,
 } from "../providers/llm";
 import { PatchOperationSchema, WorkspaceSandboxAdapter, type SandboxApproval } from "../sandbox";

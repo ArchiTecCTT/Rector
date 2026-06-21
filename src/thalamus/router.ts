@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { STATES, VALID_TRANSITIONS } from "../domain/states";
+import { STATES } from "../domain/states";
 import { type Task, TaskSchema } from "../domain/schemas";
 import { InMemoryTaskRepository } from "../adapters/taskRepository";
 import { InMemoryEventBus } from "../adapters/eventBus";

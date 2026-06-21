@@ -1,4 +1,4 @@
-import { STATES, VALID_TRANSITIONS } from "./states";
+import { VALID_TRANSITIONS } from "./states";
 
 export function isValidTransition(from: string, to: string): boolean {
   const allowed = VALID_TRANSITIONS[from];

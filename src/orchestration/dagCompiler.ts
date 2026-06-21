@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { DagSchema, type Dag, type DagEdge, type DagNode, type DagValidationResult, validateDag } from "../protocol/dag";
-import { CrucibleDecisionSchema, type CrucibleDecision } from "./crucible";
+import { CrucibleDecisionSchema } from "./crucible";
 import { PlannerOutputSchema, type PlannerOutput, type PlannerRiskLevel, type PlannerTask } from "./planner";
 
 const COMPILER_VERSION = "0.2.0-chunk-042a";
