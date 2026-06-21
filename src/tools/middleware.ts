@@ -207,7 +207,7 @@ export async function runToolWithMiddleware(
 }
 
 export function shouldHalt(result: ToolResult): boolean {
-  return result.halt === true || result.middlewareHalt === true || result.ok === false;
+  return result.halt || result.middlewareHalt || !result.ok;
 }
 
 function policyDenied(
