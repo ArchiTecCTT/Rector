@@ -12,6 +12,7 @@ coverage/
 .env
 .env.*
 !.env.example
+.envrc
 
 # Runtime config
 .rector/
@@ -30,16 +31,21 @@ desktop.ini
 *.iml
 *.swp
 *.swo
+.idea
 
 # AI tool configs (personal workspace)
 .cursor/
 .openhands/
 .kilo/
 .kiro/
+opencode.json
+.opencode/
+.omo/
 
 # Research / scratch
 research.md
 research/
+provider-credits-research/
 reviews/
 
 # Compiled / generated scripts
@@ -50,3 +56,10 @@ test_debug.mjs
 progress.md
 scripts/local/
 docs/specs/UI-Ideas
+
+# VPS Dev Filesx
+litellm_config.yaml
+start.sh
+
+# Debugging & Code Inspections
+inspections
