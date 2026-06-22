@@ -1,8 +1,5 @@
 import { z } from "zod";
-import {
-  ExtensionCapabilitySchema,
-  PUBLIC_EXTENSION_API_VERSION,
-} from "../extensions";
+import { ExtensionCapabilitySchema } from "../extensions";
 
 export const PUBLIC_MODULE_API_VERSION = "rector.modules.v1alpha1";
 

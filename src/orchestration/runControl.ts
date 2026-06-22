@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { isTerminalRunPhase, type RunPhase } from "../protocol/phases";
+import { isTerminalRunPhase } from "../protocol/phases";
 import { redactString } from "../security/redaction";
 import type { RectorStore } from "../store";
 import type { Run } from "../store/schemas";

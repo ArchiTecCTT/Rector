@@ -25,7 +25,6 @@ import {
   type LLMRequest,
   type LLMResponse,
   type LLMUsage,
-  type ModelRouter,
   type ModelSelection,
 } from "../providers/llm";
 import { PatchOperationSchema, WorkspaceSandboxAdapter, type SandboxApproval } from "../sandbox";
@@ -108,14 +107,11 @@ export async function runExternalPostPlanningPhases(params: ExternalPostPlanning
     skepticReview,
     crucibleDecision,
     deps,
-    preprocessorOutput,
     subGoals = [],
     subGoalGraph,
-    pathsExplored,
   } = params;
   const { observability } = args;
   const options = args.options ?? {};
-  const traceId = observability.traceId;
 
   // DAG compilation (only when the crucible accepted the plan).
   const compiledDag: CompiledDag | undefined = await observability.recordSpan("DAG_COMPILATION", () =>

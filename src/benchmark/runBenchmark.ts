@@ -24,7 +24,6 @@ import {
   type BenchmarkResult,
   type BenchmarkSummary,
   type BenchmarkTask,
-  type BenchmarkTaskOutcome,
 } from "./types";
 
 /** Sentinel returned by the timeout race when a task exceeds its budget. */

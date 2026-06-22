@@ -219,10 +219,6 @@ function numberFrom(...values: unknown[]): number {
   return 0;
 }
 
-function intFrom(...values: unknown[]): number {
-  return Math.trunc(numberFrom(...values));
-}
-
 function nonNegativeNumberFrom(...values: unknown[]): number {
   for (const value of values) {
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;

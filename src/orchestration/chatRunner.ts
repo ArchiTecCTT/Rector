@@ -1,6 +1,6 @@
 import { appendApprovedSkillContextToPack, type ContextPack, type SkillContextCatalog } from "./contextBuilder";
 import { compressContextLineage, evaluateContextPressure } from "./contextCompression";
-import { approvedSkillIdsFromDecision, arbitratePlanWithCrucible, type CrucibleDecision } from "./crucible";
+import { approvedSkillIdsFromDecision, arbitratePlanWithCrucible } from "./crucible";
 
 import type { ExecutorSimulatorOptions } from "./executorSimulator";
 import { runExternalPostPlanningPhases } from "./externalPostPlanning";
@@ -48,7 +48,6 @@ import {
 } from "../sandbox";
 import type { OrchestratorMode } from "../deployment";
 import type { RectorStore } from "../store";
-import { MAX_MESSAGE_CONTENT_LENGTH } from "../store/schemas";
 import type { Budget, Run } from "../store/schemas";
 import type { ModuleRegistry } from "../modules";
 import type { ToolRegistry } from "../tools";
@@ -178,9 +177,8 @@ export async function runOrchestratedChatRun(
   args: ChatRunArgs,
   deps: ChatRunnerDeps
 ): Promise<ChatRunResult> {
-  const { conversationId, prompt, triage, observability } = args;
+  const { conversationId } = args;
   const options = args.options ?? {};
-  const traceId = observability.traceId;
   const maxRuntimeMs = options.maxRuntimeMs ?? DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS;
 
   // M23: Orchestration timeout guard. We set up a timer that marks the run as
@@ -315,9 +313,7 @@ export async function handleBudgetApprovalNeeded(
   );
 
   // 3. Poll for decision with timeout
-  const result = await waitForBudgetApproval(approvalId, timeoutMs);
-
-  return result;
+  return waitForBudgetApproval(approvalId, timeoutMs);
 }
 async function runOrchestratedChatRunInner(
   store: RectorStore,

@@ -222,8 +222,7 @@ async function evaluateReadiness(deps: ProductReadinessDeps): Promise<ReadinessE
   const activationBlockers = blockers.filter((blocker) => blocker !== "Activate Rector to unlock chat.");
   const assignmentsReady = activationBlockers.filter((blocker) => {
     if (blocker.startsWith("Add at least one provider")) return false;
-    if (blocker.startsWith("Select a template") || blocker.includes("template")) return false;
-    return true;
+    return !(blocker.startsWith("Select a template") || blocker.includes("template"));
   }).length === 0;
 
   return {
@@ -260,8 +259,7 @@ function deriveStepBlockers(
     ? []
     : evaluation.blockers.filter((blocker) => {
         if (blocker === "Activate Rector to unlock chat.") return false;
-        if (providerBlockers.includes(blocker)) return false;
-        return true;
+        return !providerBlockers.includes(blocker);
       });
   const activationBlockers = evaluation.profileConfigured
     ? []

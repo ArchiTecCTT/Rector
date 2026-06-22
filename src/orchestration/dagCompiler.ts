@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { DagSchema, type Dag, type DagEdge, type DagNode, type DagValidationResult, validateDag } from "../protocol/dag";
-import { CrucibleDecisionSchema, type CrucibleDecision } from "./crucible";
+import { CrucibleDecisionSchema } from "./crucible";
 import { PlannerOutputSchema, type PlannerOutput, type PlannerRiskLevel, type PlannerTask } from "./planner";
 
 const COMPILER_VERSION = "0.2.0-chunk-042a";
@@ -349,7 +349,7 @@ function capabilityPolicyFor(type: DagNode["type"], task: PlannerTask): Record<s
     default: "deny",
     nodeType: type,
     plannerTaskId: task.id,
-    allowFileWrite: type === "FILE_OPERATION" && task.approvalRequired === false,
+    allowFileWrite: type === "FILE_OPERATION" && !task.approvalRequired,
     allowProposedPatch: type === "FILE_OPERATION",
     allowShell: false,
     approvalRequired: task.approvalRequired,

@@ -78,8 +78,7 @@ function toRedactedError(error: unknown): string {
 function matchesFilter(assignment: MemoryRoleAssignment, filter: MemoryAssignmentFilter = {}): boolean {
   if (filter.role !== undefined && assignment.role !== filter.role) return false;
   if (filter.userId !== undefined && assignment.userId !== filter.userId) return false;
-  if (filter.workspaceId !== undefined && assignment.workspaceId !== filter.workspaceId) return false;
-  return true;
+  return !(filter.workspaceId !== undefined && assignment.workspaceId !== filter.workspaceId);
 }
 
 function normalizeAssignment(assignment: MemoryRoleAssignment): MemoryRoleAssignment {
@@ -223,8 +222,7 @@ function memoryAssignmentMatchesRoleScope(
 ): boolean {
   if (assignment.role !== input.role) return false;
   if (assignment.userId !== undefined && assignment.userId !== input.userId) return false;
-  if (assignment.workspaceId !== undefined && assignment.workspaceId !== input.workspaceId) return false;
-  return true;
+  return !(assignment.workspaceId !== undefined && assignment.workspaceId !== input.workspaceId);
 }
 
 function memoryAssignmentSpecificity(assignment: MemoryRoleAssignment): number {

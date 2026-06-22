@@ -52,11 +52,6 @@ export const ALLOWED_PREPROCESSOR_TOOLS = [
 
 export type AllowedPreprocessorTool = (typeof ALLOWED_PREPROCESSOR_TOOLS)[number];
 
-const PreprocessorToolCallSchema = z.object({
-  tool: z.string().min(1),
-  args: z.record(z.unknown()),
-});
-
 export const PreprocessorInputSchema = z.object({
   rawPrompt: z.string(),
   contextPack: z.any(), // validated upstream
@@ -104,8 +99,7 @@ function extractSimpleEntities(text: string): string[] {
   if (!text) return [];
   // Very lightweight heuristic: capitalized words + obvious identifiers (safe, no secrets).
   const words = text.match(/\b([A-Z][a-zA-Z0-9_]{2,}|[a-z][a-z0-9_]{3,})\b/g) ?? [];
-  const unique = [...new Set(words.map((w) => w.trim()))].slice(0, 12);
-  return unique;
+  return [...new Set(words.map((w) => w.trim()))].slice(0, 12);
 }
 
 /** Build a compact, redacted prompt for the cheap SLM. */

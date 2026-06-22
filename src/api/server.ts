@@ -109,7 +109,6 @@ import {
   type MemoryProviderRecord,
   createInMemoryMemoryConfigStore,
   type MemoryConfigStore,
-  MemoryRoleSchema,
   createMemoryRoleAssignment,
   createInMemoryMemoryAssignmentStore,
   MemoryRoleRouter,
@@ -136,7 +135,6 @@ import { createBuiltinModuleRegistry, type ModuleRegistry } from "../modules";
 import { getNeuroAliveState } from "../modules/builtin/neuro-alive";
 import {
   applyModuleConfigToRegistry,
-  createInMemoryModuleConfigStore,
   createLocalModuleConfigStore,
   type ModuleConfigStore,
 } from "../modules/moduleConfigStore";
@@ -402,17 +400,6 @@ function createEmptySecretStore(): SecretStore {
  * set is rejected as CONFIG_INVALID before any provider is constructed or any network call occurs.
  */
 export const SUPPORTED_PROVIDER_IDS = ["together", "cloudflare", "azure-openai"] as const;
-
-/** Type guard for the supported provider id set, used to reject unsupported ids with a 400.
- *
- * Retained as a public helper for the {@link SUPPORTED_PROVIDER_IDS} kind-level guard and the
- * env-based fallback resolution. The upgraded `POST /api/setup/test-connection` route now keys
- * selection off persisted Provider_Config_Records via the Config_Bridge (so any configured kind,
- * including `openai-compatible`, is testable); an id with no matching persisted record is rejected
- * pre-build by the route instead. */
-export function isSupportedProviderId(providerId: string): boolean {
-  return (SUPPORTED_PROVIDER_IDS as readonly string[]).includes(providerId);
-}
 
 export const TestConnectionRequestSchema = z.object({
   providerId: z.string().min(1), // "together" | "cloudflare" | "azure-openai"
@@ -1183,7 +1170,7 @@ function sendRedacted(res: express.Response, status: number, payload: unknown): 
 }
 
 const malformedJsonBodyHandler: express.ErrorRequestHandler = (error, _req, res, next) => {
-  if (error instanceof SyntaxError && typeof error === "object" && error !== null && "body" in error) {
+  if (error instanceof SyntaxError && "body" in error) {
     sendRedacted(res, 400, { error: "Malformed JSON request body." });
     return;
   }
@@ -1377,7 +1364,6 @@ export const MEMORY_ENTRIES_API_LIMIT = 50;
 
 /** Allowed `layer` query values for the memory browser list endpoint. */
 export const MemoryEntriesLayerQuerySchema = z.enum(["episodic", "core"]);
-export type MemoryEntriesLayerQuery = z.infer<typeof MemoryEntriesLayerQuerySchema>;
 
 /** Response body for `GET /api/memory/entries`. */
 export const MemoryEntriesListResponseSchema = z.object({
@@ -2556,7 +2542,7 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
       }
 
       // Synchronous (non-stream) path — unchanged behavior, preserved as the streaming fallback.
-      const { run, synthesis, observabilitySummary, assistantMessage } = await runChatPipeline(rectorStore);
+      const { run, observabilitySummary, assistantMessage } = await runChatPipeline(rectorStore);
       await quotaService.recordRunCreated(access.workspaceId, { estimatedUsd: numericField(run.costEstimate, "usd") });
       await moduleRegistry.invokeOnRunCompleted({
         store: rectorStore,
@@ -3785,13 +3771,6 @@ export function createApp(manager: TaskManager, securityOptions: ApiSecurityOpti
     res.sendFile(path.join(publicDir, "index.html"));
   });
 
-  // Manual trigger for proactive "alive" behavior (Chunk 28). Useful for demo and tests.
-  // (Placed late so it doesn't interfere with earlier routes during registration.)
-  // Note: duplicate safety - the real one is registered earlier; this is a no-op guard.
-  if (false) {
-    app.post("/api/dev/proactive-trigger", codeqlRateLimitGuard, async (_req, res) => res.json({}));
-  }
-
   // Defense-in-depth error middleware: catches any unhandled errors from route handlers
   // and ensures they are redacted before being sent to the client.
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -3983,9 +3962,7 @@ function skillPrerequisitesResolved(
 
   // Env-var readiness is intentionally not inferred from process.env here; product state is
   // UI-managed and secret values must not be consulted for catalog egress.
-  if ((prerequisites.env_vars ?? []).length > 0) return false;
-
-  return true;
+  return (prerequisites.env_vars ?? []).length === 0;
 }
 
 function apiCommandAllowed(command: string, allowlistedCommands: string[]): boolean {

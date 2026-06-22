@@ -161,7 +161,7 @@ export class RectorRateLimitStore implements Store {
 
   constructor(
     private readonly limiter: RateLimiter,
-    private readonly policy: RateLimitPolicy,
+    _policy: RateLimitPolicy,
   ) {}
 
   async increment(key: string): Promise<IncrementResponse> {

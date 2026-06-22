@@ -228,7 +228,7 @@ export async function discoverRegionalModels(
   // distinct from a missing deployment or an unavailable region.
   if (request.modelId !== undefined) {
     const match = models.find((model) => model.modelId === request.modelId);
-    if (match === undefined || match.available === false) {
+    if (match === undefined || !match.available) {
       return { ok: false, error: fail("model_unavailable") };
     }
   }

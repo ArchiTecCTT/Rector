@@ -304,10 +304,6 @@ function cloneTemplate(template: RectorTemplate): RectorTemplate {
   return structuredClone(template);
 }
 
-function costRank(tier: "free" | "low" | "medium" | "high"): number {
-  return { free: 0, low: 1, medium: 2, high: 3 }[tier];
-}
-
 function costTierFromBudget(budget: TemplateBudgetPolicy | undefined): "free" | "low" | "medium" | "high" {
   return budget?.estimatedCostTier ?? "free";
 }
@@ -906,6 +902,7 @@ export class TemplateService {
     const now = this.now();
     if (mode === "replaceAssignments") return this.applyReplaceAssignments(template, scopeId, now, skipped);
     if (mode === "mergeMissing") return this.applyMergeMissing(template, scopeId, now, skipped);
+    // noinspection UnnecessaryLocalVariableJS -- intentional exhaustiveness guard; keeps the `never` assignment
     const _exhaustive: never = mode;
     throw new Error(`Unsupported template apply mode: ${String(_exhaustive)}`);
   }

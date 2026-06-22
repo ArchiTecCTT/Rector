@@ -14,5 +14,6 @@ export * as store from "./store";
 export * as workflows from "./workflows";
 export * as modules from "./modules";
 export * as templates from "./templates";
+export * as cartographer from "./cartographer";
 
 export { parseDeploymentEnvironment, createGracefulShutdownHandler } from "./deployment";

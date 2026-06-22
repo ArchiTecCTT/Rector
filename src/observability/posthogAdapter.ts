@@ -6,7 +6,7 @@
  */
 
 import type { ObservabilityAdapter, ObservabilitySpan, ObservabilitySummary } from "./index.js";
-import { redactSecrets, redactString } from "../security/redaction.js";
+import { redactSecrets } from "../security/redaction.js";
 
 /** Lazy-loaded PostHog module type — only the surface we use. */
 interface PostHogModule {

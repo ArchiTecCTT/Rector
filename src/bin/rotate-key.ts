@@ -19,7 +19,7 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomBytes, scryptSync } from "node:crypto";
-import { createLocalSecretStore, type SecretStore } from "../security/secretStore";
+import { createLocalSecretStore } from "../security/secretStore";
 
 const RECTOR_DATA_DIR = ".rector";
 const SECRET_KEY_FILE = `${RECTOR_DATA_DIR}/secret.key`;

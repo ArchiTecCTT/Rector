@@ -84,9 +84,8 @@ export function buildSessionSnippet(content: string, query: string): string {
   const suffix = "...";
   const budget = MAX_SESSION_SEARCH_SNIPPET_LENGTH - prefix.length - suffix.length;
   let start = matchIndex >= 0 ? Math.max(0, matchIndex - Math.floor(budget / 2)) : 0;
-  let end = Math.min(redacted.length, start + budget);
   start = Math.max(0, Math.min(start, Math.max(0, redacted.length - budget)));
-  end = Math.min(redacted.length, start + budget);
+  const end = Math.min(redacted.length, start + budget);
 
   const left = start > 0 ? prefix : "";
   const right = end < redacted.length ? suffix : "";

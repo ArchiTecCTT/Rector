@@ -10,8 +10,8 @@ The product is **configured orchestration**, not a provider-free demo. Fresh ins
 
 ## Current Branch / Worktree
 
-- Active branch: `rector-0.3.0-configured-product`
-- Worktree path: `C:/Users/MharSky/Dev/Projects/Rector/.worktrees/rector-0.2.0`
+- Active branch: `rector-0.3.0-cartographer`
+- Worktree path: `/home/ornyx-opifex/projects/rector/.worktrees/rector-0.3.0-cartographer`
 - Primary goal: Kill local mode as default product. Ship v0.3.0 as a configured-only commercial product with UI-persisted `runtime-settings.json`, mandatory onboarding, and a single orchestration path (`runOrchestratedChatRun`).
 
 ## Source of Truth
@@ -64,7 +64,7 @@ npm run build
 
 ## Current Implemented Chunks
 
-Completed through Chunk 37 (see `docs/plans/chunks/037-vitest-auth-live-memory.md`). Foundation chunks 0–25:
+Completed through Chunk 50 (see `docs/plans/chunks/050-cartographer-inventory-slice.md`). Foundation chunks 0–25:
 
 0. Source-of-truth docs and stale doc quarantine
 1. Open-source foundation and Apache-2.0 setup
@@ -95,7 +95,7 @@ Completed through Chunk 37 (see `docs/plans/chunks/037-vitest-auth-live-memory.m
 
 Neuro-symbolic + cloud transition chunks (26–37) include SLM preprocessor, advanced memory, proactive layer, symbolic engines, MCTS, ponder swarm, task decomposition, stale-doc cleanup, pluggable memory providers (034), durable memory + neuro wiring (035), hassle-free UI + neuro observability (036), and vitest 4 + live memory tests + opt-in multi-user auth (037).
 
-Current test baseline after Chunk 37:
+Current test baseline after Chunk 50:
 
 - `npm test`: 213 files / 1369 tests passing (4 skipped live-memory; 1 skipped file)
 - `npm run build`: passing
