@@ -47,7 +47,9 @@
     "node": ">=22.5.0"
   },
   "overrides": {
-    "esbuild": ">=0.28.1"
+    "esbuild": ">=0.28.1",
+    "undici": ">=7.28.0",
+    "ws": ">=8.21.0"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1071.0",
