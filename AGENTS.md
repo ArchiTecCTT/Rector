@@ -184,6 +184,11 @@ Credits available for later optional integrations. Do not make these required fo
 - Middleware: $5K
 - AssemblyAI: $500
 - OpenAI ChatGPT Business: 1 seat / 2 years
+- Miro 1 year Business plan & $1k credits
+- Parallel AI $80 credits
+- E2B $20.1K credits
+- Novita $100 Sandbox Credits
+- Webflow CMS Plan 12 Months
 
 ## Confluent Note
 
