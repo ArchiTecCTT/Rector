@@ -47,6 +47,7 @@ research.md
 research/
 provider-credits-research/
 reviews/
+docs/plans/2-0
 
 # Compiled / generated scripts
 scripts/performance-baseline-cold-start-compiled.mjs
