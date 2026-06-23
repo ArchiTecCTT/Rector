@@ -155,7 +155,7 @@ Your next move: approve, or ask for the dual high-accuracy review first. Full ex
   Fake-risk check: N/A (gitignore + wiring + docs). Verification runs the REAL gate suite, not a stand-in.
   Commit: Y | chore(phase0): un-ignore phases mirror, wire eval/audit scripts, mirror plan, update concerns
 
-- [ ] 9. Sync source-of-truth docs so nothing goes stale (worker does this directly — NO subagent)
+- [x] 9. Sync source-of-truth docs so nothing goes stale (worker does this directly — NO subagent)
   What to do: As the FINAL step before opening the PR, the executing agent directly updates the broader source-of-truth docs to reflect Phase 0 completion. Update each of the following only where the phase changed reality: (a) `docs/plans/rector-master-roadmap.md` — mark Phase 0 (benchmarks + eval scaffolding) status as done/landed with the PR/branch reference; (b) `AGENTS.md` — refresh the test baseline line to the FRESH `npm test` counts captured in Todo 8 (do NOT hand-wave; copy the real numbers), and note the new `src/capabilities/eval/*`, `scripts/evals/*`, `scripts/audit/*` surfaces + the new npm scripts under Build/Test commands; (c) confirm the Phase 0 entry already appended to `docs/plans/concerns-and-vulnerabilities.md` in Todo 8 is present and accurate (do not duplicate). Capture a before/after diff summary to the evidence file.
   Must NOT do: do NOT delegate this to a librarian/explore/oracle subagent — AGENTS.md mandates foreground-only and flags subagents as flaky in this repo; the worker who holds the real diff does it directly. Do NOT invent test numbers — use the actual Todo 8 gate output. Do NOT rewrite unrelated doc sections or touch architecture docs the phase did not affect. Do NOT mark any later phase done.
   Parallelization: Wave 3 (tail) | Blocked by: 8 | Blocks: none
@@ -167,11 +167,11 @@ Your next move: approve, or ask for the dual high-accuracy review first. Full ex
 
 ## Final verification wave
 > Runs in parallel after ALL todos. ALL must APPROVE. Surface results and wait for the user's explicit okay before declaring complete.
-- [ ] F1. Plan compliance audit — every Must-have delivered; every Must-NOT-have respected (no live calls, no purges, audit report-only); each todo committed separately.
-- [ ] F2. Code quality review — schemas/types clean under `npm run check`; no `src/providers` or model imports in `src/capabilities/eval/**`; redaction reused not reimplemented.
-- [ ] F3. Real manual QA — operator runs `npm run eval:capabilities` and `npm run audit:no-fakes` from a clean checkout of the worktree; confirms both exit 0 offline and reports are produced; confirms the audit lists the known fakes without failing.
-- [ ] F4. Scope fidelity — no scope creep into Phase 0.5+ (no GlobalScenarioSchema, no specialist contracts, no Regolo provider in this PR).
-- [ ] F5. Doc freshness — roadmap + AGENTS.md reflect Phase 0 done; AGENTS.md test baseline matches the real `npm test` count; no later phase prematurely marked done; concerns doc has the Phase 0 entry.
+- [x] F1. Plan compliance audit — every Must-have delivered; every Must-NOT-have respected (no live calls, no purges, audit report-only); each todo committed separately.
+- [x] F2. Code quality review — schemas/types clean under `npm run check`; no `src/providers` or model imports in `src/capabilities/eval/**`; redaction reused not reimplemented.
+- [x] F3. Real manual QA — operator runs `npm run eval:capabilities` and `npm run audit:no-fakes` from a clean checkout of the worktree; confirms both exit 0 offline and reports are produced; confirms the audit lists the known fakes without failing.
+- [x] F4. Scope fidelity — no scope creep into Phase 0.5+ (no GlobalScenarioSchema, no specialist contracts, no Regolo provider in this PR).
+- [x] F5. Doc freshness — roadmap + AGENTS.md reflect Phase 0 done; AGENTS.md test baseline matches the real `npm test` count; no later phase prematurely marked done; concerns doc has the Phase 0 entry.
 
 ## Commit strategy
 - One commit per todo (commit-per-task rule). Conventional Commits, scopes: `capabilities`, `evals`, `audit`, `phase0`, `docs`.
