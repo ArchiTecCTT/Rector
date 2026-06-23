@@ -10,7 +10,7 @@ The product is **configured orchestration**, not a provider-free demo. Fresh ins
 
 ## Current Branch / Worktree
 
-- Active branch: `rector-0.3.0-cartographer`
+- Active branch: `rector-0.3.0`
 - Worktree path: `/home/ornyx-opifex/projects/rector/.worktrees/rector-0.3.0-cartographer`
 - Primary goal: Kill local mode as default product. Ship v0.3.0 as a configured-only commercial product with UI-persisted `runtime-settings.json`, mandatory onboarding, and a single orchestration path (`runOrchestratedChatRun`).
 
@@ -41,6 +41,10 @@ Stale/quarantined docs have warning banners. If stale docs conflict with source-
 - Test: `npm test`
 - Build: `npm run build`
 - Dev server: `npm run dev`
+- Capability evals (offline, no model): `npm run eval:capabilities` (and `npm run eval:capabilities:report`) — runs the committed eval corpus and writes `.omo/evidence/eval-report.{json,md}`
+- Fake-seam audit (report-only, non-blocking): `npm run audit:no-fakes`
+
+Phase 0 added these measurement surfaces: `src/capabilities/eval/*` (eval schemas, 8-metric scorer, raw artifact store), `scripts/evals/*` (offline runner + report formatter), `scripts/audit/*` (fake-seam scanner), and `tests/fixtures/eval-corpus/` (committed real `rg`/`tsc`/`git` artifacts + oracles).
 
 Before claiming completion, run fresh:
 
@@ -95,9 +99,9 @@ Completed through Chunk 50 (see `docs/plans/chunks/050-cartographer-inventory-sl
 
 Neuro-symbolic + cloud transition chunks (26–37) include SLM preprocessor, advanced memory, proactive layer, symbolic engines, MCTS, ponder swarm, task decomposition, stale-doc cleanup, pluggable memory providers (034), durable memory + neuro wiring (035), hassle-free UI + neuro observability (036), and vitest 4 + live memory tests + opt-in multi-user auth (037).
 
-Current test baseline after Chunk 50:
+Current test baseline after Phase 0 (branch `rector-0.3.0`):
 
-- `npm test`: 213 files / 1369 tests passing (4 skipped live-memory; 1 skipped file)
+- `npm test`: 330 files (329 passed, 1 skipped) / 2209 tests (2204 passed, 5 skipped). Skips are live-memory only (`tests/memoryLive.integration.test.ts`, offline).
 - `npm run build`: passing
 - `npm audit`: 0 vulnerabilities
 
@@ -206,4 +210,4 @@ Always update `docs/plans/concerns-and-vulnerabilities.md` when discovering:
 - test gaps
 - production-hardening limitations
 
-Known current open item: `npm audit` reported 5 vulnerabilities (4 moderate, 1 critical). Triage before public release; do not run `npm audit fix --force` blindly.
+Current security status: `npm audit` reports 0 vulnerabilities on branch `rector-0.3.0`. The previously-tracked 5-advisory dev-tooling item (4 moderate, 1 critical) was cleared via additive `package.json` `overrides` for `esbuild`/`undici`/`ws` (no `npm audit fix --force`, no runtime dependency change). Keep auditing before public release and do not run `npm audit fix --force` blindly; restore an entry here if new advisories surface.

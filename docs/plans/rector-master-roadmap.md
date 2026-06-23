@@ -249,6 +249,17 @@ Kill local mode as default product. Deliverables:
 
 Branch: `rector-0.3.0-cartographer`
 
+## Phase 0 — Benchmarks + Capability Eval Scaffolding — DONE (branch `rector-0.3.0`)
+
+Offline-only measurement scaffolding for the capability/SLM-fabric workstream. Landed and verified on branch `rector-0.3.0`; no live provider calls.
+
+- Capability eval schemas + 8-metric scorer + raw artifact store: `src/capabilities/eval/{schemas,metrics,artifactStore}.ts`
+- Committed offline eval corpus (real `rg`/`tsc`/`git` artifacts + deterministic oracles): `tests/fixtures/eval-corpus/`
+- Offline model-free eval runner + report formatter: `scripts/evals/{run-capability-evals,score-capability-results}.ts` (writes `.omo/evidence/eval-report.{json,md}`); npm `eval:capabilities` / `eval:capabilities:report`
+- Report-only fake-seam audit: `scripts/audit/no-production-fakes.ts`; npm `audit:no-fakes` (non-blocking, measures only)
+
+By design, the tiny offline fixtures do NOT meet the live efficiency thresholds (compression ≥10×, raw-token-reduction ≥0.80); the runner reports the real aggregate honestly (aggregate `passed: false`) while every committed case passes its oracle. Live efficiency-threshold attainment is Phase 2.5 work. Phase 0.5 (next plan) is NOT yet executed.
+
 ## Chunk 047 — Runtime Maturity (post-042a/042b)
 
 Operational seams around the symbolic brainstem. Implement after Chunk 042a and 042b hardening complete.
