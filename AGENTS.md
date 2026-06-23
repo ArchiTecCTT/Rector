@@ -43,8 +43,12 @@ Stale/quarantined docs have warning banners. If stale docs conflict with source-
 - Dev server: `npm run dev`
 - Capability evals (offline, no model): `npm run eval:capabilities` (and `npm run eval:capabilities:report`) — runs the committed eval corpus and writes `.omo/evidence/eval-report.{json,md}`
 - Fake-seam audit (report-only, non-blocking): `npm run audit:no-fakes`
+- Global reliability harness (offline, one scorecard per scenario): `npm run test:global` — runs the committed scenarios against the fixture workspace and writes `.omo/evidence/global-report.{json,md}`; live scenarios are SKIPPED when no credentials are present
+- Specialist contract validation: `npm run test:systems` — validates committed specialist profiles against the contract schema (no execution)
 
 Phase 0 added these measurement surfaces: `src/capabilities/eval/*` (eval schemas, 8-metric scorer, raw artifact store), `scripts/evals/*` (offline runner + report formatter), `scripts/audit/*` (fake-seam scanner), and `tests/fixtures/eval-corpus/` (committed real `rg`/`tsc`/`git` artifacts + oracles).
+
+Phase 0.5 added the Global Reliability Harness surfaces: `src/evals/*` (global scenario schema, 8-dimension scorecards, offline global runner) and `src/systems/*` (specialist contract/task/result schemas, SystemRegistry validation stub, `specialistProfiles/coding.profile.json`), plus `scripts/evals/{run-global-harness,run-specialist-system-contracts}.ts`, `tests/global/` scenarios, and the `tests/fixtures/repos/rector-mini-fix/` fixture repo. These are CONTRACTS + HARNESS only — specialist execution / routing is Phase 11/12 and not yet built.
 
 Before claiming completion, run fresh:
 
@@ -99,9 +103,9 @@ Completed through Chunk 50 (see `docs/plans/chunks/050-cartographer-inventory-sl
 
 Neuro-symbolic + cloud transition chunks (26–37) include SLM preprocessor, advanced memory, proactive layer, symbolic engines, MCTS, ponder swarm, task decomposition, stale-doc cleanup, pluggable memory providers (034), durable memory + neuro wiring (035), hassle-free UI + neuro observability (036), and vitest 4 + live memory tests + opt-in multi-user auth (037).
 
-Current test baseline after Phase 0 (branch `rector-0.3.0`):
+Current test baseline after Phase 0.5 (branch `rector-0.3.0`):
 
-- `npm test`: 330 files (329 passed, 1 skipped) / 2209 tests (2204 passed, 5 skipped). Skips are live-memory only (`tests/memoryLive.integration.test.ts`, offline).
+- `npm test`: 336 files (335 passed, 1 skipped) / 2241 tests (2236 passed, 5 skipped). Skips are live-memory only (`tests/memoryLive.integration.test.ts`, offline).
 - `npm run build`: passing
 - `npm audit`: 0 vulnerabilities
 

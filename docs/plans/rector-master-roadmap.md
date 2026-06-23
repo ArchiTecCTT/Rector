@@ -258,7 +258,22 @@ Offline-only measurement scaffolding for the capability/SLM-fabric workstream. L
 - Offline model-free eval runner + report formatter: `scripts/evals/{run-capability-evals,score-capability-results}.ts` (writes `.omo/evidence/eval-report.{json,md}`); npm `eval:capabilities` / `eval:capabilities:report`
 - Report-only fake-seam audit: `scripts/audit/no-production-fakes.ts`; npm `audit:no-fakes` (non-blocking, measures only)
 
-By design, the tiny offline fixtures do NOT meet the live efficiency thresholds (compression ≥10×, raw-token-reduction ≥0.80); the runner reports the real aggregate honestly (aggregate `passed: false`) while every committed case passes its oracle. Live efficiency-threshold attainment is Phase 2.5 work. Phase 0.5 (next plan) is NOT yet executed.
+By design, the tiny offline fixtures do NOT meet the live efficiency thresholds (compression ≥10×, raw-token-reduction ≥0.80); the runner reports the real aggregate honestly (aggregate `passed: false`) while every committed case passes its oracle. Live efficiency-threshold attainment is Phase 2.5 work.
+
+## Phase 0.5 — Global Reliability Harness — DONE (branch `rector-0.3.0`)
+
+Offline-by-default reliability harness and specialist-system CONTRACTS proving the architecture can be measured as a persistent assistant delegating to specialist systems. Landed and verified on branch `rector-0.3.0`; no live provider calls.
+
+- Global scenario schema + YAML/JSON loading: `src/evals/globalScenarioSchema.ts`
+- 8-dimension scorecards (+ fake-path status) with JSON/Markdown reporters: `src/evals/scorecards.ts`
+- Offline global runner (one scorecard per scenario, deterministic oracles, report-only fake-path via injected auditor): `src/evals/globalRunner.ts` + `scripts/evals/run-global-harness.ts`; npm `test:global` (writes `.omo/evidence/global-report.{json,md}`)
+- Specialist contract/task/result schemas + validator: `src/systems/contracts.ts`
+- SystemRegistry validation stub (validates + stores contracts, rejects duplicate systemIds — NO execution): `src/systems/registry.ts` + `scripts/evals/run-specialist-system-contracts.ts`; npm `test:systems`; first committed profile `src/systems/specialistProfiles/coding.profile.json`
+- 4 real-fixture global scenarios (coding-basic-fix, memory-boundary, fake-purge, delegation-routing) + the `tests/fixtures/repos/rector-mini-fix/` fixture repo: `tests/global/`
+
+Offline-by-default with live opt-in: live scenarios are SKIPPED when no provider credentials are present (never faked) and are NOT in default CI. The harness honestly reports `passed: 0/4` because the `rector-mini-fix` fixture ships a genuinely failing test (the to-be-fixed state) — the harness proves WIRING (scenario → task packet → trace → oracle → scorecard → regression), NOT specialist execution.
+
+**SCOPE BOUNDARY (critical):** Phase 0.5 delivered CONTRACTS + HARNESS only. The ExecutiveRouter, real specialist execution, and specialist-driven repository mutation are Phase 11/12 and remain NOT done. No specialist-execution phase is marked complete here.
 
 ## Chunk 047 — Runtime Maturity (post-042a/042b)
 
