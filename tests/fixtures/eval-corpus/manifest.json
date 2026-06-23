@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "phase0.eval-corpus.v1",
+  "description": "Offline phase-0 eval corpus with real command artifacts for search, TypeScript diagnostics, and git diffs.",
+  "cases": [
+    {
+      "id": "rg-orchestration-search",
+      "title": "Real ripgrep output for configured orchestration evidence",
+      "artifactKind": "rg_output",
+      "commandPath": "cases/rg-orchestration-search/command.txt",
+      "artifactPath": "cases/rg-orchestration-search/artifact.txt",
+      "oraclePath": "cases/rg-orchestration-search/oracle.json",
+      "inputPaths": ["cases/rg-orchestration-search/src/notes.md"],
+      "generatedFrom": {
+        "tool": "rg",
+        "recordedCommand": "rg --line-number --column --with-filename \"orchestration\" src/notes.md",
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "tsc-runtime-mode-error",
+      "title": "Real tsc --noEmit error for deprecated local runtime mode",
+      "artifactKind": "tsc_no_emit_error",
+      "commandPath": "cases/tsc-runtime-mode-error/command.txt",
+      "artifactPath": "cases/tsc-runtime-mode-error/artifact.txt",
+      "oraclePath": "cases/tsc-runtime-mode-error/oracle.json",
+      "inputPaths": ["cases/tsc-runtime-mode-error/src/index.input.txt"],
+      "generatedFrom": {
+        "tool": "tsc",
+        "recordedCommand": "npx tsc --noEmit --pretty false --strict src/index.ts",
+        "exitCode": 2
+      }
+    },
+    {
+      "id": "git-readiness-diff",
+      "title": "Real git diff for readiness changing from unconfigured to configured",
+      "artifactKind": "git_diff",
+      "commandPath": "cases/git-readiness-diff/command.txt",
+      "artifactPath": "cases/git-readiness-diff/artifact.txt",
+      "oraclePath": "cases/git-readiness-diff/oracle.json",
+      "inputPaths": ["cases/git-readiness-diff/before.ts", "cases/git-readiness-diff/after.ts"],
+      "generatedFrom": {
+        "tool": "git",
+        "recordedCommand": "git diff --no-index before.ts after.ts",
+        "exitCode": 1
+      }
+    }
+  ]
+}

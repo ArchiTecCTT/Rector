@@ -1,0 +1,12 @@
+{
+  "caseId": "git-readiness-diff",
+  "artifactKind": "git_diff",
+  "expectedExitCode": 1,
+  "expectedLineCount": 7,
+  "mustContain": [
+    "diff --git a/before.ts b/after.ts",
+    "-export const readiness = \"unconfigured\";",
+    "+export const readiness = \"configured\";"
+  ],
+  "mustNotContain": ["[REDACTED]", "api_key=", "Bearer "]
+}
