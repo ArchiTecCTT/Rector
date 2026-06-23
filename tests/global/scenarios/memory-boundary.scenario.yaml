@@ -11,12 +11,12 @@ successCriteria:
   - only verified memory entries are cited
   - no unverified scratch note is promoted to durable memory
 validators:
-  - npx tsx tests/fixtures/repos/rector-mini-fix/src/calculator.verify.ts
+  - npx tsx src/calculator.verify.ts
 oracles:
   mustChange: []
   mustNotChange:
-    - tests/fixtures/repos/rector-mini-fix/src/calculator.ts
-    - tests/fixtures/repos/rector-mini-fix/src/calculator.verify.ts
+    - src/calculator.ts
+    - src/calculator.verify.ts
   mustIncludeEvidence:
     - memory.verified-only
 budgets:

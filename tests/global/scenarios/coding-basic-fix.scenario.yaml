@@ -11,12 +11,12 @@ successCriteria:
   - calculator verifier exits 0
   - add returns the sum of its two arguments
 validators:
-  - npx tsx tests/fixtures/repos/rector-mini-fix/src/calculator.verify.ts
+  - npx tsx src/calculator.verify.ts
 oracles:
   mustChange:
-    - tests/fixtures/repos/rector-mini-fix/src/calculator.ts
+    - src/calculator.ts
   mustNotChange:
-    - tests/fixtures/repos/rector-mini-fix/src/calculator.verify.ts
+    - src/calculator.verify.ts
   mustIncludeEvidence:
     - cartographer.grounding
 budgets:

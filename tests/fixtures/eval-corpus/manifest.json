@@ -23,7 +23,7 @@
       "commandPath": "cases/tsc-runtime-mode-error/command.txt",
       "artifactPath": "cases/tsc-runtime-mode-error/artifact.txt",
       "oraclePath": "cases/tsc-runtime-mode-error/oracle.json",
-      "inputPaths": ["cases/tsc-runtime-mode-error/src/index.input.txt"],
+      "inputPaths": ["cases/tsc-runtime-mode-error/src/index.ts"],
       "generatedFrom": {
         "tool": "tsc",
         "recordedCommand": "npx tsc --noEmit --pretty false --strict src/index.ts",

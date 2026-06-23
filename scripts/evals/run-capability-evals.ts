@@ -68,6 +68,81 @@ async function loadManifest(corpusRoot: string): Promise<EvalCorpusManifest> {
   return EvalCorpusManifestSchema.parse(await readCorpusJson(corpusRoot, "manifest.json"));
 }
 
+type RecallOmission = {
+  readonly foundExpected: readonly string[];
+  readonly missingExpected: readonly string[];
+  readonly recall: number;
+  readonly omission: number;
+};
+
+type LineAccuracy = {
+  readonly actualLineCount: number;
+  readonly lineCountMatches: boolean;
+  readonly lineRefAccuracy: number;
+};
+
+type CompressionMetrics = {
+  readonly compression: number;
+  readonly rawTokenReduction: number;
+};
+
+function computeRecallOmission(oracle: EvalCorpusOracle, artifact: string): RecallOmission {
+  const foundExpected = oracle.mustContain.filter((expected) => artifact.includes(expected));
+  const missingExpected = oracle.mustContain.filter((expected) => !artifact.includes(expected));
+  const total = oracle.mustContain.length;
+  return {
+    foundExpected,
+    missingExpected,
+    recall: total === 0 ? 1 : foundExpected.length / total,
+    omission: total === 0 ? 0 : missingExpected.length / total,
+  };
+}
+
+function computeSecretLeak(oracle: EvalCorpusOracle, artifact: string): number {
+  const forbiddenPresent = oracle.mustNotContain.filter((forbidden) => artifact.includes(forbidden));
+  const redactionLeak = redactString(artifact) !== artifact ? 1 : 0;
+  return forbiddenPresent.length + redactionLeak;
+}
+
+function computeLineAccuracy(artifact: string, oracle: EvalCorpusOracle): LineAccuracy {
+  const actualLineCount = countArtifactLines(artifact);
+  const lineCountMatches = actualLineCount === oracle.expectedLineCount;
+  return { actualLineCount, lineCountMatches, lineRefAccuracy: lineCountMatches ? 1 : 0 };
+}
+
+function computeRootCauseAccuracy(recall: number, exitCodeMatches: boolean, lineCountMatches: boolean): number {
+  return recall === 1 && exitCodeMatches && lineCountMatches ? 1 : 0;
+}
+
+function computeCompressionMetrics(foundExpected: readonly string[], artifact: string): CompressionMetrics {
+  const artifactChars = artifact.length;
+  const evidenceChars = foundExpected.reduce((total, evidence) => total + evidence.length, 0);
+  return {
+    compression: evidenceChars === 0 ? 0 : artifactChars / evidenceChars,
+    rawTokenReduction: artifactChars === 0 || evidenceChars >= artifactChars ? 0 : 1 - evidenceChars / artifactChars,
+  };
+}
+
+function evaluatePassed(recall: number, secretLeak: number, exitCodeMatches: boolean, lineCountMatches: boolean): boolean {
+  return recall === 1 && secretLeak === 0 && exitCodeMatches && lineCountMatches;
+}
+
+function assembleFailureReason(
+  oracle: EvalCorpusOracle,
+  fixtureCase: EvalCorpusCase,
+  recallOmission: RecallOmission,
+  secretLeak: number,
+  exitCodeMatches: boolean,
+  lineAccuracy: LineAccuracy,
+): string {
+  const failureParts: string[] = [];
+  if (recallOmission.recall !== 1) failureParts.push(`${recallOmission.missingExpected.length}/${oracle.mustContain.length} expected strings missing`);
+  if (secretLeak !== 0) failureParts.push(`${secretLeak} forbidden/leak hit(s)`);
+  if (!exitCodeMatches) failureParts.push(`exit code ${oracle.expectedExitCode} != recorded ${fixtureCase.generatedFrom.exitCode}`);
+  if (!lineAccuracy.lineCountMatches) failureParts.push(`line count ${lineAccuracy.actualLineCount} != expected ${oracle.expectedLineCount}`);
+  return `Oracle check failed: ${failureParts.join("; ")}`;
+}
+
 /**
  * Deterministically scores a single committed corpus case against its oracle with NO model.
  *
@@ -89,47 +164,27 @@ function scoreCase(input: {
 }): CapabilityEvalResult {
   const { fixtureCase, oracle, artifact } = input;
 
-  const foundExpected = oracle.mustContain.filter((expected) => artifact.includes(expected));
-  const missingExpected = oracle.mustContain.filter((expected) => !artifact.includes(expected));
-  const recall = oracle.mustContain.length === 0 ? 1 : foundExpected.length / oracle.mustContain.length;
-  const omission = oracle.mustContain.length === 0 ? 0 : missingExpected.length / oracle.mustContain.length;
-
-  const forbiddenPresent = oracle.mustNotContain.filter((forbidden) => artifact.includes(forbidden));
-  const redactionLeak = redactString(artifact) !== artifact ? 1 : 0;
-  const secretLeak = forbiddenPresent.length + redactionLeak;
-
-  const actualLineCount = countArtifactLines(artifact);
-  const lineCountMatches = actualLineCount === oracle.expectedLineCount;
-  const lineRefAccuracy = lineCountMatches ? 1 : 0;
-
+  const recallOmission = computeRecallOmission(oracle, artifact);
+  const secretLeak = computeSecretLeak(oracle, artifact);
+  const lineAccuracy = computeLineAccuracy(artifact, oracle);
   const exitCodeMatches = oracle.expectedExitCode === fixtureCase.generatedFrom.exitCode;
-  const rootCauseAccuracy = recall === 1 && exitCodeMatches && lineCountMatches ? 1 : 0;
-
-  const artifactChars = artifact.length;
-  const evidenceChars = foundExpected.reduce((total, evidence) => total + evidence.length, 0);
-  const compression = evidenceChars === 0 ? 0 : artifactChars / evidenceChars;
-  const rawTokenReduction = artifactChars === 0 || evidenceChars >= artifactChars ? 0 : 1 - evidenceChars / artifactChars;
+  const rootCauseAccuracy = computeRootCauseAccuracy(recallOmission.recall, exitCodeMatches, lineAccuracy.lineCountMatches);
+  const compressionMetrics = computeCompressionMetrics(recallOmission.foundExpected, artifact);
 
   const metricScores: Record<CapabilityEvalMetricId, number> = {
     schema_valid: 1,
-    recall,
-    omission,
+    recall: recallOmission.recall,
+    omission: recallOmission.omission,
     secret_leak: secretLeak,
-    compression,
-    raw_token_reduction: rawTokenReduction,
-    line_ref_accuracy: lineRefAccuracy,
+    compression: compressionMetrics.compression,
+    raw_token_reduction: compressionMetrics.rawTokenReduction,
+    line_ref_accuracy: lineAccuracy.lineRefAccuracy,
     root_cause_accuracy: rootCauseAccuracy,
   };
 
-  const passed = recall === 1 && secretLeak === 0 && exitCodeMatches && lineCountMatches;
-  const omissions = missingExpected.map((missing) => `Expected evidence not found in artifact: ${missing}`);
-  const failureParts: string[] = [];
-  if (recall !== 1) failureParts.push(`${missingExpected.length}/${oracle.mustContain.length} expected strings missing`);
-  if (secretLeak !== 0) failureParts.push(`${secretLeak} forbidden/leak hit(s)`);
-  if (!exitCodeMatches) {
-    failureParts.push(`exit code ${oracle.expectedExitCode} != recorded ${fixtureCase.generatedFrom.exitCode}`);
-  }
-  if (!lineCountMatches) failureParts.push(`line count ${actualLineCount} != expected ${oracle.expectedLineCount}`);
+  const passed = evaluatePassed(recallOmission.recall, secretLeak, exitCodeMatches, lineAccuracy.lineCountMatches);
+  const omissions = recallOmission.missingExpected.map((missing) => `Expected evidence not found in artifact: ${missing}`);
+  const failureReason = passed ? undefined : assembleFailureReason(oracle, fixtureCase, recallOmission, secretLeak, exitCodeMatches, lineAccuracy);
 
   const result = {
     schemaVersion: "rector.capability-eval.v1" as const,
@@ -139,7 +194,7 @@ function scoreCase(input: {
     metricScores,
     omissions,
     rawArtifactRefs: [`artifact://offline/${fixtureCase.id}/${path.basename(fixtureCase.artifactPath)}`],
-    ...(passed ? {} : { failureReason: `Oracle check failed: ${failureParts.join("; ")}` }),
+    ...(failureReason === undefined ? {} : { failureReason }),
   };
   return CapabilityEvalResultSchema.parse(result);
 }

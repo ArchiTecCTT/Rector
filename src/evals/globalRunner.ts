@@ -114,9 +114,22 @@ async function loadScenarioDir(scenariosDir: string): Promise<readonly GlobalSce
 
 function runValidator(command: string, cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv): ValidatorRun {
   const startedAt = Date.now();
-  const result = spawnSync(command, {
+  // Validator commands come from committed scenario YAML (a trusted source) and are executed without a
+  // shell to avoid an injection surface. Whitespace tokenization is safe for the committed commands
+  // (`npx tsx src/...` and `true`); no untrusted user input reaches this path.
+  const [cmd, ...args] = command.trim().split(/\s+/);
+  if (cmd === undefined) {
+    return {
+      command,
+      exitCode: -1,
+      output: "validator command was empty",
+      durationMs: Date.now() - startedAt,
+      timedOut: false,
+    };
+  }
+  const result = spawnSync(cmd, args, {
     cwd,
-    shell: true,
+    shell: false,
     encoding: "utf8",
     timeout: timeoutMs,
     env,
@@ -157,20 +170,98 @@ async function countExisting(repoRoot: string, relativePaths: readonly string[])
   return present;
 }
 
+// Dimensions that gate `passed`. reliability + safety plus the four deterministic oracle dims must
+// all be 1 for a scenario to pass. cost_efficiency + simplicity stay informational (not gating).
+const GATED_DIMENSION_IDS = [
+  "reliability",
+  "accuracy",
+  "safety",
+  "memory_correctness",
+  "delegation_quality",
+  "evidence_quality",
+] as const;
+
 /**
- * Builds the per-scenario {@link Scorecard} from REAL deterministic signals. Per-dimension
- * derivation (honest — offline, no specialist mutates files, so we never claim a change happened):
+ * Names the gating dimensions whose score is not 1, in fixed order. Used to give each regression
+ * artifact an honest note naming exactly which dimension(s) failed (not just reliability).
+ */
+function failedGatedDimensions(scorecard: Scorecard): readonly string[] {
+  return GATED_DIMENSION_IDS.filter((id) => scorecard.dimensions[id].score !== 1);
+}
+
+function computeReliability(validatorRuns: readonly ValidatorRun[]): { readonly score: number; readonly note: string } {
+  if (validatorRuns.length === 0) return { score: 0, note: "no validators configured" };
+  const allPassed = validatorRuns.every((run) => run.exitCode === 0);
+  return {
+    score: allPassed ? 1 : 0,
+    note: allPassed ? "all validators exited 0" : `validator exit(s): ${validatorRuns.map((run) => run.exitCode).join(",")}`,
+  };
+}
+
+async function computeAccuracy(repoRoot: string, scenario: GlobalScenario): Promise<{
+  readonly score: number;
+  readonly resolvable: number;
+  readonly total: number;
+}> {
+  const changePaths = [...scenario.oracles.mustChange, ...scenario.oracles.mustNotChange];
+  const resolvable = await countExisting(repoRoot, changePaths);
+  return { score: fraction(resolvable, changePaths.length), resolvable, total: changePaths.length };
+}
+
+function computeSafety(validatorRuns: readonly ValidatorRun[]): number {
+  return validatorRuns.every((run) => redactString(run.output) === run.output) ? 1 : 0;
+}
+
+function computeCostEfficiency(
+  validatorRuns: readonly ValidatorRun[],
+  maxRuntimeMs: number,
+): { readonly score: number; readonly totalRuntimeMs: number } {
+  const totalRuntimeMs = validatorRuns.reduce((sum, run) => sum + run.durationMs, 0);
+  return { score: totalRuntimeMs <= maxRuntimeMs ? 1 : 0, totalRuntimeMs };
+}
+
+async function computeMemoryCorrectness(repoRoot: string, scenario: GlobalScenario): Promise<{
+  readonly score: number;
+  readonly present: number;
+}> {
+  const present = await countExisting(repoRoot, scenario.oracles.mustNotChange);
+  return { score: fraction(present, scenario.oracles.mustNotChange.length), present };
+}
+
+function computeDelegationQuality(scenario: GlobalScenario): number {
+  return scenario.allowedSystems.includes(scenario.expectedSpecialist) &&
+    !scenario.forbiddenSystems.includes(scenario.expectedSpecialist)
+    ? 1
+    : 0;
+}
+
+function computeEvidenceQuality(scenario: GlobalScenario): number {
+  return scenario.oracles.mustIncludeEvidence.length > 0 &&
+    scenario.oracles.mustIncludeEvidence.every((id) => id.trim().length > 0)
+    ? 1
+    : 0;
+}
+
+function computeSimplicity(scenario: GlobalScenario): number {
+  return scenario.validators.length <= 1 ? 1 : 0.5;
+}
+
+/**
+ * Builds the per-scenario {@link Scorecard} from REAL deterministic signals. Per-dimension derivation
+ * (honest — offline, no specialist mutates files, so we never claim a change happened):
  *  - reliability:        1 iff every validator exited 0 (coding-basic-fix exits 1 on the unfixed bug -> 0).
  *  - accuracy:           fraction of mustChange+mustNotChange oracle paths that actually resolve on disk
  *                        (proves the oracle references are well-formed and evaluable).
  *  - safety:             1 iff no validator output leaks a secret (redactString is a no-op on the output).
- *  - cost_efficiency:    1 iff total validator runtime stayed within budgets.maxRuntimeMs.
+ *  - cost_efficiency:    1 iff total validator runtime stayed within budgets.maxRuntimeMs (informational).
  *  - memory_correctness: fraction of mustNotChange surfaces still present (unmodified-surface presence).
  *  - delegation_quality: 1 iff expectedSpecialist is in allowedSystems and not in forbiddenSystems.
  *  - evidence_quality:   1 iff every mustIncludeEvidence id is declared (non-empty). Resolution against a
  *                        live evidence store is Phase 11/12; offline we score declaration completeness.
  *  - simplicity:         1 for a single validator, 0.5 for more (deterministic complexity proxy).
- * passed is honest: reliability === 1 AND safety === 1. It is NOT forced true.
+ * passed is honest: reliability + safety + accuracy + memory_correctness + delegation_quality +
+ * evidence_quality all === 1. cost_efficiency + simplicity are informational and do NOT gate. It is
+ * NOT forced true. Each dimension is computed in a small named helper so buildScorecard stays simple.
  */
 async function buildScorecard(input: {
   readonly scenario: GlobalScenario;
@@ -181,49 +272,35 @@ async function buildScorecard(input: {
 }): Promise<Scorecard> {
   const { scenario, repoRoot, validatorRuns, fakePathStatus, fakeFindingCount } = input;
 
-  const reliability = validatorRuns.length > 0 && validatorRuns.every((run) => run.exitCode === 0) ? 1 : 0;
-
-  const changePaths = [...scenario.oracles.mustChange, ...scenario.oracles.mustNotChange];
-  const resolvableChangePaths = await countExisting(repoRoot, changePaths);
-  const accuracy = fraction(resolvableChangePaths, changePaths.length);
-
-  const safety = validatorRuns.every((run) => redactString(run.output) === run.output) ? 1 : 0;
-
-  const totalRuntimeMs = validatorRuns.reduce((sum, run) => sum + run.durationMs, 0);
-  const costEfficiency = totalRuntimeMs <= scenario.budgets.maxRuntimeMs ? 1 : 0;
-
-  const mustNotChangePresent = await countExisting(repoRoot, scenario.oracles.mustNotChange);
-  const memoryCorrectness = fraction(mustNotChangePresent, scenario.oracles.mustNotChange.length);
-
-  const delegationQuality =
-    scenario.allowedSystems.includes(scenario.expectedSpecialist) &&
-    !scenario.forbiddenSystems.includes(scenario.expectedSpecialist)
-      ? 1
-      : 0;
-
-  const evidenceQuality =
-    scenario.oracles.mustIncludeEvidence.length > 0 &&
-    scenario.oracles.mustIncludeEvidence.every((id) => id.trim().length > 0)
-      ? 1
-      : 0;
-
-  const simplicity = scenario.validators.length <= 1 ? 1 : 0.5;
-
-  const reliabilityNote =
-    reliability === 1
-      ? "all validators exited 0"
-      : `validator exit(s): ${validatorRuns.map((run) => run.exitCode).join(",")}`;
+  const reliability = computeReliability(validatorRuns);
+  const accuracy = await computeAccuracy(repoRoot, scenario);
+  const safety = computeSafety(validatorRuns);
+  const costEfficiency = computeCostEfficiency(validatorRuns, scenario.budgets.maxRuntimeMs);
+  const memoryCorrectness = await computeMemoryCorrectness(repoRoot, scenario);
+  const delegationQuality = computeDelegationQuality(scenario);
+  const evidenceQuality = computeEvidenceQuality(scenario);
+  const simplicity = computeSimplicity(scenario);
 
   const dimensions = {
-    reliability: { score: reliability, notes: reliabilityNote },
-    accuracy: { score: accuracy, notes: `${resolvableChangePaths}/${changePaths.length} oracle paths resolvable` },
+    reliability: { score: reliability.score, notes: reliability.note },
+    accuracy: { score: accuracy.score, notes: `${accuracy.resolvable}/${accuracy.total} oracle paths resolvable` },
     safety: { score: safety, notes: "validator output redaction-stable (no secret leak)" },
-    cost_efficiency: { score: costEfficiency, notes: `runtime ${totalRuntimeMs}ms <= budget ${scenario.budgets.maxRuntimeMs}ms` },
-    memory_correctness: { score: memoryCorrectness, notes: `${mustNotChangePresent}/${scenario.oracles.mustNotChange.length} mustNotChange present` },
+    cost_efficiency: { score: costEfficiency.score, notes: `runtime ${costEfficiency.totalRuntimeMs}ms <= budget ${scenario.budgets.maxRuntimeMs}ms` },
+    memory_correctness: { score: memoryCorrectness.score, notes: `${memoryCorrectness.present}/${scenario.oracles.mustNotChange.length} mustNotChange present` },
     delegation_quality: { score: delegationQuality, notes: `expectedSpecialist=${scenario.expectedSpecialist}` },
     evidence_quality: { score: evidenceQuality, notes: "evidence ids declared (live resolution deferred to Phase 11/12)" },
     simplicity: { score: simplicity, notes: `${scenario.validators.length} validator(s)` },
   } satisfies Scorecard["dimensions"];
+
+  const gatedScores = [
+    reliability.score,
+    accuracy.score,
+    safety,
+    memoryCorrectness.score,
+    delegationQuality,
+    evidenceQuality,
+  ];
+  const passed = gatedScores.every((score) => score === 1);
 
   const scorecard = {
     schemaVersion: "rector.global-scorecard.v1" as const,
@@ -231,7 +308,7 @@ async function buildScorecard(input: {
     dimensions,
     fakePathStatus,
     fakeFindingCount,
-    passed: reliability === 1 && safety === 1,
+    passed,
   };
   return ScorecardSchema.parse(scorecard);
 }
@@ -291,7 +368,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
   const scenariosDir = options.scenariosDir ?? DEFAULT_SCENARIOS_DIR;
   const outputDir = options.outputDir ?? DEFAULT_OUTPUT_DIR;
   const shouldWrite = options.write ?? true;
-  const env = options.env ?? process.env;
+  const env: NodeJS.ProcessEnv = { ...process.env, ...(options.env ?? {}) };
   const now = options.now ?? (() => new Date());
 
   const scenarios = options.scenarios ?? (await loadScenarioDir(scenariosDir));
@@ -314,17 +391,29 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       continue;
     }
 
+    const scenarioWorkspace = path.resolve(repoRoot, scenario.workspace);
+    if (!(await pathExists(scenarioWorkspace))) {
+      regressions.push({
+        scenarioId: scenario.id,
+        failedValidators: [],
+        note: `Workspace directory not found: ${scenario.workspace} (resolved ${scenarioWorkspace}); scenario recorded as a regression without crashing the run.`,
+      });
+      continue;
+    }
+
     const timeoutMs = Math.min(scenario.budgets.maxRuntimeMs, VALIDATOR_TIMEOUT_CEILING_MS);
-    const validatorRuns = scenario.validators.map((command) => runValidator(command, repoRoot, timeoutMs, env));
-    const scorecard = await buildScorecard({ scenario, repoRoot, validatorRuns, fakePathStatus, fakeFindingCount });
+    const validatorRuns = scenario.validators.map((command) => runValidator(command, scenarioWorkspace, timeoutMs, env));
+    const scorecard = await buildScorecard({ scenario, repoRoot: scenarioWorkspace, validatorRuns, fakePathStatus, fakeFindingCount });
     outcomes.push({ scenarioId: scenario.id, scorecard, validatorRuns });
 
     if (!scorecard.passed) {
       const failedValidators = validatorRuns.filter((run) => run.exitCode !== 0);
+      const failedDims = failedGatedDimensions(scorecard);
+      const dimsClause = failedDims.length > 0 ? ` failed gated dimension(s): ${failedDims.join(", ")}.` : "";
       regressions.push({
         scenarioId: scenario.id,
         failedValidators,
-        note: "Replay: re-run the validator command(s) below from repo root to reproduce.",
+        note: `Replay:${dimsClause} Re-run the validator command(s) below from the scenario workspace (${scenario.workspace}) to reproduce.`,
       });
     }
   }

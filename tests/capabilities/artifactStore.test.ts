@@ -75,6 +75,36 @@ describe("LocalFsRawArtifactStore", () => {
     ).rejects.toThrow(/artifactName/);
     await expect(fs.readdir(rootDir)).resolves.toEqual([]);
   });
+
+  it("rejects '.' and '..' callId segments before touching the filesystem", async () => {
+    // Given: a local raw-artifact store and a callId of ".." that would resolve to the parent of root.
+    const rootDir = await makeTempRoot();
+    const store = new LocalFsRawArtifactStore({ rootDir, now: () => new Date(fixedCreatedAt) });
+
+    // When/Then: boundary parsing rejects the traversal segment and nothing is written anywhere.
+    await expect(
+      store.writeRawArtifact({ callId: "..", artifactName: "x.txt", content: "traversal" }),
+    ).rejects.toThrow(/callId/);
+    await expect(fs.readdir(rootDir)).resolves.toEqual([]);
+  });
+
+  it("fails the integrity check when the on-disk content no longer matches the recorded sha256", async () => {
+    // Given: a written artifact whose on-disk content file is then corrupted out-of-band.
+    const rootDir = await makeTempRoot();
+    const store = new LocalFsRawArtifactStore({ rootDir, now: () => new Date(fixedCreatedAt) });
+    const record = await store.writeRawArtifact({
+      callId: "call-int-1",
+      artifactName: "out.txt",
+      content: "hello world",
+    });
+    const contentPath = path.join(rootDir, "call-int-1", "out.txt");
+    await fs.writeFile(contentPath, "corrupted content", "utf8");
+
+    // When/Then: reading the artifact throws the integrity error instead of returning tampered content.
+    await expect(store.readRawArtifact(record.uri)).rejects.toThrow(
+      /Raw artifact integrity check failed/,
+    );
+  });
 });
 
 async function makeTempRoot(): Promise<string> {

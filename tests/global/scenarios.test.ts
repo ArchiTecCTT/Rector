@@ -1,11 +1,12 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { GlobalScenarioSchema, loadGlobalScenario } from "../../src/evals/globalScenarioSchema";
 
-const scenariosDir = new URL("./scenarios/", import.meta.url).pathname;
-const fixtureRepoRoot = new URL("../fixtures/repos/rector-mini-fix/", import.meta.url).pathname;
+const scenariosDir = fileURLToPath(new URL("./scenarios/", import.meta.url));
+const fixtureRepoRoot = fileURLToPath(new URL("../fixtures/repos/rector-mini-fix/", import.meta.url));
 
 const EXPECTED_SCENARIO_IDS = [
   "coding-basic-fix-001",

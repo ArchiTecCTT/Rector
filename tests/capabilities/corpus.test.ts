@@ -97,4 +97,22 @@ describe("phase-0 eval corpus fixtures", () => {
     // Then: path traversal is rejected before any fixture loader can read it.
     expect(result.success).toBe(false);
   });
+
+  it("rejects a manifest with duplicate case ids", async () => {
+    // Given: a valid manifest whose second case id is changed to duplicate the first.
+    const manifest = await loadManifest();
+    const [firstCase, secondCase] = manifest.cases;
+    ok(firstCase);
+    ok(secondCase);
+    const duplicateIdManifest = {
+      ...manifest,
+      cases: [firstCase, { ...secondCase, id: firstCase.id }],
+    };
+
+    // When: the manifest is parsed by the boundary schema enforcing unique ids.
+    const result = EvalCorpusManifestSchema.safeParse(duplicateIdManifest);
+
+    // Then: duplicate ids are rejected before the corpus can be loaded.
+    expect(result.success).toBe(false);
+  });
 });

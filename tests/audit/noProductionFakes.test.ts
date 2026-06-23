@@ -81,6 +81,7 @@ describe("no-production-fakes audit", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30000,
     });
 
     // Then: output includes findings and the subprocess did not throw from a nonzero exit.
@@ -109,6 +110,7 @@ describe("no-production-fakes audit", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30000,
     });
 
     // Then: the CLI reports an internal audit failure and exits nonzero.

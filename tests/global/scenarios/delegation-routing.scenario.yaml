@@ -11,12 +11,12 @@ successCriteria:
   - the coding specialist handles the task
   - no forbidden system is invoked
 validators:
-  - npx tsx tests/fixtures/repos/rector-mini-fix/src/calculator.verify.ts
+  - npx tsx src/calculator.verify.ts
 oracles:
   mustChange:
-    - tests/fixtures/repos/rector-mini-fix/src/calculator.ts
+    - src/calculator.ts
   mustNotChange:
-    - tests/fixtures/repos/rector-mini-fix/src/calculator.verify.ts
+    - src/calculator.verify.ts
   mustIncludeEvidence:
     - delegation.coding-only
 budgets:

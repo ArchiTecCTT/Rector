@@ -8,7 +8,11 @@ export const RAW_ARTIFACT_SCHEMA_VERSION = "rector.capability.rawArtifact.v1";
 
 export const RawArtifactRedactionStateSchema = z.enum(["redacted", "no_secrets_detected"]);
 
-const SafePathSegmentSchema = z.string().min(1).regex(/^[A-Za-z0-9._-]+$/);
+const SafePathSegmentSchema = z
+  .string()
+  .min(1)
+  .regex(/^[A-Za-z0-9._-]+$/)
+  .refine((seg) => seg !== "." && seg !== "..", "Path segment cannot be '.' or '..'");
 
 export const WriteRawArtifactInputSchema = z
   .object({
@@ -42,7 +46,7 @@ const LocalFsRawArtifactStoreOptionsSchema = z
   })
   .strict();
 
-export type WriteRawArtifactInput = Readonly<z.infer<typeof WriteRawArtifactInputSchema>>;
+export type WriteRawArtifactInput = Readonly<z.input<typeof WriteRawArtifactInputSchema>>;
 export type RawArtifactRedactionState = z.infer<typeof RawArtifactRedactionStateSchema>;
 export type RawArtifactRecord = Readonly<z.infer<typeof RawArtifactRecordSchema>>;
 export type StoredRawArtifact = {
@@ -98,7 +102,12 @@ export class LocalFsRawArtifactStore implements RawArtifactStore {
       fs.readFile(this.artifactPath(ref.callId, ref.artifactName), "utf8"),
     ]);
     const rawRecord: unknown = JSON.parse(recordText);
-    return { record: RawArtifactRecordSchema.parse(rawRecord), content };
+    const record = RawArtifactRecordSchema.parse(rawRecord);
+    const contentDigest = sha256Hex(content);
+    if (contentDigest !== record.sha256) {
+      throw new Error(`Raw artifact integrity check failed for ${uri}`);
+    }
+    return { record, content };
   }
 
   async listRawArtifacts(callId: string): Promise<readonly RawArtifactRecord[]> {

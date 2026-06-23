@@ -9,8 +9,9 @@ export type EvalCorpusCommandTool = z.infer<typeof EvalCorpusCommandToolSchema>;
 const RelativeCorpusPathSchema = z
   .string()
   .min(1)
-  .refine((value) => !value.startsWith("/") && !value.startsWith("./") && !value.includes(".."), {
-    message: "Corpus paths must be relative to the eval-corpus root",
+  .refine(isSafeRelativeCorpusPath, {
+    message:
+      "Corpus paths must be relative to the eval-corpus root (no leading '/', './', or '../', no '/../' segment, no Windows/UNC absolute prefixes)",
   });
 
 const CASE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -46,7 +47,11 @@ export const EvalCorpusManifestSchema = z
     description: z.string().min(1),
     cases: z.array(EvalCorpusCaseSchema).min(3),
   })
-  .strict();
+  .strict()
+  .refine((manifest) => new Set(manifest.cases.map((fixtureCase) => fixtureCase.id)).size === manifest.cases.length, {
+    message: "Case IDs must be unique",
+    path: ["cases"],
+  });
 
 export const EvalCorpusOracleSchema = z
   .object({
@@ -76,4 +81,19 @@ export function expectedToolForArtifact(kind: EvalCorpusArtifactKind): EvalCorpu
       return unreachable;
     }
   }
+}
+
+/**
+ * Accepts only paths that resolve inside the eval-corpus root. Backslashes are normalized to forward
+ * slashes first so Windows absolute (`C:\` / `C:/`) and UNC (`\\` -> `//`) prefixes are caught by the
+ * leading-slash check. A leading `./` or `../` and any `..` path segment (the `/../` traversal case,
+ * including a trailing `..`) are rejected; a bare `..` inside a filename (e.g. `foo..bar`) is allowed.
+ */
+function isSafeRelativeCorpusPath(value: string): boolean {
+  const normalized = value.replace(/\\/g, "/");
+  if (normalized.startsWith("/")) return false;
+  if (/^[a-zA-Z]:\//.test(normalized)) return false;
+  const segments = normalized.split("/");
+  if (segments[0] === "." || segments[0] === "..") return false;
+  return !segments.some((segment) => segment === "..");
 }

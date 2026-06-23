@@ -11,12 +11,12 @@ successCriteria:
   - verifier passes via a real arithmetic fix
   - no fake-success seam is added to source
 validators:
-  - npx tsx tests/fixtures/repos/rector-mini-fix/src/calculator.verify.ts
+  - npx tsx src/calculator.verify.ts
 oracles:
   mustChange:
-    - tests/fixtures/repos/rector-mini-fix/src/calculator.ts
+    - src/calculator.ts
   mustNotChange:
-    - tests/fixtures/repos/rector-mini-fix/src/calculator.verify.ts
+    - src/calculator.verify.ts
   mustIncludeEvidence:
     - fake-path.clean
 budgets:
