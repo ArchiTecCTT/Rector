@@ -857,3 +857,34 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 ### gitignore negation carve-out for tracked benchmark mirror
 
 - **Label:** NOTE — `.gitignore` ignores the entire `docs/plans/2-0/` research tree. Phase 0 adds a single intentional exception: `docs/plans/2-0/phases/**` is re-included as the tracked benchmark mirror (`docs/plans/2-0/phases/phase-0-benchmarks.md`). To make the negation effective, the parent rule was changed from the bare directory `docs/plans/2-0` to `docs/plans/2-0/*` (git cannot re-include a path whose parent directory is itself excluded). Verified: the mirror is `git add`-able while all sibling `2-0` files and the whole `.omo/` tree remain ignored.
+
+## Phase 0.5 — Global Reliability Harness
+
+### Baseline (real gate output on `rector-0.3.0`, Phase 0.5 finish)
+
+- **`npm test`:** exit 0 — 336 files (335 passed, 1 skipped), 2241 tests (2236 passed, 5 skipped). The skipped file is `tests/memoryLive.integration.test.ts` (live-memory tests gated behind absent credentials, offline by design).
+- **`npm run check` (`tsc --noEmit`):** exit 0.
+- **`npm run build`:** exit 0.
+- **`npm run test:global`:** exit 0 — 4 offline scenarios, all executed (0 skipped), one scorecard each (8 dims + fake-path), writes `.omo/evidence/global-report.{json,md}`.
+- **`npm run test:systems`:** exit 0 — validates the committed `coding.profile.json` (1/1 valid).
+- **`npm run eval:capabilities`:** exit 0 (Phase 0 harness still green).
+- **`npm run audit:no-fakes`:** exit 0, report-only — 187 src files scanned (rose from 182 as `src/systems/*` and `src/evals/*` landed), 40 fake-seam findings.
+
+### Harness coverage and offline honesty
+
+- **Label:** BY-DESIGN — The Global Reliability Harness ships 4 offline scenarios (coding-basic-fix, memory-boundary, fake-purge, delegation-routing), each producing one scorecard across the 8 reliability dimensions plus a fake-path-status dimension. It proves the harness WIRING (scenario load → task packet → trace capture → oracle → scorecard → replayable regression), NOT specialist execution.
+- The aggregate is honestly `passed 0/4`: the `tests/fixtures/repos/rector-mini-fix/` fixture ships a genuinely failing test (the to-be-fixed state), so reliability scores 0 truthfully. The harness does not yet drive a specialist to MUTATE the repo and make the test pass — specialist-driven repair is Phase 11/12. We record 0/4 rather than fabricate a pass.
+- The harness runner exits 0 on successful report PRODUCTION, not on aggregate scenario pass (mirrors the Phase 0 eval-runner posture).
+
+### Live-scenario posture and fake-path surfacing
+
+- **Label:** NOTE — Live scenarios are opt-in only: when no provider credentials are present the live path is SKIPPED (proven by a skipped-path test), never faked, and live scenarios are NOT added to default CI.
+- **Label:** DEFERRED — fake-path-status is surfaced as a scorecard dimension (`fakes_present`, 40 seams), report-only — the same seams the `audit:no-fakes` scanner reports. Purge remains deferred to Phase 3 + the fake-purge workstream; CI-gating to Phase 13.
+
+### src-cannot-import-scripts → injected fakePathAuditor
+
+- **Label:** NOTE (design) — `src/**` cannot import from `scripts/**` (outside `tsconfig` `rootDir`), so the global harness does not statically import the `no-production-fakes` auditor. Instead the auditor is INJECTED into the runner as a `fakePathAuditor` seam; the CLI wires the real `auditNoProductionFakes` while tests inject a deterministic double. This keeps the fake-path dimension real in production runs without an illegal cross-rootDir import.
+
+### Test gaps / limitations
+
+- **Label:** DEFERRED — The harness measures reliability against committed oracles only; it does not exercise live providers or real specialist mutation (Phase 11/12). The single offline fixture repo (`rector-mini-fix`) is intentionally minimal; broader scenario corpora are future work.
