@@ -831,3 +831,29 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 ### Qodana test-scope config gap
 
 - **Label:** DEFERRED — The merged `qodana.yaml` on `origin/main` does not contain exclude/scope rules for `tests/`. The chunk honored the user's stated intent that tests were out of scope; that scope is not enforced by configuration. If `tests/` findings should be permanently suppressed, `qodana.yaml` needs an explicit exclude block in a follow-up.
+
+## Phase 0 — Capability eval harness + Phase-0 finish (Todo 6 / Todo 8)
+
+### Baseline (real gate output on `rector-0.3.0`, commit `80e809c`)
+
+- **`npm test`:** exit 0 — 330 files (329 passed, 1 skipped), 2209 tests (2204 passed, 5 skipped). The skipped file is `tests/memoryLive.integration.test.ts` (live-memory tests gated behind absent live credentials, by design offline).
+- **`npm run check` (`tsc --noEmit`):** exit 0.
+- **`npm run build`:** exit 0.
+- **`npm run audit:no-fakes`:** exit 0, report-only — 182 src files scanned, 40 fake-seam findings reported (non-blocking).
+- **`npm run eval:capabilities`:** exit 0 — offline, no-model run; 3/3 cases pass committed oracles; aggregate `passed` honestly `false`.
+- **`npm audit`:** exit 0, `found 0 vulnerabilities`. The previously-tracked 5-advisory dev-tooling item appears CLEARED on this branch by the package.json `overrides` for `esbuild`/`undici`/`ws`. (AGENTS.md test-baseline + "5 vulnerabilities" notes are owned by Todo 9 / a separate doc-refresh task; not edited here.)
+
+### Honest limitation — offline eval efficiency metrics intentionally fail (NOT a defect)
+
+- **Label:** BY-DESIGN — The offline Phase-0 eval corpus (`tests/fixtures/eval-corpus/`) ships three tiny committed real command artifacts (`rg`, `tsc --noEmit`, `git diff`). The runner (`scripts/evals/run-capability-evals.ts`) scores each artifact against its deterministic oracle with **no model**.
+- The evidence metrics (`schema_valid`, `recall`, `omission`, `secret_leak`, `line_ref_accuracy`, `root_cause_accuracy`) are REAL artifact-vs-oracle comparisons and all pass.
+- `compression` (>=10x) and `raw_token_reduction` (>=0.80) target large, noisy LIVE tool outputs. On tiny fixtures they are honestly low (aggregate compression ~1.24x), so the aggregate `passed` is truthfully `false`. We do **not** fabricate metric values to force a green report. The offline harness gate `npm run eval:capabilities` exits 0 on successful report PRODUCTION, not on aggregate threshold attainment.
+- **Deferred:** Live efficiency-threshold attainment (real compression/token-reduction against large tool outputs) is Phase 2.5 work, not Phase 0.
+
+### Report-only fake-seam audit is informational, not enforced
+
+- **Label:** DEFERRED — `npm run audit:no-fakes` reports 40 fake-system seams in `src/` (FakeLLMProvider, `createFakePlan`/`fallbackPlan`, `workspace.validate` `passed:true`, `simulator.echo`, `executorSimulator` imports). It is intentionally non-blocking (exits 0) during the v0.3.0 transition; nonzero exits are reserved for internal audit errors. Phase 0 only MEASURES these seams: purging/modifying them is deferred to Phase 3 and the fake-purge workstream, and the audit only becomes a CI-failing gate in Phase 13. Until then seam reintroduction is not gate-blocked. These seams must be retired before the configured-only product GA per `docs/architecture/configured-product-architecture.md`.
+
+### gitignore negation carve-out for tracked benchmark mirror
+
+- **Label:** NOTE — `.gitignore` ignores the entire `docs/plans/2-0/` research tree. Phase 0 adds a single intentional exception: `docs/plans/2-0/phases/**` is re-included as the tracked benchmark mirror (`docs/plans/2-0/phases/phase-0-benchmarks.md`). To make the negation effective, the parent rule was changed from the bare directory `docs/plans/2-0` to `docs/plans/2-0/*` (git cannot re-include a path whose parent directory is itself excluded). Verified: the mirror is `git add`-able while all sibling `2-0` files and the whole `.omo/` tree remain ignored.
