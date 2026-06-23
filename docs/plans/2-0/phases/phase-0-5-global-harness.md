@@ -148,7 +148,7 @@ Your next move: approve, or ask for the dual high-accuracy review first. Full ex
   Fake-risk check: ALLOWED — contract validation only; no faked execution claimed. The registry explicitly does NOT pretend to run specialists.
   Commit: Y | feat(systems): add SystemRegistry validation stub + contract tests
 
-- [ ] 8. Un-ignore phases mirror dir, wire npm scripts, commit tracked plan mirror, update concerns doc
+- [x] 8. Un-ignore phases mirror dir, wire npm scripts, commit tracked plan mirror, update concerns doc
   What to do: FIRST ensure `.gitignore` un-ignores the mirror dir — if the negation lines `!docs/plans/2-0/phases/` and `!docs/plans/2-0/phases/**` are absent (i.e. Phase 0 did not already add them), add them immediately after the `docs/plans/2-0` line; verify with `git check-ignore -v docs/plans/2-0/phases/phase-0-5-global-harness.md` printing NOTHING (exit 1 = not ignored). THEN add `test:global`, `test:systems` to `package.json` (optionally reserve `eval:global`, `eval:shadow` as documented-not-yet-wired). Create tracked mirror `docs/plans/2-0/phases/phase-0-5-global-harness.md` and `git add` it (confirm it stages). Append a Phase 0.5 entry to `docs/plans/concerns-and-vulnerabilities.md` (harness coverage, live-scenario opt-in posture, fake-path-status-as-scorecard, any gaps). Run the full gate suite and capture output.
   Must NOT do: do NOT add live scenarios to the default CI path. Do NOT alter unrelated scripts. Do NOT broaden the negation beyond `phases/`. Do NOT duplicate the negation lines if Phase 0 already added them.
   Parallelization: Wave 3 | Blocked by: 6,7 | Blocks: none
@@ -158,7 +158,7 @@ Your next move: approve, or ask for the dual high-accuracy review first. Full ex
   Fake-risk check: N/A (gitignore + wiring + docs). Verification runs the REAL gate suite.
   Commit: Y | chore(phase0.5): un-ignore phases mirror, wire global/systems scripts, mirror plan, update concerns
 
-- [ ] 9. Sync source-of-truth docs so nothing goes stale (worker does this directly — NO subagent)
+- [x] 9. Sync source-of-truth docs so nothing goes stale (worker does this directly — NO subagent)
   What to do: As the FINAL step before opening the PR, the executing agent directly updates the broader source-of-truth docs to reflect Phase 0.5 completion. Update only where the phase changed reality: (a) `docs/plans/rector-master-roadmap.md` — mark Phase 0.5 (Global Reliability Harness) status as done/landed with the PR/branch reference; (b) `AGENTS.md` — refresh the test baseline line to the FRESH `npm test` counts from Todo 8, and add the new `npm run test:global` / `npm run test:systems` commands under Build/Test commands plus the new `src/evals/*` and `src/systems/*` surfaces; (c) confirm the Phase 0.5 entry appended to `docs/plans/concerns-and-vulnerabilities.md` in Todo 8 is present and accurate (no duplicate). Capture a before/after diff summary to evidence.
   Must NOT do: do NOT delegate to a librarian/explore/oracle subagent — AGENTS.md mandates foreground-only and flags subagents as flaky here; the worker holding the real diff does it directly. Do NOT invent test numbers — use real Todo 8 gate output. Do NOT touch architecture docs the phase did not affect, and do NOT mark Phase 11/12 or any future specialist phase done (this phase only built contracts + harness, not execution).
   Parallelization: Wave 3 (tail) | Blocked by: 8 | Blocks: none
@@ -170,11 +170,11 @@ Your next move: approve, or ask for the dual high-accuracy review first. Full ex
 
 ## Final verification wave
 > Runs in parallel after ALL todos. ALL must APPROVE. Surface results and wait for the user's explicit okay before declaring complete.
-- [ ] F1. Plan compliance audit — every Must-have delivered; every Must-NOT respected (offline-by-default, no specialist execution, no purges, live opt-in+skipped); commit-per-task.
-- [ ] F2. Code quality review — schemas clean under `npm run check`; `src/systems/registry.ts` does NOT execute specialists; live-credential-absent path emits SKIPPED not pass/fail.
-- [ ] F3. Real manual QA — operator runs `npm run test:global` and `npm run test:systems` from a clean worktree checkout with NO credentials set; confirms both exit 0, 4 scorecards produced, live scenarios reported SKIPPED.
-- [ ] F4. Scope fidelity — no creep into Phase 11/12 (no ExecutiveRouter, no real coding-system execution) and none into Phase 2.5 (no Regolo/Capability-SLM).
-- [ ] F5. Doc freshness — roadmap + AGENTS.md reflect Phase 0.5 done; AGENTS.md test baseline matches the real `npm test` count; no Phase 11/12 or specialist phase prematurely marked done; concerns doc has the Phase 0.5 entry.
+- [x] F1. Plan compliance audit — every Must-have delivered; every Must-NOT respected (offline-by-default, no specialist execution, no purges, live opt-in+skipped); commit-per-task.
+- [x] F2. Code quality review — schemas clean under `npm run check`; `src/systems/registry.ts` does NOT execute specialists; live-credential-absent path emits SKIPPED not pass/fail.
+- [x] F3. Real manual QA — operator runs `npm run test:global` and `npm run test:systems` from a clean worktree checkout with NO credentials set; confirms both exit 0, 4 scorecards produced, live scenarios reported SKIPPED.
+- [x] F4. Scope fidelity — no creep into Phase 11/12 (no ExecutiveRouter, no real coding-system execution) and none into Phase 2.5 (no Regolo/Capability-SLM).
+- [x] F5. Doc freshness — roadmap + AGENTS.md reflect Phase 0.5 done; AGENTS.md test baseline matches the real `npm test` count; no Phase 11/12 or specialist phase prematurely marked done; concerns doc has the Phase 0.5 entry.
 
 ## Commit strategy
 - One commit per todo (commit-per-task). Conventional Commits, scopes: `evals`, `systems`, `phase0.5`, `docs`.
