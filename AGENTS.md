@@ -50,7 +50,7 @@ Phase 0 added these measurement surfaces: `src/capabilities/eval/*` (eval schema
 
 Phase 0.5 added the Global Reliability Harness surfaces: `src/evals/*` (global scenario schema, 8-dimension scorecards, offline global runner) and `src/systems/*` (specialist contract/task/result schemas, SystemRegistry validation stub, `specialistProfiles/coding.profile.json`), plus `scripts/evals/{run-global-harness,run-specialist-system-contracts}.ts`, `tests/global/` scenarios, and the `tests/fixtures/repos/rector-mini-fix/` fixture repo. These are CONTRACTS + HARNESS only — specialist execution / routing is Phase 11/12 and not yet built.
 
-**Phase 0 / Phase 0.5 status — SCAFFOLD LANDED / COMPLETION GATE PENDING:** The measurement surfaces above are scaffolds only; neither phase has passed its completion gates. Phase 0 passes only when `npm run eval:capabilities:gate`, `npm run baseline:phase0`, and `npm run verify:phase0` pass. Phase 0.5 passes only when `npm run test:global:gate` and `npm run verify:phase0.5` pass with at least 20 offline scenarios (>=5 strict passing, >=5 intentional regressions) and strict scorecard semantics. These gate commands are not yet implemented. The ExecutiveRouter and real specialist execution are NOT implemented (deferred to Phase 11/12); the harness emits dry-run task packets/traces only, never specialist-driven repository mutation. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
+**Phase 0 / Phase 0.5 status — DONE — gates passed on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80:** All six gates passed (`eval:capabilities:gate`, `baseline:phase0`, `verify:phase0`, `test:global:gate`, `verify:phase0.5`, `verify:foundation`). 10 eval cases (2 efficiencyRelevant cases meet >=10x compression / >=0.80 raw_token_reduction; aggregate efficiency is honestly not all-green but the gate uses designated-case efficiency). Global: 28 scenarios, 21 strict-pass, 8 intentional regressions, all actual==expected. The ExecutiveRouter and real specialist execution are NOT implemented (deferred to Phase 11/12); the harness emits dry-run task packets/traces only, never specialist-driven repository mutation. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
 
 Before claiming completion, run fresh:
 
@@ -107,7 +107,7 @@ Neuro-symbolic + cloud transition chunks (26–37) include SLM preprocessor, adv
 
 Current test baseline after Phase 0.5 (branch `rector-0.3.0`):
 
-- `npm test`: 336 files (335 passed, 1 skipped) / 2241 tests (2236 passed, 5 skipped). Skips are live-memory only (`tests/memoryLive.integration.test.ts`, offline).
+- `npm test`: 344 files (344 passed, 1 skipped) / 2338 tests (2338 passed, 5 skipped). Skips are live-memory only (`tests/memoryLive.integration.test.ts`, offline).
 - `npm run build`: passing
 - `npm audit`: 0 vulnerabilities
 

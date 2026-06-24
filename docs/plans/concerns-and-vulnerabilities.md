@@ -834,7 +834,7 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 
 ## Phase 0 — Capability eval harness + Phase-0 finish (Todo 6 / Todo 8)
 
-**Status: SCAFFOLD LANDED / COMPLETION GATE PENDING.** Phase 0 is complete only when `npm run eval:capabilities:gate`, `npm run baseline:phase0`, and `npm run verify:phase0` pass. These gate commands are not yet implemented; the baseline below records the scaffold's current honest output, not completion. No ExecutiveRouter and no real specialist execution are involved (deferred to Phase 11/12). The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
+**Status: DONE — gates passed on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80.** All Phase 0 gates passed (`eval:capabilities:gate`, `baseline:phase0`, `verify:phase0`). 10 eval cases (2 efficiencyRelevant cases meet >=10x compression / >=0.80 raw_token_reduction). No ExecutiveRouter and no real specialist execution are involved (deferred to Phase 11/12). The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13 (40 findings accepted as known deferral).
 
 ### Baseline (real gate output on `rector-0.3.0`, commit `80e809c`)
 
@@ -862,7 +862,7 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 
 ## Phase 0.5 — Global Reliability Harness
 
-**Status: SCAFFOLD LANDED / COMPLETION GATE PENDING.** Phase 0.5 is complete only when `npm run test:global:gate` and `npm run verify:phase0.5` pass with at least 20 offline scenarios (>=5 strict passing, >=5 intentional regressions), strict scorecard semantics (real behavioral dimensions, not proxy existence checks), and no claim of specialist execution. These gate commands and the expanded scenario corpus are not yet implemented; the baseline below records the scaffold's current honest output (e.g., `passed 0/4`), not completion. The ExecutiveRouter and real specialist execution are NOT implemented (deferred to Phase 11/12); the harness emits dry-run task packets/traces only. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
+**Status: DONE — gates passed on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80.** All Phase 0.5 gates passed (`test:global:gate`, `verify:phase0.5`, `verify:foundation`). 28 offline scenarios (21 strict-pass, 8 intentional regressions), all actual==expected. The ExecutiveRouter and real specialist execution are NOT implemented (deferred to Phase 11/12); the harness emits dry-run task packets/traces only. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13 (40 findings accepted as known deferral).
 
 ### Baseline (real gate output on `rector-0.3.0`, Phase 0.5 finish)
 
