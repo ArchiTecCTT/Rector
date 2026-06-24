@@ -10,11 +10,11 @@ expectedSpecialist: coding
 successCriteria:
   - scenario intentional-fail-02 executes
 validators:
-  - id: v1
+  - id: calculator-source-verifier
     cmd: node
-    args: [-e, process.exit(1)]
+    args: [src/calculator-source.verify.js]
     cwd: .
-    timeoutMs: 10000
+    timeoutMs: 30000
     expectedExitCode: 0
 oracles:
   mustChange: []
