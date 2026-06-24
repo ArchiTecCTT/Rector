@@ -77,9 +77,17 @@ async function main(): Promise<void> {
   const fakeAuditReport = await fakeModule.auditNoProductionFakes();
 
   // #9: compute REAL test counts from a fresh vitest json run (no hardcoded numbers).
+  // NON-RECURSIVE COUNT: exclude self-referential tests that shell into verify:phase0 / baseline:phase0.
+  // Without this, the count run would re-enter verify.test.ts → verify:phase0 → baseline:phase0 → infinite recursion.
+  // The excluded tests are: verify.test.ts (calls verify:phase0) and phase0Baseline.test.ts (calls baseline:phase0).
+  // Counts remain REAL (actual vitest execution) minus these two guard tests. Caveat recorded in evidence.
+  process.env.RECTOR_BASELINE_ACTIVE = "1";
   let testBaseline = { totalTests: 0, passed: 0, skipped: 0 };
   try {
-    const jsonOut = execSync("npx --no-install vitest run --reporter=json", { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const jsonOut = execSync(
+      "npx --no-install vitest run --reporter=json --exclude '**/verify.test.ts' --exclude '**/phase0Baseline.test.ts'",
+      { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, RECTOR_BASELINE_ACTIVE: "1" } }
+    );
     const parsed = JSON.parse(jsonOut);
     const suites = parsed.testResults ?? [];
     let total = 0, passed = 0, skipped = 0;

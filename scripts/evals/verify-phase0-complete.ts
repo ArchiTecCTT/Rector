@@ -60,8 +60,14 @@ async function main() {
   if (gate.code !== 0) fail(`eval:capabilities:gate exited ${gate.code} (expected 0)`);
 
   // 7. Baseline report exists + validates (self-generate if missing for CI freshness)
+  // REENTRANCY GUARD: if RECTOR_BASELINE_ACTIVE=1 we are already inside a baseline run.
+  // Do NOT shell into baseline:phase0 again — that would recurse verify→baseline→verify.
+  // Normal verify:phase0 (baseline absent, env unset) still self-generates.
   const baselinePath = path.join(EVIDENCE_DIR, "phase0-baseline.json");
   if (!existsSync(baselinePath)) {
+    if (process.env.RECTOR_BASELINE_ACTIVE === "1") {
+      fail("REENTRANCY GUARD: baseline missing while RECTOR_BASELINE_ACTIVE=1; refusing recursive generation");
+    }
     const gen = run("npm run baseline:phase0");
     if (gen.code !== 0) fail(`baseline:phase0 exited ${gen.code} (expected 0)`);
   }
