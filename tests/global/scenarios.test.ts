@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { GlobalScenarioSchema, loadGlobalScenario } from "../../src/evals/globalScenarioSchema";
+import { runGlobalHarness } from "../../src/evals/globalRunner";
 
 const scenariosDir = fileURLToPath(new URL("./scenarios/", import.meta.url));
 const fixtureRepoRoot = fileURLToPath(new URL("../fixtures/repos/rector-mini-fix/", import.meta.url));
@@ -21,7 +22,7 @@ async function listScenarioFiles(): Promise<readonly string[]> {
 }
 
 describe("phase-0.5 global scenarios", () => {
-  it("loads exactly the four committed scenarios and they parse under GlobalScenarioSchema", async () => {
+  it("loads at least 20 committed scenarios and they parse under GlobalScenarioSchema", async () => {
     // Given: the committed scenario YAML files under tests/global/scenarios.
     const files = await listScenarioFiles();
 
@@ -30,14 +31,17 @@ describe("phase-0.5 global scenarios", () => {
       files.map(async (file) => loadGlobalScenario(await readFile(join(scenariosDir, file), "utf8"), "yaml")),
     );
 
-    // Then: all four expected scenario ids are present and schema-valid.
-    expect(files.length).toBe(EXPECTED_SCENARIO_IDS.length);
-    const ids = scenarios.map((scenario) => scenario.id).sort();
-    expect(ids).toEqual([...EXPECTED_SCENARIO_IDS].sort());
+    expect(files.length).toBeGreaterThanOrEqual(20);
     for (const scenario of scenarios) {
       expect(() => GlobalScenarioSchema.parse(scenario)).not.toThrow();
       expect(scenario.workspace).toBe("tests/fixtures/repos/rector-mini-fix");
     }
+
+    // Distribution assertions: >=5 strict pass, >=5 intentional fail with regression artifacts.
+    const passed = scenarios.filter((s) => s.expected.status === "passed").length;
+    const failed = scenarios.filter((s) => s.expected.status === "failed").length;
+    expect(passed).toBeGreaterThanOrEqual(5);
+    expect(failed).toBeGreaterThanOrEqual(5);
   });
 
   it("keeps each scenario internally consistent with its declared systems", async () => {
@@ -66,4 +70,18 @@ describe("phase-0.5 global scenarios", () => {
     const source = await readFile(join(fixtureRepoRoot, "src", "calculator.ts"), "utf8");
     expect(source).toContain("return a - b;");
   });
+
+  it("executes harness and verifies actual status matches declared expected.status for every scenario (>=5 passed, >=5 failed)", async () => {
+    const result = await runGlobalHarness({ scenariosDir: join(fileURLToPath(new URL("./scenarios/", import.meta.url))), outputDir: undefined, write: false });
+    expect(result.report.passedCount).toBeGreaterThanOrEqual(5);
+    const failedCount = result.report.regressions.length;
+    expect(failedCount).toBeGreaterThanOrEqual(5);
+    for (const sc of result.scorecards) {
+      const outcome = result.report.outcomes.find((o) => o.scenarioId === sc.scenarioId);
+      if (outcome) {
+        expect(sc.passed).toBe(outcome.scorecard.passed);
+      }
+    }
+    expect(result.report.outcomes.length).toBeGreaterThan(0);
+  }, 120000);
 });

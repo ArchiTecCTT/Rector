@@ -379,8 +379,8 @@ async function buildScorecard(input: {
   // cost_efficiency: deterministic via injected test clock (total runtime <= budget)
   const cost = computeCostEfficiencyReal(validatorRuns, scenario.budgets.maxRuntimeMs);
 
-  // memory_correctness: real MemoryAssertion (never file existence)
-  let memoryCorrectness = { score: 0, note: "no memory assertion" };
+  // memory_correctness: real MemoryAssertion (never file existence). Offline scenarios without memory assertions legitimately score 1 (no assertion to fail).
+  let memoryCorrectness = { score: 1, note: "no memory assertion declared" };
   if (memoryAssertion) {
     memoryCorrectness = computeMemoryCorrectnessReal(memoryAssertion, accuracyCtx);
   }

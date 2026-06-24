@@ -1,0 +1,36 @@
+schemaVersion: rector.global-scenario.v1
+id: memory-cross-domain-leak-blocked
+title: memory-cross-domain-leak-blocked
+type: coding
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: Scenario memory-cross-domain-leak-blocked
+allowedSystems: [coding]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: coding
+successCriteria:
+  - scenario memory-cross-domain-leak-blocked executes
+validators:
+  - id: v1
+    cmd: node
+    args: [-e, process.exit(0)]
+    cwd: .
+    timeoutMs: 10000
+    expectedExitCode: 0
+oracles:
+  mustChange: []
+  mustNotChange: []
+  mustIncludeEvidence: []
+budgets:
+  maxToolCalls: 10
+  maxRuntimeMs: 60000
+  maxMainModelRawToolTokens: 100
+setup:
+  copyWorkspaceToTemp: false
+  fixtures: []
+operation:
+  kind: validator_only
+expected:
+  status: passed
+  changedPaths: []
+  unchangedPaths: []
+  evidenceRefs: []

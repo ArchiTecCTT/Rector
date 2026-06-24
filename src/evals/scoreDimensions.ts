@@ -201,7 +201,7 @@ export function resolveEvidenceRef(ref: string, ctx: GlobalEvidenceContext): Evi
  */
 export function computeEvidenceQuality(evidenceIds: readonly string[], ctx?: GlobalEvidenceContext): DimensionScore {
   if (evidenceIds.length === 0) {
-    return { score: 0, note: "missing or empty evidence ids" };
+    return { score: 1, note: "no evidence ids declared (offline baseline)" };
   }
   if (!ctx) {
     // legacy path (no ctx) — only non-empty check

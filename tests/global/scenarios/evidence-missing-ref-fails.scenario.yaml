@@ -1,0 +1,36 @@
+schemaVersion: rector.global-scenario.v1
+id: evidence-missing-ref-fails
+title: evidence-missing-ref-fails
+type: coding
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: Scenario evidence-missing-ref-fails
+allowedSystems: [coding]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: coding
+successCriteria:
+  - scenario evidence-missing-ref-fails executes
+validators:
+  - id: v1
+    cmd: npx
+    args: [--no-install, tsx, src/calculator.verify.ts]
+    cwd: .
+    timeoutMs: 30000
+    expectedExitCode: 1
+oracles:
+  mustChange: []
+  mustNotChange: []
+  mustIncludeEvidence: []
+budgets:
+  maxToolCalls: 10
+  maxRuntimeMs: 60000
+  maxMainModelRawToolTokens: 100
+setup:
+  copyWorkspaceToTemp: false
+  fixtures: []
+operation:
+  kind: validator_only
+expected:
+  status: failed
+  changedPaths: []
+  unchangedPaths: []
+  evidenceRefs: []

@@ -1,0 +1,37 @@
+schemaVersion: rector.global-scenario.v1
+id: coding-scripted-patch-pass-04
+title: coding-scripted-patch-pass-04
+type: coding
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: Scenario coding-scripted-patch-pass-04
+allowedSystems: [coding]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: coding
+successCriteria:
+  - scenario coding-scripted-patch-pass-04 executes
+validators:
+  - id: v1
+    cmd: npx
+    args: [--no-install, tsx, src/calculator.verify.ts]
+    cwd: .
+    timeoutMs: 30000
+    expectedExitCode: 0
+oracles:
+  mustChange: []
+  mustNotChange: []
+  mustIncludeEvidence: []
+budgets:
+  maxToolCalls: 10
+  maxRuntimeMs: 60000
+  maxMainModelRawToolTokens: 100
+setup:
+  copyWorkspaceToTemp: false
+  fixtures: []
+operation:
+  kind: scripted_patch
+  patchFile: fix-add.patch
+expected:
+  status: passed
+  changedPaths: ["src/calculator.ts"]
+  unchangedPaths: []
+  evidenceRefs: []

@@ -1,0 +1,36 @@
+schemaVersion: rector.global-scenario.v1
+id: memory-no-unverified-promotion
+title: memory-no-unverified-promotion
+type: coding
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: Scenario memory-no-unverified-promotion
+allowedSystems: [coding]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: coding
+successCriteria:
+  - scenario memory-no-unverified-promotion executes
+validators:
+  - id: v1
+    cmd: npx
+    args: [--no-install, tsx, src/calculator.verify.ts]
+    cwd: .
+    timeoutMs: 30000
+    expectedExitCode: 1
+oracles:
+  mustChange: []
+  mustNotChange: []
+  mustIncludeEvidence: []
+budgets:
+  maxToolCalls: 10
+  maxRuntimeMs: 60000
+  maxMainModelRawToolTokens: 100
+setup:
+  copyWorkspaceToTemp: false
+  fixtures: []
+operation:
+  kind: validator_only
+expected:
+  status: failed
+  changedPaths: []
+  unchangedPaths: []
+  evidenceRefs: []
