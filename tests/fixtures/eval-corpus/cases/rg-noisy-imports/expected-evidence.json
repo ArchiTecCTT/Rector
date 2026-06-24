@@ -2,13 +2,20 @@
   "schemaVersion": "rector.capability.evidence.v1",
   "capabilityId": "cartographer.grounding",
   "caseId": "rg-noisy-imports",
-  "summary": "x",
+  "summary": "Compact evidence for large noisy rg output",
   "evidence": [
     {
-      "kind": "summary",
-      "excerpt": "src/tools/middleware.ts:1:1:import { redactSecrets, redactString } from \"../security/redaction\";|src/tools/types.ts:13:1:import type { IterationBudget } from \"../orchestration/turnBudget\";",
+      "kind": "code_reference",
+      "excerpt": "src/tools/middleware.ts:1:1:import { redactSecrets, redactString } from \"../security/redaction\";",
       "relevance": "high",
-      "confidence": 0.5,
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://offline/rg-noisy-imports/artifact.txt"
+    },
+    {
+      "kind": "code_reference",
+      "excerpt": "src/tools/types.ts:13:1:import type { IterationBudget } from \"../orchestration/turnBudget\";",
+      "relevance": "high",
+      "confidence": 0.95,
       "rawArtifactRef": "artifact://offline/rg-noisy-imports/artifact.txt"
     }
   ],
@@ -25,7 +32,5 @@
     "passed": true
   },
   "warnings": [],
-  "rawArtifactRefs": [
-    "artifact://offline/rg-noisy-imports/artifact.txt"
-  ]
+  "rawArtifactRefs": ["artifact://offline/rg-noisy-imports/artifact.txt"]
 }

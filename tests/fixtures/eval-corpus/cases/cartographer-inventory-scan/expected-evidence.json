@@ -2,20 +2,27 @@
   "schemaVersion": "rector.capability.evidence.v1",
   "capabilityId": "cartographer.grounding",
   "caseId": "cartographer-inventory-scan",
-  "summary": "x",
+  "summary": "Compact evidence for large inventory artifact",
   "evidence": [
     {
       "kind": "summary",
-      "excerpt": ".gitattributes|tests/fixtures/eval-corpus/manifest.schema.ts",
+      "excerpt": "  \"name\": \"rector\",",
       "relevance": "high",
-      "confidence": 0.5,
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://offline/cartographer-inventory-scan/artifact.txt"
+    },
+    {
+      "kind": "summary",
+      "excerpt": "  \"lockfileVersion\": 3,",
+      "relevance": "high",
+      "confidence": 0.95,
       "rawArtifactRef": "artifact://offline/cartographer-inventory-scan/artifact.txt"
     }
   ],
   "coverage": {
     "coveredMustContain": [
-      ".gitattributes",
-      "tests/fixtures/eval-corpus/manifest.schema.ts"
+      "  \"name\": \"rector\",",
+      "  \"lockfileVersion\": 3,"
     ],
     "missingMustContain": [],
     "forbiddenHits": [],
@@ -25,7 +32,5 @@
     "passed": true
   },
   "warnings": [],
-  "rawArtifactRefs": [
-    "artifact://offline/cartographer-inventory-scan/artifact.txt"
-  ]
+  "rawArtifactRefs": ["artifact://offline/cartographer-inventory-scan/artifact.txt"]
 }

@@ -1,1 +1,1 @@
-rg --line-number --column --with-filename "import" src --max-count 30
+rg --line-number --column --with-filename "import|export|const|function|class|interface|type " src --max-count 2000

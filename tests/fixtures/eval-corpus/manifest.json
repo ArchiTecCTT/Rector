@@ -57,7 +57,7 @@
       "inputPaths": ["cases/rg-noisy-imports/artifact.txt"],
       "generatedFrom": {
         "tool": "rg",
-        "recordedCommand": "rg --line-number --column --with-filename \"import\" src --max-count 30",
+        "recordedCommand": "rg --line-number --column --with-filename \"import|export|const|function|class|interface|type \" src --max-count 2000",
         "exitCode": 0
       },
       "expectedEvidencePath": "cases/rg-noisy-imports/expected-evidence.json"
@@ -147,7 +147,7 @@
       "inputPaths": ["cases/cartographer-inventory-scan/artifact.txt"],
       "generatedFrom": {
         "tool": "git_ls_files",
-        "recordedCommand": "git ls-files --full-name | head -40",
+        "recordedCommand": "cat package-lock.json",
         "exitCode": 0
       },
       "expectedEvidencePath": "cases/cartographer-inventory-scan/expected-evidence.json"

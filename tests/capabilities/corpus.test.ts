@@ -163,6 +163,30 @@ describe("phase-0 eval corpus fixtures", () => {
     }
   });
 
+  it("enforces >=10x compression and >=0.80 raw_token_reduction for designated large cases", async () => {
+    const { estimateApproxTokensFromText } = await import("../../src/capabilities/eval/tokens");
+    const manifest = await loadManifest();
+    const largeCaseIds = ["rg-noisy-imports", "cartographer-inventory-scan"];
+
+    for (const caseId of largeCaseIds) {
+      const fixtureCase = manifest.cases.find((c) => c.id === caseId);
+      ok(fixtureCase);
+      ok(fixtureCase.expectedEvidencePath);
+
+      const artifact = await readCorpusText(fixtureCase.artifactPath);
+      const packetJson = await readCorpusJson(fixtureCase.expectedEvidencePath);
+      const packet = CapabilityEvidencePacketSchema.parse(packetJson);
+
+      const rawTokens = estimateApproxTokensFromText(artifact);
+      const evidenceTokens = estimateApproxTokensFromText(JSON.stringify(packet));
+      const compression = evidenceTokens === 0 ? 0 : rawTokens / evidenceTokens;
+      const rawTokenReduction = evidenceTokens === 0 || evidenceTokens >= rawTokens ? 0 : 1 - evidenceTokens / rawTokens;
+
+      expect(compression).toBeGreaterThanOrEqual(10);
+      expect(rawTokenReduction).toBeGreaterThanOrEqual(0.8);
+    }
+  });
+
   it("proves validateEvidenceCoverage rejects a packet that omits a required mustContain", async () => {
     const manifest = await loadManifest();
     const firstCase = manifest.cases[0];
