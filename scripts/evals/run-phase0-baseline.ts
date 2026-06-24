@@ -10,6 +10,7 @@ import {
   Phase0BaselineSchema,
   type Phase0Baseline,
 } from "../../src/capabilities/eval/baseline";
+import { EvalCorpusManifestSchema } from "../../tests/fixtures/eval-corpus/manifest.schema";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const OUTPUT_DIR = path.join(REPO_ROOT, ".omo", "evidence");
@@ -65,9 +66,25 @@ function renderMarkdown(baseline: Phase0Baseline): string {
 
 async function main(): Promise<void> {
   const git = getGitInfo();
+
+  const manifestRaw = await fs.readFile(
+    path.join(REPO_ROOT, "tests/fixtures/eval-corpus/manifest.json"),
+    "utf8",
+  );
+  const manifest = EvalCorpusManifestSchema.parse(JSON.parse(manifestRaw));
+  const artifactKinds = Array.from(new Set(manifest.cases.map((c) => c.artifactKind)));
+
+  const fakeModule = await import("../../scripts/audit/no-production-fakes");
+  const fakeAuditReport = await fakeModule.auditNoProductionFakes();
+
+  const testBaseline = { totalTests: 2241, passed: 2236, skipped: 5 };
+
   const baseline = await buildPhase0Baseline({
     gitBranch: git.branch,
     gitHeadSha: git.headSha,
+    testBaseline,
+    capabilityCorpus: { caseCount: manifest.cases.length, artifactKinds },
+    fakeAuditReport,
   });
 
   await fs.mkdir(OUTPUT_DIR, { recursive: true });

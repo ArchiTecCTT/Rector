@@ -76,6 +76,7 @@ export async function buildPhase0Baseline(options: {
   gitHeadSha?: string;
   testBaseline?: { totalTests: number; passed: number; skipped: number };
   capabilityCorpus?: { caseCount: number; artifactKinds: string[] };
+  fakeAuditReport?: NoProductionFakesAuditReport;
 }): Promise<Phase0Baseline> {
   const now = options.now ?? (() => new Date());
   const gitBranch = options.gitBranch ?? "rector-0.3.0-phase0-and-0.5";
@@ -83,13 +84,14 @@ export async function buildPhase0Baseline(options: {
   const testBaseline = options.testBaseline ?? { totalTests: 2241, passed: 2236, skipped: 5 };
   const capabilityCorpus = options.capabilityCorpus ?? { caseCount: 10, artifactKinds: ["text/plain"] };
 
-  const fakeReport: NoProductionFakesAuditReport = {
-    scanRoot: ".",
-    scannedFileCount: 0,
-    findingCount: 0,
-    exitCode: 0,
-    findings: [],
-  };
+  const fakeReport: NoProductionFakesAuditReport =
+    options.fakeAuditReport ?? {
+      scanRoot: ".",
+      scannedFileCount: 0,
+      findingCount: 0,
+      exitCode: 0,
+      findings: [],
+    };
   const perRule: Record<string, number> = {};
   for (const f of fakeReport.findings) {
     perRule[f.ruleId] = (perRule[f.ruleId] ?? 0) + 1;

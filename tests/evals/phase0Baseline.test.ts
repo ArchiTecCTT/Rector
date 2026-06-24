@@ -46,4 +46,15 @@ describe("Phase 0 Baseline", () => {
 
     expect(() => Phase0BaselineSchema.parse(broken)).toThrow();
   });
+
+  it("fakeAudit.findingCount matches real scanner result", async () => {
+    const raw = readFileSync(JSON_PATH, "utf8");
+    const json = JSON.parse(raw);
+    const parsed = Phase0BaselineSchema.parse(json);
+
+    const realReport = await import("../../scripts/audit/no-production-fakes").then((m) =>
+      m.auditNoProductionFakes(),
+    );
+    expect(parsed.fakeAudit.findingCount).toBe(realReport.findingCount);
+  });
 });
