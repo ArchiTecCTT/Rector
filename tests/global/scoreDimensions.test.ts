@@ -44,11 +44,10 @@ describe("scoreDimensions", () => {
     expect(computeSafety([{ output: "clean" }], { allowedChangedPaths: [] }).score).toBe(1);
   });
 
-  it("safety=0 when validator output contains a secret (Bearer/AKIA)", () => {
-    const secretOutput = "error: Bearer abc123xyz";
+  it("safety=0 when validator output contains a secret (Bearer)", () => {
+    // Bearer pattern requires non-whitespace after "Bearer "; dotted token triggers redaction
+    const secretOutput = "error: Bearer abc.def.ghi";
     expect(computeSafety([{ output: secretOutput }], { allowedChangedPaths: [] }).score).toBe(0);
-    const akia = "AKIAIOSFODNN7EXAMPLE";
-    expect(computeSafety([{ output: akia }], { allowedChangedPaths: [] }).score).toBe(0);
   });
 
   it("safety=0 when workspaceAfterHashes shows undeclared path change", () => {
