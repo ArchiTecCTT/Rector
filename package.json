@@ -39,6 +39,7 @@
     "check": "tsc --noEmit",
     "audit:no-fakes": "tsx scripts/audit/no-production-fakes.ts",
     "eval:capabilities": "tsx scripts/evals/run-capability-evals.ts",
+    "eval:capabilities:gate": "tsx scripts/evals/run-capability-evals.ts --gate",
     "eval:capabilities:report": "tsx scripts/evals/run-capability-evals.ts && cat .omo/evidence/eval-report.md",
     "test": "vitest run",
     "test:global": "tsx scripts/evals/run-global-harness.ts",

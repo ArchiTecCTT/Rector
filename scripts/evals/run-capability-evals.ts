@@ -282,9 +282,20 @@ function isMain(): boolean {
   return fileURLToPath(import.meta.url) === path.resolve(entry);
 }
 
+function parseMode(): "report-only" | "gate" {
+  const args = process.argv.slice(2);
+  if (args.includes("--gate")) return "gate";
+  return "report-only";
+}
+
+function isGateMode(): boolean {
+  return parseMode() === "gate";
+}
+
 async function main(): Promise<void> {
+  const mode = parseMode();
   const output = await runCapabilityEvals();
-  const { summary } = output;
+  const { summary, results } = output;
   const metricLine = CAPABILITY_EVAL_METRIC_IDS.map((id) => {
     const score = summary.metrics[id];
     const value = score.value === undefined ? "n/a" : score.value;
@@ -302,8 +313,49 @@ async function main(): Promise<void> {
       .filter((line) => line.length > 0)
       .join("\n") + "\n",
   );
-  // Exit 0 on successful report PRODUCTION. Aggregate threshold attainment on tiny offline fixtures
-  // is reported honestly, not used to fail the offline harness gate.
+
+  if (mode === "report-only") {
+    // Exit 0 on successful report PRODUCTION. Aggregate threshold attainment on tiny offline fixtures
+    // is reported honestly, not used to fail the offline harness gate.
+    return;
+  }
+
+  // GATE MODE: strict exit 1 on ANY failure condition
+  const failures: string[] = [];
+
+  // 1. Per-case oracle failure
+  for (const r of results) {
+    if (!r.passed) failures.push(`case ${r.caseId} failed oracle`);
+  }
+
+  // 2. Aggregate thresholds fail
+  if (!summary.passed) failures.push("aggregate thresholds not met");
+
+  // 3. Any required metric missing (insufficient_data)
+  for (const id of CAPABILITY_EVAL_METRIC_IDS) {
+    if (summary.metrics[id]?.status === "insufficient_data") {
+      failures.push(`metric ${id} missing`);
+    }
+  }
+
+  // 4. Artifact refs missing/unreadable (report already validates refs exist)
+  for (const r of results) {
+    if (!r.rawArtifactRefs || r.rawArtifactRefs.length === 0) {
+      failures.push(`case ${r.caseId} missing rawArtifactRefs`);
+    }
+  }
+
+  // 5. Evidence packet coverage already validated in scoring; missing refs surface as failures above
+
+  // 6. Compression/raw_token_reduction computed via estimateApproxTokensFromText
+  //    (guaranteed by runner implementation; absence of numeric values already caught as insufficient_data)
+
+  if (failures.length > 0) {
+    process.stderr.write(`[capability-evals:gate] FAIL: ${failures.join("; ")}\n`);
+    process.exitCode = 1;
+  } else {
+    process.stdout.write("[capability-evals:gate] PASS\n");
+  }
 }
 
 if (isMain()) {
