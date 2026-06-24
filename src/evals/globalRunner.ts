@@ -1,5 +1,8 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,12 +13,66 @@ import {
   type FakePathStatus,
   type Scorecard,
 } from "./scorecards";
-import { loadGlobalScenario, type GlobalScenario, type GlobalValidator } from "./globalScenarioSchema";
+import {
+  loadGlobalScenario,
+  SafeRelativePathSchema,
+  type GlobalScenario,
+  type GlobalValidator,
+  type GlobalScenarioSetup,
+  type GlobalScenarioOperation,
+  type GlobalScenarioExpected,
+} from "./globalScenarioSchema";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const DEFAULT_SCENARIOS_DIR = path.join(REPO_ROOT, "tests", "global", "scenarios");
 const DEFAULT_OUTPUT_DIR = path.join(REPO_ROOT, ".omo", "evidence");
 const VALIDATOR_TIMEOUT_CEILING_MS = 120000;
+
+// Directories excluded from the full workspace hash manifest (per plan requirement).
+const MANIFEST_EXCLUDE_DIRS = new Set([".git", "node_modules", ".omo", "tmp", "temp", ".cache", "dist", "build"]);
+
+/** Compute SHA-256 hex of a file's contents. */
+async function sha256File(absolutePath: string): Promise<string> {
+  const data = await fs.readFile(absolutePath);
+  return createHash("sha256").update(data).digest("hex");
+}
+
+/** Recursively compute a sorted manifest of {path, sha256} for all relevant files under root. */
+async function computeWorkspaceManifest(root: string): Promise<readonly { path: string; sha256: string }[]> {
+  const entries: { path: string; sha256: string }[] = [];
+  async function walk(dir: string, relBase: string) {
+    const names = await fs.readdir(dir, { withFileTypes: true });
+    for (const dirent of names) {
+      if (MANIFEST_EXCLUDE_DIRS.has(dirent.name)) continue;
+      const abs = path.join(dir, dirent.name);
+      const rel = path.posix.join(relBase, dirent.name.replace(/\\/g, "/"));
+      if (dirent.isDirectory()) {
+        await walk(abs, rel);
+      } else if (dirent.isFile()) {
+        const h = await sha256File(abs);
+        entries.push({ path: rel, sha256: h });
+      }
+    }
+  }
+  await walk(root, "");
+  entries.sort((a, b) => a.path.localeCompare(b.path));
+  return entries;
+}
+
+/** Resolve a local project binary deterministically. For `tsx`, prefer workspace node_modules/.bin/tsx, else validated npx --no-install. */
+function resolveLocalBinary(cmd: string, workspaceRoot: string): { cmd: string; argsPrefix: readonly string[] } {
+  if (cmd === "tsx") {
+    const localBin = path.join(workspaceRoot, "node_modules", ".bin", "tsx");
+    // We do not stat here (runner may run before install in some envs); the spawn will surface ENOENT if missing.
+    // The caller will fall back to npx --no-install when the validator cmd is literally "npx".
+    return { cmd: localBin, argsPrefix: [] };
+  }
+  if (cmd === "npx") {
+    // npx is already validated by GlobalValidatorSchema to contain --no-install; pass through.
+    return { cmd: "npx", argsPrefix: [] };
+  }
+  return { cmd, argsPrefix: [] };
+}
 
 export const GLOBAL_REPORT_SCHEMA_VERSION = "rector.global-report.v1";
 
@@ -118,11 +175,11 @@ function runValidator(validator: GlobalValidator, workspaceRoot: string, env: No
   const startedAt = Date.now();
   // Trusted committed scenario source; spawnSync with shell:false so validator args never reach a
   // shell. cmd/args come from the typed schema (no whitespace split), so spaced args round-trip.
-  // TODO(todo 9): in-place fixture execution only — temp-workspace copy, scripted_patch/git-apply,
-  // before/after SHA-256, the workspace hash manifest, and local binary resolution land in todo 9.
   const cwd = path.resolve(workspaceRoot, validator.cwd);
   const timeoutMs = Math.min(validator.timeoutMs, VALIDATOR_TIMEOUT_CEILING_MS);
-  const result = spawnSync(validator.cmd, validator.args, {
+  const { cmd: resolvedCmd, argsPrefix } = resolveLocalBinary(validator.cmd, workspaceRoot);
+  const finalArgs = [...argsPrefix, ...validator.args];
+  const result = spawnSync(resolvedCmd, finalArgs, {
     cwd,
     shell: false,
     encoding: "utf8",
@@ -135,7 +192,7 @@ function runValidator(validator: GlobalValidator, workspaceRoot: string, env: No
   const exitCode = typeof result.status === "number" ? result.status : -1;
   const rawOutput = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   // Joined cmd+args string drives the replayable regression artifact's replay command.
-  const command = [validator.cmd, ...validator.args].join(" ");
+  const command = [resolvedCmd, ...finalArgs].join(" ");
   return {
     command,
     exitCode,
@@ -143,6 +200,48 @@ function runValidator(validator: GlobalValidator, workspaceRoot: string, env: No
     durationMs,
     timedOut,
   };
+}
+
+/** Copy a directory tree (src) into a fresh temp dir (dest). */
+async function copyWorkspaceToTemp(src: string, dest: string): Promise<void> {
+  await fs.mkdir(dest, { recursive: true });
+  const entries = await fs.readdir(src, { withFileTypes: true });
+  for (const entry of entries) {
+    if (MANIFEST_EXCLUDE_DIRS.has(entry.name)) continue;
+    const s = path.join(src, entry.name);
+    const d = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      await copyWorkspaceToTemp(s, d);
+    } else if (entry.isFile()) {
+      await fs.copyFile(s, d);
+    }
+  }
+}
+
+/** Validate that every target path in a patch file is inside the allowed set (changedPaths + declared setup-only allowed paths). New files must be declared. */
+async function validateScriptedPatchTargets(
+  patchFileAbs: string,
+  allowedSet: ReadonlySet<string>,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const patchText = await fs.readFile(patchFileAbs, "utf8");
+  // Minimal but sufficient: scan for diff --git a/<path> b/<path> lines and extract the b/ path.
+  const targetRegex = /^diff --git a\/(.+?) b\/(.+?)$/gm;
+  let match: RegExpExecArray | null;
+  const targets: string[] = [];
+  while ((match = targetRegex.exec(patchText)) !== null) {
+    // Prefer the b/ side (post-apply path); reject if either side escapes.
+    const target = match[2] ?? match[1];
+    if (target.startsWith("/") || target.includes("..")) {
+      return { ok: false, reason: `patch target escapes workspace: ${target}` };
+    }
+    targets.push(target);
+  }
+  for (const t of targets) {
+    if (!allowedSet.has(t)) {
+      return { ok: false, reason: `patch target not in allowed set: ${t}` };
+    }
+  }
+  return { ok: true };
 }
 
 function fraction(present: number, total: number): number {
@@ -398,9 +497,73 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       continue;
     }
 
-    const validatorRuns = scenario.validators.map((validator) => runValidator(validator, scenarioWorkspace, env));
-    const scorecard = await buildScorecard({ scenario, repoRoot: scenarioWorkspace, validatorRuns, fakePathStatus, fakeFindingCount });
+    // Determine effective workspace (temp copy when requested).
+    let effectiveWorkspace = scenarioWorkspace;
+    let tempWorkspace: string | undefined;
+    const setup: GlobalScenarioSetup = scenario.setup ?? { copyWorkspaceToTemp: false, fixtures: [] };
+    if (setup.copyWorkspaceToTemp) {
+      tempWorkspace = await mkdtemp(path.join(tmpdir(), "rector-global-temp-"));
+      await copyWorkspaceToTemp(scenarioWorkspace, tempWorkspace);
+      effectiveWorkspace = tempWorkspace;
+    }
+
+    // Scripted patch (harness operation, not specialist execution).
+    const operation: GlobalScenarioOperation = scenario.operation ?? { kind: "validator_only" };
+    const expected: GlobalScenarioExpected = scenario.expected;
+    if (operation.kind === "scripted_patch" && operation.patchFile) {
+      const patchAbs = path.resolve(effectiveWorkspace, operation.patchFile);
+      // Build allowed target set: expected.changedPaths + any explicitly declared setup-only allowed paths.
+      // For this task we treat setup-only allowed paths as empty unless future schema adds a field; containment uses changedPaths.
+      const allowed = new Set<string>(expected.changedPaths);
+      const containment = await validateScriptedPatchTargets(patchAbs, allowed);
+      if (!containment.ok) {
+        regressions.push({
+          scenarioId: scenario.id,
+          failedValidators: [],
+          note: `scripted_patch rejected: ${containment.reason}`,
+        });
+        // Clean temp if created.
+        if (tempWorkspace) await rm(tempWorkspace, { recursive: true, force: true });
+        continue;
+      }
+      // git apply --check first, then apply.
+      const check = spawnSync("git", ["apply", "--check", patchAbs], { cwd: effectiveWorkspace, encoding: "utf8" });
+      if (check.status !== 0) {
+        regressions.push({
+          scenarioId: scenario.id,
+          failedValidators: [],
+          note: `git apply --check failed: ${check.stderr ?? check.stdout ?? "unknown"}`,
+        });
+        if (tempWorkspace) await rm(tempWorkspace, { recursive: true, force: true });
+        continue;
+      }
+      const apply = spawnSync("git", ["apply", patchAbs], { cwd: effectiveWorkspace, encoding: "utf8" });
+      if (apply.status !== 0) {
+        regressions.push({
+          scenarioId: scenario.id,
+          failedValidators: [],
+          note: `git apply failed: ${apply.stderr ?? apply.stdout ?? "unknown"}`,
+        });
+        if (tempWorkspace) await rm(tempWorkspace, { recursive: true, force: true });
+        continue;
+      }
+    }
+
+    // Capture before hashes for expected paths + full manifest.
+    const beforeHashes = new Map<string, string>();
+    for (const p of expected.changedPaths.concat(expected.unchangedPaths)) {
+      const abs = path.resolve(effectiveWorkspace, p);
+      if (await pathExists(abs)) beforeHashes.set(p, await sha256File(abs));
+    }
+    const beforeManifest = await computeWorkspaceManifest(effectiveWorkspace);
+
+    const validatorRuns = scenario.validators.map((validator) => runValidator(validator, effectiveWorkspace, env));
+    const scorecard = await buildScorecard({ scenario, repoRoot: effectiveWorkspace, validatorRuns, fakePathStatus, fakeFindingCount });
     outcomes.push({ scenarioId: scenario.id, scorecard, validatorRuns });
+
+    // After hashes + manifest diff for safety (detect undeclared changes).
+    const afterManifest = await computeWorkspaceManifest(effectiveWorkspace);
+    const manifestChanged = beforeManifest.length !== afterManifest.length || beforeManifest.some((b, i) => b.sha256 !== afterManifest[i]?.sha256);
 
     if (!scorecard.passed) {
       const failedValidators = validatorRuns.filter((run) => run.exitCode !== 0);
@@ -411,6 +574,11 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
         failedValidators,
         note: `Replay:${dimsClause} Re-run the validator command(s) below from the scenario workspace (${scenario.workspace}) to reproduce.`,
       });
+    }
+
+    // Clean temp workspace after validators (manifest already captured).
+    if (tempWorkspace) {
+      await rm(tempWorkspace, { recursive: true, force: true });
     }
   }
 

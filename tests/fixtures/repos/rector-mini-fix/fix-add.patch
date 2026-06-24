@@ -1,0 +1,11 @@
+diff --git a/src/calculator.ts b/src/calculator.ts
+index 1234567..abcdefg 100644
+--- a/src/calculator.ts
++++ b/src/calculator.ts
+@@ -1,5 +1,5 @@
+ export function add(a: number, b: number): number {
+-  return a - b;
++  return a + b;
+ }
+ 
+ export function sub(a: number, b: number): number {
