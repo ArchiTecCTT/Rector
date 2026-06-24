@@ -1,0 +1,29 @@
+> rector@0.3.0-alpha.1 audit:no-fakes
+> tsx scripts/audit/no-production-fakes.ts
+
+Rector no-production-fakes audit (report-only)
+Scan root: src
+Scanned files: 192
+Findings: 40
+Policy: exits 0 even when fake-system seams are found; nonzero exits are reserved for internal audit errors.
+- executor_simulator_import src/api/server.ts:9:42 — non-test src must not import executorSimulator outside simulation adapters — from "../orchestration/executorSimulator"
+- fake_llm_provider src/bin/server.ts:343:14 — product code must not select FakeLLMProvider under configured profile — FakeLLMProvider
+- executor_simulator_import src/orchestration/chatRunner.ts:5:42 — non-test src must not import executorSimulator outside simulation adapters — from "./executorSimulator"
+- fake_planner_output src/orchestration/deepPlanner.ts:2:10 — executable fake planner output must not satisfy product planner contracts — createFakePlan
+- fake_planner_output src/orchestration/deepPlanner.ts:78:11 — executable fake planner output must not satisfy product planner contracts — createFakePlan
+- fake_planner_output src/orchestration/deepPlanner.ts:81:22 — executable fake planner output must not satisfy product planner contracts — createFakePlan
+- fake_planner_output src/orchestration/deepPlanner.ts:98:22 — executable fake planner output must not satisfy product planner contracts — createFakePlan
+- fake_planner_output src/orchestration/deepPlanner.ts:353:11 — executable fake planner output must not satisfy product planner contracts — fallbackPlan
+- fake_planner_output src/orchestration/deepPlanner.ts:353:26 — executable fake planner output must not satisfy product planner contracts — createFakePlan
+- fake_planner_output src/orchestration/deepPlanner.ts:354:84 — executable fake planner output must not satisfy product planner contracts — fallbackPlan
+- fake_planner_output src/orchestration/deepPlanner.ts:358:13 — executable fake planner output must not satisfy product planner contracts — fallbackPlan
+- workspace_validate_passed_true src/orchestration/executorSimulator.ts:469:7 — workspace.validate must not return passed:true without a command or artifact validator — passed: true
+- simulator_echo_registration src/orchestration/executorSimulator.ts:492:11 — simulator.echo must not be registered outside test or dev registration — simulator.echo
+- executor_simulator_import src/orchestration/index.ts:4:10 — non-test src must not import executorSimulator outside simulation adapters — from "./executorSimulator"
+- fake_planner_output src/orchestration/planner.ts:164:17 — executable fake planner output must not satisfy product planner contracts — createFakePlan
+- fake_planner_output src/orchestration/planner.ts:542:3 — executable fake planner output must not satisfy product planner contracts — fallbackPlan
+- fake_planner_output src/orchestration/planner.ts:570:25 — executable fake planner output must not satisfy product planner contracts — createFakePlan
+- fake_planner_output src/orchestration/planner.ts:619:9 — executable fake planner output must not satisfy product planner contracts — createFakePlan
+- fake_planner_output src/orchestration/planner.ts:637:9 — executable fake planner output must not satisfy product planner contracts — createFakePlan
+- fake_planner_output src/orchestration/planner.ts:673:5 — executable fake planner output must not satisfy product planner contracts — createFakePlan
+- fake_planner_output src/orchestration/planner.ts:687:55 — executable fake planner output must not satisfy product planner contracts — createFakePlan

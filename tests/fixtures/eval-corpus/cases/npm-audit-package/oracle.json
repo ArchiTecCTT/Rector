@@ -1,0 +1,10 @@
+{
+  "caseId": "npm-audit-package",
+  "artifactKind": "package_diagnostic",
+  "expectedExitCode": 0,
+  "expectedLineCount": 1,
+  "mustContain": [
+    "found 0 vulnerabilities"
+  ],
+  "mustNotContain": ["[REDACTED]"]
+}

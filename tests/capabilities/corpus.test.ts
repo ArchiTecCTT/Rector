@@ -15,7 +15,15 @@ import {
 
 const corpusRoot = new URL("../fixtures/eval-corpus/", import.meta.url);
 
-const REQUIRED_ARTIFACT_KINDS = ["rg_output", "tsc_no_emit_error", "git_diff"] as const satisfies readonly EvalCorpusArtifactKind[];
+const REQUIRED_ARTIFACT_KINDS = [
+  "rg_output",
+  "tsc_no_emit_error",
+  "git_diff",
+  "test_log",
+  "fake_audit_report",
+  "package_diagnostic",
+  "cartographer_inventory",
+] as const satisfies readonly EvalCorpusArtifactKind[];
 
 async function readCorpusText(relativePath: string): Promise<string> {
   return readFile(join(corpusRoot.pathname, relativePath), "utf8");

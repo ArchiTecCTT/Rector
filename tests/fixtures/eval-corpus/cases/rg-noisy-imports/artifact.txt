@@ -1,0 +1,30 @@
+src/tools/middleware.ts:1:1:import { redactSecrets, redactString } from "../security/redaction";
+src/tools/middleware.ts:2:1:import type { SandboxApproval } from "../sandbox";
+src/tools/middleware.ts:3:1:import type { ToolRegistry } from "./registry";
+src/tools/middleware.ts:4:1:import {
+src/tools/registry.ts:1:1:import { redactSecrets, redactString } from "../security/redaction";
+src/tools/registry.ts:2:1:import {
+src/tools/builtinTools.ts:1:1:import { WorkspaceSandboxAdapter, SandboxOperationSchema, type SandboxOperationInput } from "../sandbox";
+src/tools/builtinTools.ts:2:1:import { redactSecrets } from "../security/redaction";
+src/tools/builtinTools.ts:3:1:import { ToolRegistry } from "./registry";
+src/tools/builtinTools.ts:4:1:import { toolSuccess, type ToolHandlerContext, type ToolRegistryEntry } from "./types";
+src/tools/types.ts:1:1:import { z } from "zod";
+src/tools/types.ts:3:1:import type { RunPhase } from "../protocol/phases";
+src/tools/types.ts:4:1:import type {
+src/tools/types.ts:12:1:import type { Budget } from "../store/schemas";
+src/tools/types.ts:13:1:import type { IterationBudget } from "../orchestration/turnBudget";
+src/systems/registry.ts:1:1:import {
+src/systems/contracts.ts:1:1:import { z } from "zod";
+src/evals/scorecards.ts:1:1:import { z } from "zod";
+src/evals/scoreDimensions.ts:1:1:import { z } from "zod";
+src/evals/scoreDimensions.ts:2:1:import type { RunEvent } from "../protocol/events";
+src/evals/scoreDimensions.ts:3:1:import type { SpecialistTaskPacket } from "../systems/contracts";
+src/evals/globalRunner.ts:1:1:import { spawnSync } from "node:child_process";
+src/evals/globalRunner.ts:2:1:import { createHash } from "node:crypto";
+src/evals/globalRunner.ts:3:1:import { promises as fs } from "node:fs";
+src/evals/globalRunner.ts:4:1:import { mkdtemp, rm } from "node:fs/promises";
+src/evals/globalRunner.ts:5:1:import { tmpdir } from "node:os";
+src/evals/globalRunner.ts:6:1:import path from "node:path";
+src/evals/globalRunner.ts:7:1:import { fileURLToPath } from "node:url";
+src/evals/globalRunner.ts:9:1:import { redactString } from "../security/redaction";
+src/evals/globalRunner.ts:10:1:import {

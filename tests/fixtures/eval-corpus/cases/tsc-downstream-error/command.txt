@@ -1,0 +1,1 @@
+npx tsc --noEmit --pretty false tests/fixtures/eval-corpus/cases/tsc-downstream-error/src/broken.ts

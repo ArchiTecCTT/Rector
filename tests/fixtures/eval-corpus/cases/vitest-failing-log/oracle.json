@@ -1,0 +1,11 @@
+{
+  "caseId": "vitest-failing-log",
+  "artifactKind": "test_log",
+  "expectedExitCode": 1,
+  "expectedLineCount": 7,
+  "mustContain": [
+    "No test files found, exiting with code 1",
+    "filter:"
+  ],
+  "mustNotContain": ["[REDACTED]"]
+}

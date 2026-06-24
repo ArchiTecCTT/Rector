@@ -1,9 +1,17 @@
 import { z } from "zod";
 
-export const EvalCorpusArtifactKindSchema = z.enum(["rg_output", "tsc_no_emit_error", "git_diff"]);
+export const EvalCorpusArtifactKindSchema = z.enum([
+  "rg_output",
+  "tsc_no_emit_error",
+  "git_diff",
+  "test_log",
+  "fake_audit_report",
+  "package_diagnostic",
+  "cartographer_inventory",
+]);
 export type EvalCorpusArtifactKind = z.infer<typeof EvalCorpusArtifactKindSchema>;
 
-export const EvalCorpusCommandToolSchema = z.enum(["rg", "tsc", "git"]);
+export const EvalCorpusCommandToolSchema = z.enum(["rg", "tsc", "git", "vitest", "npm", "audit_no_fakes", "git_ls_files"]);
 export type EvalCorpusCommandTool = z.infer<typeof EvalCorpusCommandToolSchema>;
 
 const RelativeCorpusPathSchema = z
@@ -77,6 +85,14 @@ export function expectedToolForArtifact(kind: EvalCorpusArtifactKind): EvalCorpu
       return "tsc";
     case "git_diff":
       return "git";
+    case "test_log":
+      return "vitest";
+    case "fake_audit_report":
+      return "audit_no_fakes";
+    case "package_diagnostic":
+      return "npm";
+    case "cartographer_inventory":
+      return "git_ls_files";
     default: {
       const unreachable: never = kind;
       return unreachable;

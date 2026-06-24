@@ -1,0 +1,8 @@
+{
+  "command": "npx vitest run /tmp/vitest-case/failing.test.ts --reporter=verbose",
+  "toolVersion": "vitest 4.1.8",
+  "capturedAt": "2026-06-24T10:20:00+08:00",
+  "platform": "linux x86_64",
+  "exitCode": 1,
+  "regenerableInCi": true
+}

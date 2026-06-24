@@ -1,0 +1,11 @@
+{
+  "caseId": "rg-noisy-imports",
+  "artifactKind": "rg_output",
+  "expectedExitCode": 0,
+  "expectedLineCount": 30,
+  "mustContain": [
+    "src/tools/middleware.ts:1:1:import { redactSecrets, redactString } from \"../security/redaction\";",
+    "src/tools/types.ts:13:1:import type { IterationBudget } from \"../orchestration/turnBudget\";"
+  ],
+  "mustNotContain": ["[REDACTED]", "api_key=", "Bearer "]
+}

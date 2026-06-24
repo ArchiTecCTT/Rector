@@ -1,0 +1,8 @@
+{
+  "command": "git diff --no-index package.json package-lock.json",
+  "toolVersion": "git 2.43.0",
+  "capturedAt": "2026-06-24T10:22:00+08:00",
+  "platform": "linux x86_64",
+  "exitCode": 1,
+  "regenerableInCi": true
+}

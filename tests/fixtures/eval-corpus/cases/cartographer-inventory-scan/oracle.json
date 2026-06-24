@@ -1,0 +1,11 @@
+{
+  "caseId": "cartographer-inventory-scan",
+  "artifactKind": "cartographer_inventory",
+  "expectedExitCode": 0,
+  "expectedLineCount": 63,
+  "mustContain": [
+    ".gitattributes",
+    "tests/fixtures/eval-corpus/manifest.schema.ts"
+  ],
+  "mustNotContain": ["[REDACTED]"]
+}

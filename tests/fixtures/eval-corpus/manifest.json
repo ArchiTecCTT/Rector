@@ -1,6 +1,6 @@
 {
   "schemaVersion": "phase0.eval-corpus.v1",
-  "description": "Offline phase-0 eval corpus with real command artifacts for search, TypeScript diagnostics, and git diffs.",
+  "description": "Offline phase-0 eval corpus with real command artifacts for search, TypeScript diagnostics, git diffs, test logs, audits, and cartographer inventory.",
   "cases": [
     {
       "id": "rg-orchestration-search",
@@ -42,6 +42,104 @@
         "tool": "git",
         "recordedCommand": "git diff --no-index before.ts after.ts",
         "exitCode": 1
+      }
+    },
+    {
+      "id": "rg-noisy-imports",
+      "title": "Real noisy/large rg output (30 import matches from src)",
+      "artifactKind": "rg_output",
+      "commandPath": "cases/rg-noisy-imports/command.txt",
+      "artifactPath": "cases/rg-noisy-imports/artifact.txt",
+      "oraclePath": "cases/rg-noisy-imports/oracle.json",
+      "inputPaths": ["cases/rg-noisy-imports/artifact.txt"],
+      "generatedFrom": {
+        "tool": "rg",
+        "recordedCommand": "rg --line-number --column --with-filename \"import\" src --max-count 30",
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "tsc-downstream-error",
+      "title": "Real tsc --noEmit downstream type error (number→string)",
+      "artifactKind": "tsc_no_emit_error",
+      "commandPath": "cases/tsc-downstream-error/command.txt",
+      "artifactPath": "cases/tsc-downstream-error/artifact.txt",
+      "oraclePath": "cases/tsc-downstream-error/oracle.json",
+      "inputPaths": ["cases/tsc-downstream-error/artifact.txt"],
+      "generatedFrom": {
+        "tool": "tsc",
+        "recordedCommand": "npx tsc --noEmit --pretty false tests/fixtures/eval-corpus/cases/tsc-downstream-error/src/broken.ts",
+        "exitCode": 1
+      }
+    },
+    {
+      "id": "vitest-failing-log",
+      "title": "Real vitest failing test log (intentional expect fail)",
+      "artifactKind": "test_log",
+      "commandPath": "cases/vitest-failing-log/command.txt",
+      "artifactPath": "cases/vitest-failing-log/artifact.txt",
+      "oraclePath": "cases/vitest-failing-log/oracle.json",
+      "inputPaths": ["cases/vitest-failing-log/artifact.txt"],
+      "generatedFrom": {
+        "tool": "vitest",
+        "recordedCommand": "npx vitest run /tmp/vitest-case/failing.test.ts --reporter=verbose",
+        "exitCode": 1
+      }
+    },
+    {
+      "id": "git-risky-multi-file",
+      "title": "Real git diff of risky multi-file change (package.json + lock)",
+      "artifactKind": "git_diff",
+      "commandPath": "cases/git-risky-multi-file/command.txt",
+      "artifactPath": "cases/git-risky-multi-file/artifact.txt",
+      "oraclePath": "cases/git-risky-multi-file/oracle.json",
+      "inputPaths": ["cases/git-risky-multi-file/artifact.txt"],
+      "generatedFrom": {
+        "tool": "git",
+        "recordedCommand": "git diff --no-index package.json package-lock.json",
+        "exitCode": 1
+      }
+    },
+    {
+      "id": "npm-audit-package",
+      "title": "Real npm audit package diagnostic (0 vulnerabilities)",
+      "artifactKind": "package_diagnostic",
+      "commandPath": "cases/npm-audit-package/command.txt",
+      "artifactPath": "cases/npm-audit-package/artifact.txt",
+      "oraclePath": "cases/npm-audit-package/oracle.json",
+      "inputPaths": ["cases/npm-audit-package/artifact.txt"],
+      "generatedFrom": {
+        "tool": "npm",
+        "recordedCommand": "npm audit",
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "audit-no-fakes-report",
+      "title": "Real audit:no-fakes fake-seam scan output",
+      "artifactKind": "fake_audit_report",
+      "commandPath": "cases/audit-no-fakes-report/command.txt",
+      "artifactPath": "cases/audit-no-fakes-report/artifact.txt",
+      "oraclePath": "cases/audit-no-fakes-report/oracle.json",
+      "inputPaths": ["cases/audit-no-fakes-report/artifact.txt"],
+      "generatedFrom": {
+        "tool": "audit_no_fakes",
+        "recordedCommand": "npm run audit:no-fakes",
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "cartographer-inventory-scan",
+      "title": "Real cartographer-style repo inventory via git ls-files",
+      "artifactKind": "cartographer_inventory",
+      "commandPath": "cases/cartographer-inventory-scan/command.txt",
+      "artifactPath": "cases/cartographer-inventory-scan/artifact.txt",
+      "oraclePath": "cases/cartographer-inventory-scan/oracle.json",
+      "inputPaths": ["cases/cartographer-inventory-scan/artifact.txt"],
+      "generatedFrom": {
+        "tool": "git_ls_files",
+        "recordedCommand": "git ls-files --full-name | head -40",
+        "exitCode": 0
       }
     }
   ]

@@ -1,0 +1,10 @@
+{
+  "caseId": "tsc-downstream-error",
+  "artifactKind": "tsc_no_emit_error",
+  "expectedExitCode": 1,
+  "expectedLineCount": 1,
+  "mustContain": [
+    "tests/fixtures/eval-corpus/cases/tsc-downstream-error/src/broken.ts(1,7): error TS2322: Type 'number' is not assignable to type 'string'."
+  ],
+  "mustNotContain": ["[REDACTED]"]
+}
