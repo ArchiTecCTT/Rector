@@ -54,7 +54,7 @@ export const EvalCorpusManifestSchema = z
   .object({
     schemaVersion: z.literal("phase0.eval-corpus.v1"),
     description: z.string().min(1),
-    cases: z.array(EvalCorpusCaseSchema).min(3),
+    cases: z.array(EvalCorpusCaseSchema).min(10),
   })
   .strict()
   .refine((manifest) => new Set(manifest.cases.map((fixtureCase) => fixtureCase.id)).size === manifest.cases.length, {

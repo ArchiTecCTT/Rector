@@ -52,6 +52,7 @@ describe("phase-0 eval corpus fixtures", () => {
 
     // Then: all required benchmark artifact kinds are present once and mapped to real tools.
     expect(manifest.schemaVersion).toBe("phase0.eval-corpus.v1");
+    expect(manifest.cases.length).toBeGreaterThanOrEqual(10);
     expect(uniqueArtifactKinds.size).toBe(REQUIRED_ARTIFACT_KINDS.length);
     for (const requiredKind of REQUIRED_ARTIFACT_KINDS) {
       expect(artifactKinds).toContain(requiredKind);
