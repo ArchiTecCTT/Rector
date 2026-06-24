@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { GlobalScenarioSchema, SafeRelativePathSchema } from "../../src/evals/globalScenarioSchema";
 
 const REPO_ROOT = path.dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
-const SCENARIOS_DIR = path.join(REPO_ROOT, "tests/global/scenarios");
+const SCENARIOS_DIR = process.env.VERIFY_SCENARIOS_DIR || path.join(REPO_ROOT, "tests/global/scenarios");
 
 function fail(msg: string): never {
   console.error(`[verify:phase0.5] FAIL: ${msg}`);

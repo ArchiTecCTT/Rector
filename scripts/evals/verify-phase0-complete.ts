@@ -16,7 +16,7 @@ import { CapabilityEvalResultSchema } from "../../src/capabilities/eval/schemas"
 const PHASE_0_BASELINE_SCHEMA_VERSION = "rector.phase0-baseline.v1";
 
 const REPO_ROOT = path.dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
-const CORPUS_ROOT = path.join(REPO_ROOT, "tests/fixtures/eval-corpus");
+const CORPUS_ROOT = process.env.VERIFY_CORPUS_ROOT || path.join(REPO_ROOT, "tests/fixtures/eval-corpus");
 const EVIDENCE_DIR = path.join(REPO_ROOT, ".omo/evidence");
 
 function fail(msg: string): never {
