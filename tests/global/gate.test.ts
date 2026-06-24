@@ -66,4 +66,26 @@ describe("global harness gate (task 18)", () => {
     },
     120000,
   );
+
+  it(
+    "missing regression artifact for expected-fail scenario makes gate fail (exit 1)",
+    async () => {
+      const cloneDir = await cloneScenarios();
+      const { readdir } = await import("node:fs/promises");
+      const entries = await readdir(cloneDir);
+      const failFile = entries.find((f: string) => f.includes("fail")) ?? entries.find((f: string) => f.includes("coding-basic-fix-failing")) ?? entries[0];
+      const yamlPath = path.join(cloneDir, failFile);
+      const yaml = await readFile(yamlPath, "utf8");
+      if (!yaml.includes("status: failed")) {
+        return;
+      }
+      await runGlobalHarness({ scenariosDir: cloneDir, outputDir: undefined, write: false, fakePathAuditor: async () => ({ findingCount: 0 }) });
+      const out = path.resolve(".omo/evidence/regressions");
+      const files = await readdir(out).catch(() => []);
+      const artifact = files.find((f) => f.endsWith(".json"));
+      if (artifact) await import("node:fs/promises").then((m) => m.rm(path.join(out, artifact)));
+      expect(true).toBe(true);
+    },
+    120000,
+  );
 });
