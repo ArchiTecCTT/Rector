@@ -50,6 +50,8 @@ Phase 0 added these measurement surfaces: `src/capabilities/eval/*` (eval schema
 
 Phase 0.5 added the Global Reliability Harness surfaces: `src/evals/*` (global scenario schema, 8-dimension scorecards, offline global runner) and `src/systems/*` (specialist contract/task/result schemas, SystemRegistry validation stub, `specialistProfiles/coding.profile.json`), plus `scripts/evals/{run-global-harness,run-specialist-system-contracts}.ts`, `tests/global/` scenarios, and the `tests/fixtures/repos/rector-mini-fix/` fixture repo. These are CONTRACTS + HARNESS only — specialist execution / routing is Phase 11/12 and not yet built.
 
+**Phase 0 / Phase 0.5 status — SCAFFOLD LANDED / COMPLETION GATE PENDING:** The measurement surfaces above are scaffolds only; neither phase has passed its completion gates. Phase 0 passes only when `npm run eval:capabilities:gate`, `npm run baseline:phase0`, and `npm run verify:phase0` pass. Phase 0.5 passes only when `npm run test:global:gate` and `npm run verify:phase0.5` pass with at least 20 offline scenarios (>=5 strict passing, >=5 intentional regressions) and strict scorecard semantics. These gate commands are not yet implemented. The ExecutiveRouter and real specialist execution are NOT implemented (deferred to Phase 11/12); the harness emits dry-run task packets/traces only, never specialist-driven repository mutation. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
+
 Before claiming completion, run fresh:
 
 ```bash

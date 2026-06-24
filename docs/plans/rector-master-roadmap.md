@@ -249,9 +249,9 @@ Kill local mode as default product. Deliverables:
 
 Branch: `rector-0.3.0-cartographer`
 
-## Phase 0 — Benchmarks + Capability Eval Scaffolding — DONE (branch `rector-0.3.0`)
+## Phase 0 — Benchmarks + Capability Eval Scaffolding — SCAFFOLD LANDED / COMPLETION GATE PENDING (branch `rector-0.3.0`)
 
-Offline-only measurement scaffolding for the capability/SLM-fabric workstream. Landed and verified on branch `rector-0.3.0`; no live provider calls.
+Offline-only measurement scaffolding for the capability/SLM-fabric workstream. Scaffold landed on branch `rector-0.3.0`; no live provider calls. **Status: SCAFFOLD LANDED / COMPLETION GATE PENDING** — completion is gated and not yet verified.
 
 - Capability eval schemas + 8-metric scorer + raw artifact store: `src/capabilities/eval/{schemas,metrics,artifactStore}.ts`
 - Committed offline eval corpus (real `rg`/`tsc`/`git` artifacts + deterministic oracles): `tests/fixtures/eval-corpus/`
@@ -260,9 +260,11 @@ Offline-only measurement scaffolding for the capability/SLM-fabric workstream. L
 
 By design, the tiny offline fixtures do NOT meet the live efficiency thresholds (compression ≥10×, raw-token-reduction ≥0.80); the runner reports the real aggregate honestly (aggregate `passed: false`) while every committed case passes its oracle. Live efficiency-threshold attainment is Phase 2.5 work.
 
-## Phase 0.5 — Global Reliability Harness — DONE (branch `rector-0.3.0`)
+**Completion gate (PENDING — not yet passed):** Phase 0 is complete only when all of the following pass: `npm run eval:capabilities:gate` (strict oracle/threshold/metric/artifact gate), `npm run baseline:phase0` (Phase 0 baseline report), and `npm run verify:phase0` (completion verifier). These gate commands are not yet implemented; until they land and pass, Phase 0 remains SCAFFOLD LANDED / COMPLETION GATE PENDING. No ExecutiveRouter, no real specialist execution, and no live provider are involved. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
 
-Offline-by-default reliability harness and specialist-system CONTRACTS proving the architecture can be measured as a persistent assistant delegating to specialist systems. Landed and verified on branch `rector-0.3.0`; no live provider calls.
+## Phase 0.5 — Global Reliability Harness — SCAFFOLD LANDED / COMPLETION GATE PENDING (branch `rector-0.3.0`)
+
+Offline-by-default reliability harness and specialist-system CONTRACTS proving the architecture can be measured as a persistent assistant delegating to specialist systems. Scaffold landed on branch `rector-0.3.0`; no live provider calls. **Status: SCAFFOLD LANDED / COMPLETION GATE PENDING** — completion is gated and not yet verified.
 
 - Global scenario schema + YAML/JSON loading: `src/evals/globalScenarioSchema.ts`
 - 8-dimension scorecards (+ fake-path status) with JSON/Markdown reporters: `src/evals/scorecards.ts`
@@ -273,7 +275,9 @@ Offline-by-default reliability harness and specialist-system CONTRACTS proving t
 
 Offline-by-default with live opt-in: live scenarios are SKIPPED when no provider credentials are present (never faked) and are NOT in default CI. The harness honestly reports `passed: 0/4` because the `rector-mini-fix` fixture ships a genuinely failing test (the to-be-fixed state) — the harness proves WIRING (scenario → task packet → trace → oracle → scorecard → regression), NOT specialist execution.
 
-**SCOPE BOUNDARY (critical):** Phase 0.5 delivered CONTRACTS + HARNESS only. The ExecutiveRouter, real specialist execution, and specialist-driven repository mutation are Phase 11/12 and remain NOT done. No specialist-execution phase is marked complete here.
+**SCOPE BOUNDARY (critical):** Phase 0.5 delivered CONTRACTS + HARNESS only. The ExecutiveRouter, real specialist execution, and specialist-driven repository mutation are deferred to Phase 11/12 and are NOT implemented. No specialist-execution phase is marked complete here.
+
+**Completion gate (PENDING — not yet passed):** Phase 0.5 is complete only when all of the following pass: `npm run test:global:gate` (strict expected-status gate), `npm run verify:phase0.5` (completion verifier), at least 20 offline scenarios (>=5 strict passing, >=5 intentional regressions), and strict scorecard semantics (real behavioral dimensions, not proxy existence checks), with no claim of specialist execution. These gate commands and the expanded scenario corpus are not yet implemented; until they land and pass, Phase 0.5 remains SCAFFOLD LANDED / COMPLETION GATE PENDING. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
 
 ## Chunk 047 — Runtime Maturity (post-042a/042b)
 

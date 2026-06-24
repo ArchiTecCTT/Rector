@@ -834,6 +834,8 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 
 ## Phase 0 — Capability eval harness + Phase-0 finish (Todo 6 / Todo 8)
 
+**Status: SCAFFOLD LANDED / COMPLETION GATE PENDING.** Phase 0 is complete only when `npm run eval:capabilities:gate`, `npm run baseline:phase0`, and `npm run verify:phase0` pass. These gate commands are not yet implemented; the baseline below records the scaffold's current honest output, not completion. No ExecutiveRouter and no real specialist execution are involved (deferred to Phase 11/12). The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
+
 ### Baseline (real gate output on `rector-0.3.0`, commit `80e809c`)
 
 - **`npm test`:** exit 0 — 330 files (329 passed, 1 skipped), 2209 tests (2204 passed, 5 skipped). The skipped file is `tests/memoryLive.integration.test.ts` (live-memory tests gated behind absent live credentials, by design offline).
@@ -859,6 +861,8 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 - **Label:** NOTE — `.gitignore` ignores the entire `docs/plans/2-0/` research tree. Phase 0 adds a single intentional exception: `docs/plans/2-0/phases/**` is re-included as the tracked benchmark mirror (`docs/plans/2-0/phases/phase-0-benchmarks.md`). To make the negation effective, the parent rule was changed from the bare directory `docs/plans/2-0` to `docs/plans/2-0/*` (git cannot re-include a path whose parent directory is itself excluded). Verified: the mirror is `git add`-able while all sibling `2-0` files and the whole `.omo/` tree remain ignored.
 
 ## Phase 0.5 — Global Reliability Harness
+
+**Status: SCAFFOLD LANDED / COMPLETION GATE PENDING.** Phase 0.5 is complete only when `npm run test:global:gate` and `npm run verify:phase0.5` pass with at least 20 offline scenarios (>=5 strict passing, >=5 intentional regressions), strict scorecard semantics (real behavioral dimensions, not proxy existence checks), and no claim of specialist execution. These gate commands and the expanded scenario corpus are not yet implemented; the baseline below records the scaffold's current honest output (e.g., `passed 0/4`), not completion. The ExecutiveRouter and real specialist execution are NOT implemented (deferred to Phase 11/12); the harness emits dry-run task packets/traces only. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
 
 ### Baseline (real gate output on `rector-0.3.0`, Phase 0.5 finish)
 
