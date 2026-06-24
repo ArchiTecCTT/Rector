@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "rector.capability.evidence.v1",
+  "capabilityId": "cartographer.grounding",
+  "caseId": "rg-orchestration-search",
+  "summary": "Configured orchestration evidence from real rg search on notes.md",
+  "evidence": [
+    {
+      "kind": "code_reference",
+      "path": "cases/rg-orchestration-search/artifact.txt",
+      "lineStart": 1,
+      "lineEnd": 1,
+      "excerpt": "src/notes.md:1:12:Configured orchestration should route through runOrchestratedChatRun.",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://offline/rg-orchestration-search/artifact.txt"
+    },
+    {
+      "kind": "code_reference",
+      "path": "cases/rg-orchestration-search/artifact.txt",
+      "lineStart": 2,
+      "lineEnd": 2,
+      "excerpt": "src/notes.md:3:1:orchestrationProfile=configured gates chat readiness.",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://offline/rg-orchestration-search/artifact.txt"
+    }
+  ],
+  "coverage": {
+    "coveredMustContain": [
+      "src/notes.md:1:12:Configured orchestration should route through runOrchestratedChatRun.",
+      "src/notes.md:3:1:orchestrationProfile=configured gates chat readiness."
+    ],
+    "missingMustContain": [],
+    "forbiddenHits": [],
+    "unresolvedArtifactRefs": [],
+    "unresolvedFileRefs": [],
+    "outOfBoundsLineRefs": [],
+    "passed": true
+  },
+  "warnings": [],
+  "rawArtifactRefs": ["artifact://offline/rg-orchestration-search/artifact.txt"]
+}

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "rector.capability.evidence.v1",
+  "capabilityId": "cartographer.grounding",
+  "caseId": "tsc-runtime-mode-error",
+  "summary": "tsc error showing RuntimeMode type violation for local mode",
+  "evidence": [
+    {
+      "kind": "diagnostic",
+      "path": "cases/tsc-runtime-mode-error/src/index.ts",
+      "lineStart": 1,
+      "lineEnd": 1,
+      "excerpt": "src/index.ts(2,7): error TS2322: Type '\"local\"' is not assignable to type 'RuntimeMode'.",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://offline/tsc-runtime-mode-error/artifact.txt"
+    }
+  ],
+  "coverage": {
+    "coveredMustContain": [
+      "src/index.ts(2,7): error TS2322",
+      "Type '\"local\"' is not assignable to type 'RuntimeMode'."
+    ],
+    "missingMustContain": [],
+    "forbiddenHits": [],
+    "unresolvedArtifactRefs": [],
+    "unresolvedFileRefs": [],
+    "outOfBoundsLineRefs": [],
+    "passed": true
+  },
+  "warnings": [],
+  "rawArtifactRefs": ["artifact://offline/tsc-runtime-mode-error/artifact.txt"]
+}

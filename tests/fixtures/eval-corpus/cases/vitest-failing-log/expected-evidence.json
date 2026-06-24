@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "rector.capability.evidence.v1",
+  "capabilityId": "cartographer.grounding",
+  "caseId": "vitest-failing-log",
+  "summary": "vitest failing test log showing no test files found",
+  "evidence": [
+    {
+      "kind": "log_excerpt",
+      "path": "cases/vitest-failing-log/artifact.txt",
+      "lineStart": 1,
+      "lineEnd": 1,
+      "excerpt": "No test files found, exiting with code 1",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://offline/vitest-failing-log/artifact.txt"
+    },
+    {
+      "kind": "log_excerpt",
+      "path": "cases/vitest-failing-log/artifact.txt",
+      "lineStart": 2,
+      "lineEnd": 2,
+      "excerpt": "filter:",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://offline/vitest-failing-log/artifact.txt"
+    }
+  ],
+  "coverage": {
+    "coveredMustContain": [
+      "No test files found, exiting with code 1",
+      "filter:"
+    ],
+    "missingMustContain": [],
+    "forbiddenHits": [],
+    "unresolvedArtifactRefs": [],
+    "unresolvedFileRefs": [],
+    "outOfBoundsLineRefs": [],
+    "passed": true
+  },
+  "warnings": [],
+  "rawArtifactRefs": ["artifact://offline/vitest-failing-log/artifact.txt"]
+}

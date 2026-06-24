@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "rector.capability.evidence.v1",
+  "capabilityId": "cartographer.grounding",
+  "caseId": "git-readiness-diff",
+  "summary": "git diff showing readiness transition from unconfigured to configured",
+  "evidence": [
+    {
+      "kind": "diff_hunk",
+      "path": "cases/git-readiness-diff/artifact.txt",
+      "lineStart": 1,
+      "lineEnd": 1,
+      "excerpt": "diff --git a/before.ts b/after.ts\n-export const readiness = \"unconfigured\";\n+export const readiness = \"configured\";",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://offline/git-readiness-diff/artifact.txt"
+    }
+  ],
+  "coverage": {
+    "coveredMustContain": [
+      "diff --git a/before.ts b/after.ts",
+      "-export const readiness = \"unconfigured\";",
+      "+export const readiness = \"configured\";"
+    ],
+    "missingMustContain": [],
+    "forbiddenHits": [],
+    "unresolvedArtifactRefs": [],
+    "unresolvedFileRefs": [],
+    "outOfBoundsLineRefs": [],
+    "passed": true
+  },
+  "warnings": [],
+  "rawArtifactRefs": ["artifact://offline/git-readiness-diff/artifact.txt"]
+}

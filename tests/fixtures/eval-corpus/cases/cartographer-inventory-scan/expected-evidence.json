@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "rector.capability.evidence.v1",
+  "capabilityId": "cartographer.grounding",
+  "caseId": "cartographer-inventory-scan",
+  "summary": "x",
+  "evidence": [
+    {
+      "kind": "summary",
+      "excerpt": ".gitattributes|tests/fixtures/eval-corpus/manifest.schema.ts",
+      "relevance": "high",
+      "confidence": 0.5,
+      "rawArtifactRef": "artifact://offline/cartographer-inventory-scan/artifact.txt"
+    }
+  ],
+  "coverage": {
+    "coveredMustContain": [
+      ".gitattributes",
+      "tests/fixtures/eval-corpus/manifest.schema.ts"
+    ],
+    "missingMustContain": [],
+    "forbiddenHits": [],
+    "unresolvedArtifactRefs": [],
+    "unresolvedFileRefs": [],
+    "outOfBoundsLineRefs": [],
+    "passed": true
+  },
+  "warnings": [],
+  "rawArtifactRefs": [
+    "artifact://offline/cartographer-inventory-scan/artifact.txt"
+  ]
+}

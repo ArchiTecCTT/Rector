@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "rector.capability.evidence.v1",
+  "capabilityId": "cartographer.grounding",
+  "caseId": "rg-noisy-imports",
+  "summary": "x",
+  "evidence": [
+    {
+      "kind": "summary",
+      "excerpt": "src/tools/middleware.ts:1:1:import { redactSecrets, redactString } from \"../security/redaction\";|src/tools/types.ts:13:1:import type { IterationBudget } from \"../orchestration/turnBudget\";",
+      "relevance": "high",
+      "confidence": 0.5,
+      "rawArtifactRef": "artifact://offline/rg-noisy-imports/artifact.txt"
+    }
+  ],
+  "coverage": {
+    "coveredMustContain": [
+      "src/tools/middleware.ts:1:1:import { redactSecrets, redactString } from \"../security/redaction\";",
+      "src/tools/types.ts:13:1:import type { IterationBudget } from \"../orchestration/turnBudget\";"
+    ],
+    "missingMustContain": [],
+    "forbiddenHits": [],
+    "unresolvedArtifactRefs": [],
+    "unresolvedFileRefs": [],
+    "outOfBoundsLineRefs": [],
+    "passed": true
+  },
+  "warnings": [],
+  "rawArtifactRefs": [
+    "artifact://offline/rg-noisy-imports/artifact.txt"
+  ]
+}

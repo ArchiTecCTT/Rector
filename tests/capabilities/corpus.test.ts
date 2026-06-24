@@ -12,6 +12,12 @@ import {
   type EvalCorpusArtifactKind,
   type EvalCorpusManifest,
 } from "../fixtures/eval-corpus/manifest.schema";
+import {
+  CapabilityEvidencePacketSchema,
+  validateEvidenceCoverage,
+  type CapabilityEvidencePacket,
+  type EvidenceCoverageOracle,
+} from "../../src/capabilities/eval/evidencePacket";
 
 const corpusRoot = new URL("../fixtures/eval-corpus/", import.meta.url);
 
@@ -123,5 +129,78 @@ describe("phase-0 eval corpus fixtures", () => {
 
     // Then: duplicate ids are rejected before the corpus can be loaded.
     expect(result.success).toBe(false);
+  });
+
+  it("validates every expected-evidence.json packet (schema + coverage) for all 10 cases", async () => {
+    const manifest = await loadManifest();
+
+    for (const fixtureCase of manifest.cases) {
+      ok(fixtureCase.expectedEvidencePath, `Case ${fixtureCase.id} must have expectedEvidencePath`);
+
+      const packetJson = await readCorpusJson(fixtureCase.expectedEvidencePath);
+      const packet = CapabilityEvidencePacketSchema.parse(packetJson) as CapabilityEvidencePacket;
+
+      expect(packet.schemaVersion).toBe("rector.capability.evidence.v1");
+      expect(packet.caseId).toBe(fixtureCase.id);
+      expect(packet.capabilityId).toBe("cartographer.grounding");
+
+      const oracleRaw = await readCorpusJson(fixtureCase.oraclePath);
+      const oracleObj = oracleRaw as { mustContain: string[]; mustNotContain?: string[] };
+      const oracle: EvidenceCoverageOracle = {
+        mustContain: oracleObj.mustContain,
+        mustNotContain: oracleObj.mustNotContain ?? [],
+      };
+
+      const rawArtifactRefs = new Set([`artifact://offline/${fixtureCase.id}/${fixtureCase.artifactPath.split("/").pop()}`]);
+      const coverageResult = await validateEvidenceCoverage(packet, oracle, {
+        rawArtifactRefs,
+        fixtureRoot: corpusRoot.pathname,
+      });
+
+      expect(coverageResult.passed).toBe(true);
+      expect(coverageResult.coverage.missingMustContain).toHaveLength(0);
+      expect(coverageResult.coverage.forbiddenHits).toHaveLength(0);
+    }
+  });
+
+  it("proves validateEvidenceCoverage rejects a packet that omits a required mustContain", async () => {
+    const manifest = await loadManifest();
+    const firstCase = manifest.cases[0];
+    ok(firstCase);
+
+    const oracleRaw = await readCorpusJson(firstCase.oraclePath);
+    const oracleObj = oracleRaw as { mustContain: string[]; mustNotContain?: string[] };
+    const oracle: EvidenceCoverageOracle = {
+      mustContain: oracleObj.mustContain,
+      mustNotContain: oracleObj.mustNotContain ?? [],
+    };
+
+    const incompletePacket = {
+      schemaVersion: "rector.capability.evidence.v1",
+      capabilityId: "cartographer.grounding",
+      caseId: firstCase.id,
+      summary: "incomplete",
+      evidence: [],
+      coverage: {
+        coveredMustContain: [],
+        missingMustContain: oracle.mustContain,
+        forbiddenHits: [],
+        unresolvedArtifactRefs: [],
+        unresolvedFileRefs: [],
+        outOfBoundsLineRefs: [],
+        passed: false,
+      },
+      warnings: [],
+      rawArtifactRefs: [],
+    } as unknown as CapabilityEvidencePacket;
+
+    const rawArtifactRefs = new Set([`artifact://offline/${firstCase.id}/${firstCase.artifactPath.split("/").pop()}`]);
+    const result = await validateEvidenceCoverage(incompletePacket, oracle, {
+      rawArtifactRefs,
+      fixtureRoot: corpusRoot.pathname,
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.coverage.missingMustContain.length).toBeGreaterThan(0);
   });
 });
