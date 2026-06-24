@@ -43,14 +43,19 @@ export interface DimensionScore {
 }
 
 /**
- * computeReliability — 1 iff every validatorRun.exitCode === 0.
+ * computeReliability — 1 iff every validatorRun.exitCode === expectedExitCode.
+ * 0 validators -> score 0.
  */
-export function computeReliability(validatorRuns: readonly { readonly exitCode: number }[]): DimensionScore {
+export function computeReliability(
+  validatorRuns: readonly { readonly exitCode: number; readonly expectedExitCode: number }[],
+): DimensionScore {
   if (validatorRuns.length === 0) return { score: 0, note: "no validators configured" };
-  const allPassed = validatorRuns.every((r) => r.exitCode === 0);
+  const allMatched = validatorRuns.every((r) => r.exitCode === r.expectedExitCode);
   return {
-    score: allPassed ? 1 : 0,
-    note: allPassed ? "all validators exited 0" : `validator exit(s): ${validatorRuns.map((r) => r.exitCode).join(",")}`,
+    score: allMatched ? 1 : 0,
+    note: allMatched
+      ? "all validators matched expected exit codes"
+      : `exit mismatch: ${validatorRuns.map((r) => `${r.exitCode}!=${r.expectedExitCode}`).join(",")}`,
   };
 }
 

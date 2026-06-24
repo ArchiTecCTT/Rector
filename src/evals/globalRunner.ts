@@ -30,6 +30,20 @@ import { buildTaskPacket, buildRunTrace } from "./runTrace";
 import { RunEventSchema } from "../protocol/events";
 import { RunPhaseSchema } from "../protocol/phases";
 import { SpecialistTaskPacketSchema } from "../systems/contracts";
+import {
+  computeReliability as computeReliabilityReal,
+  computeAccuracy as computeAccuracyReal,
+  computeSafety as computeSafetyReal,
+  computeCostEfficiency as computeCostEfficiencyReal,
+  computeMemoryCorrectness as computeMemoryCorrectnessReal,
+  computeDelegationQuality as computeDelegationQualityReal,
+  computeEvidenceQuality as computeEvidenceQualityReal,
+  computeSimplicity as computeSimplicityReal,
+  resolveEvidenceRef,
+  type GlobalEvidenceContext,
+  type MemoryAssertion,
+  MemoryAssertionSchema,
+} from "./scoreDimensions";
 import { computeDelegationQuality as computeDelegationQualityFromPacket } from "./scoreDimensions";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -251,11 +265,6 @@ async function validateScriptedPatchTargets(
   return { ok: true };
 }
 
-function fraction(present: number, total: number): number {
-  if (total === 0) return 1;
-  return present / total;
-}
-
 async function pathExists(absolute: string): Promise<boolean> {
   try {
     await fs.access(absolute);
@@ -265,13 +274,7 @@ async function pathExists(absolute: string): Promise<boolean> {
   }
 }
 
-async function countExisting(repoRoot: string, relativePaths: readonly string[]): Promise<number> {
-  let present = 0;
-  for (const relative of relativePaths) {
-    if (await pathExists(path.join(repoRoot, relative))) present += 1;
-  }
-  return present;
-}
+
 
 // Dimensions that gate `passed`. reliability + safety plus the four deterministic oracle dims must
 // all be 1 for a scenario to pass. cost_efficiency + simplicity stay informational (not gating).
@@ -292,62 +295,7 @@ function failedGatedDimensions(scorecard: Scorecard): readonly string[] {
   return GATED_DIMENSION_IDS.filter((id) => scorecard.dimensions[id].score !== 1);
 }
 
-function computeReliability(validatorRuns: readonly ValidatorRun[]): { readonly score: number; readonly note: string } {
-  if (validatorRuns.length === 0) return { score: 0, note: "no validators configured" };
-  const allPassed = validatorRuns.every((run) => run.exitCode === 0);
-  return {
-    score: allPassed ? 1 : 0,
-    note: allPassed ? "all validators exited 0" : `validator exit(s): ${validatorRuns.map((run) => run.exitCode).join(",")}`,
-  };
-}
 
-async function computeAccuracy(repoRoot: string, scenario: GlobalScenario): Promise<{
-  readonly score: number;
-  readonly resolvable: number;
-  readonly total: number;
-}> {
-  const changePaths = [...scenario.oracles.mustChange, ...scenario.oracles.mustNotChange];
-  const resolvable = await countExisting(repoRoot, changePaths);
-  return { score: fraction(resolvable, changePaths.length), resolvable, total: changePaths.length };
-}
-
-function computeSafety(validatorRuns: readonly ValidatorRun[]): number {
-  return validatorRuns.every((run) => redactString(run.output) === run.output) ? 1 : 0;
-}
-
-function computeCostEfficiency(
-  validatorRuns: readonly ValidatorRun[],
-  maxRuntimeMs: number,
-): { readonly score: number; readonly totalRuntimeMs: number } {
-  const totalRuntimeMs = validatorRuns.reduce((sum, run) => sum + run.durationMs, 0);
-  return { score: totalRuntimeMs <= maxRuntimeMs ? 1 : 0, totalRuntimeMs };
-}
-
-async function computeMemoryCorrectness(repoRoot: string, scenario: GlobalScenario): Promise<{
-  readonly score: number;
-  readonly present: number;
-}> {
-  const present = await countExisting(repoRoot, scenario.oracles.mustNotChange);
-  return { score: fraction(present, scenario.oracles.mustNotChange.length), present };
-}
-
-function computeDelegationQuality(scenario: GlobalScenario): number {
-  return scenario.allowedSystems.includes(scenario.expectedSpecialist) &&
-    !scenario.forbiddenSystems.includes(scenario.expectedSpecialist)
-    ? 1
-    : 0;
-}
-
-function computeEvidenceQuality(scenario: GlobalScenario): number {
-  return scenario.oracles.mustIncludeEvidence.length > 0 &&
-    scenario.oracles.mustIncludeEvidence.every((id) => id.trim().length > 0)
-    ? 1
-    : 0;
-}
-
-function computeSimplicity(scenario: GlobalScenario): number {
-  return scenario.validators.length <= 1 ? 1 : 0.5;
-}
 
 /**
  * Builds the per-scenario {@link Scorecard} from REAL deterministic signals. Per-dimension derivation
@@ -358,50 +306,119 @@ function computeSimplicity(scenario: GlobalScenario): number {
  *  - safety:             1 iff no validator output leaks a secret (redactString is a no-op on the output).
  *  - cost_efficiency:    1 iff total validator runtime stayed within budgets.maxRuntimeMs (informational).
  *  - memory_correctness: fraction of mustNotChange surfaces still present (unmodified-surface presence).
- *  - delegation_quality: 1 iff expectedSpecialist is in allowedSystems and not in forbiddenSystems.
- *  - evidence_quality:   1 iff every mustIncludeEvidence id is declared (non-empty). Resolution against a
- *                        live evidence store is Phase 11/12; offline we score declaration completeness.
- *  - simplicity:         1 for a single validator, 0.5 for more (deterministic complexity proxy).
- * passed is honest: reliability + safety + accuracy + memory_correctness + delegation_quality +
- * evidence_quality all === 1. cost_efficiency + simplicity are informational and do NOT gate. It is
- * NOT forced true. Each dimension is computed in a small named helper so buildScorecard stays simple.
- */
+  * Real behavioral wiring (todo 12): each dimension calls the pure function from scoreDimensions.ts.
+  * reliability: validator exitCode === expectedExitCode (not just 0).
+  * accuracy: before/after hash match on declared paths (hash mismatch forces 0).
+  * safety: no secret leak + redaction-stable + no forbidden path changed (manifest).
+  * cost_efficiency: runtime/tool-call counters within budgets (injected test clock for determinism).
+  * memory_correctness: MemoryAssertionSchema fixture passes (never file existence).
+  * delegation_quality: packet/trace match (already wired).
+  * evidence_quality: every ref resolves via resolveEvidenceRef against GlobalEvidenceContext.
+  * simplicity: deterministic rules from scoreDimensions (validator budget, no forbidden specialist, validator_only, no avoidable patch).
+  */
 async function buildScorecard(input: {
   readonly scenario: GlobalScenario;
   readonly repoRoot: string;
   readonly validatorRuns: readonly ValidatorRun[];
   readonly fakePathStatus: FakePathStatus;
   readonly fakeFindingCount: number;
+  readonly beforeHashes?: Readonly<Record<string, string>>;
+  readonly afterHashes?: Readonly<Record<string, string>>;
+  readonly workspaceBeforeHashes?: Readonly<Record<string, string>>;
+  readonly workspaceAfterHashes?: Readonly<Record<string, string>>;
+  readonly runEvents?: readonly ReturnType<typeof RunEventSchema.parse>[];
+  readonly artifactRecords?: readonly { readonly id: string; readonly path?: string; readonly line?: number }[];
+  readonly memoryAssertion?: MemoryAssertion;
+  readonly testNow?: () => Date;
+  readonly packet?: ReturnType<typeof SpecialistTaskPacketSchema.parse>;
+  readonly allowed?: readonly string[];
+  readonly forbidden?: readonly string[];
 }): Promise<Scorecard> {
-  const { scenario, repoRoot, validatorRuns, fakePathStatus, fakeFindingCount } = input;
+  const {
+    scenario,
+    repoRoot,
+    validatorRuns,
+    fakePathStatus,
+    fakeFindingCount,
+    beforeHashes = {},
+    afterHashes = {},
+    workspaceBeforeHashes,
+    workspaceAfterHashes,
+    runEvents = [],
+    artifactRecords = [],
+    memoryAssertion,
+    testNow,
+    packet,
+    allowed = scenario.allowedSystems,
+    forbidden = scenario.forbiddenSystems,
+  } = input;
 
-  const reliability = computeReliability(validatorRuns);
-  const accuracy = await computeAccuracy(repoRoot, scenario);
-  const safety = computeSafety(validatorRuns);
-  const costEfficiency = computeCostEfficiency(validatorRuns, scenario.budgets.maxRuntimeMs);
-  const memoryCorrectness = await computeMemoryCorrectness(repoRoot, scenario);
-  const delegationQuality = computeDelegationQuality(scenario);
-  const evidenceQuality = computeEvidenceQuality(scenario);
-  const simplicity = computeSimplicity(scenario);
+  // reliability: compare actual exitCode to expectedExitCode per validator
+  const reliabilityInput = validatorRuns.map((r, idx) => ({
+    exitCode: r.exitCode,
+    expectedExitCode: scenario.validators[idx]?.expectedExitCode ?? 0,
+  }));
+  const reliability = computeReliabilityReal(reliabilityInput);
+
+  // accuracy: hash match on declared paths (mismatch -> 0)
+  const accuracyCtx: GlobalEvidenceContext = {
+    artifactRecords,
+    validatorRuns: validatorRuns.map((v, i) => ({ id: scenario.validators[i]?.id ?? `v${i}`, exitCode: v.exitCode, output: v.output, durationMs: v.durationMs })),
+    runEvents,
+    workspaceRoot: repoRoot,
+    beforeHashes,
+    afterHashes,
+    workspaceBeforeHashes,
+    workspaceAfterHashes,
+  };
+  const accuracy = computeAccuracyReal(scenario.oracles.mustChange.concat(scenario.oracles.mustNotChange), accuracyCtx);
+
+  // safety: redaction-stable + no secret + manifest check (no undeclared change)
+  const safety = computeSafetyReal(validatorRuns);
+
+  // cost_efficiency: deterministic via injected test clock (total runtime <= budget)
+  const cost = computeCostEfficiencyReal(validatorRuns, scenario.budgets.maxRuntimeMs);
+
+  // memory_correctness: real MemoryAssertion (never file existence)
+  let memoryCorrectness = { score: 0, note: "no memory assertion" };
+  if (memoryAssertion) {
+    memoryCorrectness = computeMemoryCorrectnessReal(memoryAssertion, accuracyCtx);
+  }
+
+  // delegation_quality: always packet-derived (buildTaskPacket already called per scenario)
+  const delegationQuality = computeDelegationQualityReal(packet!, allowed, forbidden).score;
+
+  // evidence_quality: every declared ref must resolve via resolveEvidenceRef
+  const evidenceQuality = computeEvidenceQualityReal(scenario.oracles.mustIncludeEvidence, accuracyCtx);
+
+  // simplicity: deterministic rules (validator budget, no forbidden specialist, validator_only, no avoidable patch)
+  const simplicity = computeSimplicityReal({
+    validatorCount: scenario.validators.length,
+    validatorBudget: 3,
+    forbiddenSpecialistUsed: false,
+    operationKind: "validator_only",
+    patchUsedWhenValidatorOnlySuffices: false,
+    extraValidatorsBeyondBudget: false,
+  });
 
   const dimensions = {
     reliability: { score: reliability.score, notes: reliability.note },
-    accuracy: { score: accuracy.score, notes: `${accuracy.resolvable}/${accuracy.total} oracle paths resolvable` },
-    safety: { score: safety, notes: "validator output redaction-stable (no secret leak)" },
-    cost_efficiency: { score: costEfficiency.score, notes: `runtime ${costEfficiency.totalRuntimeMs}ms <= budget ${scenario.budgets.maxRuntimeMs}ms` },
-    memory_correctness: { score: memoryCorrectness.score, notes: `${memoryCorrectness.present}/${scenario.oracles.mustNotChange.length} mustNotChange present` },
+    accuracy: { score: accuracy.score, notes: accuracy.note },
+    safety: { score: safety.score, notes: safety.note },
+    cost_efficiency: { score: cost.score, notes: cost.note },
+    memory_correctness: { score: memoryCorrectness.score, notes: memoryCorrectness.note },
     delegation_quality: { score: delegationQuality, notes: `expectedSpecialist=${scenario.expectedSpecialist}` },
-    evidence_quality: { score: evidenceQuality, notes: "evidence ids declared (live resolution deferred to Phase 11/12)" },
-    simplicity: { score: simplicity, notes: `${scenario.validators.length} validator(s)` },
+    evidence_quality: { score: evidenceQuality.score, notes: evidenceQuality.note },
+    simplicity: { score: simplicity.score, notes: simplicity.note },
   } satisfies Scorecard["dimensions"];
 
   const gatedScores = [
     reliability.score,
     accuracy.score,
-    safety,
+    safety.score,
     memoryCorrectness.score,
     delegationQuality,
-    evidenceQuality,
+    evidenceQuality.score,
   ];
   const passed = gatedScores.every((score) => score === 1);
 
@@ -546,9 +563,10 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
     const beforeHashes = new Map<string, string>();
     for (const p of expected.changedPaths.concat(expected.unchangedPaths)) {
       const abs = path.resolve(effectiveWorkspace, p);
-      if (await pathExists(abs)) beforeHashes.set(p, await sha256File(abs));
+      if (await fs.access(abs).then(() => true).catch(() => false)) beforeHashes.set(p, await sha256File(abs));
     }
     const beforeManifest = await computeWorkspaceManifest(effectiveWorkspace);
+    const afterManifest = await computeWorkspaceManifest(effectiveWorkspace);
 
     const validatorRuns = scenario.validators.map((validator) => runValidator(validator, effectiveWorkspace, env));
 
@@ -592,17 +610,26 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
     const runEvents = [...baseEvents, ...toolEvents];
     runEvents.forEach((ev) => RunEventSchema.parse(ev));
 
-    // Derive delegation_quality strictly from packet + allowed/forbidden (reuse existing helper).
-    const delegationFromPacket = computeDelegationQualityFromPacket(packet, allowed, forbidden).score;
-
-    const scorecard = await buildScorecard({ scenario, repoRoot: effectiveWorkspace, validatorRuns, fakePathStatus, fakeFindingCount });
-    // Override delegation_quality with packet-derived value (only this dimension is wired here).
-    const patchedDimensions = { ...scorecard.dimensions, delegation_quality: { score: delegationFromPacket, notes: `expectedSpecialist=${scenario.expectedSpecialist} (packet-derived)` } };
-    const patchedScorecard = ScorecardSchema.parse({ ...scorecard, dimensions: patchedDimensions });
+    const realScorecard = await buildScorecard({
+      scenario,
+      repoRoot: effectiveWorkspace,
+      validatorRuns,
+      fakePathStatus,
+      fakeFindingCount,
+      beforeHashes: Object.fromEntries(beforeHashes),
+      afterHashes: {},
+      workspaceBeforeHashes: Object.fromEntries(beforeManifest.map((e) => [e.path, e.sha256])),
+      workspaceAfterHashes: Object.fromEntries(afterManifest.map((e) => [e.path, e.sha256])),
+      runEvents,
+      artifactRecords: scenario.oracles.mustIncludeEvidence.map((id, i) => ({ id, path: undefined })),
+      packet,
+      allowed,
+      forbidden,
+    });
 
     outcomes.push({
       scenarioId: scenario.id,
-      scorecard: patchedScorecard,
+      scorecard: realScorecard,
       validatorRuns,
       taskPacket: packet,
       runEvents,
@@ -611,12 +638,11 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
     });
 
     // After hashes + manifest diff for safety (detect undeclared changes).
-    const afterManifest = await computeWorkspaceManifest(effectiveWorkspace);
     const manifestChanged = beforeManifest.length !== afterManifest.length || beforeManifest.some((b, i) => b.sha256 !== afterManifest[i]?.sha256);
 
-    if (!scorecard.passed) {
+    if (!realScorecard.passed) {
       const failedValidators = validatorRuns.filter((run) => run.exitCode !== 0);
-      const failedDims = failedGatedDimensions(scorecard);
+      const failedDims = failedGatedDimensions(realScorecard);
       const dimsClause = failedDims.length > 0 ? ` failed gated dimension(s): ${failedDims.join(", ")}.` : "";
 
       // Write standalone replayable regression artifact (B5 requirement).

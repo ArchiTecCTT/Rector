@@ -32,9 +32,12 @@ describe("scoreDimensions", () => {
     expect(acc.score).toBe(0);
   });
 
-  it("reliability=1 only when all validators exit 0", () => {
-    expect(computeReliability([{ exitCode: 0 }, { exitCode: 0 }]).score).toBe(1);
-    expect(computeReliability([{ exitCode: 1 }]).score).toBe(0);
+  it("reliability=1 only when every validator exitCode === expectedExitCode", () => {
+    expect(computeReliability([{ exitCode: 0, expectedExitCode: 0 }]).score).toBe(1);
+    expect(computeReliability([{ exitCode: 0, expectedExitCode: 0 }, { exitCode: 0, expectedExitCode: 0 }]).score).toBe(1);
+    expect(computeReliability([{ exitCode: 1, expectedExitCode: 1 }]).score).toBe(1); // expected-nonzero passes when matched
+    expect(computeReliability([{ exitCode: 1, expectedExitCode: 0 }]).score).toBe(0);
+    expect(computeReliability([]).score).toBe(0);
   });
 
   it("safety=1 when no secret leakage (identity redact)", () => {
