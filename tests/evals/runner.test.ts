@@ -86,8 +86,9 @@ describe("offline capability eval runner", () => {
     expect(output.summary.metrics.root_cause_accuracy.status).toBe("pass");
 
     // And: efficiency thresholds are NOT met by the tiny offline fixtures, so the aggregate is
-    // honestly false rather than fabricated to green.
-    expect(output.summary.metrics.compression.status).toBe("fail");
+    // honestly false rather than fabricated to green. Compression now passes (large cases lift mean)
+    // but raw_token_reduction still fails, keeping summary.passed === false.
+    expect(output.summary.metrics.raw_token_reduction.status).toBe("fail");
     expect(output.summary.passed).toBe(false);
   });
 
@@ -100,9 +101,16 @@ describe("offline capability eval runner", () => {
 
     // Then: every committed case yields its exact recorded score (drift in scoring math fails here).
     const expectedPerCase = {
-      "rg-orchestration-search": { compression: 0, raw_token_reduction: 0 },
-      "tsc-runtime-mode-error": { compression: 0, raw_token_reduction: 0 },
-      "git-readiness-diff": { compression: 0, raw_token_reduction: 0 },
+      "rg-orchestration-search": { compression: 0.12738853503184713, raw_token_reduction: 0 },
+      "tsc-runtime-mode-error": { compression: 0.1050228310502283, raw_token_reduction: 0 },
+      "git-readiness-diff": { compression: 0.20600858369098712, raw_token_reduction: 0 },
+      "rg-noisy-imports": { compression: 905.4587813620071, raw_token_reduction: 0.998895587495992 },
+      "tsc-downstream-error": { compression: 0.15765765765765766, raw_token_reduction: 0 },
+      "vitest-failing-log": { compression: 0.3724696356275304, raw_token_reduction: 0 },
+      "git-risky-multi-file": { compression: 0.22264150943396227, raw_token_reduction: 0 },
+      "npm-audit-package": { compression: 0.03409090909090909, raw_token_reduction: 0 },
+      "audit-no-fakes-report": { compression: 2.7725856697819315, raw_token_reduction: 0.6393258426966293 },
+      "cartographer-inventory-scan": { compression: 265.72222222222223, raw_token_reduction: 0.9962366715450554 },
     } as const;
     for (const [caseId, expected] of Object.entries(expectedPerCase)) {
       const scores = byCase.get(caseId);
@@ -116,9 +124,9 @@ describe("offline capability eval runner", () => {
       expect(scores?.raw_token_reduction).toBe(expected.raw_token_reduction);
     }
 
-    // And: the aggregate values are the exact deterministic means over the three cases (all zero because no expectedEvidencePath yet).
-    expect(output.summary.metrics.compression.value).toBe(0);
-    expect(output.summary.metrics.raw_token_reduction.value).toBe(0);
+    // And: the aggregate values are the exact deterministic means over the ten cases.
+    expect(output.summary.metrics.compression.value).toBe(117.51788689155944);
+    expect(output.summary.metrics.raw_token_reduction.value).toBe(0.26344581017376767);
     expect(output.summary.metrics.recall.value).toBe(1);
     expect(output.summary.metrics.omission.value).toBe(0);
     expect(output.summary.metrics.secret_leak.value).toBe(0);
