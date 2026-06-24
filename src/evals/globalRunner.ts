@@ -476,7 +476,8 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
 
   const outcomes: GlobalScenarioOutcome[] = [];
   const skipped: SkippedScenario[] = [];
-  const regressions: RegressionArtifact[] = [];
+  const regressions: { scenarioId: string; note?: string; failedValidators?: readonly ValidatorRun[] }[] = [];
+  const regressionArtifacts: RegressionArtifact[] = [];
 
   for (const scenario of scenarios) {
     if (requiresLiveProvider(scenario) && env.LIVE_EVALS !== "1") {
@@ -489,7 +490,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
 
     const scenarioWorkspace = path.resolve(repoRoot, scenario.workspace);
     if (!(await pathExists(scenarioWorkspace))) {
-      regressions.push({ scenarioId: scenario.id, note: `scripted_patch rejected` } as any);
+      regressions.push({ scenarioId: scenario.id, note: `workspace not found: ${scenario.workspace}` });
       continue;
     }
 
@@ -513,33 +514,20 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       const allowed = new Set<string>(expected.changedPaths);
       const containment = await validateScriptedPatchTargets(patchAbs, allowed);
       if (!containment.ok) {
-        regressions.push({
-          scenarioId: scenario.id,
-          failedValidators: [],
-          note: `scripted_patch rejected: ${containment.reason}`,
-        });
-        // Clean temp if created.
+        regressions.push({ scenarioId: scenario.id, note: `scripted_patch rejected: ${containment.reason}` });
         if (tempWorkspace) await rm(tempWorkspace, { recursive: true, force: true });
         continue;
       }
       // git apply --check first, then apply.
       const check = spawnSync("git", ["apply", "--check", patchAbs], { cwd: effectiveWorkspace, encoding: "utf8" });
       if (check.status !== 0) {
-        regressions.push({
-          scenarioId: scenario.id,
-          failedValidators: [],
-          note: `git apply --check failed: ${check.stderr ?? check.stdout ?? "unknown"}`,
-        });
+        regressions.push({ scenarioId: scenario.id, note: `git apply --check failed` });
         if (tempWorkspace) await rm(tempWorkspace, { recursive: true, force: true });
         continue;
       }
       const apply = spawnSync("git", ["apply", patchAbs], { cwd: effectiveWorkspace, encoding: "utf8" });
       if (apply.status !== 0) {
-        regressions.push({
-          scenarioId: scenario.id,
-          failedValidators: [],
-          note: `git apply failed: ${apply.stderr ?? apply.stdout ?? "unknown"}`,
-        });
+        regressions.push({ scenarioId: scenario.id, note: `git apply failed` });
         if (tempWorkspace) await rm(tempWorkspace, { recursive: true, force: true });
         continue;
       }
@@ -591,26 +579,27 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       generatedAt: now().toISOString(),
     };
     RegressionArtifactSchema.parse(artifact);
-      const regressionsDir = path.join(outputDir, "regressions");
-      await fs.mkdir(regressionsDir, { recursive: true });
-      const jsonPath = path.join(regressionsDir, `${scenario.id}.json`);
-      await fs.writeFile(jsonPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
-      const mdLines = [
-        `# Regression ${scenario.id}`,
-        "",
-        `Workspace: ${scenario.workspace}`,
-        tempWorkspace ? `Temp: ${tempWorkspace}` : "",
-        `Replay: \`${artifact.replayCommand}\``,
-        "",
-        `Failed dimensions: ${failedDims.join(", ") || "none"}`,
-      ].filter(Boolean);
-      await fs.writeFile(path.join(regressionsDir, `${scenario.id}.md`), `${mdLines.join("\n")}\n`, "utf8");
+    regressionArtifacts.push(artifact);
+    const regressionsDir = path.join(outputDir, "regressions");
+    await fs.mkdir(regressionsDir, { recursive: true });
+    const jsonPath = path.join(regressionsDir, `${scenario.id}.json`);
+    await fs.writeFile(jsonPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+    const mdLines = [
+      `# Regression ${scenario.id}`,
+      "",
+      `Workspace: ${scenario.workspace}`,
+      tempWorkspace ? `Temp: ${tempWorkspace}` : "",
+      `Replay: \`${artifact.replayCommand}\``,
+      "",
+      `Failed dimensions: ${failedDims.join(", ") || "none"}`,
+    ].filter(Boolean);
+    await fs.writeFile(path.join(regressionsDir, `${scenario.id}.md`), `${mdLines.join("\n")}\n`, "utf8");
 
-      regressions.push({
-        scenarioId: scenario.id,
-        failedValidators,
-        note: `Replay:${dimsClause} Re-run the validator command(s) below from the scenario workspace (${scenario.workspace}) to reproduce.`,
-      } as any);
+    regressions.push({
+      scenarioId: scenario.id,
+      failedValidators,
+      note: `Replay:${dimsClause} Re-run the validator command(s) below from the scenario workspace (${scenario.workspace}) to reproduce.`,
+    });
     }
 
     // Clean temp workspace after validators (manifest already captured).
