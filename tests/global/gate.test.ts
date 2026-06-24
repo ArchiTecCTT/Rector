@@ -84,7 +84,10 @@ describe("global harness gate (task 18)", () => {
       const files = await readdir(out).catch(() => []);
       const artifact = files.find((f) => f.endsWith(".json"));
       if (artifact) await import("node:fs/promises").then((m) => m.rm(path.join(out, artifact)));
-      expect(true).toBe(true);
+      // Now invoke gate and assert non-zero exit (missing artifact for expected-fail)
+      const { spawnSync } = await import("node:child_process");
+      const gate = spawnSync(process.execPath, ["scripts/evals/run-global-harness.ts", "--gate"], { encoding: "utf8", cwd: process.cwd() });
+      expect(gate.status).not.toBe(0);
     },
     120000,
   );

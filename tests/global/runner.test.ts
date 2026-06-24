@@ -216,10 +216,31 @@ describe("global reliability harness runner", () => {
   );
 
   it("scripted_patch runs git apply --check before apply", async () => {
-    // We cannot easily inject a full scenario with operation here without extending schema usage,
-    // but the implementation path is exercised by the containment tests below; this test asserts the
-    // harness still runs without crashing when a scenario declares scripted_patch (even if skipped by containment).
-    expect(true).toBe(true);
+    // Malformed patch must be rejected at --check stage (apply never mutates workspace).
+    const fixture = path.resolve("tests/fixtures/repos/rector-mini-fix");
+    const badPatch = path.join(fixture, "bad-check.patch");
+    await writeFile(badPatch, "diff --git a/src/x.ts b/src/x.ts\nindex 000..111 100644\n--- a/src/x.ts\n+++ b/src/x.ts\n@@ -0,0 +1 @@\n+broken\n", "utf8");
+    const scenario = GlobalScenarioSchema.parse({
+      id: "patch-check-001",
+      title: "Malformed patch rejected at check",
+      type: "coding",
+      workspace: "tests/fixtures/repos/rector-mini-fix",
+      userGoal: "Apply malformed patch.",
+      allowedSystems: ["coding"],
+      forbiddenSystems: [],
+      expectedSpecialist: "coding",
+      successCriteria: [],
+      validators: [{ id: "noop", cmd: "node", args: ["-e", "process.exit(0)"], timeoutMs: 10000 }],
+      oracles: { mustChange: [], mustNotChange: [], mustIncludeEvidence: [] },
+      budgets: { maxToolCalls: 1, maxRuntimeMs: 30000, maxMainModelRawToolTokens: 10 },
+      setup: { copyWorkspaceToTemp: true, fixtures: [] },
+      operation: { kind: "scripted_patch", patchFile: "bad-check.patch" },
+      expected: { status: "failed", changedPaths: [], unchangedPaths: [], evidenceRefs: [] },
+    });
+    const result = await runGlobalHarness({ write: false, now: FIXED_NOW, scenarios: [scenario], fakePathAuditor: cleanAuditor });
+    const reg = result.report.regressions.find((r) => r.scenarioId === "patch-check-001");
+    expect(reg?.note ?? "").toContain("patch apply failed");
+    await rm(badPatch, { force: true });
   });
 
   it("rejects a scripted_patch whose target is outside expected.changedPaths + declared allowed", async () => {
@@ -278,10 +299,29 @@ describe("global reliability harness runner", () => {
   });
 
   it("changedPaths actually change while unchangedPaths remain byte-identical", async () => {
-    // The coding-basic-fix scenario declares src/calculator.ts as changed and verify as unchanged.
-    // Because the harness currently runs the still-buggy fixture, the file is not mutated by a specialist.
-    // The test asserts the manifest plumbing exists and does not crash; real mutation is Phase 11/12.
-    expect(true).toBe(true);
+    // Run a real scripted_patch scenario in a temp workspace and assert changed path hash differs, unchanged path bytes identical.
+    const fixture = path.resolve("tests/fixtures/repos/rector-mini-fix");
+    const scenario = GlobalScenarioSchema.parse({
+      id: "hash-manifest-001",
+      title: "Hash manifest changed/unchanged",
+      type: "coding",
+      workspace: "tests/fixtures/repos/rector-mini-fix",
+      userGoal: "Apply patch and verify hashes.",
+      allowedSystems: ["coding"],
+      forbiddenSystems: [],
+      expectedSpecialist: "coding",
+      successCriteria: [],
+      validators: [{ id: "noop", cmd: "node", args: ["-e", "process.exit(0)"], timeoutMs: 10000 }],
+      oracles: { mustChange: [], mustNotChange: [], mustIncludeEvidence: [] },
+      budgets: { maxToolCalls: 1, maxRuntimeMs: 30000, maxMainModelRawToolTokens: 10 },
+      setup: { copyWorkspaceToTemp: true, fixtures: [] },
+      operation: { kind: "scripted_patch", patchFile: "fix-add.patch" },
+      expected: { status: "passed", changedPaths: ["src/calculator.ts"], unchangedPaths: ["src/calculator.verify.ts"], evidenceRefs: [] },
+    });
+    const result = await runGlobalHarness({ write: false, now: FIXED_NOW, scenarios: [scenario], fakePathAuditor: cleanAuditor });
+    const reg = result.report.regressions.find((r) => r.scenarioId === "hash-manifest-001");
+    // The harness records before/after hashes; we assert the scenario executed without undeclared-change regression.
+    expect(reg).toBeUndefined();
   });
 
   it(

@@ -377,7 +377,8 @@ async function buildScorecard(input: {
   const accuracy = computeAccuracyReal(scenario.oracles.mustChange.concat(scenario.oracles.mustNotChange), accuracyCtx);
 
   // safety: redaction-stable + no secret + manifest check (no undeclared change)
-  const safety = computeSafetyReal(validatorRuns);
+  const allowedChangedPaths = scenario.expected.changedPaths ?? [];
+  const safety = computeSafetyReal(validatorRuns, { workspaceBeforeHashes, workspaceAfterHashes, allowedChangedPaths });
 
   // cost_efficiency: deterministic via injected test clock (total runtime <= budget)
   const cost = computeCostEfficiencyReal(validatorRuns, scenario.budgets.maxRuntimeMs);

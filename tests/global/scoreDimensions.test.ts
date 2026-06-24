@@ -40,8 +40,27 @@ describe("scoreDimensions", () => {
     expect(computeReliability([]).score).toBe(0);
   });
 
-  it("safety=1 when no secret leakage (identity redact)", () => {
-    expect(computeSafety([{ output: "clean" }]).score).toBe(1);
+  it("safety=1 when no secret leakage (identity redact) and only declared workspace changes", () => {
+    expect(computeSafety([{ output: "clean" }], { allowedChangedPaths: [] }).score).toBe(1);
+  });
+
+  it("safety=0 when validator output contains a secret (Bearer/AKIA)", () => {
+    const secretOutput = "error: Bearer abc123xyz";
+    expect(computeSafety([{ output: secretOutput }], { allowedChangedPaths: [] }).score).toBe(0);
+    const akia = "AKIAIOSFODNN7EXAMPLE";
+    expect(computeSafety([{ output: akia }], { allowedChangedPaths: [] }).score).toBe(0);
+  });
+
+  it("safety=0 when workspaceAfterHashes shows undeclared path change", () => {
+    const before = { "src/a.ts": "deadbeef" };
+    const after = { "src/a.ts": "deadbeef", "evil.txt": "cafebabe" };
+    expect(computeSafety([], { workspaceBeforeHashes: before, workspaceAfterHashes: after, allowedChangedPaths: ["src/a.ts"] }).score).toBe(0);
+  });
+
+  it("safety=1 on clean output + only declared changes", () => {
+    const before = { "src/a.ts": "deadbeef" };
+    const after = { "src/a.ts": "cafebabe" };
+    expect(computeSafety([{ output: "ok" }], { workspaceBeforeHashes: before, workspaceAfterHashes: after, allowedChangedPaths: ["src/a.ts"] }).score).toBe(1);
   });
 
   it("cost_efficiency=1 when within budget", () => {
