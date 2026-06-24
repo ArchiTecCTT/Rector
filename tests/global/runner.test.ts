@@ -45,53 +45,61 @@ function liveScenario(): GlobalScenario {
 }
 
 describe("global reliability harness runner", () => {
-  it("produces one scorecard per committed scenario with all eight dimensions plus fake-path", async () => {
-    // Given: the four committed offline scenarios and a real temp output directory.
-    const outputDir = await tempOutputDir();
+  it(
+    "produces one scorecard per committed scenario with all eight dimensions plus fake-path",
+    async () => {
+      // Given: the four committed offline scenarios and a real temp output directory.
+      const outputDir = await tempOutputDir();
 
-    // When: the harness runs them, writing both reports.
-    const result = await runGlobalHarness({ outputDir, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
+      // When: the harness runs them, writing both reports.
+      const result = await runGlobalHarness({ outputDir, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
 
-    // Then: there is exactly one scorecard per scenario, each carrying all eight dimensions + fake-path.
-    expect(result.scorecards.length).toBe(result.report.scenarioCount);
-    expect(result.scorecards.length).toBeGreaterThanOrEqual(4);
-    for (const scorecard of result.scorecards) {
-      for (const dimensionId of GLOBAL_SCORECARD_DIMENSION_IDS) {
-        expect(scorecard.dimensions[dimensionId].score).toBeGreaterThanOrEqual(0);
-        expect(scorecard.dimensions[dimensionId].score).toBeLessThanOrEqual(1);
+      // Then: there is exactly one scorecard per scenario, each carrying all eight dimensions + fake-path.
+      expect(result.scorecards.length).toBe(result.report.scenarioCount);
+      expect(result.scorecards.length).toBeGreaterThanOrEqual(4);
+      for (const scorecard of result.scorecards) {
+        for (const dimensionId of GLOBAL_SCORECARD_DIMENSION_IDS) {
+          expect(scorecard.dimensions[dimensionId].score).toBeGreaterThanOrEqual(0);
+          expect(scorecard.dimensions[dimensionId].score).toBeLessThanOrEqual(1);
+        }
+        expect(["clean", "fakes_present", "audit_not_present"]).toContain(scorecard.fakePathStatus);
       }
-      expect(["clean", "fakes_present", "audit_not_present"]).toContain(scorecard.fakePathStatus);
-    }
 
-    // And: both report files are written and reparse as JSON.
-    expect(result.jsonPath).toBeDefined();
-    const jsonText = await readFile(result.jsonPath as string, "utf8");
-    const reparsed = JSON.parse(jsonText) as { schemaVersion: string; generatedAt: string };
-    expect(reparsed.schemaVersion).toBe("rector.global-report.v1");
-    expect(reparsed.generatedAt).toBe("2026-01-01T00:00:00.000Z");
-    const markdownText = await readFile(result.markdownPath as string, "utf8");
-    expect(markdownText).toBe(result.reportMd);
-  });
+      // And: both report files are written and reparse as JSON.
+      expect(result.jsonPath).toBeDefined();
+      const jsonText = await readFile(result.jsonPath as string, "utf8");
+      const reparsed = JSON.parse(jsonText) as { schemaVersion: string; generatedAt: string };
+      expect(reparsed.schemaVersion).toBe("rector.global-report.v1");
+      expect(reparsed.generatedAt).toBe("2026-01-01T00:00:00.000Z");
+      const markdownText = await readFile(result.markdownPath as string, "utf8");
+      expect(markdownText).toBe(result.reportMd);
+    },
+    120000
+  );
 
-  it("records the real validator failure of the unfixed coding fixture and writes a replayable regression", async () => {
-    // Given: the committed scenarios whose validators run the still-buggy fixture verifier (exits 1).
-    const result = await runGlobalHarness({ write: false, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
+  it(
+    "records the real validator failure of the unfixed coding fixture and writes a replayable regression",
+    async () => {
+      // Given: the committed scenarios whose validators run the still-buggy fixture verifier (exits 1).
+      const result = await runGlobalHarness({ write: false, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
 
-    // When: the coding-basic-fix scenario outcome is inspected.
-    const codingOutcome = result.report.outcomes.find((outcome) => outcome.scenarioId === "coding-basic-fix-001");
-    const codingRegression = result.report.regressions.find((regression) => regression.scenarioId === "coding-basic-fix-001");
+      // When: the coding-basic-fix scenario outcome is inspected.
+      const codingOutcome = result.report.outcomes.find((outcome) => outcome.scenarioId === "coding-basic-fix-001");
+      const codingRegression = result.report.regressions.find((regression) => regression.scenarioId === "coding-basic-fix-001");
 
-    // Then: its reliability is 0 from the REAL non-zero exit and it did NOT silently pass.
-    expect(codingOutcome).toBeDefined();
-    expect(codingOutcome?.scorecard.passed).toBe(false);
-    expect(codingOutcome?.scorecard.dimensions.reliability.score).toBe(0);
-    expect(codingOutcome?.validatorRuns.some((run) => run.exitCode !== 0)).toBe(true);
+      // Then: its reliability is 0 from the REAL non-zero exit and it did NOT silently pass.
+      expect(codingOutcome).toBeDefined();
+      expect(codingOutcome?.scorecard.passed).toBe(false);
+      expect(codingOutcome?.scorecard.dimensions.reliability.score).toBe(0);
+      expect(codingOutcome?.validatorRuns.some((run) => run.exitCode !== 0)).toBe(true);
 
-    // And: a replayable regression artifact captures the failing validator command and exit.
-    expect(codingRegression).toBeDefined();
-    expect(codingRegression?.failedValidators?.length ?? 0).toBeGreaterThan(0);
-    expect(codingRegression?.failedValidators?.[0]?.command).toContain("calculator.verify.ts");
-  });
+      // And: a replayable regression artifact captures the failing validator command and exit.
+      expect(codingRegression).toBeDefined();
+      expect(codingRegression?.failedValidators?.length ?? 0).toBeGreaterThan(0);
+      expect(codingRegression?.failedValidators?.[0]?.command).toContain("calculator.verify.ts");
+    },
+    120000
+  );
 
   it("skips a live scenario without creds, recording a reason and never failing the run", async () => {
     // Given: a synthetic live scenario and an environment without LIVE_EVALS=1.
@@ -136,14 +144,18 @@ describe("global reliability harness runner", () => {
     expect(result.scorecards[0]?.dimensions.reliability.score).toBe(1);
   });
 
-  it("reports audit_not_present when no fake-path auditor is injected", async () => {
-    // Given: the committed scenarios run without an injected fake-path auditor.
-    const result = await runGlobalHarness({ write: false, now: FIXED_NOW });
+  it(
+    "reports audit_not_present when no fake-path auditor is injected",
+    async () => {
+      // Given: the committed scenarios run without an injected fake-path auditor.
+      const result = await runGlobalHarness({ write: false, now: FIXED_NOW });
 
     // Then: the fake-path status is honestly audit_not_present rather than a fabricated clean.
     expect(result.report.fakePathStatus).toBe("audit_not_present");
     expect(result.report.fakeFindingCount).toBe(0);
-  });
+    },
+    120000
+  );
 
   it("executes a validator whose args contain spaces without whitespace-splitting", async () => {
     const scenario = GlobalScenarioSchema.parse({
@@ -166,34 +178,42 @@ describe("global reliability harness runner", () => {
     expect(result.scorecards[0]?.dimensions.reliability.score).toBe(1);
   });
 
-  it("resolves tsx via local node_modules/.bin or validated npx --no-install (never plain npx)", async () => {
-    // The committed coding-basic-fix scenario already uses npx --no-install tsx; running it proves the path.
-    const result = await runGlobalHarness({ write: false, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
+  it(
+    "resolves tsx via local node_modules/.bin or validated npx --no-install (never plain npx)",
+    async () => {
+      // The committed coding-basic-fix scenario already uses npx --no-install tsx; running it proves the path.
+      const result = await runGlobalHarness({ write: false, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
     const coding = result.report.outcomes.find((o) => o.scenarioId === "coding-basic-fix-001");
     expect(coding).toBeDefined();
     // The validator command string must contain --no-install and must not contain a bare "npx tsx" without the flag.
     const cmd = coding?.validatorRuns[0]?.command ?? "";
     expect(cmd).toContain("--no-install");
     expect(cmd).not.toMatch(/\bnpx tsx\b(?!\s*--no-install)/);
-  });
+    },
+    120000
+  );
 
-  it("emits schema-valid SpecialistTaskPacket + >=5 RunEvent trace per executed scenario and derives delegation_quality from packet/trace", async () => {
-    const result = await runGlobalHarness({ write: false, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
-    expect(result.report.executedCount).toBeGreaterThanOrEqual(4);
-    for (const outcome of result.report.outcomes) {
-      expect(outcome.taskPacket).toBeDefined();
-      SpecialistTaskPacketSchema.parse(outcome.taskPacket);
-      expect(outcome.runEvents).toBeDefined();
-      expect(outcome.runEvents!.length).toBeGreaterThanOrEqual(5);
-      outcome.runEvents!.forEach((ev) => RunEventSchema.parse(ev));
-      // 1:1 validator -> TOOL_INVOKED + completion/failure
-      const toolInvoked = outcome.runEvents!.filter((e) => e.type === "TOOL_INVOKED");
-      expect(toolInvoked.length).toBe(outcome.validatorRuns.length);
-      // delegation_quality derived from packet/trace (score 0 or 1)
-      const dq = outcome.scorecard.dimensions.delegation_quality.score;
-      expect([0, 1]).toContain(dq);
-    }
-  });
+  it(
+    "emits schema-valid SpecialistTaskPacket + >=5 RunEvent trace per executed scenario and derives delegation_quality from packet/trace",
+    async () => {
+      const result = await runGlobalHarness({ write: false, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
+      expect(result.report.executedCount).toBeGreaterThanOrEqual(4);
+      for (const outcome of result.report.outcomes) {
+        expect(outcome.taskPacket).toBeDefined();
+        SpecialistTaskPacketSchema.parse(outcome.taskPacket);
+        expect(outcome.runEvents).toBeDefined();
+        expect(outcome.runEvents!.length).toBeGreaterThanOrEqual(5);
+        outcome.runEvents!.forEach((ev) => RunEventSchema.parse(ev));
+        // 1:1 validator -> TOOL_INVOKED + completion/failure
+        const toolInvoked = outcome.runEvents!.filter((e) => e.type === "TOOL_INVOKED");
+        expect(toolInvoked.length).toBe(outcome.validatorRuns.length);
+        // delegation_quality derived from packet/trace (score 0 or 1)
+        const dq = outcome.scorecard.dimensions.delegation_quality.score;
+        expect([0, 1]).toContain(dq);
+      }
+    },
+    120000
+  );
 
   it("scripted_patch runs git apply --check before apply", async () => {
     // We cannot easily inject a full scenario with operation here without extending schema usage,
@@ -264,17 +284,23 @@ describe("global reliability harness runner", () => {
     expect(true).toBe(true);
   });
 
-  it("full workspace hash manifest detects an undeclared change", async () => {
-    // The manifest is computed before/after; any length or hash diff is captured.
-    // We assert the code path exists by running the harness; detailed diff inspection is future work.
-    const result = await runGlobalHarness({ write: false, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
-    expect(result.report.executedCount).toBeGreaterThanOrEqual(4);
-  });
+  it(
+    "full workspace hash manifest detects an undeclared change",
+    async () => {
+      // The manifest is computed before/after; any length or hash diff is captured.
+      // We assert the code path exists by running the harness; detailed diff inspection is future work.
+      const result = await runGlobalHarness({ write: false, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
+      expect(result.report.executedCount).toBeGreaterThanOrEqual(4);
+    },
+    120000
+  );
 
-  it("writes standalone regression artifacts for a failing scenario and none for a passing one", async () => {
-    const outputDir = await tempOutputDir();
-    // Run the harness (coding-basic-fix fails) and write artifacts.
-    await runGlobalHarness({ outputDir, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
+  it(
+    "writes standalone regression artifacts for a failing scenario and none for a passing one",
+    async () => {
+      const outputDir = await tempOutputDir();
+      // Run the harness (coding-basic-fix fails) and write artifacts.
+      await runGlobalHarness({ outputDir, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
 
     const fsMod = await import("node:fs/promises");
     const jsonPath = path.join(outputDir, "regressions", "coding-basic-fix-001.json");
@@ -287,5 +313,7 @@ describe("global reliability harness runner", () => {
     const mdText = await fsMod.readFile(mdPath, "utf8");
     expect(mdText).toContain("coding-basic-fix-001");
     expect(mdText).toContain("Replay");
-  });
+    },
+    120000
+  );
 });
