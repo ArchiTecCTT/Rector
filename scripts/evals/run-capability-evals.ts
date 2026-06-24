@@ -23,6 +23,11 @@ import {
   type CapabilityEvalRunReport,
 } from "./score-capability-results";
 import { LocalFsRawArtifactStore, type RawArtifactRecord } from "../../src/capabilities/eval/artifactStore";
+import { estimateApproxTokensFromText } from "../../src/capabilities/eval/tokens";
+import {
+  CapabilityEvidencePacketSchema,
+  type CapabilityEvidencePacket,
+} from "../../src/capabilities/eval/evidencePacket";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const DEFAULT_CORPUS_ROOT = path.join(REPO_ROOT, "tests", "fixtures", "eval-corpus");
@@ -115,13 +120,16 @@ function computeRootCauseAccuracy(recall: number, exitCodeMatches: boolean, line
   return recall === 1 && exitCodeMatches && lineCountMatches ? 1 : 0;
 }
 
-function computeCompressionMetrics(foundExpected: readonly string[], artifact: string): CompressionMetrics {
-  const artifactChars = artifact.length;
-  const evidenceChars = foundExpected.reduce((total, evidence) => total + evidence.length, 0);
-  return {
-    compression: evidenceChars === 0 ? 0 : artifactChars / evidenceChars,
-    rawTokenReduction: artifactChars === 0 || evidenceChars >= artifactChars ? 0 : 1 - evidenceChars / artifactChars,
-  };
+function computeCompressionMetricsFromExpectedPacket(artifact: string, packet: CapabilityEvidencePacket | null): CompressionMetrics {
+  const rawTokens = estimateApproxTokensFromText(artifact);
+  if (!packet) {
+    return { compression: 0, rawTokenReduction: 0 };
+  }
+  const evidenceText = JSON.stringify(packet);
+  const evidenceTokens = estimateApproxTokensFromText(evidenceText);
+  const compression = evidenceTokens === 0 ? 0 : rawTokens / evidenceTokens;
+  const rawTokenReduction = evidenceTokens === 0 || evidenceTokens >= rawTokens ? 0 : 1 - evidenceTokens / rawTokens;
+  return { compression, rawTokenReduction };
 }
 
 function evaluatePassed(recall: number, secretLeak: number, exitCodeMatches: boolean, lineCountMatches: boolean): boolean {
@@ -162,15 +170,16 @@ function scoreCase(input: {
   readonly fixtureCase: EvalCorpusCase;
   readonly oracle: EvalCorpusOracle;
   readonly artifact: string;
+  readonly expectedEvidencePacket?: CapabilityEvidencePacket | null;
 }): CapabilityEvalResult {
-  const { fixtureCase, oracle, artifact } = input;
+  const { fixtureCase, oracle, artifact, expectedEvidencePacket } = input;
 
   const recallOmission = computeRecallOmission(oracle, artifact);
   const secretLeak = computeSecretLeak(oracle, artifact);
   const lineAccuracy = computeLineAccuracy(artifact, oracle);
   const exitCodeMatches = oracle.expectedExitCode === fixtureCase.generatedFrom.exitCode;
   const rootCauseAccuracy = computeRootCauseAccuracy(recallOmission.recall, exitCodeMatches, lineAccuracy.lineCountMatches);
-  const compressionMetrics = computeCompressionMetrics(recallOmission.foundExpected, artifact);
+  const compressionMetrics = computeCompressionMetricsFromExpectedPacket(artifact, expectedEvidencePacket ?? null);
 
   const metricScores: Record<CapabilityEvalMetricId, number> = {
     schema_valid: 1,
@@ -229,7 +238,14 @@ export async function runCapabilityEvals(options: RunCapabilityEvalsOptions = {}
       metadata: { source: "eval-corpus", caseId: fixtureCase.id },
     });
     rawArtifactRecords.push({ uri: record.uri, sha256: record.sha256, redactionState: record.redactionState, sizeBytes: record.sizeBytes });
-    const result = scoreCase({ fixtureCase, oracle, artifact });
+
+    let expectedEvidencePacket: CapabilityEvidencePacket | null = null;
+    if (fixtureCase.expectedEvidencePath) {
+      const packetJson = await readCorpusJson(corpusRoot, fixtureCase.expectedEvidencePath);
+      expectedEvidencePacket = CapabilityEvidencePacketSchema.parse(packetJson);
+    }
+
+    const result = scoreCase({ fixtureCase, oracle, artifact, expectedEvidencePacket });
     const patched = { ...result, rawArtifactRefs: [record.uri] };
     results.push(CapabilityEvalResultSchema.parse(patched));
   }

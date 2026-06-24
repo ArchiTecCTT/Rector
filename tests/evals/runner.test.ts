@@ -100,9 +100,9 @@ describe("offline capability eval runner", () => {
 
     // Then: every committed case yields its exact recorded score (drift in scoring math fails here).
     const expectedPerCase = {
-      "rg-orchestration-search": { compression: 1.0127388535031847, raw_token_reduction: 0.012578616352201255 },
-      "tsc-runtime-mode-error": { compression: 1.0348837209302326, raw_token_reduction: 0.0337078651685393 },
-      "git-readiness-diff": { compression: 1.6725663716814159, raw_token_reduction: 0.4021164021164021 },
+      "rg-orchestration-search": { compression: 0, raw_token_reduction: 0 },
+      "tsc-runtime-mode-error": { compression: 0, raw_token_reduction: 0 },
+      "git-readiness-diff": { compression: 0, raw_token_reduction: 0 },
     } as const;
     for (const [caseId, expected] of Object.entries(expectedPerCase)) {
       const scores = byCase.get(caseId);
@@ -116,9 +116,9 @@ describe("offline capability eval runner", () => {
       expect(scores?.raw_token_reduction).toBe(expected.raw_token_reduction);
     }
 
-    // And: the aggregate values are the exact deterministic means over the three cases.
-    expect(output.summary.metrics.compression.value).toBe(1.2400629820382776);
-    expect(output.summary.metrics.raw_token_reduction.value).toBe(0.14946762787904755);
+    // And: the aggregate values are the exact deterministic means over the three cases (all zero because no expectedEvidencePath yet).
+    expect(output.summary.metrics.compression.value).toBe(0);
+    expect(output.summary.metrics.raw_token_reduction.value).toBe(0);
     expect(output.summary.metrics.recall.value).toBe(1);
     expect(output.summary.metrics.omission.value).toBe(0);
     expect(output.summary.metrics.secret_leak.value).toBe(0);

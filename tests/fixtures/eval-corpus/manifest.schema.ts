@@ -34,6 +34,7 @@ export const EvalCorpusCaseSchema = z
     oraclePath: RelativeCorpusPathSchema,
     inputPaths: z.array(RelativeCorpusPathSchema).min(1),
     generatedFrom: EvalCorpusCommandSchema,
+    expectedEvidencePath: RelativeCorpusPathSchema.optional(),
   })
   .strict()
   .refine((fixtureCase) => expectedToolForArtifact(fixtureCase.artifactKind) === fixtureCase.generatedFrom.tool, {
