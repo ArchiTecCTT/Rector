@@ -10,9 +10,9 @@ expectedSpecialist: coding
 successCriteria:
   - scenario coding-basic-fix-passing-scripted-patch executes
 validators:
-  - id: calculator-verifier
-    cmd: tsx
-    args: [src/calculator.verify.ts]
+  - id: calculator-source-verifier
+    cmd: node
+    args: [src/calculator-source.verify.js]
     cwd: .
     timeoutMs: 30000
     expectedExitCode: 0
