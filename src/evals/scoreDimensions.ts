@@ -30,6 +30,8 @@ export interface GlobalEvidenceContext {
   readonly workspaceRoot: string;
   readonly beforeHashes: Readonly<Record<string, string>>;
   readonly afterHashes: Readonly<Record<string, string>>;
+  readonly workspaceBeforeHashes?: Readonly<Record<string, string>>;
+  readonly workspaceAfterHashes?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -131,11 +133,81 @@ export function computeDelegationQuality(packet: SpecialistTaskPacket, allowed: 
 }
 
 /**
- * computeEvidenceQuality — 1 iff every declared evidence id is non-empty.
+ * Evidence resolution result for a single ref.
  */
-export function computeEvidenceQuality(evidenceIds: readonly string[]): DimensionScore {
-  const ok = evidenceIds.length > 0 && evidenceIds.every((id) => id.trim().length > 0);
-  return { score: ok ? 1 : 0, note: ok ? "evidence ids declared" : "missing or empty evidence ids" };
+export interface EvidenceResolution {
+  readonly resolved: boolean;
+  readonly kind?: "artifact" | "validator" | "event" | "file" | "line";
+  readonly reason?: string;
+}
+
+/**
+ * resolveEvidenceRef — resolves a required evidence ref against GlobalEvidenceContext.
+ * Returns { resolved: true, kind } on success; { resolved: false, reason } on failure.
+ * Pure/deterministic; never throws.
+ */
+export function resolveEvidenceRef(ref: string, ctx: GlobalEvidenceContext): EvidenceResolution {
+  if (!ref || ref.trim().length === 0) {
+    return { resolved: false, reason: "empty ref" };
+  }
+  // artifact by id
+  if (ctx.artifactRecords.some((a) => a.id === ref)) {
+    return { resolved: true, kind: "artifact" };
+  }
+  // validator by id
+  if (ctx.validatorRuns.some((v) => v.id === ref)) {
+    return { resolved: true, kind: "validator" };
+  }
+  // runEvent by id
+  if (ctx.runEvents.some((e) => e.id === ref)) {
+    return { resolved: true, kind: "event" };
+  }
+
+  const allPaths = new Set<string>();
+  for (const a of ctx.artifactRecords) if (a.path) allPaths.add(a.path);
+  for (const k of Object.keys(ctx.beforeHashes)) allPaths.add(k);
+  for (const k of Object.keys(ctx.afterHashes)) allPaths.add(k);
+  if (ctx.workspaceBeforeHashes) for (const k of Object.keys(ctx.workspaceBeforeHashes)) allPaths.add(k);
+  if (ctx.workspaceAfterHashes) for (const k of Object.keys(ctx.workspaceAfterHashes)) allPaths.add(k);
+
+  if (ref.includes(":")) {
+    const [p, ln] = ref.split(":");
+    const lineNum = ln ? parseInt(ln, 10) : undefined;
+    const hasPath = allPaths.has(p);
+    if (hasPath) {
+      const lineMatch = ctx.artifactRecords.some((a) => a.path === p && (a.line === undefined || a.line === lineNum));
+      if (lineMatch || lineNum === undefined) {
+        return { resolved: true, kind: "line" };
+      }
+    }
+    return { resolved: false, reason: `unresolvable line ref: ${ref}` };
+  }
+
+  if (allPaths.has(ref) || ref.startsWith(ctx.workspaceRoot)) {
+    return { resolved: true, kind: "file" };
+  }
+
+  return { resolved: false, reason: `unresolvable ref: ${ref}` };
+}
+
+/**
+ * computeEvidenceQuality — 1 iff every declared evidence id resolves against ctx.
+ * Fabricated ids (unresolvable) force score=0 (anti-cheat).
+ */
+export function computeEvidenceQuality(evidenceIds: readonly string[], ctx?: GlobalEvidenceContext): DimensionScore {
+  if (evidenceIds.length === 0) {
+    return { score: 0, note: "missing or empty evidence ids" };
+  }
+  if (!ctx) {
+    // legacy path (no ctx) — only non-empty check
+    const ok = evidenceIds.every((id) => id.trim().length > 0);
+    return { score: ok ? 1 : 0, note: ok ? "evidence ids declared" : "missing or empty evidence ids" };
+  }
+  const allResolved = evidenceIds.every((id) => resolveEvidenceRef(id, ctx).resolved);
+  return {
+    score: allResolved ? 1 : 0,
+    note: allResolved ? "all evidence refs resolved" : "unresolvable evidence ref(s)",
+  };
 }
 
 /**
