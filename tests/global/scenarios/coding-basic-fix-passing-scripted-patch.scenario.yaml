@@ -11,8 +11,8 @@ successCriteria:
   - scenario coding-basic-fix-passing-scripted-patch executes
 validators:
   - id: calculator-verifier
-    cmd: npx
-    args: [--no-install, tsx, src/calculator.verify.ts]
+    cmd: tsx
+    args: [src/calculator.verify.ts]
     cwd: .
     timeoutMs: 30000
     expectedExitCode: 0
