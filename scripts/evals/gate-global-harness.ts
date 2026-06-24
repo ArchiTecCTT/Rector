@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
 
 import { runGlobalHarness } from "../../src/evals/globalRunner";
 import { auditNoProductionFakes } from "../audit/no-production-fakes";
-import { loadGlobalScenario, type GlobalScenario } from "../../src/evals/globalScenarioSchema";
+import { loadGlobalScenario } from "../../src/evals/globalScenarioSchema";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCENARIOS_DIR = path.join(REPO_ROOT, "tests", "global", "scenarios");
@@ -53,8 +53,20 @@ async function main(): Promise<void> {
   const strictPass = scorecards.filter((s) => s.passed).length;
   if (strictPass < 5) violations.push(`strict-passing scenarios ${strictPass} < 5`);
 
-  const regressionCount = report.regressions.length;
-  if (regressionCount < 5) violations.push(`intentional regressions ${regressionCount} < 5`);
+  // 1 + 4: structured actual vs expected (from harness outcomes + scenario files)
+  const scenarioFiles = await fs.readdir(SCENARIOS_DIR);
+  let intentionalRegressionCount = 0;
+  for (const o of outcomes) {
+    const scenarioFile = scenarioFiles.find((f) => f.includes(o.scenarioId));
+    if (!scenarioFile) continue;
+    const yaml = await fs.readFile(path.join(SCENARIOS_DIR, scenarioFile), "utf8");
+    const scenario = loadGlobalScenario(yaml, "yaml");
+    const declared = scenario.expected.status;
+    const actual = o.actualStatus;
+    if (declared !== actual) violations.push(`${o.scenarioId}: declared ${declared} but actually ${actual}`);
+    if (declared === "failed" && actual === "failed") intentionalRegressionCount++;
+  }
+  if (intentionalRegressionCount < 5) violations.push(`intentional regressions ${intentionalRegressionCount} < 5`);
 
   // 5
   for (const o of outcomes) {
@@ -65,28 +77,22 @@ async function main(): Promise<void> {
     if (!o.validationRefs || o.validationRefs.length === 0) violations.push(`${o.scenarioId}: missing validationRefs`);
   }
 
-  // 6 evidence_quality === 0 while scenario declares evidence refs
-  for (const sc of scorecards) {
+  // 6 evidence_quality === 0 while scenario declares evidence refs (use exact scenarioFile)
+  for (const o of outcomes) {
+    const sc = scorecards.find((s) => s.scenarioId === o.scenarioId);
+    if (!sc) continue;
     const eq = sc.dimensions.evidence_quality.score;
     if (eq === 0) {
-      // check if scenario actually declares evidence refs
-      const scenarioFile = (await fs.readdir(SCENARIOS_DIR)).find((f) => f.includes(sc.scenarioId.split("-")[0]));
-      if (scenarioFile) {
-        const yaml = await fs.readFile(path.join(SCENARIOS_DIR, scenarioFile), "utf8");
-        if (yaml.includes("evidence") || yaml.includes("artifact-ref")) {
-          violations.push(`${sc.scenarioId}: evidence_quality=0 with declared evidence refs`);
-        }
+      const yaml = await fs.readFile(path.join(SCENARIOS_DIR, o.scenarioFile), "utf8");
+      if (yaml.includes("evidence") || yaml.includes("artifact-ref")) {
+        violations.push(`${o.scenarioId}: evidence_quality=0 with declared evidence refs`);
       }
     }
   }
 
-  // 7 regression artifacts for expected-fail scenarios
+  // 7 regression artifacts for expected-fail scenarios (use o.expectedStatus + o.scenarioFile)
   for (const o of outcomes) {
-    const scenarioFile = (await fs.readdir(SCENARIOS_DIR)).find((f) => f.includes(o.scenarioId.split("-")[0]));
-    if (!scenarioFile) continue;
-    const yaml = await fs.readFile(path.join(SCENARIOS_DIR, scenarioFile), "utf8");
-    const declared = /expected:\s*\n\s*status:\s*(\w+)/.exec(yaml)?.[1];
-    if (declared === "failed") {
+    if (o.expectedStatus === "failed") {
       const jsonPath = path.join(REGRESSIONS_DIR, `${o.scenarioId}.json`);
       const mdPath = path.join(REGRESSIONS_DIR, `${o.scenarioId}.md`);
       if (!(await fs.stat(jsonPath).catch(() => null)) || !(await fs.stat(mdPath).catch(() => null))) {
@@ -110,7 +116,7 @@ async function main(): Promise<void> {
       isGate ? "[global-harness:gate]" : "[global-harness:report-only]",
       `scenarios: ${report.scenarioCount} executed ${report.executedCount} skipped ${report.skippedCount}`,
       `passed: ${report.passedCount} regressions: ${report.regressions.length}`,
-      `strict-pass: ${strictPass} regressions: ${report.regressions.length}`,
+      `strict-pass: ${strictPass} intentional: ${intentionalRegressionCount}`,
       violations.length ? `VIOLATIONS: ${violations.join("; ")}` : "gate passed",
     ].join("\n") + "\n",
   );

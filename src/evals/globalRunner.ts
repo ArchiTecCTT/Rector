@@ -133,6 +133,9 @@ export type GlobalScenarioOutcome = {
   readonly runEvents?: readonly ReturnType<typeof RunEventSchema.parse>[];
   readonly artifactRefs?: readonly string[];
   readonly validationRefs?: readonly string[];
+  readonly actualStatus: "passed" | "failed" | "skipped";
+  readonly expectedStatus: "passed" | "failed" | "skipped";
+  readonly scenarioFile: string;
 };
 
 export type GlobalHarnessReport = {
@@ -627,6 +630,8 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       forbidden,
     });
 
+    const actualStatus: "passed" | "failed" | "skipped" = realScorecard.passed ? "passed" : "failed";
+    const scenarioFileName = `${scenario.id}.scenario.yaml`;
     outcomes.push({
       scenarioId: scenario.id,
       scorecard: realScorecard,
@@ -635,6 +640,9 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       runEvents,
       artifactRefs: scenario.oracles.mustIncludeEvidence,
       validationRefs: scenario.validators.map((v) => v.id),
+      actualStatus,
+      expectedStatus: scenario.expected.status,
+      scenarioFile: scenarioFileName,
     });
 
     // After hashes + manifest diff for safety (detect undeclared changes).
