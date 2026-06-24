@@ -135,7 +135,10 @@ describe("Capability eval metrics", () => {
   });
 
   it("treats missing metric keys as fail-closed worst-case values", () => {
-    // Given: a non-empty result omitting recall and omission scores from its metric record.
+    // Given: an UNVALIDATED result (constructed without schema parsing) that omits recall and
+    // omission scores. The strict CapabilityMetricScoresSchema now rejects missing keys at the
+    // schema boundary, so this cast bypasses validation to exercise the scorer's defense-in-depth
+    // fail-closed path for any caller that does not parse through CapabilityEvalResultSchema.
     const incompleteScores: Record<string, number> = {
       schema_valid: 1,
       secret_leak: 0,
@@ -144,7 +147,7 @@ describe("Capability eval metrics", () => {
       line_ref_accuracy: 0.92,
       root_cause_accuracy: 0.87,
     };
-    const incompleteResult: CapabilityEvalResult = {
+    const incompleteResult = {
       schemaVersion: "rector.capability-eval.v1",
       caseId: "incomplete",
       capabilityId: "cartographer.grounding",
@@ -152,7 +155,7 @@ describe("Capability eval metrics", () => {
       metricScores: incompleteScores,
       omissions: ["Metric keys were missing."],
       rawArtifactRefs: ["artifact://phase0/incomplete/raw.json"],
-    };
+    } as unknown as CapabilityEvalResult;
 
     // When: the incomplete result is scored.
     const summary = scoreEvalResults([incompleteResult]);

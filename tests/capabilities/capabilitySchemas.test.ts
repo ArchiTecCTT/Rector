@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import { describe, expect, it } from "vitest";
+import { CAPABILITY_EVAL_METRIC_IDS } from "../../src/capabilities/eval/metrics";
 import {
   CAPABILITY_EVAL_SCHEMA_VERSION,
   CapabilityEvalCaseSchema,
@@ -102,6 +103,46 @@ describe("Capability eval schemas", () => {
     }
     if (!lineResult.success) {
       expect(lineResult.error.issues.some((issue) => issue.path.join(".") === "oracle.mustIncludeLineContains")).toBe(true);
+    }
+  });
+
+  it("rejects a result missing any of the eight required metric scores", () => {
+    // Given: the strict metric schema requires every canonical Phase-0 metric id.
+    for (const metricId of CAPABILITY_EVAL_METRIC_IDS) {
+      const metricScores: Record<string, number> = { ...sampleResult.metricScores };
+      delete metricScores[metricId];
+      const resultMissingOne = { ...sampleResult, metricScores };
+
+      // When: the result is parsed with one required metric score removed.
+      const result = CapabilityEvalResultSchema.safeParse(resultMissingOne);
+
+      // Then: parsing fails because the strict schema requires all eight keys (also catches a
+      // schema that silently drops a required id, since each id is exercised in turn).
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((issue) => issue.path.join(".") === `metricScores.${metricId}`)).toBe(true);
+      }
+    }
+  });
+
+  it("rejects a result carrying an extra metric score key", () => {
+    // Given: a valid result fixture extended with an unknown metric id.
+    const metricScores = { ...sampleResult.metricScores, bogus_metric: 0 };
+    const resultWithExtra = { ...sampleResult, metricScores };
+
+    // When: the result is parsed with the unrecognised metric key present.
+    const result = CapabilityEvalResultSchema.safeParse(resultWithExtra);
+
+    // Then: parsing fails because the strict metric schema admits only the eight canonical ids;
+    // Zod surfaces the extra key as an `unrecognized_keys` issue on the `metricScores` object.
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((candidate) => candidate.code === "unrecognized_keys");
+      expect(issue).toBeDefined();
+      if (issue && issue.code === "unrecognized_keys") {
+        expect(issue.path.join(".")).toBe("metricScores");
+        expect(issue.keys).toContain("bogus_metric");
+      }
     }
   });
 });
