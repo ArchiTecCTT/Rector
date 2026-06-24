@@ -21,14 +21,14 @@ describe("scoreDimensions", () => {
 
   it("GlobalEvidenceContext rejects fabricated refs (accuracy=0 on mismatch)", () => {
     const ctx: GlobalEvidenceContext = {
-      artifactRecords: {},
+      artifactRecords: [{ id: "a1", path: "a.ts" }],
       validatorRuns: [],
       runEvents: [],
       workspaceRoot: "/tmp",
       beforeHashes: { "a.ts": "deadbeef" },
       afterHashes: { "a.ts": "cafebabe" },
     };
-    const acc = computeAccuracy(ctx);
+    const acc = computeAccuracy(["a.ts"], ctx);
     expect(acc.score).toBe(0);
   });
 
@@ -54,7 +54,9 @@ describe("scoreDimensions", () => {
       expectedCandidateRefs: ["ref1"],
       forbiddenCrossDomainRefs: [],
     });
-    expect(computeMemoryCorrectness(assertion).score).toBe(1);
+    const ctx: GlobalEvidenceContext = { artifactRecords: [], validatorRuns: [], runEvents: [], workspaceRoot: ".", beforeHashes: {}, afterHashes: {} };
+    // No matching runEvents → strict rule yields 0
+    expect(computeMemoryCorrectness(assertion, ctx).score).toBe(0);
   });
 
   it("delegation_quality=1 only when allowed and not forbidden", () => {
@@ -70,11 +72,24 @@ describe("scoreDimensions", () => {
   });
 
   it("simplicity=1 only when within budget and no violations", () => {
-    expect(computeSimplicity(1, 2, false, false, false).score).toBe(1);
-    expect(computeSimplicity(3, 2, false, false, false).score).toBe(0);
-    expect(computeSimplicity(1, 2, true, false, false).score).toBe(0);
-    expect(computeSimplicity(1, 2, false, true, false).score).toBe(0);
-    expect(computeSimplicity(1, 2, false, false, true).score).toBe(0);
+    const ok = computeSimplicity({ validatorCount: 1, validatorBudget: 2, forbiddenSpecialistUsed: false, operationKind: "validator_only", patchUsedWhenValidatorOnlySuffices: false, extraValidatorsBeyondBudget: false });
+    expect(ok.score).toBe(1);
+  });
+  it("simplicity penalizes validator count exceed", () => {
+    const bad = computeSimplicity({ validatorCount: 3, validatorBudget: 2, forbiddenSpecialistUsed: false, operationKind: "validator_only", patchUsedWhenValidatorOnlySuffices: false, extraValidatorsBeyondBudget: false });
+    expect(bad.score).toBe(0.5);
+  });
+  it("simplicity=0 on forbidden specialist", () => {
+    const bad = computeSimplicity({ validatorCount: 1, validatorBudget: 2, forbiddenSpecialistUsed: true, operationKind: "validator_only", patchUsedWhenValidatorOnlySuffices: false, extraValidatorsBeyondBudget: false });
+    expect(bad.score).toBe(0);
+  });
+  it("simplicity=0 on avoidable patch", () => {
+    const bad = computeSimplicity({ validatorCount: 1, validatorBudget: 2, forbiddenSpecialistUsed: false, operationKind: "validator_only", patchUsedWhenValidatorOnlySuffices: true, extraValidatorsBeyondBudget: false });
+    expect(bad.score).toBe(0);
+  });
+  it("simplicity penalizes extra validators", () => {
+    const bad = computeSimplicity({ validatorCount: 1, validatorBudget: 2, forbiddenSpecialistUsed: false, operationKind: "validator_only", patchUsedWhenValidatorOnlySuffices: false, extraValidatorsBeyondBudget: true });
+    expect(bad.score).toBe(0.5);
   });
 
   it("SpecialistTaskPacket validates under schema", () => {
