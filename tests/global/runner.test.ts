@@ -8,6 +8,8 @@ import {
 } from "../../src/evals/scorecards";
 import { GlobalScenarioSchema, type GlobalScenario } from "../../src/evals/globalScenarioSchema";
 import { requiresLiveProvider, runGlobalHarness } from "../../src/evals/globalRunner";
+import { RunEventSchema } from "../../src/protocol/events";
+import { SpecialistTaskPacketSchema } from "../../src/systems/contracts";
 
 const FIXED_NOW = () => new Date("2026-01-01T00:00:00.000Z");
 const cleanAuditor = async () => ({ findingCount: 0 });
@@ -87,8 +89,8 @@ describe("global reliability harness runner", () => {
 
     // And: a replayable regression artifact captures the failing validator command and exit.
     expect(codingRegression).toBeDefined();
-    expect(codingRegression?.failedValidators.length).toBeGreaterThan(0);
-    expect(codingRegression?.failedValidators[0]?.command).toContain("calculator.verify.ts");
+    expect(codingRegression?.failedValidators?.length ?? 0).toBeGreaterThan(0);
+    expect(codingRegression?.failedValidators?.[0]?.command).toContain("calculator.verify.ts");
   });
 
   it("skips a live scenario without creds, recording a reason and never failing the run", async () => {
@@ -173,6 +175,24 @@ describe("global reliability harness runner", () => {
     const cmd = coding?.validatorRuns[0]?.command ?? "";
     expect(cmd).toContain("--no-install");
     expect(cmd).not.toMatch(/\bnpx tsx\b(?!\s*--no-install)/);
+  });
+
+  it("emits schema-valid SpecialistTaskPacket + >=5 RunEvent trace per executed scenario and derives delegation_quality from packet/trace", async () => {
+    const result = await runGlobalHarness({ write: false, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
+    expect(result.report.executedCount).toBeGreaterThanOrEqual(4);
+    for (const outcome of result.report.outcomes) {
+      expect(outcome.taskPacket).toBeDefined();
+      SpecialistTaskPacketSchema.parse(outcome.taskPacket);
+      expect(outcome.runEvents).toBeDefined();
+      expect(outcome.runEvents!.length).toBeGreaterThanOrEqual(5);
+      outcome.runEvents!.forEach((ev) => RunEventSchema.parse(ev));
+      // 1:1 validator -> TOOL_INVOKED + completion/failure
+      const toolInvoked = outcome.runEvents!.filter((e) => e.type === "TOOL_INVOKED");
+      expect(toolInvoked.length).toBe(outcome.validatorRuns.length);
+      // delegation_quality derived from packet/trace (score 0 or 1)
+      const dq = outcome.scorecard.dimensions.delegation_quality.score;
+      expect([0, 1]).toContain(dq);
+    }
   });
 
   it("scripted_patch runs git apply --check before apply", async () => {

@@ -26,6 +26,11 @@ import {
   RegressionArtifactSchema,
   type RegressionArtifact,
 } from "./regressionArtifactSchema";
+import { buildTaskPacket, buildRunTrace } from "./runTrace";
+import { RunEventSchema } from "../protocol/events";
+import { RunPhaseSchema } from "../protocol/phases";
+import { SpecialistTaskPacketSchema } from "../systems/contracts";
+import { computeDelegationQuality as computeDelegationQualityFromPacket } from "./scoreDimensions";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const DEFAULT_SCENARIOS_DIR = path.join(REPO_ROOT, "tests", "global", "scenarios");
@@ -110,6 +115,10 @@ export type GlobalScenarioOutcome = {
   readonly scenarioId: string;
   readonly scorecard: Scorecard;
   readonly validatorRuns: readonly ValidatorRun[];
+  readonly taskPacket?: ReturnType<typeof SpecialistTaskPacketSchema.parse>;
+  readonly runEvents?: readonly ReturnType<typeof RunEventSchema.parse>[];
+  readonly artifactRefs?: readonly string[];
+  readonly validationRefs?: readonly string[];
 };
 
 export type GlobalHarnessReport = {
@@ -542,8 +551,64 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
     const beforeManifest = await computeWorkspaceManifest(effectiveWorkspace);
 
     const validatorRuns = scenario.validators.map((validator) => runValidator(validator, effectiveWorkspace, env));
+
+    // B4(wiring): emit dry-run SpecialistTaskPacket + RunEvent[] trace per executed scenario.
+    // All events validated under RunEventSchema; phases from RunPhaseSchema only. No specialist/provider execution.
+    const allowed = scenario.allowedSystems;
+    const forbidden = scenario.forbiddenSystems;
+    const packet = buildTaskPacket({
+      systemId: scenario.expectedSpecialist,
+      userGoal: scenario.userGoal,
+      successCriteria: scenario.successCriteria,
+      allowedScopes: scenario.validators.map((v) => v.id),
+      forbiddenScopes: [],
+      validationRequirements: scenario.validators.map((v) => v.cmd),
+    });
+    SpecialistTaskPacketSchema.parse(packet);
+
+    // Build canonical trace: RUN_CREATED, PHASE_CHANGED, >=1 TOOL_INVOKED per validator, completions, RUN_COMPLETED.
+    const phases: ReturnType<typeof RunPhaseSchema.parse>[] = ["CHAT_RECEIVED", "TRIAGE", "EXECUTING", "VALIDATING", "DONE"];
+    const baseEvents = buildRunTrace(`run-${scenario.id}`, phases, { dryRun: true, scenarioId: scenario.id });
+    const toolEvents: ReturnType<typeof RunEventSchema.parse>[] = [];
+    scenario.validators.forEach((v, idx) => {
+      const invoked = RunEventSchema.parse({
+        id: `evt-tool-invoked-${scenario.id}-${idx}`,
+        runId: `run-${scenario.id}`,
+        type: "TOOL_INVOKED",
+        phase: "EXECUTING",
+        payload: { validatorId: v.id, cmd: v.cmd, dryRun: true },
+        createdAt: new Date().toISOString(),
+      });
+      const completed = RunEventSchema.parse({
+        id: `evt-tool-completed-${scenario.id}-${idx}`,
+        runId: `run-${scenario.id}`,
+        type: validatorRuns[idx]?.exitCode === 0 ? "TOOL_COMPLETED" : "VALIDATION_FAILED",
+        phase: "VALIDATING",
+        payload: { validatorId: v.id, exitCode: validatorRuns[idx]?.exitCode ?? -1, dryRun: true },
+        createdAt: new Date().toISOString(),
+      });
+      toolEvents.push(invoked, completed);
+    });
+    const runEvents = [...baseEvents, ...toolEvents];
+    runEvents.forEach((ev) => RunEventSchema.parse(ev));
+
+    // Derive delegation_quality strictly from packet + allowed/forbidden (reuse existing helper).
+    const delegationFromPacket = computeDelegationQualityFromPacket(packet, allowed, forbidden).score;
+
     const scorecard = await buildScorecard({ scenario, repoRoot: effectiveWorkspace, validatorRuns, fakePathStatus, fakeFindingCount });
-    outcomes.push({ scenarioId: scenario.id, scorecard, validatorRuns });
+    // Override delegation_quality with packet-derived value (only this dimension is wired here).
+    const patchedDimensions = { ...scorecard.dimensions, delegation_quality: { score: delegationFromPacket, notes: `expectedSpecialist=${scenario.expectedSpecialist} (packet-derived)` } };
+    const patchedScorecard = ScorecardSchema.parse({ ...scorecard, dimensions: patchedDimensions });
+
+    outcomes.push({
+      scenarioId: scenario.id,
+      scorecard: patchedScorecard,
+      validatorRuns,
+      taskPacket: packet,
+      runEvents,
+      artifactRefs: scenario.oracles.mustIncludeEvidence,
+      validationRefs: scenario.validators.map((v) => v.id),
+    });
 
     // After hashes + manifest diff for safety (detect undeclared changes).
     const afterManifest = await computeWorkspaceManifest(effectiveWorkspace);
