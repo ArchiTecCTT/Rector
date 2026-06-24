@@ -10,11 +10,11 @@ expectedSpecialist: coding
 successCriteria:
   - scenario coding-basic-fix-passing-scripted-patch executes
 validators:
-  - id: v1
-    cmd: node
-    args: [-e, process.exit(0)]
+  - id: calculator-verifier
+    cmd: npx
+    args: [--no-install, tsx, src/calculator.verify.ts]
     cwd: .
-    timeoutMs: 10000
+    timeoutMs: 30000
     expectedExitCode: 0
 oracles:
   mustChange: []
