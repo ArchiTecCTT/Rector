@@ -59,9 +59,14 @@ async function main() {
   const gate = run("npm run eval:capabilities:gate");
   if (gate.code !== 0) fail(`eval:capabilities:gate exited ${gate.code} (expected 0)`);
 
-  // 7. Baseline report exists + validates
-  if (!existsSync(path.join(EVIDENCE_DIR, "phase0-baseline.json"))) fail("phase0-baseline.json missing");
-  const baseline = JSON.parse(readFileSync(path.join(EVIDENCE_DIR, "phase0-baseline.json"), "utf8"));
+  // 7. Baseline report exists + validates (self-generate if missing for CI freshness)
+  const baselinePath = path.join(EVIDENCE_DIR, "phase0-baseline.json");
+  if (!existsSync(baselinePath)) {
+    const gen = run("npm run baseline:phase0");
+    if (gen.code !== 0) fail(`baseline:phase0 exited ${gen.code} (expected 0)`);
+  }
+  if (!existsSync(baselinePath)) fail("phase0-baseline.json missing after generation attempt");
+  const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
   if (baseline.schemaVersion !== PHASE_0_BASELINE_SCHEMA_VERSION) fail("baseline schemaVersion mismatch");
 
   console.log("[verify:phase0] PASS");
