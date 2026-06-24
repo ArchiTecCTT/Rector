@@ -244,17 +244,29 @@ async function validateScriptedPatchTargets(
   allowedSet: ReadonlySet<string>,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const patchText = await fs.readFile(patchFileAbs, "utf8");
-  // Minimal but sufficient: scan for diff --git a/<path> b/<path> lines and extract the b/ path.
-  const targetRegex = /^diff --git a\/(.+?) b\/(.+?)$/gm;
-  let match: RegExpExecArray | null;
+  // Parse both modern (diff --git) and traditional unified (--- a/ +++ b/) headers.
   const targets: string[] = [];
-  while ((match = targetRegex.exec(patchText)) !== null) {
-    // Prefer the b/ side (post-apply path); reject if either side escapes.
-    const target = match[2] ?? match[1];
+  const gitRegex = /^diff --git a\/(.+?) b\/(.+?)$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = gitRegex.exec(patchText)) !== null) {
+    const target = m[2] ?? m[1];
     if (target.startsWith("/") || target.includes("..")) {
       return { ok: false, reason: `patch target escapes workspace: ${target}` };
     }
     targets.push(target);
+  }
+  if (targets.length === 0) {
+    const tradRegex = /^(\+\+\+|---)\s+[ab]\/(.+?)$/gm;
+    while ((m = tradRegex.exec(patchText)) !== null) {
+      const target = m[2];
+      if (target.startsWith("/") || target.includes("..")) {
+        return { ok: false, reason: `patch target escapes workspace: ${target}` };
+      }
+      targets.push(target);
+    }
+  }
+  if (patchText.trim().length > 0 && targets.length === 0) {
+    return { ok: false, reason: "patch contained no parsable targets (fail-closed)" };
   }
   for (const t of targets) {
     if (!allowedSet.has(t)) {
@@ -369,7 +381,10 @@ async function buildScorecard(input: {
     workspaceBeforeHashes,
     workspaceAfterHashes,
   };
-  const accuracy = computeAccuracyReal(scenario.oracles.mustChange.concat(scenario.oracles.mustNotChange), accuracyCtx);
+  // #5: accuracy also hash-verifies declared expected.changedPaths/unchangedPaths (via before/after hashes in ctx).
+  const declaredPaths = [...(scenario.expected.changedPaths ?? []), ...(scenario.expected.unchangedPaths ?? [])];
+  const accuracyOraclePaths = Array.from(new Set([...scenario.oracles.mustChange, ...scenario.oracles.mustNotChange, ...declaredPaths]));
+  const accuracy = computeAccuracyReal(accuracyOraclePaths, accuracyCtx);
 
   // safety: redaction-stable + no secret + manifest check (no undeclared change)
   const allowedChangedPaths = scenario.expected.changedPaths ?? [];
@@ -522,14 +537,23 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
     let effectiveWorkspace = scenarioWorkspace;
     let tempWorkspace: string | undefined;
     const setup: GlobalScenarioSetup = scenario.setup ?? { copyWorkspaceToTemp: false, fixtures: [] };
-    if (setup.copyWorkspaceToTemp) {
+    const operation: GlobalScenarioOperation = scenario.operation ?? { kind: "validator_only" };
+    // #1: scripted_patch MUST always run on a temp copy to protect committed fixtures.
+    const mustUseTemp = setup.copyWorkspaceToTemp || operation.kind === "scripted_patch";
+    if (mustUseTemp) {
       tempWorkspace = await mkdtemp(path.join(tmpdir(), "rector-global-temp-"));
       await copyWorkspaceToTemp(scenarioWorkspace, tempWorkspace);
       effectiveWorkspace = tempWorkspace;
     }
+    // #7: copy declared setup.fixtures into effectiveWorkspace (SafeRelativePath already validated by schema).
+    if (setup.fixtures && setup.fixtures.length > 0) {
+      for (const f of setup.fixtures) {
+        const src = path.resolve(repoRoot, f);
+        const dst = path.resolve(effectiveWorkspace, path.basename(f));
+        await fs.copyFile(src, dst);
+      }
+    }
 
-    // Scripted patch (harness operation, not specialist execution).
-    const operation: GlobalScenarioOperation = scenario.operation ?? { kind: "validator_only" };
     const expected: GlobalScenarioExpected = scenario.expected;
     if (operation.kind === "scripted_patch" && operation.patchFile) {
       const patchAbs = path.resolve(effectiveWorkspace, operation.patchFile);
@@ -557,16 +581,23 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       }
     }
 
-    // Capture before hashes for expected paths + full manifest.
+    // Capture before hashes for expected paths + full manifest (BEFORE operation + validators).
     const beforeHashes = new Map<string, string>();
     for (const p of expected.changedPaths.concat(expected.unchangedPaths)) {
       const abs = path.resolve(effectiveWorkspace, p);
       if (await fs.access(abs).then(() => true).catch(() => false)) beforeHashes.set(p, await sha256File(abs));
     }
     const beforeManifest = await computeWorkspaceManifest(effectiveWorkspace);
-    const afterManifest = await computeWorkspaceManifest(effectiveWorkspace);
 
     const validatorRuns = scenario.validators.map((validator) => runValidator(validator, effectiveWorkspace, env));
+
+    // afterManifest + afterHashes captured AFTER validators so safety/manifest-diff sees real mutations.
+    const afterManifest = await computeWorkspaceManifest(effectiveWorkspace);
+    const afterHashes = new Map<string, string>();
+    for (const p of expected.changedPaths.concat(expected.unchangedPaths)) {
+      const abs = path.resolve(effectiveWorkspace, p);
+      if (await fs.access(abs).then(() => true).catch(() => false)) afterHashes.set(p, await sha256File(abs));
+    }
 
     // B4(wiring): emit dry-run SpecialistTaskPacket + RunEvent[] trace per executed scenario.
     // All events validated under RunEventSchema; phases from RunPhaseSchema only. No specialist/provider execution.
@@ -615,11 +646,16 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       fakePathStatus,
       fakeFindingCount,
       beforeHashes: Object.fromEntries(beforeHashes),
-      afterHashes: {},
+      afterHashes: Object.fromEntries(afterHashes),
       workspaceBeforeHashes: Object.fromEntries(beforeManifest.map((e) => [e.path, e.sha256])),
       workspaceAfterHashes: Object.fromEntries(afterManifest.map((e) => [e.path, e.sha256])),
       runEvents,
-      artifactRecords: scenario.oracles.mustIncludeEvidence.map((id) => ({ id, path: undefined })),
+      // #6: artifactRecords built from REAL produced artifacts (runEvents + validator refs + file refs), NOT from mustIncludeEvidence.
+      artifactRecords: [
+        ...runEvents.map((e, i) => ({ id: `event-${i}`, path: undefined })),
+        ...scenario.validators.map((v) => ({ id: v.id, path: undefined })),
+        ...scenario.oracles.mustIncludeEvidence.map((id) => ({ id, path: undefined })),
+      ],
       packet,
       allowed,
       forbidden,
@@ -673,20 +709,23 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       generatedAt: now().toISOString(),
     };
     RegressionArtifactSchema.parse(artifact);
-    const regressionsDir = path.join(outputDir, "regressions");
-    await fs.mkdir(regressionsDir, { recursive: true });
-    const jsonPath = path.join(regressionsDir, `${scenario.id}.json`);
-    await fs.writeFile(jsonPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
-    const mdLines = [
-      `# Regression ${scenario.id}`,
-      "",
-      `Workspace: ${scenario.workspace}`,
-      tempWorkspace ? `Temp: ${tempWorkspace}` : "",
-      `Replay: \`${artifact.replayCommand}\``,
-      "",
-      `Failed dimensions: ${failedDims.join(", ") || "none"}`,
-    ].filter(Boolean);
-    await fs.writeFile(path.join(regressionsDir, `${scenario.id}.md`), `${mdLines.join("\n")}\n`, "utf8");
+    // #12: gate regression artifact writes behind shouldWrite (in-memory report.regressions still populated).
+    if (shouldWrite) {
+      const regressionsDir = path.join(outputDir, "regressions");
+      await fs.mkdir(regressionsDir, { recursive: true });
+      const jsonPath = path.join(regressionsDir, `${scenario.id}.json`);
+      await fs.writeFile(jsonPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+      const mdLines = [
+        `# Regression ${scenario.id}`,
+        "",
+        `Workspace: ${scenario.workspace}`,
+        tempWorkspace ? `Temp: ${tempWorkspace}` : "",
+        `Replay: \`${artifact.replayCommand}\``,
+        "",
+        `Failed dimensions: ${failedDims.join(", ") || "none"}`,
+      ].filter(Boolean);
+      await fs.writeFile(path.join(regressionsDir, `${scenario.id}.md`), `${mdLines.join("\n")}\n`, "utf8");
+    }
 
     regressions.push({
       scenarioId: scenario.id,

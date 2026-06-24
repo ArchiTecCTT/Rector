@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createHash } from "node:crypto";
 import { redactString } from "../../src/security/redaction";
 import {
   CAPABILITY_EVAL_METRIC_IDS,
@@ -230,13 +231,25 @@ export async function runCapabilityEvals(options: RunCapabilityEvalsOptions = {}
     const rawOracle = EvalCorpusOracleSchema.parse(await readCorpusJson(corpusRoot, fixtureCase.oraclePath));
     const oracle = options.oracleOverride ? EvalCorpusOracleSchema.parse(options.oracleOverride(fixtureCase.id, rawOracle)) : rawOracle;
     const artifact = await readCorpusText(corpusRoot, fixtureCase.artifactPath);
-    const record = await artifactStore.writeRawArtifact({
-      callId: fixtureCase.id,
-      artifactName: path.basename(fixtureCase.artifactPath),
-      content: artifact,
-      contentType: "text/plain",
-      metadata: { source: "eval-corpus", caseId: fixtureCase.id },
-    });
+    // #11: respect write:false — compute record metadata but skip disk write when !shouldWrite.
+    let record: any;
+    if (shouldWrite) {
+      record = await artifactStore.writeRawArtifact({
+        callId: fixtureCase.id,
+        artifactName: path.basename(fixtureCase.artifactPath),
+        content: artifact,
+        contentType: "text/plain",
+        metadata: { source: "eval-corpus", caseId: fixtureCase.id },
+      });
+    } else {
+      const redacted = redactString(artifact);
+      record = {
+        uri: `artifact://${fixtureCase.id}/${path.basename(fixtureCase.artifactPath)}`,
+        sha256: createHash("sha256").update(redacted, "utf8").digest("hex"),
+        redactionState: artifact === redacted ? "no_secrets_detected" : "redacted",
+        sizeBytes: Buffer.byteLength(redacted, "utf8"),
+      };
+    }
     rawArtifactRecords.push({ uri: record.uri, sha256: record.sha256, redactionState: record.redactionState, sizeBytes: record.sizeBytes });
 
     let expectedEvidencePacket: CapabilityEvidencePacket | null = null;

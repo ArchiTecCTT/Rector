@@ -53,15 +53,10 @@ async function main(): Promise<void> {
   const strictPass = scorecards.filter((s) => s.passed).length;
   if (strictPass < 5) violations.push(`strict-passing scenarios ${strictPass} < 5`);
 
-  // 1 + 4: structured actual vs expected (from harness outcomes + scenario files)
-  const scenarioFiles = await fs.readdir(SCENARIOS_DIR);
+  // 1 + 4: structured actual vs expected (from harness outcomes directly)
   let intentionalRegressionCount = 0;
   for (const o of outcomes) {
-    const scenarioFile = scenarioFiles.find((f) => f.includes(o.scenarioId));
-    if (!scenarioFile) continue;
-    const yaml = await fs.readFile(path.join(SCENARIOS_DIR, scenarioFile), "utf8");
-    const scenario = loadGlobalScenario(yaml, "yaml");
-    const declared = scenario.expected.status;
+    const declared = o.expectedStatus;
     const actual = o.actualStatus;
     if (declared !== actual) violations.push(`${o.scenarioId}: declared ${declared} but actually ${actual}`);
     if (declared === "failed" && actual === "failed") intentionalRegressionCount++;
@@ -77,7 +72,7 @@ async function main(): Promise<void> {
     if (!o.validationRefs || o.validationRefs.length === 0) violations.push(`${o.scenarioId}: missing validationRefs`);
   }
 
-  // 6 evidence_quality === 0 while scenario declares evidence refs (use exact scenarioFile)
+  // 6 evidence_quality === 0 while scenario declares evidence refs (use o.scenarioFile exact)
   for (const o of outcomes) {
     const sc = scorecards.find((s) => s.scenarioId === o.scenarioId);
     if (!sc) continue;
@@ -101,12 +96,11 @@ async function main(): Promise<void> {
     }
   }
 
-  // 8 proxy-regression behavioral checks
-  const proxy = spawnSync("npx", ["vitest", "run", "tests/global/proxyRegression.test.ts", "--passWithNoTests"], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    stdio: "pipe",
-  });
+  // 8 proxy-regression behavioral checks (offline: prefer local binary, never network install)
+  const vitestBin = path.join(REPO_ROOT, "node_modules", ".bin", "vitest");
+  const vitestCmd = (await fs.stat(vitestBin).catch(() => null)) ? vitestBin : "npx";
+  const vitestArgs = (vitestCmd === "npx") ? ["--no-install", "vitest", "run", "tests/global/proxyRegression.test.ts", "--passWithNoTests"] : ["run", "tests/global/proxyRegression.test.ts", "--passWithNoTests"];
+  const proxy = spawnSync(vitestCmd, vitestArgs, { cwd: REPO_ROOT, encoding: "utf8", stdio: "pipe" });
   if (proxy.status !== 0) violations.push("proxyRegression behavioral checks failed");
 
   const exitCode = violations.length > 0 && isGate ? 1 : 0;

@@ -85,7 +85,7 @@ export class LocalFsRawArtifactStore implements RawArtifactStore {
       sha256: sha256Hex(redactedContent),
       sizeBytes: Buffer.byteLength(redactedContent, "utf8"),
       contentType: parsed.contentType,
-      redactionState: parsed.content === redactedContent ? "no_secrets_detected" : "redacted",
+      redactionState: (parsed.content === redactedContent && JSON.stringify(parsed.metadata) === JSON.stringify(redactedMetadata)) ? "no_secrets_detected" : "redacted",
       metadata: redactedMetadata,
       createdAt: this.now().toISOString(),
     };

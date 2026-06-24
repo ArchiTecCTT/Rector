@@ -76,7 +76,24 @@ async function main(): Promise<void> {
   const fakeModule = await import("../../scripts/audit/no-production-fakes");
   const fakeAuditReport = await fakeModule.auditNoProductionFakes();
 
-  const testBaseline = { totalTests: 2241, passed: 2236, skipped: 5 };
+  // #9: compute REAL test counts from a fresh vitest json run (no hardcoded numbers).
+  let testBaseline = { totalTests: 0, passed: 0, skipped: 0 };
+  try {
+    const jsonOut = execSync("npx --no-install vitest run --reporter=json", { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const parsed = JSON.parse(jsonOut);
+    const suites = parsed.testResults ?? [];
+    let total = 0, passed = 0, skipped = 0;
+    for (const s of suites) {
+      for (const t of s.assertionResults ?? []) {
+        total++;
+        if (t.status === "passed") passed++;
+        if (t.status === "skipped") skipped++;
+      }
+    }
+    if (total > 0) testBaseline = { totalTests: total, passed, skipped };
+  } catch {
+    // fallback to 0s if vitest json unavailable; baseline still valid shape.
+  }
 
   const baseline = await buildPhase0Baseline({
     gitBranch: git.branch,
