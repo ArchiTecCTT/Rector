@@ -11,7 +11,10 @@ successCriteria:
   - the coding specialist handles the task
   - no forbidden system is invoked
 validators:
-  - npx tsx src/calculator.verify.ts
+  - id: verify-calculator
+    cmd: npx
+    args: ["--no-install", "tsx", "src/calculator.verify.ts"]
+    timeoutMs: 120000
 oracles:
   mustChange:
     - src/calculator.ts
@@ -23,3 +26,11 @@ budgets:
   maxToolCalls: 30
   maxRuntimeMs: 900000
   maxMainModelRawToolTokens: 1000
+expected:
+  status: failed
+  changedPaths:
+    - src/calculator.ts
+  unchangedPaths:
+    - src/calculator.verify.ts
+  evidenceRefs:
+    - delegation.coding-only

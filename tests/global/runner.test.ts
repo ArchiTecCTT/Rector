@@ -35,9 +35,10 @@ function liveScenario(): GlobalScenario {
     forbiddenSystems: ["coding"],
     expectedSpecialist: "research",
     successCriteria: ["live answer produced"],
-    validators: ["true"],
+    validators: [{ id: "noop", cmd: "node", args: ["-e", "process.exit(0)"], timeoutMs: 60000 }],
     oracles: { mustChange: [], mustNotChange: [], mustIncludeEvidence: ["research.live"] },
     budgets: { maxToolCalls: 10, maxRuntimeMs: 600000, maxMainModelRawToolTokens: 500 },
+    expected: { status: "passed", changedPaths: [], unchangedPaths: [], evidenceRefs: ["research.live"] },
   });
 }
 

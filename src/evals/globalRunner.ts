@@ -10,7 +10,7 @@ import {
   type FakePathStatus,
   type Scorecard,
 } from "./scorecards";
-import { loadGlobalScenario, type GlobalScenario } from "./globalScenarioSchema";
+import { loadGlobalScenario, type GlobalScenario, type GlobalValidator } from "./globalScenarioSchema";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const DEFAULT_SCENARIOS_DIR = path.join(REPO_ROOT, "tests", "global", "scenarios");
@@ -27,7 +27,9 @@ export const GLOBAL_REPORT_SCHEMA_VERSION = "rector.global-report.v1";
  */
 export function requiresLiveProvider(scenario: GlobalScenario): boolean {
   if (scenario.type === "live") return true;
-  return scenario.validators.some((validator) => validator.includes("LIVE_EVALS"));
+  return scenario.validators.some((validator) =>
+    validator.args.some((arg) => arg.includes("LIVE_EVALS")),
+  );
 }
 
 export type ValidatorRun = {
@@ -112,22 +114,15 @@ async function loadScenarioDir(scenariosDir: string): Promise<readonly GlobalSce
   return scenarios;
 }
 
-function runValidator(command: string, cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv): ValidatorRun {
+function runValidator(validator: GlobalValidator, workspaceRoot: string, env: NodeJS.ProcessEnv): ValidatorRun {
   const startedAt = Date.now();
-  // Validator commands come from committed scenario YAML (a trusted source) and are executed without a
-  // shell to avoid an injection surface. Whitespace tokenization is safe for the committed commands
-  // (`npx tsx src/...` and `true`); no untrusted user input reaches this path.
-  const [cmd, ...args] = command.trim().split(/\s+/);
-  if (cmd === undefined) {
-    return {
-      command,
-      exitCode: -1,
-      output: "validator command was empty",
-      durationMs: Date.now() - startedAt,
-      timedOut: false,
-    };
-  }
-  const result = spawnSync(cmd, args, {
+  // Trusted committed scenario source; spawnSync with shell:false so validator args never reach a
+  // shell. cmd/args come from the typed schema (no whitespace split), so spaced args round-trip.
+  // TODO(todo 9): in-place fixture execution only — temp-workspace copy, scripted_patch/git-apply,
+  // before/after SHA-256, the workspace hash manifest, and local binary resolution land in todo 9.
+  const cwd = path.resolve(workspaceRoot, validator.cwd);
+  const timeoutMs = Math.min(validator.timeoutMs, VALIDATOR_TIMEOUT_CEILING_MS);
+  const result = spawnSync(validator.cmd, validator.args, {
     cwd,
     shell: false,
     encoding: "utf8",
@@ -139,6 +134,8 @@ function runValidator(command: string, cwd: string, timeoutMs: number, env: Node
   // status is null when the process was killed by a signal (e.g. timeout) — treat as failure (-1).
   const exitCode = typeof result.status === "number" ? result.status : -1;
   const rawOutput = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  // Joined cmd+args string drives the replayable regression artifact's replay command.
+  const command = [validator.cmd, ...validator.args].join(" ");
   return {
     command,
     exitCode,
@@ -401,8 +398,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       continue;
     }
 
-    const timeoutMs = Math.min(scenario.budgets.maxRuntimeMs, VALIDATOR_TIMEOUT_CEILING_MS);
-    const validatorRuns = scenario.validators.map((command) => runValidator(command, scenarioWorkspace, timeoutMs, env));
+    const validatorRuns = scenario.validators.map((validator) => runValidator(validator, scenarioWorkspace, env));
     const scorecard = await buildScorecard({ scenario, repoRoot: scenarioWorkspace, validatorRuns, fakePathStatus, fakeFindingCount });
     outcomes.push({ scenarioId: scenario.id, scorecard, validatorRuns });
 

@@ -11,7 +11,10 @@ successCriteria:
   - only verified memory entries are cited
   - no unverified scratch note is promoted to durable memory
 validators:
-  - npx tsx src/calculator.verify.ts
+  - id: verify-calculator
+    cmd: npx
+    args: ["--no-install", "tsx", "src/calculator.verify.ts"]
+    timeoutMs: 120000
 oracles:
   mustChange: []
   mustNotChange:
@@ -23,3 +26,11 @@ budgets:
   maxToolCalls: 20
   maxRuntimeMs: 600000
   maxMainModelRawToolTokens: 800
+expected:
+  status: failed
+  changedPaths: []
+  unchangedPaths:
+    - src/calculator.ts
+    - src/calculator.verify.ts
+  evidenceRefs:
+    - memory.verified-only
