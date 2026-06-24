@@ -41,6 +41,7 @@
     "eval:capabilities": "tsx scripts/evals/run-capability-evals.ts",
     "eval:capabilities:gate": "tsx scripts/evals/run-capability-evals.ts --gate",
     "eval:capabilities:report": "tsx scripts/evals/run-capability-evals.ts && cat .omo/evidence/eval-report.md",
+    "baseline:phase0": "tsx scripts/evals/run-phase0-baseline.ts",
     "test": "vitest run",
     "test:global": "tsx scripts/evals/run-global-harness.ts",
     "test:systems": "tsx scripts/evals/run-specialist-system-contracts.ts",
