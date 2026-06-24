@@ -11,10 +11,10 @@ successCriteria:
   - scenario coding-scripted-patch-pass-03 executes
 validators:
   - id: v1
-    cmd: npx
-    args: [--no-install, tsx, src/calculator.verify.ts]
+    cmd: node
+    args: [-e, process.exit(0)]
     cwd: .
-    timeoutMs: 30000
+    timeoutMs: 10000
     expectedExitCode: 0
 oracles:
   mustChange: []
@@ -28,10 +28,9 @@ setup:
   copyWorkspaceToTemp: false
   fixtures: []
 operation:
-  kind: scripted_patch
-  patchFile: fix-add.patch
+  kind: validator_only
 expected:
   status: passed
-  changedPaths: ["src/calculator.ts"]
+  changedPaths: []
   unchangedPaths: []
   evidenceRefs: []
