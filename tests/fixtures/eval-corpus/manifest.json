@@ -60,7 +60,8 @@
         "recordedCommand": "rg --line-number --column --with-filename \"import|export|const|function|class|interface|type \" src --max-count 2000",
         "exitCode": 0
       },
-      "expectedEvidencePath": "cases/rg-noisy-imports/expected-evidence.json"
+      "expectedEvidencePath": "cases/rg-noisy-imports/expected-evidence.json",
+      "efficiencyRelevant": true
     },
     {
       "id": "tsc-downstream-error",
@@ -150,7 +151,8 @@
         "recordedCommand": "cat package-lock.json",
         "exitCode": 0
       },
-      "expectedEvidencePath": "cases/cartographer-inventory-scan/expected-evidence.json"
+      "expectedEvidencePath": "cases/cartographer-inventory-scan/expected-evidence.json",
+      "efficiencyRelevant": true
     }
   ]
 }

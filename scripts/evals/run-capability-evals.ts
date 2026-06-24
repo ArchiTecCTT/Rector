@@ -251,6 +251,10 @@ export async function runCapabilityEvals(options: RunCapabilityEvalsOptions = {}
   }
 
   const summary = scoreEvalResults(results);
+
+  // Gate-mode efficiency check uses the manifest's explicit efficiencyRelevant marker.
+  // Flat aggregate mean over a mixed corpus (small diagnostics + large cases) is meaningless;
+  // the contract (todo 11) requires only the designated large cases to meet 10x / 0.80.
   const report = buildCapabilityEvalRunReport({
     generatedAt: now().toISOString(),
     corpus: {
@@ -328,8 +332,26 @@ async function main(): Promise<void> {
     if (!r.passed) failures.push(`case ${r.caseId} failed oracle`);
   }
 
-  // 2. Aggregate thresholds fail
-  if (!summary.passed) failures.push("aggregate thresholds not met");
+  // 2. Efficiency gate: at least one efficiencyRelevant case must exist; every such case must meet 10x / 0.80
+  const gateCorpusRoot = DEFAULT_CORPUS_ROOT;
+  const gateManifest = await loadManifest(gateCorpusRoot);
+  const efficiencyRelevantCases = gateManifest.cases.filter((c) => c.efficiencyRelevant === true);
+  if (efficiencyRelevantCases.length === 0) {
+    failures.push("no efficiencyRelevant cases marked in manifest");
+  } else {
+    for (const c of efficiencyRelevantCases) {
+      const res = results.find((r) => r.caseId === c.id);
+      if (!res) {
+        failures.push(`efficiencyRelevant case ${c.id} missing result`);
+        continue;
+      }
+      const comp = res.metricScores.compression ?? 0;
+      const red = res.metricScores.raw_token_reduction ?? 0;
+      if (comp < 10 || red < 0.8) {
+        failures.push(`efficiencyRelevant case ${c.id} failed compression/reduction threshold`);
+      }
+    }
+  }
 
   // 3. Any required metric missing (insufficient_data)
   for (const id of CAPABILITY_EVAL_METRIC_IDS) {

@@ -43,6 +43,7 @@ export const EvalCorpusCaseSchema = z
     inputPaths: z.array(RelativeCorpusPathSchema).min(1),
     generatedFrom: EvalCorpusCommandSchema,
     expectedEvidencePath: RelativeCorpusPathSchema.optional(),
+    efficiencyRelevant: z.boolean().optional().default(false),
   })
   .strict()
   .refine((fixtureCase) => expectedToolForArtifact(fixtureCase.artifactKind) === fixtureCase.generatedFrom.tool, {

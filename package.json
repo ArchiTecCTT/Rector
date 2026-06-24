@@ -51,7 +51,10 @@
     "test:watch": "vitest",
     "smoke:tidb": "tsx --env-file=.env scripts/tidb-smoke-test.ts",
     "smoke:memory": "tsx --env-file=.env scripts/memory-live-smoke-test.ts",
-    "test:coverage": "vitest run --coverage --testTimeout=10000 --maxWorkers=2"
+    "test:coverage": "vitest run --coverage --testTimeout=10000 --maxWorkers=2",
+    "verify:phase0": "tsx scripts/evals/verify-phase0-complete.ts",
+    "verify:phase0.5": "tsx scripts/evals/verify-phase0-5-complete.ts",
+    "verify:foundation": "npm run verify:phase0 && npm run verify:phase0.5"
   },
   "engines": {
     "node": ">=22.5.0"
