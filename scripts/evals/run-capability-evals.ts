@@ -22,6 +22,7 @@ import {
   renderCapabilityEvalMarkdown,
   type CapabilityEvalRunReport,
 } from "./score-capability-results";
+import { LocalFsRawArtifactStore, type RawArtifactRecord } from "../../src/capabilities/eval/artifactStore";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const DEFAULT_CORPUS_ROOT = path.join(REPO_ROOT, "tests", "fixtures", "eval-corpus");
@@ -213,12 +214,24 @@ export async function runCapabilityEvals(options: RunCapabilityEvalsOptions = {}
   const now = options.now ?? (() => new Date());
 
   const manifest = await loadManifest(corpusRoot);
+  const artifactStore = new LocalFsRawArtifactStore({ rootDir: path.join(outputDir, "raw-artifacts") });
   const results: CapabilityEvalResult[] = [];
+  const rawArtifactRecords: Array<Pick<RawArtifactRecord, "uri" | "sha256" | "redactionState" | "sizeBytes">> = [];
   for (const fixtureCase of manifest.cases) {
     const rawOracle = EvalCorpusOracleSchema.parse(await readCorpusJson(corpusRoot, fixtureCase.oraclePath));
     const oracle = options.oracleOverride ? EvalCorpusOracleSchema.parse(options.oracleOverride(fixtureCase.id, rawOracle)) : rawOracle;
     const artifact = await readCorpusText(corpusRoot, fixtureCase.artifactPath);
-    results.push(scoreCase({ fixtureCase, oracle, artifact }));
+    const record = await artifactStore.writeRawArtifact({
+      callId: fixtureCase.id,
+      artifactName: path.basename(fixtureCase.artifactPath),
+      content: artifact,
+      contentType: "text/plain",
+      metadata: { source: "eval-corpus", caseId: fixtureCase.id },
+    });
+    rawArtifactRecords.push({ uri: record.uri, sha256: record.sha256, redactionState: record.redactionState, sizeBytes: record.sizeBytes });
+    const result = scoreCase({ fixtureCase, oracle, artifact });
+    const patched = { ...result, rawArtifactRefs: [record.uri] };
+    results.push(CapabilityEvalResultSchema.parse(patched));
   }
 
   const summary = scoreEvalResults(results);
@@ -231,6 +244,7 @@ export async function runCapabilityEvals(options: RunCapabilityEvalsOptions = {}
     },
     results,
     summary,
+    rawArtifactRecords,
   });
   const markdown = renderCapabilityEvalMarkdown(report);
 

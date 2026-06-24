@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { CAPABILITY_EVAL_METRIC_IDS } from "../../src/capabilities/eval/metrics";
 import { CapabilityEvalResultSchema } from "../../src/capabilities/eval/schemas";
+import { LocalFsRawArtifactStore } from "../../src/capabilities/eval/artifactStore";
 import { runCapabilityEvals } from "../../scripts/evals/run-capability-evals";
 import {
   CapabilityEvalRunReportSchema,
@@ -147,5 +148,39 @@ describe("offline capability eval runner", () => {
     // And: the rendered markdown surfaces the recorded failure for auditors.
     expect(output.markdown).toContain("Recorded Failures");
     expect(output.markdown).toContain("rg-orchestration-search");
+  });
+
+  it("persists artifacts via LocalFsRawArtifactStore and round-trips with integrity", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "rector-artifact-store-"));
+    tempRoots.push(root);
+    const store = new LocalFsRawArtifactStore({ rootDir: root });
+    const content = "hello world\n";
+    const record = await store.writeRawArtifact({
+      callId: "roundtrip",
+      artifactName: "sample.txt",
+      content,
+      contentType: "text/plain",
+      metadata: {},
+    });
+    const reread = await store.readRawArtifact(record.uri);
+    expect(reread.content).toBe(content);
+    expect(reread.record.sha256).toBe(record.sha256);
+  });
+
+  it("redacts AKIA-style secret before persistence", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "rector-artifact-redact-"));
+    tempRoots.push(root);
+    const store = new LocalFsRawArtifactStore({ rootDir: root });
+    const secret = "AKIAIOSFODNN7EXAMPLE";
+    const record = await store.writeRawArtifact({
+      callId: "redact",
+      artifactName: "leak.txt",
+      content: `token=${secret}`,
+      contentType: "text/plain",
+      metadata: {},
+    });
+    expect(record.redactionState).toBe("redacted");
+    const reread = await store.readRawArtifact(record.uri);
+    expect(reread.content).not.toContain(secret);
   });
 });

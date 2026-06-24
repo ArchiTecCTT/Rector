@@ -7,6 +7,7 @@ import {
   type MetricSummary,
 } from "../../src/capabilities/eval/metrics";
 import { CapabilityEvalResultSchema, type CapabilityEvalResult } from "../../src/capabilities/eval/schemas";
+import type { RawArtifactRecord } from "../../src/capabilities/eval/artifactStore";
 
 export const CAPABILITY_EVAL_REPORT_SCHEMA_VERSION = "rector.capability-eval-report.v1";
 
@@ -47,6 +48,15 @@ const MetricSummaryReportSchema = z
   })
   .strict();
 
+const RawArtifactRecordSummarySchema = z
+  .object({
+    uri: z.string().min(1),
+    sha256: z.string().min(1),
+    redactionState: z.enum(["no_secrets_detected", "redacted"]),
+    sizeBytes: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export const CapabilityEvalRunReportSchema = z
   .object({
     schemaVersion: z.literal(CAPABILITY_EVAL_REPORT_SCHEMA_VERSION),
@@ -60,6 +70,7 @@ export const CapabilityEvalRunReportSchema = z
       .strict(),
     results: z.array(CapabilityEvalResultSchema),
     summary: MetricSummaryReportSchema,
+    rawArtifactRecords: z.array(RawArtifactRecordSummarySchema),
     notes: z.array(z.string().min(1)).min(1),
   })
   .strict();
@@ -71,6 +82,7 @@ export function buildCapabilityEvalRunReport(input: {
   readonly corpus: { readonly schemaVersion: string; readonly description: string; readonly caseCount: number };
   readonly results: readonly CapabilityEvalResult[];
   readonly summary: MetricSummary;
+  readonly rawArtifactRecords?: readonly Pick<RawArtifactRecord, "uri" | "sha256" | "redactionState" | "sizeBytes">[];
 }): CapabilityEvalRunReport {
   const report = {
     schemaVersion: CAPABILITY_EVAL_REPORT_SCHEMA_VERSION,
@@ -78,6 +90,14 @@ export function buildCapabilityEvalRunReport(input: {
     corpus: input.corpus,
     results: input.results.map((result) => CapabilityEvalResultSchema.parse(result)),
     summary: input.summary,
+    rawArtifactRecords: (input.rawArtifactRecords ?? []).map((r) =>
+      RawArtifactRecordSummarySchema.parse({
+        uri: r.uri,
+        sha256: r.sha256,
+        redactionState: r.redactionState,
+        sizeBytes: r.sizeBytes,
+      }),
+    ),
     notes: [...OFFLINE_REPORT_NOTES],
   };
   return CapabilityEvalRunReportSchema.parse(report);
