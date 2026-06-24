@@ -330,7 +330,7 @@ async function buildScorecard(input: {
   readonly artifactRecords?: readonly { readonly id: string; readonly path?: string; readonly line?: number }[];
   readonly memoryAssertion?: MemoryAssertion;
   readonly testNow?: () => Date;
-  readonly packet?: ReturnType<typeof SpecialistTaskPacketSchema.parse>;
+  readonly packet: ReturnType<typeof SpecialistTaskPacketSchema.parse>;
   readonly allowed?: readonly string[];
   readonly forbidden?: readonly string[];
 }): Promise<Scorecard> {
@@ -386,7 +386,7 @@ async function buildScorecard(input: {
   }
 
   // delegation_quality: always packet-derived (buildTaskPacket already called per scenario)
-  const delegationQuality = computeDelegationQualityReal(packet!, allowed, forbidden).score;
+  const delegationQuality = computeDelegationQualityReal(packet, allowed, forbidden).score;
 
   // evidence_quality: every declared ref must resolve via resolveEvidenceRef
   const evidenceQuality = computeEvidenceQualityReal(scenario.oracles.mustIncludeEvidence, accuracyCtx);
