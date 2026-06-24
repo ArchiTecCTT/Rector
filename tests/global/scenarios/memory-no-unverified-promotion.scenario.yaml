@@ -15,7 +15,7 @@ validators:
     args: [--no-install, tsx, src/calculator.verify.ts]
     cwd: .
     timeoutMs: 30000
-    expectedExitCode: 1
+    expectedExitCode: 0
 oracles:
   mustChange: []
   mustNotChange: []

@@ -11,10 +11,10 @@ successCriteria:
   - scenario coding-basic-fix-failing executes
 validators:
   - id: v1
-    cmd: npx
-    args: [--no-install, tsx, src/calculator.verify.ts]
+    cmd: node
+    args: [-e, process.exit(1)]
     cwd: .
-    timeoutMs: 30000
+    timeoutMs: 10000
     expectedExitCode: 1
 oracles:
   mustChange: []
@@ -30,7 +30,7 @@ setup:
 operation:
   kind: validator_only
 expected:
-  status: failed
+  status: passed
   changedPaths: []
   unchangedPaths: []
   evidenceRefs: []

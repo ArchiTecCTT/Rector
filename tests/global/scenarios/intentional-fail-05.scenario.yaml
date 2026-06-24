@@ -1,20 +1,20 @@
 schemaVersion: rector.global-scenario.v1
-id: evidence-missing-ref-fails
-title: evidence-missing-ref-fails
+id: intentional-fail-05
+title: intentional-fail-05
 type: coding
 workspace: tests/fixtures/repos/rector-mini-fix
-userGoal: Scenario evidence-missing-ref-fails
+userGoal: Scenario intentional-fail-05
 allowedSystems: [coding]
 forbiddenSystems: [research, writing, design]
 expectedSpecialist: coding
 successCriteria:
-  - scenario evidence-missing-ref-fails executes
+  - scenario intentional-fail-05 executes
 validators:
   - id: v1
-    cmd: npx
-    args: [--no-install, tsx, src/calculator.verify.ts]
+    cmd: node
+    args: [-e, process.exit(1)]
     cwd: .
-    timeoutMs: 30000
+    timeoutMs: 10000
     expectedExitCode: 0
 oracles:
   mustChange: []
