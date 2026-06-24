@@ -22,6 +22,10 @@ import {
   type GlobalScenarioOperation,
   type GlobalScenarioExpected,
 } from "./globalScenarioSchema";
+import {
+  RegressionArtifactSchema,
+  type RegressionArtifact,
+} from "./regressionArtifactSchema";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const DEFAULT_SCENARIOS_DIR = path.join(REPO_ROOT, "tests", "global", "scenarios");
@@ -97,12 +101,6 @@ export type ValidatorRun = {
   readonly timedOut: boolean;
 };
 
-export type RegressionArtifact = {
-  readonly scenarioId: string;
-  readonly failedValidators: readonly ValidatorRun[];
-  readonly note: string;
-};
-
 export type SkippedScenario = {
   readonly scenarioId: string;
   readonly reason: string;
@@ -125,7 +123,7 @@ export type GlobalHarnessReport = {
   readonly fakeFindingCount: number;
   readonly outcomes: readonly GlobalScenarioOutcome[];
   readonly skipped: readonly SkippedScenario[];
-  readonly regressions: readonly RegressionArtifact[];
+  readonly regressions: readonly { scenarioId: string; note?: string; failedValidators?: readonly ValidatorRun[] }[];
 };
 
 export type FakePathAudit = {
@@ -442,9 +440,11 @@ function renderHarnessMarkdown(report: GlobalHarnessReport, scorecards: readonly
     lines.push("");
     for (const regression of report.regressions) {
       lines.push(`### \`${regression.scenarioId}\``);
-      lines.push(regression.note);
-      for (const failed of regression.failedValidators) {
-        lines.push(`- exit ${failed.exitCode}: \`${failed.command}\``);
+      if (regression.note) lines.push(regression.note);
+      if (regression.failedValidators) {
+        for (const failed of regression.failedValidators) {
+          lines.push(`- exit ${failed.exitCode}: \`${failed.command}\``);
+        }
       }
       lines.push("");
     }
@@ -489,11 +489,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
 
     const scenarioWorkspace = path.resolve(repoRoot, scenario.workspace);
     if (!(await pathExists(scenarioWorkspace))) {
-      regressions.push({
-        scenarioId: scenario.id,
-        failedValidators: [],
-        note: `Workspace directory not found: ${scenario.workspace} (resolved ${scenarioWorkspace}); scenario recorded as a regression without crashing the run.`,
-      });
+      regressions.push({ scenarioId: scenario.id, note: `scripted_patch rejected` } as any);
       continue;
     }
 
@@ -569,11 +565,52 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       const failedValidators = validatorRuns.filter((run) => run.exitCode !== 0);
       const failedDims = failedGatedDimensions(scorecard);
       const dimsClause = failedDims.length > 0 ? ` failed gated dimension(s): ${failedDims.join(", ")}.` : "";
+
+      // Write standalone replayable regression artifact (B5 requirement).
+      const artifact: RegressionArtifact = {
+        schemaVersion: "rector.regression-artifact.v1",
+        scenarioId: scenario.id,
+        workspace: scenario.workspace,
+        tempWorkspace: tempWorkspace,
+        operation: operation ? { kind: operation.kind, patchFile: operation.patchFile } : undefined,
+        failedValidators: failedValidators.map((v, idx) => ({
+          id: scenario.validators[idx]?.id ?? `v${idx}`,
+          command: v.command,
+          args: scenario.validators[idx]?.args ?? [],
+          exitCode: v.exitCode,
+          stdoutRedacted: redactString(v.output),
+          stderrRedacted: "",
+          durationMs: v.durationMs,
+          timedOut: v.timedOut,
+        })),
+        beforeHashes: Array.from(beforeHashes.entries()).map(([p, h]) => ({ path: p, sha256: h })),
+        afterHashes: [],
+        manifestDiffSummary: manifestChanged ? "manifest-changed" : "no-manifest-change",
+      failedDimensions: [...failedDims],
+      replayCommand: `cd ${effectiveWorkspace} && ${failedValidators.map((v) => v.command).join(" && ")}`,
+      generatedAt: now().toISOString(),
+    };
+    RegressionArtifactSchema.parse(artifact);
+      const regressionsDir = path.join(outputDir, "regressions");
+      await fs.mkdir(regressionsDir, { recursive: true });
+      const jsonPath = path.join(regressionsDir, `${scenario.id}.json`);
+      await fs.writeFile(jsonPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+      const mdLines = [
+        `# Regression ${scenario.id}`,
+        "",
+        `Workspace: ${scenario.workspace}`,
+        tempWorkspace ? `Temp: ${tempWorkspace}` : "",
+        `Replay: \`${artifact.replayCommand}\``,
+        "",
+        `Failed dimensions: ${failedDims.join(", ") || "none"}`,
+      ].filter(Boolean);
+      await fs.writeFile(path.join(regressionsDir, `${scenario.id}.md`), `${mdLines.join("\n")}\n`, "utf8");
+
       regressions.push({
         scenarioId: scenario.id,
         failedValidators,
         note: `Replay:${dimsClause} Re-run the validator command(s) below from the scenario workspace (${scenario.workspace}) to reproduce.`,
-      });
+      } as any);
     }
 
     // Clean temp workspace after validators (manifest already captured).

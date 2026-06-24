@@ -250,4 +250,22 @@ describe("global reliability harness runner", () => {
     const result = await runGlobalHarness({ write: false, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
     expect(result.report.executedCount).toBeGreaterThanOrEqual(4);
   });
+
+  it("writes standalone regression artifacts for a failing scenario and none for a passing one", async () => {
+    const outputDir = await tempOutputDir();
+    // Run the harness (coding-basic-fix fails) and write artifacts.
+    await runGlobalHarness({ outputDir, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
+
+    const fsMod = await import("node:fs/promises");
+    const jsonPath = path.join(outputDir, "regressions", "coding-basic-fix-001.json");
+    const mdPath = path.join(outputDir, "regressions", "coding-basic-fix-001.md");
+    const jsonText = await fsMod.readFile(jsonPath, "utf8");
+    const artifact = JSON.parse(jsonText);
+    expect(artifact.schemaVersion).toBe("rector.regression-artifact.v1");
+    expect(artifact.replayCommand).toContain("calculator.verify.ts");
+
+    const mdText = await fsMod.readFile(mdPath, "utf8");
+    expect(mdText).toContain("coding-basic-fix-001");
+    expect(mdText).toContain("Replay");
+  });
 });
