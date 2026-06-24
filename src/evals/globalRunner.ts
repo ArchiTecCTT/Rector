@@ -15,7 +15,6 @@ import {
 } from "./scorecards";
 import {
   loadGlobalScenario,
-  SafeRelativePathSchema,
   type GlobalScenario,
   type GlobalValidator,
   type GlobalScenarioSetup,
@@ -39,12 +38,9 @@ import {
   computeDelegationQuality as computeDelegationQualityReal,
   computeEvidenceQuality as computeEvidenceQualityReal,
   computeSimplicity as computeSimplicityReal,
-  resolveEvidenceRef,
   type GlobalEvidenceContext,
   type MemoryAssertion,
-  MemoryAssertionSchema,
 } from "./scoreDimensions";
-import { computeDelegationQuality as computeDelegationQualityFromPacket } from "./scoreDimensions";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const DEFAULT_SCENARIOS_DIR = path.join(REPO_ROOT, "tests", "global", "scenarios");
@@ -168,7 +164,7 @@ export type RunGlobalHarnessOptions = {
   readonly now?: () => Date;
   /**
    * Injected fake-path auditor. `src` cannot import the `scripts/` audit module (rootDir boundary),
-   * so the CLI passes {@link auditNoProductionFakes} in. When omitted, the harness reports
+   * so the CLI passes auditNoProductionFakes in. When omitted, the harness reports
    * `audit_not_present` honestly rather than fabricating a `clean` status.
    */
   readonly fakePathAuditor?: FakePathAuditor;
@@ -350,7 +346,6 @@ async function buildScorecard(input: {
     runEvents = [],
     artifactRecords = [],
     memoryAssertion,
-    testNow,
     packet,
     allowed = scenario.allowedSystems,
     forbidden = scenario.forbiddenSystems,
@@ -507,7 +502,6 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
   const outcomes: GlobalScenarioOutcome[] = [];
   const skipped: SkippedScenario[] = [];
   const regressions: { scenarioId: string; note?: string; failedValidators?: readonly ValidatorRun[] }[] = [];
-  const regressionArtifacts: RegressionArtifact[] = [];
 
   for (const scenario of scenarios) {
     if (requiresLiveProvider(scenario) && env.LIVE_EVALS !== "1") {
@@ -625,7 +619,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       workspaceBeforeHashes: Object.fromEntries(beforeManifest.map((e) => [e.path, e.sha256])),
       workspaceAfterHashes: Object.fromEntries(afterManifest.map((e) => [e.path, e.sha256])),
       runEvents,
-      artifactRecords: scenario.oracles.mustIncludeEvidence.map((id, i) => ({ id, path: undefined })),
+      artifactRecords: scenario.oracles.mustIncludeEvidence.map((id) => ({ id, path: undefined })),
       packet,
       allowed,
       forbidden,
@@ -679,7 +673,6 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       generatedAt: now().toISOString(),
     };
     RegressionArtifactSchema.parse(artifact);
-    regressionArtifacts.push(artifact);
     const regressionsDir = path.join(outputDir, "regressions");
     await fs.mkdir(regressionsDir, { recursive: true });
     const jsonPath = path.join(regressionsDir, `${scenario.id}.json`);

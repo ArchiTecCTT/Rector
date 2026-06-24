@@ -35,8 +35,7 @@ export const SafeRelativePathSchema = z
     if (segments.some((segment) => segment === "")) return false; // empty segment (//, trailing /)
     const normalized = path.posix.normalize(value.replace(/\\/g, "/"));
     if (normalized.startsWith("/") || normalized.startsWith("..")) return false;
-    if (normalized.split("/").some((segment) => segment === "..")) return false;
-    return true;
+    return !normalized.split("/").some((segment) => segment === "..");
   }, {
     message:
       "path must be a safe relative path within the scenario workspace (no absolute, .., leading ./, drive, or UNC)",
@@ -116,10 +115,7 @@ const GlobalOperationSchema = z
   .strict()
   .refine((operation) => {
     // patchFile is only meaningful for a scripted patch; reject it otherwise.
-    if (operation.patchFile !== undefined && operation.kind !== "scripted_patch") {
-      return false;
-    }
-    return true;
+    return operation.patchFile === undefined || operation.kind === "scripted_patch";
   }, {
     message: "operation.patchFile is only allowed when operation.kind is scripted_patch",
   });

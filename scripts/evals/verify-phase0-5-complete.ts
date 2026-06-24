@@ -6,11 +6,11 @@
  * Exits 1 with clear message on any unmet requirement.
  */
 import { execSync } from "node:child_process";
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { GlobalScenarioSchema, SafeRelativePathSchema } from "../../src/evals/globalScenarioSchema";
+import { SafeRelativePathSchema } from "../../src/evals/globalScenarioSchema";
 
 const REPO_ROOT = path.dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 const SCENARIOS_DIR = process.env.VERIFY_SCENARIOS_DIR || path.join(REPO_ROOT, "tests/global/scenarios");

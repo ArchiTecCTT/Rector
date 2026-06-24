@@ -7,7 +7,6 @@ import { execSync } from "node:child_process";
 
 import {
   buildPhase0Baseline,
-  Phase0BaselineSchema,
   type Phase0Baseline,
 } from "../../src/capabilities/eval/baseline";
 import { EvalCorpusManifestSchema } from "../../tests/fixtures/eval-corpus/manifest.schema";

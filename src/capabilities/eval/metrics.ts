@@ -147,10 +147,8 @@ function scoreOrWorstCase(id: CapabilityEvalMetricId, result: CapabilityEvalResu
     case "omission":
     case "secret_leak":
       return 1;
-    default: {
-      const unreachable: never = id;
-      return unreachable;
-    }
+    default:
+      return id;
   }
 }
 
@@ -162,9 +160,7 @@ function passesThreshold(value: number, rule: CapabilityEvalThresholdRule): bool
       return value <= rule.threshold;
     case "equals":
       return value === rule.threshold;
-    default: {
-      const unreachable: never = rule.direction;
-      return unreachable;
-    }
+    default:
+      return rule.direction;
   }
 }

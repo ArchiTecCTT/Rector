@@ -292,10 +292,6 @@ function parseMode(): "report-only" | "gate" {
   return "report-only";
 }
 
-function isGateMode(): boolean {
-  return parseMode() === "gate";
-}
-
 async function main(): Promise<void> {
   const mode = parseMode();
   const output = await runCapabilityEvals();
@@ -333,8 +329,7 @@ async function main(): Promise<void> {
   }
 
   // 2. Efficiency gate: at least one efficiencyRelevant case must exist; every such case must meet 10x / 0.80
-  const gateCorpusRoot = DEFAULT_CORPUS_ROOT;
-  const gateManifest = await loadManifest(gateCorpusRoot);
+  const gateManifest = await loadManifest(DEFAULT_CORPUS_ROOT);
   const efficiencyRelevantCases = gateManifest.cases.filter((c) => c.efficiencyRelevant === true);
   if (efficiencyRelevantCases.length === 0) {
     failures.push("no efficiencyRelevant cases marked in manifest");

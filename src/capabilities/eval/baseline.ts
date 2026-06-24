@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { PHASE_0_THRESHOLDS } from "./metrics";
-import { estimateApproxTokensFromText } from "./tokens";
 
 type NoProductionFakesAuditReport = {
   readonly scanRoot: string;

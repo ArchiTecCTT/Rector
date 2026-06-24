@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { RunEventSchema, type RunEvent, type RunEventType } from "../protocol/events";
 import { RunPhaseSchema, type RunPhase } from "../protocol/phases";
 import { SpecialistTaskPacketSchema, type SpecialistTaskPacket } from "../systems/contracts";
