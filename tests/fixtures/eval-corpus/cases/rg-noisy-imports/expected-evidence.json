@@ -9,14 +9,14 @@
       "excerpt": "src/tools/middleware.ts:1:1:import { redactSecrets, redactString } from \"../security/redaction\";",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/rg-noisy-imports/artifact.txt"
+      "rawArtifactRef": "artifact://rg-noisy-imports/artifact.txt"
     },
     {
       "kind": "code_reference",
       "excerpt": "src/tools/types.ts:13:1:import type { IterationBudget } from \"../orchestration/turnBudget\";",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/rg-noisy-imports/artifact.txt"
+      "rawArtifactRef": "artifact://rg-noisy-imports/artifact.txt"
     }
   ],
   "coverage": {
@@ -32,5 +32,5 @@
     "passed": true
   },
   "warnings": [],
-  "rawArtifactRefs": ["artifact://offline/rg-noisy-imports/artifact.txt"]
+  "rawArtifactRefs": ["artifact://rg-noisy-imports/artifact.txt"]
 }

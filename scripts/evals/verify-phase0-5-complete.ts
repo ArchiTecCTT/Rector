@@ -10,7 +10,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SafeRelativePathSchema } from "../../src/evals/globalScenarioSchema";
+import { GlobalScenarioSchema, SafeRelativePathSchema } from "../../src/evals/globalScenarioSchema";
+import YAML from "yaml";
 
 const REPO_ROOT = path.dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 const SCENARIOS_DIR = process.env.VERIFY_SCENARIOS_DIR || path.join(REPO_ROOT, "tests/global/scenarios");
@@ -39,6 +40,18 @@ async function main() {
     const raw = readFileSync(path.join(SCENARIOS_DIR, f), "utf8");
     if (raw.includes("validators:") && raw.includes("- ")) {
       // crude string check for array form; real schema parse would catch
+    }
+    if (raw.includes("process.exit(")) {
+      fail(`scenario ${f} contains hardcoded process.exit stub`);
+    }
+    const scenario = GlobalScenarioSchema.parse(YAML.parse(raw));
+    for (const validator of scenario.validators) {
+      if (validator.cmd === "node" && validator.args.includes("-e")) {
+        fail(`scenario ${f} validator ${validator.id} uses node -e stub`);
+      }
+      if (validator.args.some((arg) => arg.includes("process.exit(0)") || arg.includes("process.exit(1)"))) {
+        fail(`scenario ${f} validator ${validator.id} contains hardcoded process.exit status`);
+      }
     }
     if (raw.includes("npx ") && !raw.includes("--no-install")) {
       fail(`scenario ${f} uses npx without --no-install`);

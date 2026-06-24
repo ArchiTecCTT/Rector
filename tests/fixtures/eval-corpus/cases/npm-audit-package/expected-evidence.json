@@ -12,7 +12,7 @@
       "excerpt": "found 0 vulnerabilities",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/npm-audit-package/artifact.txt"
+      "rawArtifactRef": "artifact://npm-audit-package/artifact.txt"
     }
   ],
   "coverage": {
@@ -27,5 +27,5 @@
     "passed": true
   },
   "warnings": [],
-  "rawArtifactRefs": ["artifact://offline/npm-audit-package/artifact.txt"]
+  "rawArtifactRefs": ["artifact://npm-audit-package/artifact.txt"]
 }

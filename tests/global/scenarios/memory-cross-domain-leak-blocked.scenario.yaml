@@ -10,11 +10,11 @@ expectedSpecialist: coding
 successCriteria:
   - scenario memory-cross-domain-leak-blocked executes
 validators:
-  - id: v1
+  - id: fixture-integrity-verifier
     cmd: node
-    args: [-e, process.exit(0)]
+    args: [src/fixture-integrity.verify.js]
     cwd: .
-    timeoutMs: 10000
+    timeoutMs: 30000
     expectedExitCode: 0
 oracles:
   mustChange: []

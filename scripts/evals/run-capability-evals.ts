@@ -27,7 +27,9 @@ import { LocalFsRawArtifactStore, type RawArtifactRecord } from "../../src/capab
 import { estimateApproxTokensFromText } from "../../src/capabilities/eval/tokens";
 import {
   CapabilityEvidencePacketSchema,
+  validateEvidenceCoverage,
   type CapabilityEvidencePacket,
+  type CapabilityCoverage,
 } from "../../src/capabilities/eval/evidencePacket";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -133,8 +135,14 @@ function computeCompressionMetricsFromExpectedPacket(artifact: string, packet: C
   return { compression, rawTokenReduction };
 }
 
-function evaluatePassed(recall: number, secretLeak: number, exitCodeMatches: boolean, lineCountMatches: boolean): boolean {
-  return recall === 1 && secretLeak === 0 && exitCodeMatches && lineCountMatches;
+function evaluatePassed(
+  recall: number,
+  secretLeak: number,
+  exitCodeMatches: boolean,
+  lineCountMatches: boolean,
+  evidenceCoveragePassed: boolean,
+): boolean {
+  return recall === 1 && secretLeak === 0 && exitCodeMatches && lineCountMatches && evidenceCoveragePassed;
 }
 
 function assembleFailureReason(
@@ -144,13 +152,46 @@ function assembleFailureReason(
   secretLeak: number,
   exitCodeMatches: boolean,
   lineAccuracy: LineAccuracy,
+  evidenceCoverageFailure?: string,
 ): string {
   const failureParts: string[] = [];
   if (recallOmission.recall !== 1) failureParts.push(`${recallOmission.missingExpected.length}/${oracle.mustContain.length} expected strings missing`);
   if (secretLeak !== 0) failureParts.push(`${secretLeak} forbidden/leak hit(s)`);
   if (!exitCodeMatches) failureParts.push(`exit code ${oracle.expectedExitCode} != recorded ${fixtureCase.generatedFrom.exitCode}`);
   if (!lineAccuracy.lineCountMatches) failureParts.push(`line count ${lineAccuracy.actualLineCount} != expected ${oracle.expectedLineCount}`);
+  if (evidenceCoverageFailure !== undefined) failureParts.push(evidenceCoverageFailure);
   return `Oracle check failed: ${failureParts.join("; ")}`;
+}
+
+
+function formatCoverageFailure(coverage: CapabilityCoverage): string {
+  const parts: string[] = [];
+  if (coverage.missingMustContain.length > 0) parts.push(`missing evidence: ${coverage.missingMustContain.join(", ")}`);
+  if (coverage.forbiddenHits.length > 0) parts.push(`forbidden evidence: ${coverage.forbiddenHits.join(", ")}`);
+  if (coverage.unresolvedArtifactRefs.length > 0) parts.push(`unresolved artifacts: ${coverage.unresolvedArtifactRefs.join(", ")}`);
+  if (coverage.unresolvedFileRefs.length > 0) parts.push(`unresolved files: ${coverage.unresolvedFileRefs.join(", ")}`);
+  if (coverage.outOfBoundsLineRefs.length > 0) parts.push(`out-of-bounds lines: ${coverage.outOfBoundsLineRefs.join(", ")}`);
+  return `Evidence coverage failed: ${parts.join("; ")}`;
+}
+
+async function evaluateEvidenceCoverage(input: {
+  readonly fixtureCase: EvalCorpusCase;
+  readonly oracle: EvalCorpusOracle;
+  readonly expectedEvidencePacket: CapabilityEvidencePacket | null;
+  readonly rawArtifactUri: string;
+  readonly corpusRoot: string;
+}): Promise<{ readonly passed: boolean; readonly failureReason?: string }> {
+  if (input.expectedEvidencePacket === null) {
+    return { passed: false, failureReason: "Evidence coverage failed: missing expectedEvidencePacket" };
+  }
+  const coverage = await validateEvidenceCoverage(input.expectedEvidencePacket, { mustContain: input.oracle.mustContain, mustNotContain: input.oracle.mustNotContain }, {
+    rawArtifactRefs: new Set([input.rawArtifactUri]),
+    fixtureRoot: input.corpusRoot,
+  });
+  if (!coverage.passed) {
+    return { passed: false, failureReason: formatCoverageFailure(coverage.coverage) };
+  }
+  return { passed: true };
 }
 
 /**
@@ -172,8 +213,10 @@ function scoreCase(input: {
   readonly oracle: EvalCorpusOracle;
   readonly artifact: string;
   readonly expectedEvidencePacket?: CapabilityEvidencePacket | null;
+  readonly evidenceCoveragePassed: boolean;
+  readonly evidenceCoverageFailure?: string;
 }): CapabilityEvalResult {
-  const { fixtureCase, oracle, artifact, expectedEvidencePacket } = input;
+  const { fixtureCase, oracle, artifact, expectedEvidencePacket, evidenceCoveragePassed, evidenceCoverageFailure } = input;
 
   const recallOmission = computeRecallOmission(oracle, artifact);
   const secretLeak = computeSecretLeak(oracle, artifact);
@@ -193,9 +236,11 @@ function scoreCase(input: {
     root_cause_accuracy: rootCauseAccuracy,
   };
 
-  const passed = evaluatePassed(recallOmission.recall, secretLeak, exitCodeMatches, lineAccuracy.lineCountMatches);
+  const passed = evaluatePassed(recallOmission.recall, secretLeak, exitCodeMatches, lineAccuracy.lineCountMatches, evidenceCoveragePassed);
   const omissions = recallOmission.missingExpected.map((missing) => `Expected evidence not found in artifact: ${missing}`);
-  const failureReason = passed ? undefined : assembleFailureReason(oracle, fixtureCase, recallOmission, secretLeak, exitCodeMatches, lineAccuracy);
+  const failureReason = passed
+    ? undefined
+    : assembleFailureReason(oracle, fixtureCase, recallOmission, secretLeak, exitCodeMatches, lineAccuracy, evidenceCoverageFailure);
 
   const result = {
     schemaVersion: "rector.capability-eval.v1" as const,
@@ -258,7 +303,22 @@ export async function runCapabilityEvals(options: RunCapabilityEvalsOptions = {}
       expectedEvidencePacket = CapabilityEvidencePacketSchema.parse(packetJson);
     }
 
-    const result = scoreCase({ fixtureCase, oracle, artifact, expectedEvidencePacket });
+    const evidenceCoverage = await evaluateEvidenceCoverage({
+      fixtureCase,
+      oracle,
+      expectedEvidencePacket,
+      rawArtifactUri: record.uri,
+      corpusRoot,
+    });
+
+    const result = scoreCase({
+      fixtureCase,
+      oracle,
+      artifact,
+      expectedEvidencePacket,
+      evidenceCoveragePassed: evidenceCoverage.passed,
+      evidenceCoverageFailure: evidenceCoverage.failureReason,
+    });
     const patched = { ...result, rawArtifactRefs: [record.uri] };
     results.push(CapabilityEvalResultSchema.parse(patched));
   }

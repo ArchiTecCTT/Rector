@@ -12,7 +12,7 @@
       "excerpt": "diff --git a/before.ts b/after.ts\n-export const readiness = \"unconfigured\";\n+export const readiness = \"configured\";",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/git-readiness-diff/artifact.txt"
+      "rawArtifactRef": "artifact://git-readiness-diff/artifact.txt"
     }
   ],
   "coverage": {
@@ -29,5 +29,5 @@
     "passed": true
   },
   "warnings": [],
-  "rawArtifactRefs": ["artifact://offline/git-readiness-diff/artifact.txt"]
+  "rawArtifactRefs": ["artifact://git-readiness-diff/artifact.txt"]
 }

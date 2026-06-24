@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -101,16 +101,16 @@ describe("offline capability eval runner", () => {
 
     // Then: every committed case yields its exact recorded score (drift in scoring math fails here).
     const expectedPerCase = {
-      "rg-orchestration-search": { compression: 0.12738853503184713, raw_token_reduction: 0 },
-      "tsc-runtime-mode-error": { compression: 0.1050228310502283, raw_token_reduction: 0 },
-      "git-readiness-diff": { compression: 0.20600858369098712, raw_token_reduction: 0 },
-      "rg-noisy-imports": { compression: 905.4587813620071, raw_token_reduction: 0.998895587495992 },
-      "tsc-downstream-error": { compression: 0.15765765765765766, raw_token_reduction: 0 },
-      "vitest-failing-log": { compression: 0.3724696356275304, raw_token_reduction: 0 },
-      "git-risky-multi-file": { compression: 0.22264150943396227, raw_token_reduction: 0 },
-      "npm-audit-package": { compression: 0.03409090909090909, raw_token_reduction: 0 },
-      "audit-no-fakes-report": { compression: 2.7725856697819315, raw_token_reduction: 0.6393258426966293 },
-      "cartographer-inventory-scan": { compression: 265.72222222222223, raw_token_reduction: 0.9962366715450554 },
+      "rg-orchestration-search": { compression: 0.12987012987012986, raw_token_reduction: 0 },
+      "tsc-runtime-mode-error": { compression: 0.10697674418604651, raw_token_reduction: 0 },
+      "git-readiness-diff": { compression: 0.2096069868995633, raw_token_reduction: 0 },
+      "rg-noisy-imports": { compression: 925.3589743589744, raw_token_reduction: 0.9989193383025299 },
+      "tsc-downstream-error": { compression: 0.16055045871559634, raw_token_reduction: 0 },
+      "vitest-failing-log": { compression: 0.3817427385892116, raw_token_reduction: 0 },
+      "git-risky-multi-file": { compression: 0.2277992277992278, raw_token_reduction: 0 },
+      "npm-audit-package": { compression: 0.03488372093023256, raw_token_reduction: 0 },
+      "audit-no-fakes-report": { compression: 2.8434504792332267, raw_token_reduction: 0.648314606741573 },
+      "cartographer-inventory-scan": { compression: 273.3142857142857, raw_token_reduction: 0.9963412084465817 },
     } as const;
     for (const [caseId, expected] of Object.entries(expectedPerCase)) {
       const scores = byCase.get(caseId);
@@ -125,8 +125,8 @@ describe("offline capability eval runner", () => {
     }
 
     // And: the aggregate values are the exact deterministic means over the ten cases.
-    expect(output.summary.metrics.compression.value).toBe(117.51788689155944);
-    expect(output.summary.metrics.raw_token_reduction.value).toBe(0.26344581017376767);
+    expect(output.summary.metrics.compression.value).toBe(120.27681405594834);
+    expect(output.summary.metrics.raw_token_reduction.value).toBe(0.26435751534906843);
     expect(output.summary.metrics.recall.value).toBe(1);
     expect(output.summary.metrics.omission.value).toBe(0);
     expect(output.summary.metrics.secret_leak.value).toBe(0);
@@ -156,6 +156,39 @@ describe("offline capability eval runner", () => {
     // And: the rendered markdown surfaces the recorded failure for auditors.
     expect(output.markdown).toContain("Recorded Failures");
     expect(output.markdown).toContain("rg-orchestration-search");
+  });
+
+  it("fails the runner path when expected evidence has a bad raw artifact ref", async () => {
+    const corpusRoot = await mkdtemp(path.join(tmpdir(), "rector-eval-corpus-bad-ref-"));
+    tempRoots.push(corpusRoot);
+    await cp(path.join(process.cwd(), "tests", "fixtures", "eval-corpus"), corpusRoot, { recursive: true });
+    const evidencePath = path.join(corpusRoot, "cases", "rg-orchestration-search", "expected-evidence.json");
+    const packet = JSON.parse(await readFile(evidencePath, "utf8"));
+    packet.evidence[0].rawArtifactRef = "artifact://fabricated/missing.txt";
+    packet.rawArtifactRefs = ["artifact://fabricated/missing.txt"];
+    await writeFile(evidencePath, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
+
+    const output = await runCapabilityEvals({ corpusRoot, write: false, now: FIXED_NOW });
+    const result = output.results.find((entry) => entry.caseId === "rg-orchestration-search");
+    expect(result?.passed).toBe(false);
+    expect(result?.failureReason).toContain("Evidence coverage failed");
+    expect(result?.failureReason).toContain("unresolved artifacts");
+  });
+
+  it("fails the runner path when expected evidence has an out-of-bounds line ref", async () => {
+    const corpusRoot = await mkdtemp(path.join(tmpdir(), "rector-eval-corpus-bad-line-"));
+    tempRoots.push(corpusRoot);
+    await cp(path.join(process.cwd(), "tests", "fixtures", "eval-corpus"), corpusRoot, { recursive: true });
+    const evidencePath = path.join(corpusRoot, "cases", "rg-orchestration-search", "expected-evidence.json");
+    const packet = JSON.parse(await readFile(evidencePath, "utf8"));
+    packet.evidence[0].lineEnd = 999999;
+    await writeFile(evidencePath, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
+
+    const output = await runCapabilityEvals({ corpusRoot, write: false, now: FIXED_NOW });
+    const result = output.results.find((entry) => entry.caseId === "rg-orchestration-search");
+    expect(result?.passed).toBe(false);
+    expect(result?.failureReason).toContain("Evidence coverage failed");
+    expect(result?.failureReason).toContain("out-of-bounds lines");
   });
 
   it("persists artifacts via LocalFsRawArtifactStore and round-trips with integrity", async () => {

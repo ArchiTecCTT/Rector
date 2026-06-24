@@ -12,7 +12,7 @@
       "excerpt": "Rector no-production-fakes audit (report-only)",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/audit-no-fakes-report/artifact.txt"
+      "rawArtifactRef": "artifact://audit-no-fakes-report/artifact.txt"
     },
     {
       "kind": "summary",
@@ -22,7 +22,7 @@
       "excerpt": "Scanned files: 192",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/audit-no-fakes-report/artifact.txt"
+      "rawArtifactRef": "artifact://audit-no-fakes-report/artifact.txt"
     },
     {
       "kind": "summary",
@@ -32,7 +32,7 @@
       "excerpt": "Findings: 40",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/audit-no-fakes-report/artifact.txt"
+      "rawArtifactRef": "artifact://audit-no-fakes-report/artifact.txt"
     }
   ],
   "coverage": {
@@ -49,5 +49,5 @@
     "passed": true
   },
   "warnings": [],
-  "rawArtifactRefs": ["artifact://offline/audit-no-fakes-report/artifact.txt"]
+  "rawArtifactRefs": ["artifact://audit-no-fakes-report/artifact.txt"]
 }

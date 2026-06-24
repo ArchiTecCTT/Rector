@@ -1,6 +1,8 @@
-const { existsSync, readFileSync } = require("node:fs");
-const { join } = require("node:path");
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
 const calculatorPath = join(root, "src", "calculator.ts");
 const verifierPath = join(root, "src", "calculator.verify.ts");

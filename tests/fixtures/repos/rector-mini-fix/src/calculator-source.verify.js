@@ -1,6 +1,8 @@
-const { readFileSync } = require("node:fs");
-const { join } = require("node:path");
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const sourcePath = join(__dirname, "calculator.ts");
 const source = readFileSync(sourcePath, "utf8");
 
