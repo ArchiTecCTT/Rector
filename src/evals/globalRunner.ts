@@ -134,6 +134,43 @@ export type GlobalScenarioOutcome = {
   readonly scenarioFile: string;
 };
 
+type ProducedArtifactRecord = {
+  readonly id: string;
+  readonly path?: string;
+  readonly line?: number;
+};
+
+type ProducedArtifactInput = {
+  readonly runEvents: readonly ReturnType<typeof RunEventSchema.parse>[];
+  readonly validators: readonly GlobalValidator[];
+  readonly beforeHashes: ReadonlyMap<string, string>;
+  readonly afterHashes: ReadonlyMap<string, string>;
+  readonly packet: ReturnType<typeof SpecialistTaskPacketSchema.parse>;
+  readonly allowed: readonly string[];
+  readonly forbidden: readonly string[];
+  readonly fakePathStatus: FakePathStatus;
+};
+
+function buildProducedArtifactRecords(input: ProducedArtifactInput): readonly ProducedArtifactRecord[] {
+  const records: ProducedArtifactRecord[] = [
+    ...input.runEvents.map((event, index) => ({ id: `event-${index}`, path: undefined })),
+    ...input.validators.map((validator) => ({ id: validator.id, path: undefined })),
+  ];
+  if (input.beforeHashes.size > 0 || input.afterHashes.size > 0) {
+    records.push({ id: "cartographer.grounding", path: undefined });
+  }
+  if (input.packet.systemId === "coding" && input.allowed.includes("coding") && !input.forbidden.includes("coding")) {
+    records.push({ id: "delegation.coding-only", path: undefined });
+  }
+  if (input.fakePathStatus === "clean") {
+    records.push({ id: "fake-path.clean", path: undefined });
+  }
+  if (input.packet.systemId === "memory" && input.allowed.includes("memory") && !input.forbidden.includes("memory")) {
+    records.push({ id: "memory.verified-only", path: undefined });
+  }
+  return records;
+}
+
 export type GlobalHarnessReport = {
   readonly schemaVersion: typeof GLOBAL_REPORT_SCHEMA_VERSION;
   readonly generatedAt: string;
@@ -189,6 +226,17 @@ async function loadScenarioDir(scenariosDir: string): Promise<readonly GlobalSce
     scenarios.push(loadGlobalScenario(text, "yaml"));
   }
   return scenarios;
+}
+
+async function loadScenarioFileMap(scenariosDir: string): Promise<ReadonlyMap<string, string>> {
+  const entries = await fs.readdir(scenariosDir);
+  const files = entries.filter((entry) => entry.endsWith(".scenario.yaml")).sort();
+  const scenarioFiles = new Map<string, string>();
+  for (const file of files) {
+    const text = await fs.readFile(path.join(scenariosDir, file), "utf8");
+    scenarioFiles.set(loadGlobalScenario(text, "yaml").id, file);
+  }
+  return scenarioFiles;
 }
 
 function runValidator(validator: GlobalValidator, workspaceRoot: string, env: NodeJS.ProcessEnv): ValidatorRun {
@@ -384,7 +432,10 @@ async function buildScorecard(input: {
   // #5: accuracy also hash-verifies declared expected.changedPaths/unchangedPaths (via before/after hashes in ctx).
   const declaredPaths = [...(scenario.expected.changedPaths ?? []), ...(scenario.expected.unchangedPaths ?? [])];
   const accuracyOraclePaths = Array.from(new Set([...scenario.oracles.mustChange, ...scenario.oracles.mustNotChange, ...declaredPaths]));
-  const accuracy = computeAccuracyReal(accuracyOraclePaths, accuracyCtx);
+  const accuracy = computeAccuracyReal(accuracyOraclePaths, accuracyCtx, {
+    changedPaths: scenario.expected.changedPaths ?? [],
+    unchangedPaths: scenario.expected.unchangedPaths ?? [],
+  });
 
   // safety: redaction-stable + no secret + manifest check (no undeclared change)
   const allowedChangedPaths = scenario.expected.changedPaths ?? [];
@@ -508,6 +559,9 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
   const now = options.now ?? (() => new Date());
 
   const scenarios = options.scenarios ?? (await loadScenarioDir(scenariosDir));
+  const scenarioFiles = options.scenarios
+    ? new Map(scenarios.map((scenario) => [scenario.id, `${scenario.id}.scenario.yaml`]))
+    : await loadScenarioFileMap(scenariosDir);
 
   const audit = options.fakePathAuditor ? await options.fakePathAuditor() : undefined;
   const fakePathStatus: FakePathStatus =
@@ -519,6 +573,11 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
   const regressions: { scenarioId: string; note?: string; failedValidators?: readonly ValidatorRun[] }[] = [];
 
   for (const scenario of scenarios) {
+    const skipWithRegression = (reason: string): void => {
+      skipped.push({ scenarioId: scenario.id, reason });
+      regressions.push({ scenarioId: scenario.id, note: reason });
+    };
+
     if (requiresLiveProvider(scenario) && env.LIVE_EVALS !== "1") {
       skipped.push({
         scenarioId: scenario.id,
@@ -529,7 +588,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
 
     const scenarioWorkspace = path.resolve(repoRoot, scenario.workspace);
     if (!(await pathExists(scenarioWorkspace))) {
-      regressions.push({ scenarioId: scenario.id, note: `workspace not found: ${scenario.workspace}` });
+      skipWithRegression(`workspace not found: ${scenario.workspace}`);
       continue;
     }
 
@@ -555,6 +614,14 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
     }
 
     const expected: GlobalScenarioExpected = scenario.expected;
+
+    const beforeHashes = new Map<string, string>();
+    for (const p of expected.changedPaths.concat(expected.unchangedPaths)) {
+      const abs = path.resolve(effectiveWorkspace, p);
+      if (await fs.access(abs).then(() => true).catch(() => false)) beforeHashes.set(p, await sha256File(abs));
+    }
+    const beforeManifest = await computeWorkspaceManifest(effectiveWorkspace);
+
     if (operation.kind === "scripted_patch" && operation.patchFile) {
       const patchAbs = path.resolve(effectiveWorkspace, operation.patchFile);
       // Build allowed target set: expected.changedPaths + any explicitly declared setup-only allowed paths.
@@ -562,32 +629,24 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       const allowed = new Set<string>(expected.changedPaths);
       const containment = await validateScriptedPatchTargets(patchAbs, allowed);
       if (!containment.ok) {
-        regressions.push({ scenarioId: scenario.id, note: `scripted_patch rejected: ${containment.reason}` });
+        skipWithRegression(`scripted_patch rejected: ${containment.reason}`);
         if (tempWorkspace) await rm(tempWorkspace, { recursive: true, force: true });
         continue;
       }
       // git apply --check first, then apply.
-      const check = spawnSync("git", ["apply", "--check", patchAbs], { cwd: effectiveWorkspace, encoding: "utf8" });
+      const check = spawnSync("git", ["apply", "--check", "-C0", patchAbs], { cwd: effectiveWorkspace, encoding: "utf8" });
       if (check.status !== 0) {
-        regressions.push({ scenarioId: scenario.id, note: `git apply --check failed` });
+        skipWithRegression("git apply --check failed");
         if (tempWorkspace) await rm(tempWorkspace, { recursive: true, force: true });
         continue;
       }
-      const apply = spawnSync("git", ["apply", patchAbs], { cwd: effectiveWorkspace, encoding: "utf8" });
+      const apply = spawnSync("git", ["apply", "-C0", patchAbs], { cwd: effectiveWorkspace, encoding: "utf8" });
       if (apply.status !== 0) {
-        regressions.push({ scenarioId: scenario.id, note: `git apply failed` });
+        skipWithRegression("git apply failed");
         if (tempWorkspace) await rm(tempWorkspace, { recursive: true, force: true });
         continue;
       }
     }
-
-    // Capture before hashes for expected paths + full manifest (BEFORE operation + validators).
-    const beforeHashes = new Map<string, string>();
-    for (const p of expected.changedPaths.concat(expected.unchangedPaths)) {
-      const abs = path.resolve(effectiveWorkspace, p);
-      if (await fs.access(abs).then(() => true).catch(() => false)) beforeHashes.set(p, await sha256File(abs));
-    }
-    const beforeManifest = await computeWorkspaceManifest(effectiveWorkspace);
 
     const validatorRuns = scenario.validators.map((validator) => runValidator(validator, effectiveWorkspace, env));
 
@@ -650,19 +709,23 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       workspaceBeforeHashes: Object.fromEntries(beforeManifest.map((e) => [e.path, e.sha256])),
       workspaceAfterHashes: Object.fromEntries(afterManifest.map((e) => [e.path, e.sha256])),
       runEvents,
-      // #6: artifactRecords built from REAL produced artifacts (runEvents + validator refs + file refs), NOT from mustIncludeEvidence.
-      artifactRecords: [
-        ...runEvents.map((e, i) => ({ id: `event-${i}`, path: undefined })),
-        ...scenario.validators.map((v) => ({ id: v.id, path: undefined })),
-        ...scenario.oracles.mustIncludeEvidence.map((id) => ({ id, path: undefined })),
-      ],
+      artifactRecords: buildProducedArtifactRecords({
+        runEvents,
+        validators: scenario.validators,
+        beforeHashes,
+        afterHashes,
+        packet,
+        allowed,
+        forbidden,
+        fakePathStatus,
+      }),
       packet,
       allowed,
       forbidden,
     });
 
     const actualStatus: "passed" | "failed" | "skipped" = realScorecard.passed ? "passed" : "failed";
-    const scenarioFileName = `${scenario.id}.scenario.yaml`;
+    const scenarioFileName = scenarioFiles.get(scenario.id) ?? `${scenario.id}.scenario.yaml`;
     outcomes.push({
       scenarioId: scenario.id,
       scorecard: realScorecard,

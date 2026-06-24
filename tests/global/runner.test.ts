@@ -8,6 +8,7 @@ import {
 } from "../../src/evals/scorecards";
 import { GlobalScenarioSchema, type GlobalScenario } from "../../src/evals/globalScenarioSchema";
 import { requiresLiveProvider, runGlobalHarness } from "../../src/evals/globalRunner";
+import type { GlobalEvidenceContext } from "../../src/evals/scoreDimensions";
 import { RunEventSchema } from "../../src/protocol/events";
 import { SpecialistTaskPacketSchema } from "../../src/systems/contracts";
 
@@ -324,6 +325,25 @@ describe("global reliability harness runner", () => {
     // Real hash assertion: accuracy dimension 1 proves changed path hash matched declared expectation
     const sc = result.scorecards.find((s) => s.scenarioId === "hash-manifest-001");
     expect(sc?.dimensions.accuracy.score).toBe(1);
+  });
+
+  it("evidence_quality anti-cheat: declared mustIncludeEvidence with no real backing artifact scores 0", async () => {
+    // Direct test of computeEvidenceQuality with fabricated ref (no auto-injection).
+    const { computeEvidenceQuality } = await import("../../src/evals/scoreDimensions");
+    const ctx: GlobalEvidenceContext = {
+      artifactRecords: [{ id: "real-validator-1", path: undefined }],
+      validatorRuns: [],
+      runEvents: [],
+      workspaceRoot: "/tmp",
+      beforeHashes: {},
+      afterHashes: {},
+    };
+    // Fabricated ref not present in real artifacts → score 0
+    const bad = computeEvidenceQuality(["fabricated.evidence.ref"], ctx);
+    expect(bad.score).toBe(0);
+    // Real ref that matches a produced artifact id → score 1
+    const good = computeEvidenceQuality(["real-validator-1"], ctx);
+    expect(good.score).toBe(1);
   });
 
   it(

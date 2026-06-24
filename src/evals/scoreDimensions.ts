@@ -35,6 +35,21 @@ export interface GlobalEvidenceContext {
   readonly workspaceAfterHashes?: Readonly<Record<string, string>>;
 }
 
+export type AccuracyHashExpectation = {
+  readonly changedPaths: readonly string[];
+  readonly unchangedPaths: readonly string[];
+};
+
+function hasPathEvidence(path: string, evidence: GlobalEvidenceContext): boolean {
+  return (
+    evidence.artifactRecords.some((artifact) => artifact.path === path) ||
+    evidence.beforeHashes[path] !== undefined ||
+    evidence.afterHashes[path] !== undefined ||
+    evidence.workspaceBeforeHashes?.[path] !== undefined ||
+    evidence.workspaceAfterHashes?.[path] !== undefined
+  );
+}
+
 /**
  * Score result for a single dimension.
  */
@@ -68,19 +83,40 @@ export function computeReliability(
 export function computeAccuracy(
   changePaths: readonly string[],
   evidence: GlobalEvidenceContext,
+  hashExpectation?: AccuracyHashExpectation,
 ): DimensionScore {
   if (changePaths.length === 0) return { score: 1, note: "no oracle paths declared" };
-  // Hash mismatch → accuracy 0
-  for (const p of changePaths) {
-    const bh = evidence.beforeHashes[p];
-    const ah = evidence.afterHashes[p];
-    if (bh !== undefined && ah !== undefined && bh !== ah) {
-      return { score: 0, note: `hash mismatch on ${p}` };
+  if (hashExpectation) {
+    for (const p of hashExpectation.changedPaths) {
+      const bh = evidence.beforeHashes[p];
+      const ah = evidence.afterHashes[p];
+      if (bh === undefined || ah === undefined) {
+        return { score: 0, note: `missing hash for changed path ${p}` };
+      }
+      if (bh === ah) {
+        return { score: 0, note: `expected changed path did not change: ${p}` };
+      }
+    }
+    for (const p of hashExpectation.unchangedPaths) {
+      const bh = evidence.beforeHashes[p];
+      const ah = evidence.afterHashes[p];
+      if (bh === undefined || ah === undefined) {
+        return { score: 0, note: `missing hash for unchanged path ${p}` };
+      }
+      if (bh !== ah) {
+        return { score: 0, note: `unexpected hash mismatch on unchanged path ${p}` };
+      }
+    }
+  } else {
+    for (const p of changePaths) {
+      const bh = evidence.beforeHashes[p];
+      const ah = evidence.afterHashes[p];
+      if (bh !== undefined && ah !== undefined && bh !== ah) {
+        return { score: 0, note: `hash mismatch on ${p}` };
+      }
     }
   }
-  const resolvable = changePaths.filter((p) =>
-    evidence.artifactRecords.some((a) => a.path === p)
-  ).length;
+  const resolvable = changePaths.filter((p) => hasPathEvidence(p, evidence)).length;
   const score = resolvable / changePaths.length;
   return { score, note: `${resolvable}/${changePaths.length} oracle paths resolvable` };
 }
@@ -273,4 +309,3 @@ export function computeSimplicity(params: {
   }
   return { score: 1, note: "minimal validator_only within budget" };
 }
-

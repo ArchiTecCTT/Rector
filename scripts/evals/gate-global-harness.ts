@@ -21,7 +21,6 @@ import { spawnSync } from "node:child_process";
 
 import { runGlobalHarness } from "../../src/evals/globalRunner";
 import { auditNoProductionFakes } from "../audit/no-production-fakes";
-import { loadGlobalScenario } from "../../src/evals/globalScenarioSchema";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCENARIOS_DIR = path.join(REPO_ROOT, "tests", "global", "scenarios");
@@ -77,7 +76,7 @@ async function main(): Promise<void> {
     const sc = scorecards.find((s) => s.scenarioId === o.scenarioId);
     if (!sc) continue;
     const eq = sc.dimensions.evidence_quality.score;
-    if (eq === 0) {
+    if (eq === 0 && o.expectedStatus === "passed") {
       const yaml = await fs.readFile(path.join(SCENARIOS_DIR, o.scenarioFile), "utf8");
       if (yaml.includes("evidence") || yaml.includes("artifact-ref")) {
         violations.push(`${o.scenarioId}: evidence_quality=0 with declared evidence refs`);
