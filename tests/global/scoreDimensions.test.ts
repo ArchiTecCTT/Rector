@@ -13,6 +13,7 @@ import {
 } from "../../src/evals/scoreDimensions";
 import { buildTaskPacket } from "../../src/evals/runTrace";
 import { SpecialistTaskPacketSchema } from "../../src/systems/contracts";
+import { RunEventSchema } from "../../src/protocol/events";
 
 describe("scoreDimensions", () => {
   it("MemoryAssertionSchema rejects malformed fixtures", () => {
@@ -80,11 +81,20 @@ describe("scoreDimensions", () => {
     expect(computeMemoryCorrectness(assertion, ctx).score).toBe(0);
   });
 
-  it("delegation_quality=1 only when allowed and not forbidden", () => {
+  it("delegation_quality=1 only when packet and trace select an allowed, non-forbidden specialist", () => {
     const pkt = buildTaskPacket({ systemId: "coding-basic-fix" });
-    expect(computeDelegationQuality(pkt, ["coding-basic-fix"], []).score).toBe(1);
-    expect(computeDelegationQuality(pkt, ["other"], []).score).toBe(0);
-    expect(computeDelegationQuality(pkt, ["coding-basic-fix"], ["coding-basic-fix"]).score).toBe(0);
+    const runEvents = [RunEventSchema.parse({
+      id: "evt-delegation",
+      runId: "run-delegation",
+      type: "RUN_CREATED",
+      phase: "CHAT_RECEIVED",
+      payload: { selectedSystemId: "coding-basic-fix" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    })];
+    expect(computeDelegationQuality({ packet: pkt, runEvents, expectedSpecialist: "coding-basic-fix", allowed: ["coding-basic-fix"], forbidden: [] }).score).toBe(1);
+    expect(computeDelegationQuality({ packet: pkt, runEvents, expectedSpecialist: "coding-basic-fix", allowed: ["other"], forbidden: [] }).score).toBe(0);
+    expect(computeDelegationQuality({ packet: pkt, runEvents, expectedSpecialist: "coding-basic-fix", allowed: ["coding-basic-fix"], forbidden: ["coding-basic-fix"] }).score).toBe(0);
+    expect(computeDelegationQuality({ packet: pkt, runEvents: [], expectedSpecialist: "coding-basic-fix", allowed: ["coding-basic-fix"], forbidden: [] }).score).toBe(0);
   });
 
   it("evidence_quality=1 only when ids are non-empty", () => {

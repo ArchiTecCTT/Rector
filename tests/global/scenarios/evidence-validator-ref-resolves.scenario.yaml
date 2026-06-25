@@ -19,7 +19,8 @@ validators:
 oracles:
   mustChange: []
   mustNotChange: []
-  mustIncludeEvidence: []
+  mustIncludeEvidence:
+    - fixture-integrity-verifier
 budgets:
   maxToolCalls: 10
   maxRuntimeMs: 60000
@@ -33,4 +34,5 @@ expected:
   status: passed
   changedPaths: []
   unchangedPaths: []
-  evidenceRefs: []
+  evidenceRefs:
+    - fixture-integrity-verifier

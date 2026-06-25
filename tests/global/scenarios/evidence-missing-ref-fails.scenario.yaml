@@ -10,16 +10,17 @@ expectedSpecialist: coding
 successCriteria:
   - scenario evidence-missing-ref-fails executes
 validators:
-  - id: v1
-    cmd: npx
-    args: [--no-install, tsx, src/calculator.verify.ts]
+  - id: fixture-integrity-verifier
+    cmd: node
+    args: [src/fixture-integrity.verify.js]
     cwd: .
     timeoutMs: 30000
     expectedExitCode: 0
 oracles:
   mustChange: []
   mustNotChange: []
-  mustIncludeEvidence: []
+  mustIncludeEvidence:
+    - fabricated-ref-does-not-exist
 budgets:
   maxToolCalls: 10
   maxRuntimeMs: 60000
@@ -33,4 +34,5 @@ expected:
   status: failed
   changedPaths: []
   unchangedPaths: []
-  evidenceRefs: []
+  evidenceRefs:
+    - fabricated-ref-does-not-exist

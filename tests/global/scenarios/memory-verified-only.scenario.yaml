@@ -1,12 +1,12 @@
 schemaVersion: rector.global-scenario.v1
 id: memory-verified-only
 title: memory-verified-only
-type: coding
+type: memory
 workspace: tests/fixtures/repos/rector-mini-fix
 userGoal: Scenario memory-verified-only
-allowedSystems: [coding]
+allowedSystems: [coding, memory]
 forbiddenSystems: [research, writing, design]
-expectedSpecialist: coding
+expectedSpecialist: memory
 successCriteria:
   - scenario memory-verified-only executes
 validators:
@@ -19,7 +19,8 @@ validators:
 oracles:
   mustChange: []
   mustNotChange: []
-  mustIncludeEvidence: []
+  mustIncludeEvidence:
+    - memory.verified-only
 budgets:
   maxToolCalls: 10
   maxRuntimeMs: 60000
@@ -33,4 +34,7 @@ expected:
   status: passed
   changedPaths: []
   unchangedPaths: []
-  evidenceRefs: []
+  evidenceRefs:
+    - memory.verified-only
+  memoryAssertionPath: memory/verified-only.assertion.json
+  runEventTracePath: memory/verified-only.trace.json

@@ -1,12 +1,12 @@
 schemaVersion: rector.global-scenario.v1
 id: memory-candidate-needs-evidence
 title: memory-candidate-needs-evidence
-type: coding
+type: memory
 workspace: tests/fixtures/repos/rector-mini-fix
 userGoal: Scenario memory-candidate-needs-evidence
-allowedSystems: [coding]
+allowedSystems: [coding, memory]
 forbiddenSystems: [research, writing, design]
-expectedSpecialist: coding
+expectedSpecialist: memory
 successCriteria:
   - scenario memory-candidate-needs-evidence executes
 validators:
@@ -19,7 +19,8 @@ validators:
 oracles:
   mustChange: []
   mustNotChange: []
-  mustIncludeEvidence: []
+  mustIncludeEvidence:
+    - memory.verified-only
 budgets:
   maxToolCalls: 10
   maxRuntimeMs: 60000
@@ -30,7 +31,10 @@ setup:
 operation:
   kind: validator_only
 expected:
-  status: passed
+  status: failed
   changedPaths: []
   unchangedPaths: []
-  evidenceRefs: []
+  evidenceRefs:
+    - memory.verified-only
+  memoryAssertionPath: memory/missing-evidence.assertion.json
+  runEventTracePath: memory/missing-evidence.trace.json

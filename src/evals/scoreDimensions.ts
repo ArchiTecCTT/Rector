@@ -180,10 +180,17 @@ export function computeMemoryCorrectness(assertion: MemoryAssertion, evidence: G
   const noForbidden = assertion.forbiddenPromotions.every((id) =>
     !evidence.runEvents.some((e) => (e.payload?.["promoted"] as string | undefined) === id)
   );
+  const candidateOk = assertion.expectedCandidateRefs.every((ref) =>
+    evidence.runEvents.some((e) =>
+      (e.payload?.["candidateRef"] as string | undefined) === ref ||
+      (e.payload?.["evidenceRef"] as string | undefined) === ref ||
+      ((e.payload?.["refs"] as string[] | undefined) ?? []).includes(ref)
+    )
+  );
   const noCross = assertion.forbiddenCrossDomainRefs.every((ref) =>
     !evidence.runEvents.some((e) => ((e.payload?.["refs"] as string[] | undefined) ?? []).includes(ref))
   );
-  const score = verifiedOk && unverifiedOk && noForbidden && noCross ? 1 : 0;
+  const score = verifiedOk && unverifiedOk && candidateOk && noForbidden && noCross ? 1 : 0;
   return {
     score,
     note: score === 1 ? "memory assertions satisfied" : "memory assertion violations",
@@ -191,11 +198,40 @@ export function computeMemoryCorrectness(assertion: MemoryAssertion, evidence: G
 }
 
 /**
- * computeDelegationQuality — 1 iff expected specialist is allowed and not forbidden.
+ * computeDelegationQuality — 1 iff packet and trace consistently select the expected specialist,
+ * the specialist is allowed/not forbidden, and no run-event payload names a forbidden system.
  */
-export function computeDelegationQuality(packet: SpecialistTaskPacket, allowed: readonly string[], forbidden: readonly string[]): DimensionScore {
-  const ok = allowed.includes(packet.systemId) && !forbidden.includes(packet.systemId);
-  return { score: ok ? 1 : 0, note: ok ? "delegation within policy" : "delegation policy violation" };
+export function computeDelegationQuality(input: {
+  packet: SpecialistTaskPacket;
+  runEvents: readonly RunEvent[];
+  expectedSpecialist: string;
+  allowed: readonly string[];
+  forbidden: readonly string[];
+}): DimensionScore {
+  const { packet, runEvents, expectedSpecialist, allowed, forbidden } = input;
+  if (packet.systemId !== expectedSpecialist) {
+    return { score: 0, note: `packet system ${packet.systemId} != expected ${expectedSpecialist}` };
+  }
+  if (!allowed.includes(packet.systemId) || forbidden.includes(packet.systemId)) {
+    return { score: 0, note: "delegation policy violation" };
+  }
+  const forbiddenHit = forbidden.find((systemId) =>
+    runEvents.some((event) => {
+      const payload = event.payload ?? {};
+      return payload["selectedSystemId"] === systemId || payload["usedSystemId"] === systemId || payload["systemId"] === systemId;
+    })
+  );
+  if (forbiddenHit) {
+    return { score: 0, note: `forbidden system named in trace: ${forbiddenHit}` };
+  }
+  const selected = runEvents.some((event) => {
+    const payload = event.payload ?? {};
+    return payload["selectedSystemId"] === expectedSpecialist || payload["usedSystemId"] === expectedSpecialist;
+  });
+  if (!selected) {
+    return { score: 0, note: `trace never selected expected specialist ${expectedSpecialist}` };
+  }
+  return { score: 1, note: "delegation packet and trace within policy" };
 }
 
 /**

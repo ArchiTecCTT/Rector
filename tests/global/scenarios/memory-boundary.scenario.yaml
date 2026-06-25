@@ -34,3 +34,5 @@ expected:
     - src/calculator.verify.ts
   evidenceRefs:
     - memory.verified-only
+  memoryAssertionPath: memory/verified-only.assertion.json
+  runEventTracePath: memory/verified-only.trace.json

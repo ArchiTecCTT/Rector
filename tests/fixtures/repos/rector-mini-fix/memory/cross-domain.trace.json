@@ -1,0 +1,14 @@
+[
+  {
+    "id": "evt-memory-cross-domain",
+    "runId": "run-memory-fixture",
+    "type": "ARTIFACT_CREATED",
+    "phase": "VALIDATING",
+    "payload": {
+      "memoryId": "mem-verified-calculator",
+      "candidateRef": "validator:fixture-integrity-verifier",
+      "refs": ["research.customer-data"]
+    },
+    "createdAt": "2026-01-01T00:00:00.000Z"
+  }
+]
