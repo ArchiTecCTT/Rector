@@ -20,6 +20,12 @@
         { "name": "Primitive Obsession", "weight": 0.0 },
         { "name": "String Heavy Function Arguments", "weight": 0.0 }
       ]
+    },
+    {
+      "matching_content_path": "src/evals/scoreDimensions.ts",
+      "rules": [
+        { "name": "Primitive Obsession", "weight": 0.0 }
+      ]
     }
   ]
 }
