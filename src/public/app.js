@@ -6312,7 +6312,7 @@ function bindComposer() {
     const content = input.value;
     input.value = "";
     autoGrow(input);
-    sendMessage(content);
+    void sendMessage(content);
   });
 
   input.addEventListener("input", () => autoGrow(input));
@@ -6435,8 +6435,8 @@ function init() {
     console.error("[init] missing #close-trace; trace close control disabled");
   }
 
-  checkHealth();
-  loadConversations();
+  void checkHealth();
+  void loadConversations();
   void loadProductReadiness();
   els["composer-input"]?.focus();
 }
