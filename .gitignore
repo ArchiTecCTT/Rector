@@ -41,6 +41,7 @@ desktop.ini
 opencode.json
 .opencode/
 .omo/
+.agents/
 
 # Research / scratch
 research.md
