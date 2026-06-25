@@ -22,7 +22,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderConfigRecord } from "../src/providers/config";
 import { cloudflareDiscoveryAdapter } from "../src/providers/discovery/adapters/cloudflare";
-import type { AdapterContext } from "../src/providers/discovery/adapters/index";
+import type { AdapterContext } from "../src/providers/discovery/adapters";
 
 const BASE_URL = "https://api.cloudflare.com/client/v4";
 const ACCOUNT_ID = "acct-123";

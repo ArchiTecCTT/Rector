@@ -1,7 +1,7 @@
 import type { ProviderKind } from "../../config";
 import { azureDiscoveryAdapter } from "./azure";
 import { cloudflareDiscoveryAdapter } from "./cloudflare";
-import type { DiscoveryAdapter, DiscoveryAdapterRegistry } from "./index";
+import type { DiscoveryAdapter, DiscoveryAdapterRegistry } from ".";
 import { openaiCompatibleDiscoveryAdapter } from "./openaiCompatible";
 import { togetherDiscoveryAdapter } from "./together";
 

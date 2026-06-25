@@ -1,0 +1,8 @@
+{
+  "command": "npm run audit:no-fakes",
+  "toolVersion": "tsx 4.19.2 + node 22.14.0",
+  "capturedAt": "2026-06-24T10:28:00+08:00",
+  "platform": "linux x86_64",
+  "exitCode": 0,
+  "regenerableInCi": true
+}

@@ -1,0 +1,38 @@
+schemaVersion: rector.global-scenario.v1
+id: memory-boundary-001
+title: Respect memory boundary - do not promote unverified notes
+type: memory
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: Answer using only verified memory; do not promote or cite unverified scratch notes as fact.
+allowedSystems: [coding, memory]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: memory
+successCriteria:
+  - only verified memory entries are cited
+  - no unverified scratch note is promoted to durable memory
+validators:
+  - id: verify-calculator
+    cmd: npx
+    args: ["--no-install", "tsx", "src/calculator.verify.ts"]
+    timeoutMs: 120000
+oracles:
+  mustChange: []
+  mustNotChange:
+    - src/calculator.ts
+    - src/calculator.verify.ts
+  mustIncludeEvidence:
+    - memory.verified-only
+budgets:
+  maxToolCalls: 20
+  maxRuntimeMs: 600000
+  maxMainModelRawToolTokens: 800
+expected:
+  status: failed
+  changedPaths: []
+  unchangedPaths:
+    - src/calculator.ts
+    - src/calculator.verify.ts
+  evidenceRefs:
+    - memory.verified-only
+  memoryAssertionPath: memory/verified-only.assertion.json
+  runEventTracePath: memory/verified-only.trace.json

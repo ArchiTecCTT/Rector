@@ -37,11 +37,24 @@
     "benchmark:performance": "tsx scripts/performance-baseline.ts",
     "build": "tsc && node scripts/fix-dist-esm-imports.js",
     "check": "tsc --noEmit",
+    "audit:no-fakes": "tsx scripts/audit/no-production-fakes.ts",
+    "eval:capabilities": "tsx scripts/evals/run-capability-evals.ts",
+    "eval:capabilities:gate": "tsx scripts/evals/run-capability-evals.ts --gate",
+    "eval:capabilities:report": "tsx scripts/evals/run-capability-evals.ts && cat .omo/evidence/eval-report.md",
+    "baseline:phase0": "tsx scripts/evals/run-phase0-baseline.ts",
     "test": "vitest run",
+    "test:global": "tsx scripts/evals/run-global-harness.ts",
+    "test:global:gate": "tsx scripts/evals/gate-global-harness.ts --gate",
+    "eval:global": "tsx scripts/evals/run-global-harness.ts",
+    "audit:scorecards": "tsx scripts/evals/audit-scorecards.ts",
+    "test:systems": "tsx scripts/evals/run-specialist-system-contracts.ts",
     "test:watch": "vitest",
     "smoke:tidb": "tsx --env-file=.env scripts/tidb-smoke-test.ts",
     "smoke:memory": "tsx --env-file=.env scripts/memory-live-smoke-test.ts",
-    "test:coverage": "vitest run --coverage --testTimeout=10000 --maxWorkers=2"
+    "test:coverage": "vitest run --coverage --testTimeout=10000 --maxWorkers=2",
+    "verify:phase0": "tsx scripts/evals/verify-phase0-complete.ts",
+    "verify:phase0.5": "tsx scripts/evals/verify-phase0-5-complete.ts",
+    "verify:foundation": "npm run verify:phase0 && npm run verify:phase0.5"
   },
   "engines": {
     "node": ">=22.5.0"
@@ -66,6 +79,7 @@
     "openai": "^6.44.0",
     "opencode-codebase-index": "^0.11.0",
 
+    "yaml": "^2.9.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

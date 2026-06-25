@@ -89,7 +89,7 @@ interface ExternalSynthesisPhaseResult {
 
 /**
  * Runs the external post-planning phase sequence (ORN-37/38). Unlike the deterministic
- * {@link runPostPlanningPhases} (kept byte-for-byte for local mode), this path drives the
+ * local post-planning execution (kept byte-for-byte for local mode), this path drives the
  * EXECUTING / VALIDATING / HEALING phases through the safe workspace executor
  * ({@link executeDagThroughSandbox} + {@link WorkspaceSandboxAdapter}) and the bounded live healing
  * loop ({@link validateAndHealExecution} with a live {@link LiveRepairAgent}), and produces the final

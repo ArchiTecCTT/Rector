@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "rector.capability.evidence.v1",
+  "capabilityId": "cartographer.grounding",
+  "caseId": "audit-no-fakes-report",
+  "summary": "audit:no-fakes report showing 192 files scanned, 40 findings",
+  "evidence": [
+    {
+      "kind": "summary",
+      "path": "cases/audit-no-fakes-report/artifact.txt",
+      "lineStart": 1,
+      "lineEnd": 1,
+      "excerpt": "Rector no-production-fakes audit (report-only)",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://audit-no-fakes-report/artifact.txt"
+    },
+    {
+      "kind": "summary",
+      "path": "cases/audit-no-fakes-report/artifact.txt",
+      "lineStart": 2,
+      "lineEnd": 2,
+      "excerpt": "Scanned files: 192",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://audit-no-fakes-report/artifact.txt"
+    },
+    {
+      "kind": "summary",
+      "path": "cases/audit-no-fakes-report/artifact.txt",
+      "lineStart": 3,
+      "lineEnd": 3,
+      "excerpt": "Findings: 40",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://audit-no-fakes-report/artifact.txt"
+    }
+  ],
+  "coverage": {
+    "coveredMustContain": [
+      "Rector no-production-fakes audit (report-only)",
+      "Scanned files: 192",
+      "Findings: 40"
+    ],
+    "missingMustContain": [],
+    "forbiddenHits": [],
+    "unresolvedArtifactRefs": [],
+    "unresolvedFileRefs": [],
+    "outOfBoundsLineRefs": [],
+    "passed": true
+  },
+  "warnings": [],
+  "rawArtifactRefs": ["artifact://audit-no-fakes-report/artifact.txt"]
+}

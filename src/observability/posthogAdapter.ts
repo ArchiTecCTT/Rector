@@ -5,7 +5,7 @@
  * are redacted via `redactSecrets` before being sent to PostHog.
  */
 
-import type { ObservabilityAdapter, ObservabilitySpan, ObservabilitySummary } from "./index.js";
+import type { ObservabilityAdapter, ObservabilitySpan, ObservabilitySummary } from ".";
 import { redactSecrets } from "../security/redaction.js";
 
 /** Lazy-loaded PostHog module type — only the surface we use. */

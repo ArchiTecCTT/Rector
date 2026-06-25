@@ -39,7 +39,7 @@ import type {
   AdapterContext,
   AdapterResult,
   DiscoveryAdapter,
-} from "../src/providers/discovery/adapters/index";
+} from "../src/providers/discovery/adapters";
 import { togetherDiscoveryAdapter } from "../src/providers/discovery/adapters/together";
 import { cloudflareDiscoveryAdapter } from "../src/providers/discovery/adapters/cloudflare";
 import { azureDiscoveryAdapter } from "../src/providers/discovery/adapters/azure";

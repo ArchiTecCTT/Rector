@@ -24,7 +24,7 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 
-import { normalizeCandidate, type NormalizeContext } from "../src/providers/discovery/adapters/index";
+import { normalizeCandidate, type NormalizeContext } from "../src/providers/discovery/adapters";
 import { ModelCandidateSchema } from "../src/providers/discovery/types";
 import { PROVIDER_KINDS } from "../src/providers/config";
 

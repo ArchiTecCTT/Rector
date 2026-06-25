@@ -5,7 +5,7 @@ import {
   type AdapterResult,
   type DiscoveryAdapter,
   type NormalizeContext,
-} from "./index";
+} from ".";
 
 /**
  * Generic OpenAI-compatible Discovery_Adapter (design section C —

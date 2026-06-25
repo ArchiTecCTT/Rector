@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "rector.capability.evidence.v1",
+  "capabilityId": "cartographer.grounding",
+  "caseId": "npm-audit-package",
+  "summary": "npm audit report showing 0 vulnerabilities",
+  "evidence": [
+    {
+      "kind": "summary",
+      "path": "cases/npm-audit-package/artifact.txt",
+      "lineStart": 1,
+      "lineEnd": 1,
+      "excerpt": "found 0 vulnerabilities",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://npm-audit-package/artifact.txt"
+    }
+  ],
+  "coverage": {
+    "coveredMustContain": [
+      "found 0 vulnerabilities"
+    ],
+    "missingMustContain": [],
+    "forbiddenHits": [],
+    "unresolvedArtifactRefs": [],
+    "unresolvedFileRefs": [],
+    "outOfBoundsLineRefs": [],
+    "passed": true
+  },
+  "warnings": [],
+  "rawArtifactRefs": ["artifact://npm-audit-package/artifact.txt"]
+}

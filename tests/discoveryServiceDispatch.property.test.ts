@@ -28,7 +28,7 @@ import type {
   AdapterResult,
   DiscoveryAdapter,
   DiscoveryAdapterRegistry,
-} from "../src/providers/discovery/adapters/index";
+} from "../src/providers/discovery/adapters";
 import { createInMemoryProviderConfigStore } from "../src/providers/configStore";
 import { PROVIDER_KINDS, type ProviderConfigRecord, type ProviderKind } from "../src/providers/config";
 import { PROVIDER_CONFIG_VERSION } from "../src/providers/config";

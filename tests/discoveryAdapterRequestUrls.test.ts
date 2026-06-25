@@ -24,7 +24,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderConfigRecord } from "../src/providers/config";
-import type { AdapterContext } from "../src/providers/discovery/adapters/index";
+import type { AdapterContext } from "../src/providers/discovery/adapters";
 import { azureDiscoveryAdapter } from "../src/providers/discovery/adapters/azure";
 import { cloudflareDiscoveryAdapter } from "../src/providers/discovery/adapters/cloudflare";
 import { openaiCompatibleDiscoveryAdapter } from "../src/providers/discovery/adapters/openaiCompatible";

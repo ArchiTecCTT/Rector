@@ -39,8 +39,8 @@
 //   1  config invalid, write/read failed, or a field-for-field mismatch
 // ============================================================
 
-import { parseDeploymentEnvironment } from "../src/deployment/index.ts";
-import { createRectorStore, StoreConfigError, type RectorStore } from "../src/store/index.ts";
+import { parseDeploymentEnvironment } from "../src/deployment";
+import { createRectorStore, StoreConfigError, type RectorStore } from "../src/store";
 import { redactString } from "../src/security/redaction.ts";
 
 /** Deep, order-insensitive structural equality used for the field-for-field check. */

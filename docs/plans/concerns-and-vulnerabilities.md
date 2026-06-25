@@ -831,3 +831,64 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 ### Qodana test-scope config gap
 
 - **Label:** DEFERRED — The merged `qodana.yaml` on `origin/main` does not contain exclude/scope rules for `tests/`. The chunk honored the user's stated intent that tests were out of scope; that scope is not enforced by configuration. If `tests/` findings should be permanently suppressed, `qodana.yaml` needs an explicit exclude block in a follow-up.
+
+## Phase 0 — Capability eval harness + Phase-0 finish (Todo 6 / Todo 8)
+
+**Status: DONE — gates passed on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80.** All Phase 0 gates passed (`eval:capabilities:gate`, `baseline:phase0`, `verify:phase0`). 10 eval cases (2 efficiencyRelevant cases meet >=10x compression / >=0.80 raw_token_reduction). No ExecutiveRouter and no real specialist execution are involved (deferred to Phase 11/12). The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13 (40 findings accepted as known deferral).
+
+### Baseline (real gate output on `rector-0.3.0`, commit `80e809c`)
+
+- **`npm test`:** exit 0 — 330 files (329 passed, 1 skipped), 2209 tests (2204 passed, 5 skipped). The skipped file is `tests/memoryLive.integration.test.ts` (live-memory tests gated behind absent live credentials, by design offline).
+- **`npm run check` (`tsc --noEmit`):** exit 0.
+- **`npm run build`:** exit 0.
+- **`npm run audit:no-fakes`:** exit 0, report-only — 182 src files scanned, 40 fake-seam findings reported (non-blocking).
+- **`npm run eval:capabilities`:** exit 0 — offline, no-model run; 3/3 cases pass committed oracles; aggregate `passed` honestly `false`.
+- **`npm audit`:** exit 0, `found 0 vulnerabilities`. The previously-tracked 5-advisory dev-tooling item appears CLEARED on this branch by the package.json `overrides` for `esbuild`/`undici`/`ws`. (AGENTS.md test-baseline + "5 vulnerabilities" notes are owned by Todo 9 / a separate doc-refresh task; not edited here.)
+
+### Honest limitation — offline eval efficiency metrics intentionally fail (NOT a defect)
+
+- **Label:** BY-DESIGN — The offline Phase-0 eval corpus (`tests/fixtures/eval-corpus/`) ships three tiny committed real command artifacts (`rg`, `tsc --noEmit`, `git diff`). The runner (`scripts/evals/run-capability-evals.ts`) scores each artifact against its deterministic oracle with **no model**.
+- The evidence metrics (`schema_valid`, `recall`, `omission`, `secret_leak`, `line_ref_accuracy`, `root_cause_accuracy`) are REAL artifact-vs-oracle comparisons and all pass.
+- `compression` (>=10x) and `raw_token_reduction` (>=0.80) target large, noisy LIVE tool outputs. On tiny fixtures they are honestly low (aggregate compression ~1.24x), so the aggregate `passed` is truthfully `false`. We do **not** fabricate metric values to force a green report. The offline harness gate `npm run eval:capabilities` exits 0 on successful report PRODUCTION, not on aggregate threshold attainment.
+- **Deferred:** Live efficiency-threshold attainment (real compression/token-reduction against large tool outputs) is Phase 2.5 work, not Phase 0.
+
+### Report-only fake-seam audit is informational, not enforced
+
+- **Label:** DEFERRED — `npm run audit:no-fakes` reports 40 fake-system seams in `src/` (FakeLLMProvider, `createFakePlan`/`fallbackPlan`, `workspace.validate` `passed:true`, `simulator.echo`, `executorSimulator` imports). It is intentionally non-blocking (exits 0) during the v0.3.0 transition; nonzero exits are reserved for internal audit errors. Phase 0 only MEASURES these seams: purging/modifying them is deferred to Phase 3 and the fake-purge workstream, and the audit only becomes a CI-failing gate in Phase 13. Until then seam reintroduction is not gate-blocked. These seams must be retired before the configured-only product GA per `docs/architecture/configured-product-architecture.md`.
+
+### gitignore negation carve-out for tracked benchmark mirror
+
+- **Label:** NOTE — `.gitignore` ignores the entire `docs/plans/2-0/` research tree. Phase 0 adds a single intentional exception: `docs/plans/2-0/phases/**` is re-included as the tracked benchmark mirror (`docs/plans/2-0/phases/phase-0-benchmarks.md`). To make the negation effective, the parent rule was changed from the bare directory `docs/plans/2-0` to `docs/plans/2-0/*` (git cannot re-include a path whose parent directory is itself excluded). Verified: the mirror is `git add`-able while all sibling `2-0` files and the whole `.omo/` tree remain ignored.
+
+## Phase 0.5 — Global Reliability Harness
+
+**Status: DONE — gates passed on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80.** All Phase 0.5 gates passed (`test:global:gate`, `verify:phase0.5`, `verify:foundation`). 28 offline scenarios (21 strict-pass, 8 intentional regressions), all actual==expected. The ExecutiveRouter and real specialist execution are NOT implemented (deferred to Phase 11/12); the harness emits dry-run task packets/traces only. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13 (40 findings accepted as known deferral).
+
+### Baseline (real gate output on `rector-0.3.0`, Phase 0.5 finish)
+
+- **`npm test`:** exit 0 — 336 files (335 passed, 1 skipped), 2241 tests (2236 passed, 5 skipped). The skipped file is `tests/memoryLive.integration.test.ts` (live-memory tests gated behind absent credentials, offline by design).
+- **`npm run check` (`tsc --noEmit`):** exit 0.
+- **`npm run build`:** exit 0.
+- **`npm run test:global`:** exit 0 — 4 offline scenarios, all executed (0 skipped), one scorecard each (8 dims + fake-path), writes `.omo/evidence/global-report.{json,md}`.
+- **`npm run test:systems`:** exit 0 — validates the committed `coding.profile.json` (1/1 valid).
+- **`npm run eval:capabilities`:** exit 0 (Phase 0 harness still green).
+- **`npm run audit:no-fakes`:** exit 0, report-only — 187 src files scanned (rose from 182 as `src/systems/*` and `src/evals/*` landed), 40 fake-seam findings.
+
+### Harness coverage and offline honesty
+
+- **Label:** BY-DESIGN — The Global Reliability Harness ships 4 offline scenarios (coding-basic-fix, memory-boundary, fake-purge, delegation-routing), each producing one scorecard across the 8 reliability dimensions plus a fake-path-status dimension. It proves the harness WIRING (scenario load → task packet → trace capture → oracle → scorecard → replayable regression), NOT specialist execution.
+- The aggregate is honestly `passed 0/4`: the `tests/fixtures/repos/rector-mini-fix/` fixture ships a genuinely failing test (the to-be-fixed state), so reliability scores 0 truthfully. The harness does not yet drive a specialist to MUTATE the repo and make the test pass — specialist-driven repair is Phase 11/12. We record 0/4 rather than fabricate a pass.
+- The harness runner exits 0 on successful report PRODUCTION, not on aggregate scenario pass (mirrors the Phase 0 eval-runner posture).
+
+### Live-scenario posture and fake-path surfacing
+
+- **Label:** NOTE — Live scenarios are opt-in only: when no provider credentials are present the live path is SKIPPED (proven by a skipped-path test), never faked, and live scenarios are NOT added to default CI.
+- **Label:** DEFERRED — fake-path-status is surfaced as a scorecard dimension (`fakes_present`, 40 seams), report-only — the same seams the `audit:no-fakes` scanner reports. Purge remains deferred to Phase 3 + the fake-purge workstream; CI-gating to Phase 13.
+
+### src-cannot-import-scripts → injected fakePathAuditor
+
+- **Label:** NOTE (design) — `src/**` cannot import from `scripts/**` (outside `tsconfig` `rootDir`), so the global harness does not statically import the `no-production-fakes` auditor. Instead the auditor is INJECTED into the runner as a `fakePathAuditor` seam; the CLI wires the real `auditNoProductionFakes` while tests inject a deterministic double. This keeps the fake-path dimension real in production runs without an illegal cross-rootDir import.
+
+### Test gaps / limitations
+
+- **Label:** DEFERRED — The harness measures reliability against committed oracles only; it does not exercise live providers or real specialist mutation (Phase 11/12). The single offline fixture repo (`rector-mini-fix`) is intentionally minimal; broader scenario corpora are future work.

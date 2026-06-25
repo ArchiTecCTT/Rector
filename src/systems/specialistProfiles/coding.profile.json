@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "rector.specialist-system.v1",
+  "systemId": "coding-specialist",
+  "domain": "coding",
+  "purpose": "Repository-aware coding specialist: Cartographer-backed understanding, capability-SLM diagnostics, planner/skeptic/Crucible code changes, and validation-aware DAG execution.",
+  "inputSchema": {
+    "type": "object",
+    "required": ["userGoal"],
+    "properties": {
+      "userGoal": { "type": "string" },
+      "allowedScopes": { "type": "array", "items": { "type": "string" } }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["status", "summary"],
+    "properties": {
+      "status": { "type": "string" },
+      "summary": { "type": "string" },
+      "changedPaths": { "type": "array", "items": { "type": "string" } }
+    }
+  },
+  "supportedTaskKinds": ["implement", "diagnose", "refactor", "test_fix"],
+  "capabilityRefs": ["rg.search", "testlog.diagnose", "tsc.diagnose", "git.diff_summarize"],
+  "validatorRefs": ["tsc.noEmit", "vitest.run"],
+  "memoryProfile": {
+    "scope": "local_skill",
+    "remembers": [
+      "prior coding episodes and outcomes",
+      "tool and capability failure modes",
+      "repeated validation failures and their fixes",
+      "effective workflows for this repository",
+      "local coding skills and recipes",
+      "evaluator results and regression cases"
+    ],
+    "forbids": [
+      "global user identity facts",
+      "private cross-domain preferences",
+      "another specialist's memory unless passed as a scoped packet"
+    ]
+  },
+  "riskProfile": "medium",
+  "approvalPolicy": { "mode": "on_risk" },
+  "budgetPolicy": { "maxUsd": 5, "maxRuntimeMs": 600000, "maxToolCalls": 200 },
+  "evalSuiteRefs": ["coding.regression.v1"],
+  "admission": "draft"
+}

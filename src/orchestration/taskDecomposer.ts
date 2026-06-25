@@ -265,7 +265,7 @@ type ParsedSubGoals = string[] & { source: "bullets" | "sentences" };
 function parseCandidateSubGoals(distilled: string): ParsedSubGoals {
   const lines = distilled.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const bulletItems = lines
-    .map((line) => line.match(/^(?:[-*+]\s+|\d+[.)]\s+|\[[ xX]\]\s+)(.+)$/)?.[1]?.trim())
+    .map((line) => line.match(/^(?:[-*+]\s+|\d+[.)]\s+|\[[ xX]]\s+)(.+)$/)?.[1]?.trim())
     .filter((line): line is string => Boolean(line && line.length > 0));
 
   if (bulletItems.length >= 2) {
@@ -273,7 +273,7 @@ function parseCandidateSubGoals(distilled: string): ParsedSubGoals {
   }
 
   const sentenceItems = distilled
-    .split(/(?:\.|;|\n)+/)
+    .split(/[.;\n]+/)
     .map((part) => part.trim())
     .filter((part) => part.length > 10);
   return withSource(cleanGoals(sentenceItems), "sentences");

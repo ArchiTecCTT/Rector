@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "rector.capability.evidence.v1",
+  "capabilityId": "cartographer.grounding",
+  "caseId": "rg-noisy-imports",
+  "summary": "Compact evidence for large noisy rg output",
+  "evidence": [
+    {
+      "kind": "code_reference",
+      "excerpt": "src/tools/middleware.ts:1:1:import { redactSecrets, redactString } from \"../security/redaction\";",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://rg-noisy-imports/artifact.txt"
+    },
+    {
+      "kind": "code_reference",
+      "excerpt": "src/tools/types.ts:13:1:import type { IterationBudget } from \"../orchestration/turnBudget\";",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://rg-noisy-imports/artifact.txt"
+    }
+  ],
+  "coverage": {
+    "coveredMustContain": [
+      "src/tools/middleware.ts:1:1:import { redactSecrets, redactString } from \"../security/redaction\";",
+      "src/tools/types.ts:13:1:import type { IterationBudget } from \"../orchestration/turnBudget\";"
+    ],
+    "missingMustContain": [],
+    "forbiddenHits": [],
+    "unresolvedArtifactRefs": [],
+    "unresolvedFileRefs": [],
+    "outOfBoundsLineRefs": [],
+    "passed": true
+  },
+  "warnings": [],
+  "rawArtifactRefs": ["artifact://rg-noisy-imports/artifact.txt"]
+}

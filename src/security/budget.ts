@@ -212,13 +212,6 @@ function approvalReasonsFor(budget: Budget, usage: BudgetDecision["usage"]): str
   return [];
 }
 
-function numberFrom(...values: unknown[]): number {
-  for (const value of values) {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return 0;
-}
-
 function nonNegativeNumberFrom(...values: unknown[]): number {
   for (const value of values) {
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;

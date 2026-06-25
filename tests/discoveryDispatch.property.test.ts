@@ -41,7 +41,7 @@ import type {
   AdapterResult,
   DiscoveryAdapter,
   DiscoveryAdapterRegistry,
-} from "../src/providers/discovery/adapters/index";
+} from "../src/providers/discovery/adapters";
 import type { DiscoveryError, ModelCandidate } from "../src/providers/discovery/types";
 import { redactString } from "../src/security/redaction";
 import type { SecretStore, SecretStoreResult } from "../src/security/secretStore";

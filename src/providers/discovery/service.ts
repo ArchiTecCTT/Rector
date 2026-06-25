@@ -2,7 +2,7 @@ import { redactString } from "../../security/redaction";
 import type { SecretStore } from "../../security/secretStore";
 import type { ProviderConfigRecord } from "../config";
 import type { ProviderConfigStore } from "../configStore";
-import type { AdapterContext, AdapterResult, DiscoveryAdapterRegistry } from "./adapters/index";
+import type { AdapterContext, AdapterResult, DiscoveryAdapterRegistry } from "./adapters";
 import type { DiscoveryCache } from "./cache";
 import type { DiscoveryError, DiscoveryResult } from "./types";
 

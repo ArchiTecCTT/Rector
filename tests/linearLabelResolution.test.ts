@@ -6,7 +6,7 @@ import {
   labelCache,
   LABEL_CACHE_TTL_MS,
   LINEAR_LABELS_QUERY,
-} from "../src/workflows/index.js";
+} from "../src/workflows";
 
 function makeAdapter(options?: { fetchImpl?: typeof fetch }) {
   return new LinearWorkflowAdapter({

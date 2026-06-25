@@ -1,0 +1,11 @@
+{
+  "caseId": "tsc-runtime-mode-error",
+  "artifactKind": "tsc_no_emit_error",
+  "expectedExitCode": 2,
+  "expectedLineCount": 1,
+  "mustContain": [
+    "src/index.ts(2,7): error TS2322",
+    "Type '\"local\"' is not assignable to type 'RuntimeMode'."
+  ],
+  "mustNotContain": ["[REDACTED]", "api_key=", "Bearer "]
+}

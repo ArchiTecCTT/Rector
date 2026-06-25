@@ -1,0 +1,40 @@
+schemaVersion: rector.global-scenario.v1
+id: memory-verified-only
+title: memory-verified-only
+type: memory
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: Scenario memory-verified-only
+allowedSystems: [coding, memory]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: memory
+successCriteria:
+  - scenario memory-verified-only executes
+validators:
+  - id: fixture-integrity-verifier
+    cmd: node
+    args: [src/fixture-integrity.verify.js]
+    cwd: .
+    timeoutMs: 30000
+    expectedExitCode: 0
+oracles:
+  mustChange: []
+  mustNotChange: []
+  mustIncludeEvidence:
+    - memory.verified-only
+budgets:
+  maxToolCalls: 10
+  maxRuntimeMs: 60000
+  maxMainModelRawToolTokens: 100
+setup:
+  copyWorkspaceToTemp: false
+  fixtures: []
+operation:
+  kind: validator_only
+expected:
+  status: passed
+  changedPaths: []
+  unchangedPaths: []
+  evidenceRefs:
+    - memory.verified-only
+  memoryAssertionPath: memory/verified-only.assertion.json
+  runEventTracePath: memory/verified-only.trace.json

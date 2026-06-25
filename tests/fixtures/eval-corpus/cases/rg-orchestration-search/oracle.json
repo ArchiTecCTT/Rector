@@ -1,0 +1,11 @@
+{
+  "caseId": "rg-orchestration-search",
+  "artifactKind": "rg_output",
+  "expectedExitCode": 0,
+  "expectedLineCount": 2,
+  "mustContain": [
+    "src/notes.md:1:12:Configured orchestration should route through runOrchestratedChatRun.",
+    "src/notes.md:3:1:orchestrationProfile=configured gates chat readiness."
+  ],
+  "mustNotContain": ["[REDACTED]", "api_key=", "Bearer "]
+}

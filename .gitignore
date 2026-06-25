@@ -47,6 +47,12 @@ research.md
 research/
 provider-credits-research/
 reviews/
+docs/plans/2-0/*
+# Phase-0 tracked benchmark mirror is an intentional exception to the ignored 2-0 tree.
+# The parent uses /* (not the bare dir) so this negation can take effect; git cannot
+# re-include a path whose parent directory is itself excluded.
+!docs/plans/2-0/phases/
+!docs/plans/2-0/phases/**
 
 # Compiled / generated scripts
 scripts/performance-baseline-cold-start-compiled.mjs
@@ -63,3 +69,7 @@ start.sh
 
 # Debugging & Code Inspections
 inspections
+
+# Teamwork agent artifacts
+ORIGINAL_PROMPT.md
+.agents/

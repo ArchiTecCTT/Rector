@@ -91,7 +91,7 @@ import {
   type CreateMemoryEntryInput,
   type UpdateMemoryEntryInput,
 } from "./schemas";
-import type { RectorStore } from "./index";
+import type { RectorStore } from ".";
 import {
   compareMemoryPruneCandidates,
   compareMemorySearchResults,
@@ -395,6 +395,7 @@ export class SqlRectorStore implements RectorStore {
 
     const eventSeq = this.nextSeq("run_events");
     this.driver.exec("BEGIN");
+    let versionMatched = true;
     try {
       const updatedPayload = this.serialize(updated);
       const updatedMac = this.macKey ? computePayloadMac(updatedPayload, this.macKey) : null;
@@ -408,24 +409,30 @@ export class SqlRectorStore implements RectorStore {
         [updated.id, newVersion]
       );
       if (!checkRow) {
-        // Version mismatch — another transition occurred concurrently
+        versionMatched = false;
         this.driver.exec("ROLLBACK");
-        throw new ConcurrentTransitionError(runId, expectedVersion, -1);
+      } else {
+        const eventPayload = this.serialize(parsedEvent);
+        const eventMac = this.macKey ? computePayloadMac(eventPayload, this.macKey) : null;
+        this.driver.run(
+          "INSERT INTO run_events (id, run_id, seq, payload, mac) VALUES (?, ?, ?, ?, ?)",
+          [parsedEvent.id, parsedEvent.runId, eventSeq, eventPayload, eventMac]
+        );
+        this.driver.exec("COMMIT");
       }
-      const eventPayload = this.serialize(parsedEvent);
-      const eventMac = this.macKey ? computePayloadMac(eventPayload, this.macKey) : null;
-      this.driver.run(
-        "INSERT INTO run_events (id, run_id, seq, payload, mac) VALUES (?, ?, ?, ?, ?)",
-        [parsedEvent.id, parsedEvent.runId, eventSeq, eventPayload, eventMac]
-      );
-      this.driver.exec("COMMIT");
     } catch (error) {
-      try {
-        this.driver.exec("ROLLBACK");
-      } catch (rollbackError) {
-        console.error("[CRITICAL] Transaction rollback failed - database may be in inconsistent state:", rollbackError);
+      if (versionMatched) {
+        try {
+          this.driver.exec("ROLLBACK");
+        } catch (rollbackError) {
+          console.error("[CRITICAL] Transaction rollback failed - database may be in inconsistent state:", rollbackError);
+        }
       }
       throw error;
+    }
+
+    if (!versionMatched) {
+      throw new ConcurrentTransitionError(runId, expectedVersion, -1);
     }
 
     return { run: updated, event: parsedEvent };
@@ -739,27 +746,26 @@ export class SqlRectorStore implements RectorStore {
   }
 
   private deserialize(label: string, id: string, payload: string): unknown {
+    if (payload.startsWith(ENC1_PREFIX) && !this.encryptionKey) {
+      throw new Error(
+        `Encrypted ${label} payload for id ${redactString(id)} cannot be decrypted: no encryption key provided. ` +
+        `Set RECTOR_DB_ENCRYPTION=true and ensure the secret key is available.`
+      );
+    }
     try {
       if (payload.startsWith(ENC1_PREFIX)) {
-        if (!this.encryptionKey) {
-          throw new Error(
-            `Encrypted ${label} payload for id ${redactString(id)} cannot be decrypted: no encryption key provided. ` +
-            `Set RECTOR_DB_ENCRYPTION=true and ensure the secret key is available.`
-          );
-        }
         const sealed = Buffer.from(payload.slice(ENC1_PREFIX.length), "base64");
         // Layout: nonce(12) + ciphertext + authTag(16)
         const nonce = sealed.subarray(0, GCM_NONCE_LENGTH);
         const tag = sealed.subarray(sealed.length - 16);
         const ciphertext = sealed.subarray(GCM_NONCE_LENGTH, sealed.length - 16);
-        const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey, nonce);
+        const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey!, nonce);
         decipher.setAuthTag(tag);
         const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
         return JSON.parse(plaintext.toString("utf8"));
       }
       return JSON.parse(payload);
     } catch (error) {
-      if (error instanceof Error && error.message.includes("no encryption key provided")) throw error;
       const message = redactString(error instanceof Error ? error.message : String(error));
       throw new Error(`Corrupt ${label} payload for id ${redactString(id)}: ${message}`);
     }

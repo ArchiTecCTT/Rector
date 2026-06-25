@@ -37,6 +37,9 @@ jobs:
       - name: Install dependencies (deterministic)
         run: npm ci
 
+      - name: Generate Phase 0 baseline (for verify tests)
+        run: npm run baseline:phase0
+
       - name: Run tests
         run: npm test
 
@@ -72,6 +75,9 @@ jobs:
 
       - name: Install dependencies (deterministic)
         run: npm ci
+
+      - name: Generate Phase 0 baseline (for baseline tests)
+        run: npm run baseline:phase0
 
       - name: Run coverage
         run: npm run test:coverage

@@ -34,10 +34,10 @@ function resolveSpecifier(file, specifier) {
 for (const file of walk(dist)) {
   const original = fs.readFileSync(file, "utf8");
   const rewritten = original
-    .replace(/(\bfrom\s*["'])(\.[^"']+)(["'])/g, (_match, prefix, specifier, suffix) => {
+    .replace(/(\bfrom\s*["'])(\.[^"']*)(["'])/g, (_match, prefix, specifier, suffix) => {
       return `${prefix}${resolveSpecifier(file, specifier)}${suffix}`;
     })
-    .replace(/(\bimport\s*\(\s*["'])(\.[^"']+)(["']\s*\))/g, (_match, prefix, specifier, suffix) => {
+    .replace(/(\bimport\s*\(\s*["'])(\.[^"']*)(["']\s*\))/g, (_match, prefix, specifier, suffix) => {
       return `${prefix}${resolveSpecifier(file, specifier)}${suffix}`;
     });
 
@@ -62,9 +62,8 @@ if (fs.existsSync(coldStartSrc)) {
     // Remove TypeScript type annotations from parameters and return types
     .replace(/:\s*Promise<void>/g, "")
     .replace(/:\s*unknown/g, "")
-    // Remove the async wrapper — use top-level await like the original compiled version
     .replace(
-      /async function main\(\)\s*\{([\s\S]*?)\}\s*\r?\nmain\(\)\.catch[\s\S]*$/,
+      /async function main\(\)\s*\{([\s\S]*?)}\s*\r?\nmain\(\)\.catch[\s\S]*$/,
       (_, body) => body.replace(/^ {2}/gm, "").trim()
     )
     .trim() + "\n";

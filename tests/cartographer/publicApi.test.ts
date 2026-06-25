@@ -14,7 +14,7 @@ import {
   SqliteCartographerInventoryStore,
 } from "../../src/cartographer";
 import type { CartographerInventoryStore, ScanResult } from "../../src/cartographer";
-import { cartographer } from "../../src/index";
+import { cartographer } from "../../src";
 
 describe("Cartographer public API barrel", () => {
   it("exports the required runtime API from src/cartographer", () => {
