@@ -139,17 +139,23 @@ export class LocalFsRawArtifactStore implements RawArtifactStore {
   }
 }
 
-function artifactUri(callId: string, artifactName: string): string {
-  return `artifact://${callId}/${artifactName}`;
+function artifactUri(callId: string, artifactName: string): string;
+function artifactUri(coord: ArtifactCoordinate): string;
+function artifactUri(arg1: string | ArtifactCoordinate, arg2?: string): string {
+  if (typeof arg1 === "string") {
+    return `artifact://${arg1}/${arg2}`;
+  }
+  const c = fromCoordinate(arg1);
+  return `artifact://${c.callId}/${c.artifactName}`;
 }
 
-function parseArtifactUri(uri: string): { readonly callId: string; readonly artifactName: string } {
+function parseArtifactUri(uri: string): ArtifactCoordinate {
   const parsed = new URL(uri);
   const artifactName = parsed.pathname.startsWith("/") ? parsed.pathname.slice(1) : parsed.pathname;
-  return {
-    callId: SafePathSegmentSchema.parse(parsed.hostname),
-    artifactName: SafePathSegmentSchema.parse(artifactName),
-  };
+  return toCoordinate(
+    SafePathSegmentSchema.parse(parsed.hostname),
+    SafePathSegmentSchema.parse(artifactName),
+  );
 }
 
 function sha256Hex(content: string): string {
@@ -168,6 +174,14 @@ async function readDirOrEmpty(dir: string): Promise<readonly string[]> {
 interface ArtifactCoordinate {
   readonly callId: string;
   readonly artifactName: string;
+}
+
+function toCoordinate(callId: string, artifactName: string): ArtifactCoordinate {
+  return { callId, artifactName };
+}
+
+function fromCoordinate(coord: ArtifactCoordinate): { callId: string; artifactName: string } {
+  return { callId: coord.callId, artifactName: coord.artifactName };
 }
 
 function hasErrorCode(error: unknown): error is { code: unknown } {

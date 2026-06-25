@@ -292,16 +292,6 @@ function resolveById(ref: string, ctx: GlobalEvidenceContext): EvidenceResolutio
   return undefined;
 }
 
-function gatherAllPaths(ctx: GlobalEvidenceContext): Set<string> {
-  const all = new Set<string>();
-  for (const a of ctx.artifactRecords) if (a.path) all.add(a.path);
-  for (const k of Object.keys(ctx.beforeHashes)) all.add(k);
-  for (const k of Object.keys(ctx.afterHashes)) all.add(k);
-  if (ctx.workspaceBeforeHashes) for (const k of Object.keys(ctx.workspaceBeforeHashes)) all.add(k);
-  if (ctx.workspaceAfterHashes) for (const k of Object.keys(ctx.workspaceAfterHashes)) all.add(k);
-  return all;
-}
-
 export function resolveEvidenceRef(ref: string, ctx: GlobalEvidenceContext): EvidenceResolution {
   if (!ref || ref.trim().length === 0) {
     return { resolved: false, reason: "empty ref" };
@@ -317,15 +307,23 @@ export function resolveEvidenceRef(ref: string, ctx: GlobalEvidenceContext): Evi
   if (ctx.workspaceAfterHashes) for (const k of Object.keys(ctx.workspaceAfterHashes)) allPaths.add(k);
 
   if (ref.includes(":")) {
-    const [p, ln] = ref.split(":");
-    const lineNum = ln ? parseInt(ln, 10) : undefined;
-    if (allPaths.has(p)) {
-      const lineMatch = ctx.artifactRecords.some((a) => a.path === p && (a.line === undefined || a.line === lineNum));
-      if (lineMatch || lineNum === undefined) return { resolved: true, kind: "line" };
-    }
-    return { resolved: false, reason: `unresolvable line ref: ${ref}` };
+    return resolveLineRef(ref, allPaths, ctx);
   }
 
+  return resolveFileRef(ref, allPaths, ctx);
+}
+
+function resolveLineRef(ref: string, allPaths: Set<string>, ctx: GlobalEvidenceContext): EvidenceResolution {
+  const [p, ln] = ref.split(":");
+  const lineNum = ln ? parseInt(ln, 10) : undefined;
+  if (allPaths.has(p)) {
+    const lineMatch = ctx.artifactRecords.some((a) => a.path === p && (a.line === undefined || a.line === lineNum));
+    if (lineMatch || lineNum === undefined) return { resolved: true, kind: "line" };
+  }
+  return { resolved: false, reason: `unresolvable line ref: ${ref}` };
+}
+
+function resolveFileRef(ref: string, allPaths: Set<string>, ctx: GlobalEvidenceContext): EvidenceResolution {
   if (allPaths.has(ref) || ref.startsWith(ctx.workspaceRoot)) {
     return { resolved: true, kind: "file" };
   }

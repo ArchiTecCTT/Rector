@@ -34,11 +34,6 @@ function checkOfflineCount(executedCount: number, violations: string[]): void {
   if (executedCount < 20) violations.push(`offline scenario count ${executedCount} < 20`);
 }
 
-function checkStrictPassCount(scorecards: { passed: boolean }[], violations: string[]): void {
-  const strictPass = scorecards.filter((s) => s.passed).length;
-  if (strictPass < 5) violations.push(`strict-passing scenarios ${strictPass} < 5`);
-}
-
 function checkStatusConsistency(
   outcomes: readonly { scenarioId: string; expectedStatus: string; actualStatus: string }[],
   report: { skipped: readonly { scenarioId: string; expectedStatus: string }[]; scenarioCount: number },
@@ -61,19 +56,6 @@ function checkStatusConsistency(
     violations.push(`accounted scenarios ${accounted.size} != scenario count ${report.scenarioCount}`);
   }
   return intentionalRegressionCount;
-}
-
-function checkAccountedScenarios(
-  outcomes: readonly { scenarioId: string }[],
-  report: { skipped: readonly { scenarioId: string }[]; scenarioCount: number },
-  violations: string[],
-): void {
-  const accounted = new Set<string>();
-  for (const o of outcomes) accounted.add(o.scenarioId);
-  for (const s of report.skipped) accounted.add(s.scenarioId);
-  if (accounted.size !== report.scenarioCount) {
-    violations.push(`accounted scenarios ${accounted.size} != scenario count ${report.scenarioCount}`);
-  }
 }
 
 function checkRequiredArtifacts(
