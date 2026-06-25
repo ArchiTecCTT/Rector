@@ -4,15 +4,11 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { redactString } from "../src/security/redaction";
 import {
-  computeReliability,
   computeAccuracy,
   computeSafety,
-  computeCostEfficiency,
   computeMemoryCorrectness,
   computeDelegationQuality,
-  computeEvidenceQuality,
   resolveEvidenceRef,
   type GlobalEvidenceContext,
 } from "../src/evals/scoreDimensions";

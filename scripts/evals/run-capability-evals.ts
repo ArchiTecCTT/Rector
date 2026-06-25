@@ -375,7 +375,7 @@ function parseMode(): "report-only" | "gate" {
   return "report-only";
 }
 
-function printSummary(summary: MetricSummary, results: readonly CapabilityEvalResult[], output: RunCapabilityEvalsOutput) {
+function printSummary(summary: MetricSummary, output: RunCapabilityEvalsOutput) {
   const metricLine = CAPABILITY_EVAL_METRIC_IDS.map((id) => {
     const score = summary.metrics[id];
     const value = score.value === undefined ? "n/a" : score.value;
@@ -439,7 +439,7 @@ async function main(): Promise<void> {
   const mode = parseMode();
   const output = await runCapabilityEvals();
   const { summary, results } = output;
-  printSummary(summary, results, output);
+  printSummary(summary, output);
 
   if (mode === "report-only") return;
 

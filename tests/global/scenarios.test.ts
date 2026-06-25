@@ -9,13 +9,6 @@ import { runGlobalHarness } from "../../src/evals/globalRunner";
 const scenariosDir = fileURLToPath(new URL("./scenarios/", import.meta.url));
 const fixtureRepoRoot = fileURLToPath(new URL("../fixtures/repos/rector-mini-fix/", import.meta.url));
 
-const EXPECTED_SCENARIO_IDS = [
-  "coding-basic-fix-001",
-  "memory-boundary-001",
-  "fake-purge-001",
-  "delegation-routing-001",
-] as const;
-
 async function listScenarioFiles(): Promise<readonly string[]> {
   const entries = await readdir(scenariosDir);
   return entries.filter((entry) => entry.endsWith(".scenario.yaml")).sort();

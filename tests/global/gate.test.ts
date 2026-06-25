@@ -6,8 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runGlobalHarness } from "../../src/evals/globalRunner";
 
 const SCENARIOS_DIR = path.resolve("tests/global/scenarios");
-const FIXTURE_ROOT = path.resolve("tests/fixtures/repos/rector-mini-fix");
-
 const tempRoots: string[] = [];
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((r) => rm(r, { recursive: true, force: true })));

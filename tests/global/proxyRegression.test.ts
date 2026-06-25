@@ -5,13 +5,11 @@ import {
   computeMemoryCorrectness,
   computeDelegationQuality,
   computeCostEfficiency,
-  resolveEvidenceRef,
   type GlobalEvidenceContext,
   MemoryAssertionSchema,
   computeReliability,
 } from "../../src/evals/scoreDimensions";
 import { SpecialistTaskPacketSchema } from "../../src/systems/contracts";
-import { RunEventSchema } from "../../src/protocol/events";
 
 describe("proxy-regression behavioral semantics (anti-cheat)", () => {
   const ctxBase: GlobalEvidenceContext = {
