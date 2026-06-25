@@ -1,7 +1,9 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execSync } from "node:child_process";
 import { promises as fs } from "node:fs";
+import * as fsSync from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -161,48 +163,62 @@ expected:
 
   describe("4. CommonJS verifier scripts compatibility", () => {
     it("calculator-source.verify.js executes correctly with node", async () => {
-      const calcVerify = path.join(REPO_ROOT, "tests/fixtures/repos/rector-mini-fix/src/calculator-source.verify.js");
-      const calcPath = path.join(REPO_ROOT, "tests/fixtures/repos/rector-mini-fix/src/calculator.ts");
-      
-      // 1. Initially (broken state), calculator-source should fail
+      // Copy fixture to temp dir; mutate ONLY the copy. Never touch committed fixture.
+      const srcFixture = path.join(REPO_ROOT, "tests/fixtures/repos/rector-mini-fix");
+      const tempRoot = fsSync.mkdtempSync(path.join(tmpdir(), "rector-mini-fix-"));
+      const tempFixture = path.join(tempRoot, "rector-mini-fix");
+      fsSync.cpSync(srcFixture, tempFixture, { recursive: true });
+      const calcVerify = path.join(tempFixture, "src/calculator-source.verify.js");
+      const calcPath = path.join(tempFixture, "src/calculator.ts");
+
       try {
-        execSync(`node ${calcVerify}`, { stdio: "pipe" });
-        expect.fail("Should have failed on broken calculator");
-      } catch (e: any) {
-        expect(e.status).not.toBe(0);
-      }
-      
-      // 2. Temporarily patch calculator.ts to pass
-      const calcOriginal = await fs.readFile(calcPath, "utf8");
-      const calcFixed = calcOriginal.replace("return a - b;", "return a + b;");
-      await fs.writeFile(calcPath, calcFixed, "utf8");
-      
-      try {
-        const out = execSync(`node ${calcVerify}`, { encoding: "utf8" });
+        // 1. Initially (broken state), calculator-source should fail
+        try {
+          execSync(`node ${calcVerify}`, { stdio: "pipe", cwd: tempFixture });
+          expect.fail("Should have failed on broken calculator");
+        } catch (e: any) {
+          expect(e.status).not.toBe(0);
+        }
+
+        // 2. Temporarily patch calculator.ts (in temp copy) to pass
+        const calcOriginal = await fs.readFile(calcPath, "utf8");
+        const calcFixed = calcOriginal.replace("return a - b;", "return a + b;");
+        await fs.writeFile(calcPath, calcFixed, "utf8");
+
+        const out = execSync(`node ${calcVerify}`, { encoding: "utf8", cwd: tempFixture });
         expect(out).toContain("calculator source verifier: PASS");
       } finally {
-        await fs.writeFile(calcPath, calcOriginal, "utf8");
+        fsSync.rmSync(tempRoot, { recursive: true, force: true });
       }
     });
 
     it("fixture-integrity.verify.js executes correctly with node", async () => {
-      const integrityVerify = path.join(REPO_ROOT, "tests/fixtures/repos/rector-mini-fix/src/fixture-integrity.verify.js");
-      const calcPath = path.join(REPO_ROOT, "tests/fixtures/repos/rector-mini-fix/src/calculator.ts");
+      // Copy fixture to temp dir; mutate ONLY the copy. Never touch committed fixture.
+      const srcFixture = path.join(REPO_ROOT, "tests/fixtures/repos/rector-mini-fix");
+      const tempRoot = fsSync.mkdtempSync(path.join(tmpdir(), "rector-mini-fix-"));
+      const tempFixture = path.join(tempRoot, "rector-mini-fix");
+      fsSync.cpSync(srcFixture, tempFixture, { recursive: true });
+      const integrityVerify = path.join(tempFixture, "src/fixture-integrity.verify.js");
+      const calcPath = path.join(tempFixture, "src/calculator.ts");
 
-      // 1. fixture-integrity verifier should pass initially
-      const outIntegrity = execSync(`node ${integrityVerify}`, { encoding: "utf8" });
-      expect(outIntegrity).toContain("fixture integrity verifier: PASS");
-      
-      // 2. Temporarily move calculator.ts to fail integrity check
-      const calcTempPath = path.join(REPO_ROOT, "tests/fixtures/repos/rector-mini-fix/src/calculator.ts.tmp");
-      await fs.rename(calcPath, calcTempPath);
       try {
-        execSync(`node ${integrityVerify}`, { stdio: "pipe" });
-        expect.fail("Should have failed when calculator.ts is missing");
-      } catch (e: any) {
-        expect(e.status).not.toBe(0);
+        // 1. fixture-integrity verifier should pass initially (on pristine temp copy)
+        const outIntegrity = execSync(`node ${integrityVerify}`, { encoding: "utf8", cwd: tempFixture });
+        expect(outIntegrity).toContain("fixture integrity verifier: PASS");
+
+        // 2. Temporarily move calculator.ts (in temp copy) to fail integrity check
+        const calcTempPath = path.join(tempFixture, "src/calculator.ts.tmp");
+        await fs.rename(calcPath, calcTempPath);
+        try {
+          execSync(`node ${integrityVerify}`, { stdio: "pipe", cwd: tempFixture });
+          expect.fail("Should have failed when calculator.ts is missing");
+        } catch (e: any) {
+          expect(e.status).not.toBe(0);
+        } finally {
+          await fs.rename(calcTempPath, calcPath);
+        }
       } finally {
-        await fs.rename(calcTempPath, calcPath);
+        fsSync.rmSync(tempRoot, { recursive: true, force: true });
       }
     });
   });
