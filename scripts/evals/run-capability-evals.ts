@@ -135,31 +135,41 @@ function computeCompressionMetricsFromExpectedPacket(artifact: string, packet: C
   return { compression, rawTokenReduction };
 }
 
-function evaluatePassed(
-  recall: number,
-  secretLeak: number,
-  exitCodeMatches: boolean,
-  lineCountMatches: boolean,
-  evidenceCoveragePassed: boolean,
-): boolean {
-  return recall === 1 && secretLeak === 0 && exitCodeMatches && lineCountMatches && evidenceCoveragePassed;
+interface EvaluatePassedInput {
+  readonly recall: number;
+  readonly secretLeak: number;
+  readonly exitCodeMatches: boolean;
+  readonly lineCountMatches: boolean;
+  readonly evidenceCoveragePassed: boolean;
 }
 
-function assembleFailureReason(
-  oracle: EvalCorpusOracle,
-  fixtureCase: EvalCorpusCase,
-  recallOmission: RecallOmission,
-  secretLeak: number,
-  exitCodeMatches: boolean,
-  lineAccuracy: LineAccuracy,
-  evidenceCoverageFailure?: string,
-): string {
+function evaluatePassed(input: EvaluatePassedInput): boolean {
+  return (
+    input.recall === 1 &&
+    input.secretLeak === 0 &&
+    input.exitCodeMatches &&
+    input.lineCountMatches &&
+    input.evidenceCoveragePassed
+  );
+}
+
+interface AssembleFailureReasonInput {
+  readonly oracle: EvalCorpusOracle;
+  readonly fixtureCase: EvalCorpusCase;
+  readonly recallOmission: RecallOmission;
+  readonly secretLeak: number;
+  readonly exitCodeMatches: boolean;
+  readonly lineAccuracy: LineAccuracy;
+  readonly evidenceCoverageFailure?: string;
+}
+
+function assembleFailureReason(input: AssembleFailureReasonInput): string {
   const failureParts: string[] = [];
-  if (recallOmission.recall !== 1) failureParts.push(`${recallOmission.missingExpected.length}/${oracle.mustContain.length} expected strings missing`);
-  if (secretLeak !== 0) failureParts.push(`${secretLeak} forbidden/leak hit(s)`);
-  if (!exitCodeMatches) failureParts.push(`exit code ${oracle.expectedExitCode} != recorded ${fixtureCase.generatedFrom.exitCode}`);
-  if (!lineAccuracy.lineCountMatches) failureParts.push(`line count ${lineAccuracy.actualLineCount} != expected ${oracle.expectedLineCount}`);
-  if (evidenceCoverageFailure !== undefined) failureParts.push(evidenceCoverageFailure);
+  if (input.recallOmission.recall !== 1) failureParts.push(`${input.recallOmission.missingExpected.length}/${input.oracle.mustContain.length} expected strings missing`);
+  if (input.secretLeak !== 0) failureParts.push(`${input.secretLeak} forbidden/leak hit(s)`);
+  if (!input.exitCodeMatches) failureParts.push(`exit code ${input.oracle.expectedExitCode} != recorded ${input.fixtureCase.generatedFrom.exitCode}`);
+  if (!input.lineAccuracy.lineCountMatches) failureParts.push(`line count ${input.lineAccuracy.actualLineCount} != expected ${input.oracle.expectedLineCount}`);
+  if (input.evidenceCoverageFailure !== undefined) failureParts.push(input.evidenceCoverageFailure);
   return `Oracle check failed: ${failureParts.join("; ")}`;
 }
 
@@ -236,11 +246,11 @@ function scoreCase(input: {
     root_cause_accuracy: rootCauseAccuracy,
   };
 
-  const passed = evaluatePassed(recallOmission.recall, secretLeak, exitCodeMatches, lineAccuracy.lineCountMatches, evidenceCoveragePassed);
+  const passed = evaluatePassed({ recall: recallOmission.recall, secretLeak, exitCodeMatches, lineCountMatches: lineAccuracy.lineCountMatches, evidenceCoveragePassed });
   const omissions = recallOmission.missingExpected.map((missing) => `Expected evidence not found in artifact: ${missing}`);
   const failureReason = passed
     ? undefined
-    : assembleFailureReason(oracle, fixtureCase, recallOmission, secretLeak, exitCodeMatches, lineAccuracy, evidenceCoverageFailure);
+    : assembleFailureReason({ oracle, fixtureCase, recallOmission, secretLeak, exitCodeMatches, lineAccuracy, evidenceCoverageFailure });
 
   const result = {
     schemaVersion: "rector.capability-eval.v1" as const,

@@ -30,30 +30,20 @@ const REGRESSIONS_DIR = path.join(OUTPUT_DIR, "regressions");
 const args = process.argv.slice(2);
 const isGate = args.includes("--gate");
 
-async function main(): Promise<void> {
-  const result = await runGlobalHarness({
-    scenariosDir: SCENARIOS_DIR,
-    outputDir: OUTPUT_DIR,
-    write: true,
-    fakePathAuditor: async () => {
-      const audit = await auditNoProductionFakes({ repoRoot: REPO_ROOT });
-      return { findingCount: audit.findingCount };
-    },
-  });
+function checkOfflineCount(executedCount: number, violations: string[]): void {
+  if (executedCount < 20) violations.push(`offline scenario count ${executedCount} < 20`);
+}
 
-  const { report, scorecards } = result;
-  const outcomes = report.outcomes;
-  const violations: string[] = [];
-
-  // 2
-  if (report.executedCount < 20) violations.push(`offline scenario count ${report.executedCount} < 20`);
-
-  // 3
+function checkStrictPassCount(scorecards: { passed: boolean }[], violations: string[]): void {
   const strictPass = scorecards.filter((s) => s.passed).length;
   if (strictPass < 5) violations.push(`strict-passing scenarios ${strictPass} < 5`);
+}
 
-  // 1 + 4: structured actual vs expected (from harness outcomes and skipped records).
-  // A scenario must never disappear from gate semantics: it must be in outcomes or skipped.
+function checkStatusConsistency(
+  outcomes: readonly { scenarioId: string; expectedStatus: string; actualStatus: string }[],
+  report: { skipped: readonly { scenarioId: string; expectedStatus: string }[]; scenarioCount: number },
+  violations: string[],
+): number {
   let intentionalRegressionCount = 0;
   const accounted = new Set<string>();
   for (const o of outcomes) {
@@ -70,20 +60,43 @@ async function main(): Promise<void> {
   if (accounted.size !== report.scenarioCount) {
     violations.push(`accounted scenarios ${accounted.size} != scenario count ${report.scenarioCount}`);
   }
-  if (intentionalRegressionCount < 5) violations.push(`intentional regressions ${intentionalRegressionCount} < 5`);
+  return intentionalRegressionCount;
+}
 
-  // 5
-  for (const o of outcomes) {
-    const sc = scorecards.find((s) => s.scenarioId === o.scenarioId);
+function checkAccountedScenarios(
+  outcomes: readonly { scenarioId: string }[],
+  report: { skipped: readonly { scenarioId: string }[]; scenarioCount: number },
+  violations: string[],
+): void {
+  const accounted = new Set<string>();
+  for (const o of outcomes) accounted.add(o.scenarioId);
+  for (const s of report.skipped) accounted.add(s.scenarioId);
+  if (accounted.size !== report.scenarioCount) {
+    violations.push(`accounted scenarios ${accounted.size} != scenario count ${report.scenarioCount}`);
+  }
+}
+
+function checkRequiredArtifacts(
+  outcomes: readonly { scenarioId: string; taskPacket?: unknown; runEvents?: readonly unknown[]; validationRefs?: readonly unknown[] }[],
+  scorecards: readonly { scenarioId: string }[],
+  violations: string[],
+): void {
+  for (const o of outcomes as any[]) {
+    const sc = (scorecards as any[]).find((s: any) => s.scenarioId === o.scenarioId);
     if (!sc) { violations.push(`${o.scenarioId}: missing scorecard`); continue; }
     if (!o.taskPacket) violations.push(`${o.scenarioId}: missing taskPacket`);
     if (!o.runEvents || o.runEvents.length === 0) violations.push(`${o.scenarioId}: missing runEvents`);
     if (!o.validationRefs || o.validationRefs.length === 0) violations.push(`${o.scenarioId}: missing validationRefs`);
   }
+}
 
-  // 6 evidence_quality === 0 while scenario declares evidence refs (use o.scenarioFile exact)
-  for (const o of outcomes) {
-    const sc = scorecards.find((s) => s.scenarioId === o.scenarioId);
+async function checkEvidenceQuality(
+  outcomes: readonly { scenarioId: string; scenarioFile: string; expectedStatus: string }[],
+  scorecards: readonly { scenarioId: string; dimensions: { evidence_quality: { score: number } } }[],
+  violations: string[],
+): Promise<void> {
+  for (const o of outcomes as any[]) {
+    const sc = (scorecards as any[]).find((s: any) => s.scenarioId === o.scenarioId);
     if (!sc) continue;
     const eq = sc.dimensions.evidence_quality.score;
     if (eq === 0 && o.expectedStatus === "passed") {
@@ -93,8 +106,12 @@ async function main(): Promise<void> {
       }
     }
   }
+}
 
-  // 7 regression artifacts for expected-fail scenarios (use o.expectedStatus + o.scenarioFile)
+async function checkRegressionArtifacts(
+  outcomes: readonly { scenarioId: string; expectedStatus: string }[],
+  violations: string[],
+): Promise<void> {
   for (const o of outcomes) {
     if (o.expectedStatus === "failed") {
       const jsonPath = path.join(REGRESSIONS_DIR, `${o.scenarioId}.json`);
@@ -104,13 +121,41 @@ async function main(): Promise<void> {
       }
     }
   }
+}
 
-  // 8 proxy-regression behavioral checks (offline: prefer local binary, never network install)
-  const vitestBin = path.join(REPO_ROOT, "node_modules", ".bin", "vitest");
+async function checkProxyRegression(repoRoot: string, violations: string[]): Promise<void> {
+  const vitestBin = path.join(repoRoot, "node_modules", ".bin", "vitest");
   const vitestCmd = (await fs.stat(vitestBin).catch(() => null)) ? vitestBin : "npx";
   const vitestArgs = (vitestCmd === "npx") ? ["--no-install", "vitest", "run", "tests/global/proxyRegression.test.ts", "--passWithNoTests"] : ["run", "tests/global/proxyRegression.test.ts", "--passWithNoTests"];
-  const proxy = spawnSync(vitestCmd, vitestArgs, { cwd: REPO_ROOT, encoding: "utf8", stdio: "pipe" });
+  const proxy = spawnSync(vitestCmd, vitestArgs, { cwd: repoRoot, encoding: "utf8", stdio: "pipe" });
   if (proxy.status !== 0) violations.push("proxyRegression behavioral checks failed");
+}
+
+async function main(): Promise<void> {
+  const result = await runGlobalHarness({
+    scenariosDir: SCENARIOS_DIR,
+    outputDir: OUTPUT_DIR,
+    write: true,
+    fakePathAuditor: async () => {
+      const audit = await auditNoProductionFakes({ repoRoot: REPO_ROOT });
+      return { findingCount: audit.findingCount };
+    },
+  });
+
+  const { report, scorecards } = result;
+  const outcomes = report.outcomes;
+  const violations: string[] = [];
+
+  checkOfflineCount(report.executedCount, violations);
+  const strictPass = scorecards.filter((s) => s.passed).length;
+  if (strictPass < 5) violations.push(`strict-passing scenarios ${strictPass} < 5`);
+  const intentionalRegressionCount = checkStatusConsistency(outcomes, report, violations);
+  if (intentionalRegressionCount < 5) violations.push(`intentional regressions ${intentionalRegressionCount} < 5`);
+
+  checkRequiredArtifacts(outcomes, scorecards, violations);
+  await checkEvidenceQuality(outcomes, scorecards, violations);
+  await checkRegressionArtifacts(outcomes, violations);
+  await checkProxyRegression(REPO_ROOT, violations);
 
   const exitCode = violations.length > 0 && isGate ? 1 : 0;
 

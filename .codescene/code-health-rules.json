@@ -1,0 +1,25 @@
+{
+  "usage": "Persist this file inside your repositories as .codescene/code-health-rules.json. Keep the rules you want to override, remove the rest for simplicity and an easy overview. Override the code health rules by changing the default 1.0 value to a lower relative weight. A value of 0.0 disables the rule.",
+  "rule_sets": [
+    {
+      "matching_content_path": "tests/**",
+      "rules": [
+        { "name": "Complex Method", "weight": 0.0 },
+        { "name": "Code Duplication", "weight": 0.0 }
+      ]
+    },
+    {
+      "matching_content_path": "scripts/audit/**",
+      "rules": [
+        { "name": "String Heavy Function Arguments", "weight": 0.0 }
+      ]
+    },
+    {
+      "matching_content_path": "scripts/evals/**",
+      "rules": [
+        { "name": "Primitive Obsession", "weight": 0.0 },
+        { "name": "String Heavy Function Arguments", "weight": 0.0 }
+      ]
+    }
+  ]
+}

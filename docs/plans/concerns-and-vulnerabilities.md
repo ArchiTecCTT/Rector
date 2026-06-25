@@ -892,3 +892,4 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 ### Test gaps / limitations
 
 - **Label:** DEFERRED — The harness measures reliability against committed oracles only; it does not exercise live providers or real specialist mutation (Phase 11/12). The single offline fixture repo (`rector-mini-fix`) is intentionally minimal; broader scenario corpora are future work.
+- **Label:** DEFERRED — CodeScene "Complex Method" + "Code Duplication" (tests/**) and "String Heavy Function Arguments" (scripts/audit/**) suppressed via committed code-health-rules.json (test/audit legitimate patterns); production src/** untouched.
