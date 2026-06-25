@@ -72,6 +72,15 @@ npm run build
   - Debug/fix workers: `google-vertex/gemini-3.5-flash`
 - Parent orchestrator remains in charge: worker -> GLM review -> Gemini fixes if needed -> verify -> commit -> next chunk.
 
+## Commit Identity
+
+All commits (including those made by subagents) must be authored and committed as:
+
+- Name: `Lanz Skyler B. Busa`
+- Email: `274020196+ArchiTecCTT@users.noreply.github.com`
+
+The VM's default git identity is `Ubuntu <…@…cloudapp.net>`, which does NOT attribute to the GitHub account. Before committing, set the repo-local identity (`git config user.name` / `git config user.email`) to the values above so contributions attribute to `ArchiTecCTT`. If commits were already made under the VM default and have not been pushed, re-stamp author+committer before pushing.
+
 ## Current Implemented Chunks
 
 Completed through Chunk 50 (see `docs/plans/chunks/050-cartographer-inventory-slice.md`). Foundation chunks 0–25:
