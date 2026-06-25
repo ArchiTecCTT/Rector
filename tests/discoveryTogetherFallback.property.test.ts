@@ -26,7 +26,7 @@ import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 
 import type { ProviderConfigRecord } from "../src/providers/config";
-import type { AdapterContext } from "../src/providers/discovery/adapters/index";
+import type { AdapterContext } from "../src/providers/discovery/adapters";
 import { togetherDiscoveryAdapter } from "../src/providers/discovery/adapters/together";
 
 const TIMESTAMPS = { createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };

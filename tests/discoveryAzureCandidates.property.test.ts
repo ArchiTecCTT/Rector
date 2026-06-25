@@ -24,7 +24,7 @@ import fc from "fast-check";
 
 import type { ProviderConfigRecord } from "../src/providers/config";
 import { azureDiscoveryAdapter } from "../src/providers/discovery/adapters/azure";
-import type { AdapterContext } from "../src/providers/discovery/adapters/index";
+import type { AdapterContext } from "../src/providers/discovery/adapters";
 
 const ENDPOINT = "https://prop8.openai.azure.com";
 

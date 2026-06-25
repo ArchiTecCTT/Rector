@@ -25,7 +25,7 @@ import {
   type SandboxPolicyInput,
   type SandboxProviderMetadata,
   type WorkspaceFs,
-} from "./index";
+} from ".";
 
 // ---------------------------------------------------------------------------
 // E2B container client surface (Req 6.1)
@@ -138,13 +138,9 @@ const OPTIONAL_E2B_CLIENT = "@e2b/code-interpreter";
 
 function loadE2BClientFactory(): E2BClientFactory {
   const requireFromHere = createRequire(import.meta.url);
+  let mod: any;
   try {
-    const mod = requireFromHere(OPTIONAL_E2B_CLIENT) as { default?: E2BClientFactory } | E2BClientFactory;
-    const factory = (typeof mod === "function" ? mod : mod.default) as E2BClientFactory | undefined;
-    if (typeof factory !== "function") {
-      throw new Error("module did not export a client factory");
-    }
-    return factory;
+    mod = requireFromHere(OPTIONAL_E2B_CLIENT);
   } catch {
     throw new Error(
       `The E2B sandbox path requires the optional "${OPTIONAL_E2B_CLIENT}" dependency, which is ` +
@@ -152,6 +148,15 @@ function loadE2BClientFactory(): E2BClientFactory {
         `use the local workspace sandbox instead (no cloud account or network required).`,
     );
   }
+  const factory = (typeof mod === "function" ? mod : mod.default) as E2BClientFactory | undefined;
+  if (typeof factory !== "function") {
+    throw new Error(
+      `The E2B sandbox path requires the optional "${OPTIONAL_E2B_CLIENT}" dependency, which is ` +
+        `not installed. Run \`npm install ${OPTIONAL_E2B_CLIENT}\` to enable the E2B sandbox, or ` +
+        `use the local workspace sandbox instead (no cloud account or network required).`,
+    );
+  }
+  return factory;
 }
 
 function defaultClientFactory(apiKey: string): E2BClient {

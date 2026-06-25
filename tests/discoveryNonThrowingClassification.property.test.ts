@@ -35,7 +35,7 @@ import { azureDiscoveryAdapter } from "../src/providers/discovery/adapters/azure
 import { cloudflareDiscoveryAdapter } from "../src/providers/discovery/adapters/cloudflare";
 import { openaiCompatibleDiscoveryAdapter } from "../src/providers/discovery/adapters/openaiCompatible";
 import { togetherDiscoveryAdapter } from "../src/providers/discovery/adapters/together";
-import type { AdapterContext, DiscoveryAdapter } from "../src/providers/discovery/adapters/index";
+import type { AdapterContext, DiscoveryAdapter } from "../src/providers/discovery/adapters";
 import {
   DiscoveryErrorCategorySchema,
   DiscoveryErrorSchema,

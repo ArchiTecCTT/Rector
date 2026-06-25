@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { redactString } from "../security/redaction";
 import type { Conversation, Message } from "./schemas";
-import type { RectorStore } from "./index";
+import type { RectorStore } from ".";
 
 export const DEFAULT_SESSION_SEARCH_LIMIT = 20;
 export const MAX_SESSION_SEARCH_LIMIT = 50;

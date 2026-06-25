@@ -1056,7 +1056,7 @@ async function findAssistantMessage(conversationId, runId) {
 // pending bubble with the assistant message and render the final trace from the persisted run/events.
 async function finalizeRun({ conversationId, runId, pending, phase }) {
   let run = null;
-  let events = [];
+  let events;
   try {
     const data = await api(`/runs/${runId}/events`);
     run = data.run || null;
@@ -1114,6 +1114,8 @@ async function sendMessage(content) {
   const pending = renderMessage("assistant", "Running local pipeline…", { pending: true });
   setRunStatus("Thinking", "status-pill--running");
 
+  let hasError = false;
+  let errorMessage = "";
   try {
     const conversationId = await ensureConversation();
 
@@ -1155,16 +1157,21 @@ async function sendMessage(content) {
       setRunStatus(PHASE_STATUS_LABELS[phase] || phase || "Done", statusPillClass(phase, response.run?.status));
       renderTrace(response);
     } else {
-      throw new Error("Unexpected response from server");
+      hasError = true;
+      errorMessage = "Unexpected response from server";
     }
   } catch (err) {
-    teardownLiveRun();
-    pending.remove();
-    renderMessage("assistant", `Error: ${err.message}`, {});
-    setRunStatus("Failed", "status-pill--failed");
+    hasError = true;
+    errorMessage = err.message;
   } finally {
     els["composer-send"].disabled = false;
     els["composer-input"].focus();
+  }
+  if (hasError) {
+    teardownLiveRun();
+    pending.remove();
+    renderMessage("assistant", `Error: ${errorMessage}`, {});
+    setRunStatus("Failed", "status-pill--failed");
   }
 }
 
@@ -4034,7 +4041,7 @@ function renderModuleManagerList(modules) {
     checkbox.checked = Boolean(mod.enabled);
     checkbox.disabled = mod.tier === "core";
     checkbox.addEventListener("change", () => {
-      void toggleModuleEnabled(mod.id, checkbox.checked, checkbox);
+      void toggleModule(mod.id, checkbox.checked, checkbox);
     });
     toggleRow.append(checkbox, document.createTextNode(" Enabled"));
     body.append(toggleRow);
@@ -4044,35 +4051,50 @@ function renderModuleManagerList(modules) {
   }
 }
 
-async function toggleModuleEnabled(moduleId, enabled, checkbox) {
+async function toggleModule(moduleId, enabled, checkbox) {
+  clearModuleManagerError();
+  let errorMsg = null;
   try {
-    const res = await fetch("/api/modules", {
+    const res = await fetch(`/api/modules/${moduleId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ moduleId, enabled }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.error || `Request failed (${res.status})`);
+      errorMsg = data.error || `Request failed (${res.status})`;
     }
   } catch (err) {
+    errorMsg = err.message;
+  }
+  if (errorMsg) {
     if (checkbox) checkbox.checked = !enabled;
-    showModuleManagerError(`Could not update module: ${err.message}`);
+    showModuleManagerError(`Could not update module: ${errorMsg}`);
   }
 }
 
 async function loadModuleManager() {
   clearModuleManagerError();
   setModuleManagerLoading(true);
+  let errorMsg = null;
+  let modules = [];
   try {
     const res = await fetch("/api/modules");
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-    renderModuleManagerList(data.modules || []);
+    if (!res.ok) {
+      errorMsg = data.error || `Request failed (${res.status})`;
+    } else {
+      modules = data.modules || [];
+    }
   } catch (err) {
-    showModuleManagerError(`Could not load modules: ${err.message}`);
+    errorMsg = err.message;
   } finally {
     setModuleManagerLoading(false);
+  }
+  if (errorMsg) {
+    showModuleManagerError(`Could not load modules: ${errorMsg}`);
+  } else {
+    renderModuleManagerList(modules);
   }
 }
 
@@ -6366,8 +6388,7 @@ function bindSuggestions() {
   messages.addEventListener("click", (event) => {
     const btn = event.target.closest(".suggestion");
     if (!btn) return;
-    const prompt = btn.dataset.prompt || btn.textContent.trim();
-    els["composer-input"].value = prompt;
+    els["composer-input"].value = btn.dataset.prompt || btn.textContent.trim();
     els["composer"].requestSubmit();
   });
 }

@@ -1,6 +1,6 @@
 import { redactString } from "../security/redaction";
 import type { Conversation } from "./schemas";
-import type { RectorStore } from "./index";
+import type { RectorStore } from ".";
 
 export const MAX_CONVERSATION_LINEAGE_DEPTH = 10;
 

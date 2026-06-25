@@ -21,7 +21,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderConfigRecord } from "../src/providers/config";
 import { azureDiscoveryAdapter } from "../src/providers/discovery/adapters/azure";
-import type { AdapterContext } from "../src/providers/discovery/adapters/index";
+import type { AdapterContext } from "../src/providers/discovery/adapters";
 
 const ENUMERATE_DEPLOYMENTS_HEADER = "x-rector-azure-enumerate-deployments";
 

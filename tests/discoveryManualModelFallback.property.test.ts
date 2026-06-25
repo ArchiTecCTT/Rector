@@ -30,7 +30,7 @@ import fc from "fast-check";
 
 import type { ProviderConfigRecord } from "../src/providers/config";
 import { openaiCompatibleDiscoveryAdapter } from "../src/providers/discovery/adapters/openaiCompatible";
-import type { AdapterContext } from "../src/providers/discovery/adapters/index";
+import type { AdapterContext } from "../src/providers/discovery/adapters";
 import { ModelCandidateSchema } from "../src/providers/discovery/types";
 
 const BASE_URL = "https://proxy.example.com";

@@ -9,8 +9,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSentryAdapter } from "../src/observability/sentryAdapter.js";
 import { createPostHogAdapter } from "../src/observability/posthogAdapter.js";
-import { createObservabilityAdapters } from "../src/observability/index.js";
-import type { ObservabilitySpan, ObservabilitySummary } from "../src/observability/index.js";
+import { createObservabilityAdapters } from "../src/observability";
+import type { ObservabilitySpan, ObservabilitySummary } from "../src/observability";
 
 // ── Test data ──────────────────────────────────────────────────────────────────
 

@@ -62,17 +62,9 @@ const OPTIONAL_MEM0_CLIENT = "mem0ai";
 
 function loadMem0ClientFactory(): Mem0ClientFactory {
   const requireFromHere = createRequire(import.meta.url);
+  let mod: any;
   try {
-    const mod = requireFromHere(OPTIONAL_MEM0_CLIENT) as
-      | { default?: new (opts: { apiKey: string }) => Mem0Client }
-      | (new (opts: { apiKey: string }) => Mem0Client);
-    const MemoryClient = (typeof mod === "function" ? mod : mod.default) as
-      | (new (opts: { apiKey: string }) => Mem0Client)
-      | undefined;
-    if (typeof MemoryClient !== "function") {
-      throw new Error("module did not export MemoryClient");
-    }
-    return (apiKey: string) => new MemoryClient({ apiKey });
+    mod = requireFromHere(OPTIONAL_MEM0_CLIENT);
   } catch {
     throw new Error(
       `The Mem0 memory path requires the optional "${OPTIONAL_MEM0_CLIENT}" dependency, which is ` +
@@ -80,6 +72,17 @@ function loadMem0ClientFactory(): Mem0ClientFactory {
         `use a local provider (in-memory or local-sqlite-mem) instead (no cloud account or network required).`,
     );
   }
+  const MemoryClient = (typeof mod === "function" ? mod : mod.default) as
+    | (new (opts: { apiKey: string }) => Mem0Client)
+    | undefined;
+  if (typeof MemoryClient !== "function") {
+    throw new Error(
+      `The Mem0 memory path requires the optional "${OPTIONAL_MEM0_CLIENT}" dependency, which is ` +
+        `not installed. Run \`npm install ${OPTIONAL_MEM0_CLIENT}\` to enable Mem0 memory, or ` +
+        `use a local provider (in-memory or local-sqlite-mem) instead (no cloud account or network required).`,
+    );
+  }
+  return (apiKey: string) => new MemoryClient({ apiKey });
 }
 
 function defaultClientFactory(apiKey: string): Mem0Client {

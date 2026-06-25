@@ -5,7 +5,7 @@ import {
   type AdapterResult,
   type DiscoveryAdapter,
   type NormalizeContext,
-} from "./index";
+} from ".";
 
 /**
  * Together AI Discovery_Adapter (design section C — `adapters/together.ts`,

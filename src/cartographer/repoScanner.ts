@@ -120,15 +120,19 @@ export async function scanRepository(input: ScanRepositoryInput): Promise<ScanRe
 }
 
 async function assertRootDirectory(input: { readonly repoRoot: string; readonly fileReader: FileReader; readonly emitter?: CartographerScanEmitter; readonly now: () => Date }): Promise<void> {
+  let stat: Awaited<ReturnType<FileReader["lstat"]>>;
   try {
-    const stat = await input.fileReader.lstat(input.repoRoot);
-    if (!stat.isDirectory()) {
-      throw new RepositoryScanRootError(`${input.repoRoot} is not a directory`);
-    }
+    stat = await input.fileReader.lstat(input.repoRoot);
   } catch (error) {
     const scanError = { path: input.repoRoot, stage: "walk", message: messageFromUnknown(error), recoverable: false } satisfies ScanError;
     await emitSafely(input.emitter, { type: "CARTOGRAPHER_SCAN_FAILED", error: scanError, timestamp: input.now().toISOString() });
     throw error;
+  }
+  if (!stat.isDirectory()) {
+    const err = new RepositoryScanRootError(`${input.repoRoot} is not a directory`);
+    const scanError = { path: input.repoRoot, stage: "walk", message: err.message, recoverable: false } satisfies ScanError;
+    await emitSafely(input.emitter, { type: "CARTOGRAPHER_SCAN_FAILED", error: scanError, timestamp: input.now().toISOString() });
+    throw err;
   }
 }
 
@@ -255,8 +259,7 @@ function eventPath(event: CartographerScanEvent): string {
     case "CARTOGRAPHER_SCAN_FAILED":
       return event.error.path;
     default: {
-      const unreachable: never = event;
-      return unreachable;
+      return event satisfies never;
     }
   }
 }

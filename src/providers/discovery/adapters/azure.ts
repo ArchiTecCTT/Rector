@@ -6,7 +6,7 @@ import {
   type AdapterResult,
   type DiscoveryAdapter,
   type NormalizeContext,
-} from "./index";
+} from ".";
 
 /**
  * Azure OpenAI Discovery_Adapter (design section C — `adapters/azure.ts`,

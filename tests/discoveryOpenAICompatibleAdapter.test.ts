@@ -19,7 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderConfigRecord } from "../src/providers/config";
 import { openaiCompatibleDiscoveryAdapter } from "../src/providers/discovery/adapters/openaiCompatible";
-import type { AdapterContext } from "../src/providers/discovery/adapters/index";
+import type { AdapterContext } from "../src/providers/discovery/adapters";
 
 const BASE_URL = "https://proxy.example.com";
 

@@ -33,7 +33,7 @@ import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 
 import { createE2BSandboxAdapter, type E2BClient } from "../src/sandbox/e2bSandboxAdapter";
-import { MAX_CAPTURED_STREAM_BYTES } from "../src/sandbox/index";
+import { MAX_CAPTURED_STREAM_BYTES } from "../src/sandbox";
 
 const FIXED_TS = "2026-01-01T00:00:00.000Z";
 const CAP = MAX_CAPTURED_STREAM_BYTES;

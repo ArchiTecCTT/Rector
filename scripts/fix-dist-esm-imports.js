@@ -62,9 +62,8 @@ if (fs.existsSync(coldStartSrc)) {
     // Remove TypeScript type annotations from parameters and return types
     .replace(/:\s*Promise<void>/g, "")
     .replace(/:\s*unknown/g, "")
-    // Remove the async wrapper — use top-level await like the original compiled version
     .replace(
-      /async function main\(\)\s*\{([\s\S]*?)\}\s*\r?\nmain\(\)\.catch[\s\S]*$/,
+      /async function main\(\)\s*\{([\s\S]*?)}\s*\r?\nmain\(\)\.catch[\s\S]*$/,
       (_, body) => body.replace(/^ {2}/gm, "").trim()
     )
     .trim() + "\n";

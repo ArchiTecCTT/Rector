@@ -30,7 +30,7 @@ import fc from "fast-check";
 
 import type { ProviderConfigRecord } from "../src/providers/config";
 import { cloudflareDiscoveryAdapter } from "../src/providers/discovery/adapters/cloudflare";
-import type { AdapterContext } from "../src/providers/discovery/adapters/index";
+import type { AdapterContext } from "../src/providers/discovery/adapters";
 
 const ACCOUNT_ID = "acct-prop-7";
 

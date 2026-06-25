@@ -408,7 +408,6 @@ async function measureMemoryRoleResolution(): Promise<number> {
   const { MEMORY_ROLES } = await import("../src/providers/memoryAssignments");
   const { MemoryRoleRouter } = await import("../src/providers/memoryRoleRouter");
   const { createInMemoryMemoryRoleAssignmentStore } = await import("../src/providers/memoryAssignmentStore");
-  const { createInMemoryProviderConfigStore } = await import("../src/providers/configStore");
   const { createInMemoryMemoryConfigStore } = await import("../src/providers/memoryConfigStore");
 
   const router = new MemoryRoleRouter({

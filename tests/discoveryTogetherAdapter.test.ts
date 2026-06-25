@@ -20,7 +20,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderConfigRecord } from "../src/providers/config";
 import { togetherDiscoveryAdapter } from "../src/providers/discovery/adapters/together";
-import type { AdapterContext } from "../src/providers/discovery/adapters/index";
+import type { AdapterContext } from "../src/providers/discovery/adapters";
 
 const BASE_URL = "https://api.together.xyz";
 
