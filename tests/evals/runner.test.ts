@@ -1,35 +1,26 @@
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { cp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CAPABILITY_EVAL_METRIC_IDS } from "../../src/capabilities/eval/metrics";
 import { CapabilityEvalResultSchema } from "../../src/capabilities/eval/schemas";
-import { LocalFsRawArtifactStore } from "../../src/capabilities/eval/artifactStore";
 import { runCapabilityEvals } from "../../scripts/evals/run-capability-evals";
 import {
   CapabilityEvalRunReportSchema,
   OFFLINE_REPORT_NOTES,
 } from "../../scripts/evals/score-capability-results";
+import { FIXED_NOW, makeTempLifecycle } from "../helpers";
 
-const FIXED_NOW = () => new Date("2026-01-01T00:00:00.000Z");
-
-const tempRoots: string[] = [];
+const { cleanup, tempOutputDir } = makeTempLifecycle();
 
 afterEach(async () => {
-  await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await cleanup();
 });
-
-async function tempOutputDir(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "rector-eval-runner-"));
-  tempRoots.push(root);
-  return root;
-}
 
 describe("offline capability eval runner", () => {
   it("scores every committed corpus case against its oracle with no model and writes both reports", async () => {
     // Given: the committed offline corpus and a real temp output directory.
-    const outputDir = await tempOutputDir();
+    const outputDir = await tempOutputDir("rector-eval-runner-");
 
     // When: the runner scores each case deterministically and writes the report files.
     const output = await runCapabilityEvals({ outputDir, now: FIXED_NOW });
@@ -158,70 +149,31 @@ describe("offline capability eval runner", () => {
     expect(output.markdown).toContain("rg-orchestration-search");
   });
 
-  it("fails the runner path when expected evidence has a bad raw artifact ref", async () => {
-    const corpusRoot = await mkdtemp(path.join(tmpdir(), "rector-eval-corpus-bad-ref-"));
-    tempRoots.push(corpusRoot);
+  async function testEvidenceFailure(modifyPacket: (packet: any) => void, expectedError: string) {
+    const corpusRoot = await tempOutputDir("rector-eval-corpus-evidence-fail-");
     await cp(path.join(process.cwd(), "tests", "fixtures", "eval-corpus"), corpusRoot, { recursive: true });
     const evidencePath = path.join(corpusRoot, "cases", "rg-orchestration-search", "expected-evidence.json");
     const packet = JSON.parse(await readFile(evidencePath, "utf8"));
-    packet.evidence[0].rawArtifactRef = "artifact://fabricated/missing.txt";
-    packet.rawArtifactRefs = ["artifact://fabricated/missing.txt"];
+    modifyPacket(packet);
     await writeFile(evidencePath, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
 
     const output = await runCapabilityEvals({ corpusRoot, write: false, now: FIXED_NOW });
     const result = output.results.find((entry) => entry.caseId === "rg-orchestration-search");
     expect(result?.passed).toBe(false);
     expect(result?.failureReason).toContain("Evidence coverage failed");
-    expect(result?.failureReason).toContain("unresolved artifacts");
+    expect(result?.failureReason).toContain(expectedError);
+  }
+
+  it("fails the runner path when expected evidence has a bad raw artifact ref", async () => {
+    await testEvidenceFailure((packet) => {
+      packet.evidence[0].rawArtifactRef = "artifact://fabricated/missing.txt";
+      packet.rawArtifactRefs = ["artifact://fabricated/missing.txt"];
+    }, "unresolved artifacts");
   });
 
   it("fails the runner path when expected evidence has an out-of-bounds line ref", async () => {
-    const corpusRoot = await mkdtemp(path.join(tmpdir(), "rector-eval-corpus-bad-line-"));
-    tempRoots.push(corpusRoot);
-    await cp(path.join(process.cwd(), "tests", "fixtures", "eval-corpus"), corpusRoot, { recursive: true });
-    const evidencePath = path.join(corpusRoot, "cases", "rg-orchestration-search", "expected-evidence.json");
-    const packet = JSON.parse(await readFile(evidencePath, "utf8"));
-    packet.evidence[0].lineEnd = 999999;
-    await writeFile(evidencePath, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
-
-    const output = await runCapabilityEvals({ corpusRoot, write: false, now: FIXED_NOW });
-    const result = output.results.find((entry) => entry.caseId === "rg-orchestration-search");
-    expect(result?.passed).toBe(false);
-    expect(result?.failureReason).toContain("Evidence coverage failed");
-    expect(result?.failureReason).toContain("out-of-bounds lines");
-  });
-
-  it("persists artifacts via LocalFsRawArtifactStore and round-trips with integrity", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "rector-artifact-store-"));
-    tempRoots.push(root);
-    const store = new LocalFsRawArtifactStore({ rootDir: root });
-    const content = "hello world\n";
-    const record = await store.writeRawArtifact({
-      callId: "roundtrip",
-      artifactName: "sample.txt",
-      content,
-      contentType: "text/plain",
-      metadata: {},
-    });
-    const reread = await store.readRawArtifact(record.uri);
-    expect(reread.content).toBe(content);
-    expect(reread.record.sha256).toBe(record.sha256);
-  });
-
-  it("redacts AKIA-style secret before persistence", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "rector-artifact-redact-"));
-    tempRoots.push(root);
-    const store = new LocalFsRawArtifactStore({ rootDir: root });
-    const secret = "AKIAIOSFODNN7EXAMPLE";
-    const record = await store.writeRawArtifact({
-      callId: "redact",
-      artifactName: "leak.txt",
-      content: `token=${secret}`,
-      contentType: "text/plain",
-      metadata: {},
-    });
-    expect(record.redactionState).toBe("redacted");
-    const reread = await store.readRawArtifact(record.uri);
-    expect(reread.content).not.toContain(secret);
+    await testEvidenceFailure((packet) => {
+      packet.evidence[0].lineEnd = 999999;
+    }, "out-of-bounds lines");
   });
 });

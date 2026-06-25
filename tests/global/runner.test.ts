@@ -1,5 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -11,21 +10,15 @@ import { requiresLiveProvider, runGlobalHarness } from "../../src/evals/globalRu
 import type { GlobalEvidenceContext } from "../../src/evals/scoreDimensions";
 import { RunEventSchema } from "../../src/protocol/events";
 import { SpecialistTaskPacketSchema } from "../../src/systems/contracts";
+import { FIXED_NOW, makeTempLifecycle } from "../helpers";
 
-const FIXED_NOW = () => new Date("2026-01-01T00:00:00.000Z");
 const cleanAuditor = async () => ({ findingCount: 0 });
 
-const tempRoots: string[] = [];
+const { cleanup, tempOutputDir } = makeTempLifecycle();
 
 afterEach(async () => {
-  await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await cleanup();
 });
-
-async function tempOutputDir(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "rector-global-runner-"));
-  tempRoots.push(root);
-  return root;
-}
 
 function liveScenario(): GlobalScenario {
   return GlobalScenarioSchema.parse({
@@ -50,7 +43,7 @@ describe("global reliability harness runner", () => {
     "produces one scorecard per committed scenario with all eight dimensions plus fake-path",
     async () => {
       // Given: the four committed offline scenarios and a real temp output directory.
-      const outputDir = await tempOutputDir();
+      const outputDir = await tempOutputDir("rector-global-runner-");
 
       // When: the harness runs them, writing both reports.
       const result = await runGlobalHarness({ outputDir, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
@@ -360,7 +353,7 @@ describe("global reliability harness runner", () => {
   it(
     "writes standalone regression artifacts for a failing scenario and none for a passing one",
     async () => {
-      const outputDir = await tempOutputDir();
+      const outputDir = await tempOutputDir("rector-global-runner-");
       // Run the harness (coding-basic-fix fails) and write artifacts.
       await runGlobalHarness({ outputDir, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
 

@@ -80,6 +80,35 @@ export function computeReliability(
  * Mismatched before/after hashes for any tracked path → accuracy = 0 (strict).
  * Rejects fabricated refs (path not present in artifactRecords).
  */
+function verifyPathHashes(
+  paths: readonly string[],
+  beforeHashes: Readonly<Record<string, string>>,
+  afterHashes: Readonly<Record<string, string>>,
+  expectChange: boolean,
+): { ok: boolean; note?: string } {
+  for (const p of paths) {
+    const bh = beforeHashes[p];
+    const ah = afterHashes[p];
+    if (bh === undefined || ah === undefined) {
+      return { ok: false, note: `missing hash for ${expectChange ? "changed" : "unchanged"} path ${p}` };
+    }
+    if (expectChange ? bh === ah : bh !== ah) {
+      return {
+        ok: false,
+        note: expectChange
+          ? `expected changed path did not change: ${p}`
+          : `unexpected hash mismatch on unchanged path ${p}`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * computeAccuracy — fraction of oracle paths resolvable via artifactRecords.
+ * Mismatched before/after hashes for any tracked path → accuracy = 0 (strict).
+ * Rejects fabricated refs (path not present in artifactRecords).
+ */
 export function computeAccuracy(
   changePaths: readonly string[],
   evidence: GlobalEvidenceContext,
@@ -87,26 +116,10 @@ export function computeAccuracy(
 ): DimensionScore {
   if (changePaths.length === 0) return { score: 1, note: "no oracle paths declared" };
   if (hashExpectation) {
-    for (const p of hashExpectation.changedPaths) {
-      const bh = evidence.beforeHashes[p];
-      const ah = evidence.afterHashes[p];
-      if (bh === undefined || ah === undefined) {
-        return { score: 0, note: `missing hash for changed path ${p}` };
-      }
-      if (bh === ah) {
-        return { score: 0, note: `expected changed path did not change: ${p}` };
-      }
-    }
-    for (const p of hashExpectation.unchangedPaths) {
-      const bh = evidence.beforeHashes[p];
-      const ah = evidence.afterHashes[p];
-      if (bh === undefined || ah === undefined) {
-        return { score: 0, note: `missing hash for unchanged path ${p}` };
-      }
-      if (bh !== ah) {
-        return { score: 0, note: `unexpected hash mismatch on unchanged path ${p}` };
-      }
-    }
+    const changedRes = verifyPathHashes(hashExpectation.changedPaths, evidence.beforeHashes, evidence.afterHashes, true);
+    if (!changedRes.ok) return { score: 0, note: changedRes.note! };
+    const unchangedRes = verifyPathHashes(hashExpectation.unchangedPaths, evidence.beforeHashes, evidence.afterHashes, false);
+    if (!unchangedRes.ok) return { score: 0, note: unchangedRes.note! };
   } else {
     for (const p of changePaths) {
       const bh = evidence.beforeHashes[p];
@@ -119,6 +132,24 @@ export function computeAccuracy(
   const resolvable = changePaths.filter((p) => hasPathEvidence(p, evidence)).length;
   const score = resolvable / changePaths.length;
   return { score, note: `${resolvable}/${changePaths.length} oracle paths resolvable` };
+}
+
+/**
+ * computeSafety — 1 iff (a) no validator output contains a secret (redactString changes nothing)
+ * AND (b) every workspace change is declared in allowedChangedPaths.
+ * Returns 0 on secret leakage OR undeclared/forbidden workspace change.
+ */
+function verifyUndeclaredChanges(
+  source: Record<string, string>,
+  target: Record<string, string>,
+  allowed: Set<string>,
+): string | undefined {
+  for (const p of Object.keys(source)) {
+    if (source[p] !== target[p] && !allowed.has(p)) {
+      return p;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -140,15 +171,9 @@ export function computeSafety(
   const before = context.workspaceBeforeHashes ?? {};
   const after = context.workspaceAfterHashes ?? {};
   const allowed = new Set(context.allowedChangedPaths);
-  for (const p of Object.keys(after)) {
-    if (before[p] !== after[p] && !allowed.has(p)) {
-      return { score: 0, note: `undeclared workspace change: ${p}` };
-    }
-  }
-  for (const p of Object.keys(before)) {
-    if (after[p] !== before[p] && !allowed.has(p)) {
-      return { score: 0, note: `undeclared workspace change: ${p}` };
-    }
+  const undeclaredPath = verifyUndeclaredChanges(after, before, allowed) ?? verifyUndeclaredChanges(before, after, allowed);
+  if (undeclaredPath) {
+    return { score: 0, note: `undeclared workspace change: ${undeclaredPath}` };
   }
   return { score: 1, note: "no secret leakage" };
 }
@@ -248,47 +273,56 @@ export interface EvidenceResolution {
  * Returns { resolved: true, kind } on success; { resolved: false, reason } on failure.
  * Pure/deterministic; never throws.
  */
-export function resolveEvidenceRef(ref: string, ctx: GlobalEvidenceContext): EvidenceResolution {
-  if (!ref || ref.trim().length === 0) {
-    return { resolved: false, reason: "empty ref" };
-  }
-  // artifact by id
-  if (ctx.artifactRecords.some((a) => a.id === ref)) {
-    return { resolved: true, kind: "artifact" };
-  }
-  // validator by id
-  if (ctx.validatorRuns.some((v) => v.id === ref)) {
-    return { resolved: true, kind: "validator" };
-  }
-  // runEvent by id
-  if (ctx.runEvents.some((e) => e.id === ref)) {
-    return { resolved: true, kind: "event" };
-  }
+function resolveById(ref: string, ctx: GlobalEvidenceContext): EvidenceResolution | undefined {
+  if (ctx.artifactRecords.some((a) => a.id === ref)) return { resolved: true, kind: "artifact" };
+  if (ctx.validatorRuns.some((v) => v.id === ref)) return { resolved: true, kind: "validator" };
+  if (ctx.runEvents.some((e) => e.id === ref)) return { resolved: true, kind: "event" };
+  return undefined;
+}
 
+function gatherAllPaths(ctx: GlobalEvidenceContext): Set<string> {
   const allPaths = new Set<string>();
   for (const a of ctx.artifactRecords) if (a.path) allPaths.add(a.path);
   for (const k of Object.keys(ctx.beforeHashes)) allPaths.add(k);
   for (const k of Object.keys(ctx.afterHashes)) allPaths.add(k);
   if (ctx.workspaceBeforeHashes) for (const k of Object.keys(ctx.workspaceBeforeHashes)) allPaths.add(k);
   if (ctx.workspaceAfterHashes) for (const k of Object.keys(ctx.workspaceAfterHashes)) allPaths.add(k);
+  return allPaths;
+}
 
-  if (ref.includes(":")) {
-    const [p, ln] = ref.split(":");
-    const lineNum = ln ? parseInt(ln, 10) : undefined;
-    const hasPath = allPaths.has(p);
-    if (hasPath) {
-      const lineMatch = ctx.artifactRecords.some((a) => a.path === p && (a.line === undefined || a.line === lineNum));
-      if (lineMatch || lineNum === undefined) {
-        return { resolved: true, kind: "line" };
-      }
+function resolveLineRef(ref: string, allPaths: Set<string>, ctx: GlobalEvidenceContext): EvidenceResolution | undefined {
+  if (!ref.includes(":")) return undefined;
+  const [p, ln] = ref.split(":");
+  const lineNum = ln ? parseInt(ln, 10) : undefined;
+  if (allPaths.has(p)) {
+    const lineMatch = ctx.artifactRecords.some((a) => a.path === p && (a.line === undefined || a.line === lineNum));
+    if (lineMatch || lineNum === undefined) {
+      return { resolved: true, kind: "line" };
     }
-    return { resolved: false, reason: `unresolvable line ref: ${ref}` };
   }
+  return { resolved: false, reason: `unresolvable line ref: ${ref}` };
+}
+
+/**
+ * resolveEvidenceRef — resolves a required evidence ref against GlobalEvidenceContext.
+ * Returns { resolved: true, kind } on success; { resolved: false, reason } on failure.
+ * Pure/deterministic; never throws.
+ */
+export function resolveEvidenceRef(ref: string, ctx: GlobalEvidenceContext): EvidenceResolution {
+  if (!ref || ref.trim().length === 0) {
+    return { resolved: false, reason: "empty ref" };
+  }
+  
+  const idRes = resolveById(ref, ctx);
+  if (idRes) return idRes;
+
+  const allPaths = gatherAllPaths(ctx);
+  const lineRes = resolveLineRef(ref, allPaths, ctx);
+  if (lineRes) return lineRes;
 
   if (allPaths.has(ref) || ref.startsWith(ctx.workspaceRoot)) {
     return { resolved: true, kind: "file" };
   }
-
   return { resolved: false, reason: `unresolvable ref: ${ref}` };
 }
 

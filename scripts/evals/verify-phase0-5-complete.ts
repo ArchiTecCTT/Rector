@@ -45,9 +45,11 @@ async function main() {
       fail(`scenario ${f} contains hardcoded process.exit stub`);
     }
     const scenario = GlobalScenarioSchema.parse(YAML.parse(raw));
+    const blockedEvalArgs = ["-e", "--eval", "-p", "--print"];
     for (const validator of scenario.validators) {
-      if (validator.cmd === "node" && validator.args.includes("-e")) {
-        fail(`scenario ${f} validator ${validator.id} uses node -e stub`);
+      const hasEvalAlias = validator.cmd === "node" && validator.args.some((arg) => blockedEvalArgs.includes(arg));
+      if (hasEvalAlias) {
+        fail(`scenario ${f} validator ${validator.id} uses a blocked node eval alias`);
       }
       if (validator.args.some((arg) => arg.includes("process.exit(0)") || arg.includes("process.exit(1)"))) {
         fail(`scenario ${f} validator ${validator.id} contains hardcoded process.exit status`);

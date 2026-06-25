@@ -69,3 +69,7 @@ start.sh
 
 # Debugging & Code Inspections
 inspections
+
+# Teamwork agent artifacts
+ORIGINAL_PROMPT.md
+.agents/
