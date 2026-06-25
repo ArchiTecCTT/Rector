@@ -34,10 +34,10 @@ function resolveSpecifier(file, specifier) {
 for (const file of walk(dist)) {
   const original = fs.readFileSync(file, "utf8");
   const rewritten = original
-    .replace(/(\bfrom\s*["'])(\.[^"']+)(["'])/g, (_match, prefix, specifier, suffix) => {
+    .replace(/(\bfrom\s*["'])(\.[^"']*)(["'])/g, (_match, prefix, specifier, suffix) => {
       return `${prefix}${resolveSpecifier(file, specifier)}${suffix}`;
     })
-    .replace(/(\bimport\s*\(\s*["'])(\.[^"']+)(["']\s*\))/g, (_match, prefix, specifier, suffix) => {
+    .replace(/(\bimport\s*\(\s*["'])(\.[^"']*)(["']\s*\))/g, (_match, prefix, specifier, suffix) => {
       return `${prefix}${resolveSpecifier(file, specifier)}${suffix}`;
     });
 
