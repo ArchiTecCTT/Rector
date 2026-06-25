@@ -312,29 +312,40 @@ function assertNoUndeclaredNewFile(targets: readonly string[], allowedSet: Reado
   }
   return { ok: true };
 }
+
+function collectTargetsWithRegex(
+  patchText: string,
+  regex: RegExp,
+  allowedSet: ReadonlySet<string>,
+  groupIndex: (m: RegExpExecArray) => string,
+): { ok: true; targets: string[] } | { ok: false; reason: string } {
+  const targets: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(patchText)) !== null) {
+    const target = groupIndex(m);
+    const check = assertTargetInAllowed(target, allowedSet);
+    if (!check.ok) return check;
+    targets.push(target);
+  }
+  return { ok: true, targets };
+}
+
 /** Validate that every target path in a patch file is inside the allowed set (changedPaths + declared setup-only allowed paths). New files must be declared. */
 async function validateScriptedPatchTargets(
   patchFileAbs: string,
   allowedSet: ReadonlySet<string>,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const patchText = await fs.readFile(patchFileAbs, "utf8");
-  const targets: string[] = [];
   const gitRegex = /^diff --git a\/(.+?) b\/(.+?)$/gm;
-  let m: RegExpExecArray | null;
-  while ((m = gitRegex.exec(patchText)) !== null) {
-    const target = m[2] ?? m[1];
-    const check = assertTargetInAllowed(target, allowedSet);
-    if (!check.ok) return check;
-    targets.push(target);
-  }
+  const gitRes = collectTargetsWithRegex(patchText, gitRegex, allowedSet, (m) => m[2] ?? m[1]);
+  if (!gitRes.ok) return gitRes;
+  let targets = gitRes.targets;
+
   if (targets.length === 0) {
     const tradRegex = /^(\+\+\+|---)\s+[ab]\/(.+?)$/gm;
-    while ((m = tradRegex.exec(patchText)) !== null) {
-      const target = m[2];
-      const check = assertTargetInAllowed(target, allowedSet);
-      if (!check.ok) return check;
-      targets.push(target);
-    }
+    const tradRes = collectTargetsWithRegex(patchText, tradRegex, allowedSet, (m) => m[2]);
+    if (!tradRes.ok) return tradRes;
+    targets = tradRes.targets;
   }
   if (patchText.trim().length > 0 && targets.length === 0) {
     return { ok: false, reason: "patch contained no parsable targets (fail-closed)" };

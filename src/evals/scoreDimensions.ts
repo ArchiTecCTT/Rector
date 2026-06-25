@@ -292,6 +292,16 @@ function resolveById(ref: string, ctx: GlobalEvidenceContext): EvidenceResolutio
   return undefined;
 }
 
+function gatherAllPaths(ctx: GlobalEvidenceContext): Set<string> {
+  const allPaths = new Set<string>();
+  for (const a of ctx.artifactRecords) if (a.path) allPaths.add(a.path);
+  for (const k of Object.keys(ctx.beforeHashes)) allPaths.add(k);
+  for (const k of Object.keys(ctx.afterHashes)) allPaths.add(k);
+  if (ctx.workspaceBeforeHashes) for (const k of Object.keys(ctx.workspaceBeforeHashes)) allPaths.add(k);
+  if (ctx.workspaceAfterHashes) for (const k of Object.keys(ctx.workspaceAfterHashes)) allPaths.add(k);
+  return allPaths;
+}
+
 export function resolveEvidenceRef(ref: string, ctx: GlobalEvidenceContext): EvidenceResolution {
   if (!ref || ref.trim().length === 0) {
     return { resolved: false, reason: "empty ref" };
@@ -299,12 +309,7 @@ export function resolveEvidenceRef(ref: string, ctx: GlobalEvidenceContext): Evi
   const idRes = resolveById(ref, ctx);
   if (idRes) return idRes;
 
-  const allPaths = new Set<string>();
-  for (const a of ctx.artifactRecords) if (a.path) allPaths.add(a.path);
-  for (const k of Object.keys(ctx.beforeHashes)) allPaths.add(k);
-  for (const k of Object.keys(ctx.afterHashes)) allPaths.add(k);
-  if (ctx.workspaceBeforeHashes) for (const k of Object.keys(ctx.workspaceBeforeHashes)) allPaths.add(k);
-  if (ctx.workspaceAfterHashes) for (const k of Object.keys(ctx.workspaceAfterHashes)) allPaths.add(k);
+  const allPaths = gatherAllPaths(ctx);
 
   if (ref.includes(":")) {
     return resolveLineRef(ref, allPaths, ctx);
