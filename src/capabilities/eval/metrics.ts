@@ -131,25 +131,21 @@ function aggregateMetric(id: CapabilityEvalMetricId, results: readonly Capabilit
   return total / results.length;
 }
 
-// Missing ratio metrics use 0 as the documented worst-case score; missing lower-is-better
-// safety metrics fail closed with 1 so absent omission/leak fields cannot accidentally pass.
+const WORST_CASE_BY_METRIC: Readonly<Record<CapabilityEvalMetricId, number>> = {
+  schema_valid: 0,
+  recall: 0,
+  compression: 0,
+  raw_token_reduction: 0,
+  line_ref_accuracy: 0,
+  root_cause_accuracy: 0,
+  omission: 1,
+  secret_leak: 1,
+};
+
 function scoreOrWorstCase(id: CapabilityEvalMetricId, result: CapabilityEvalResult): number {
   const score = result.metricScores[id];
   if (score !== undefined && Number.isFinite(score)) return score;
-  switch (id) {
-    case "schema_valid":
-    case "recall":
-    case "compression":
-    case "raw_token_reduction":
-    case "line_ref_accuracy":
-    case "root_cause_accuracy":
-      return 0;
-    case "omission":
-    case "secret_leak":
-      return 1;
-    default:
-      return id;
-  }
+  return WORST_CASE_BY_METRIC[id] ?? 0;
 }
 
 function passesThreshold(value: number, rule: CapabilityEvalThresholdRule): boolean {

@@ -195,37 +195,58 @@ export function computeCostEfficiency(
  * Rejects malformed assertions via schema; scores verified presence, unverified absence,
  * no forbidden promotions, no cross-domain refs.
  */
+function eventHasMemoryId(e: RunEvent, id: string): boolean {
+  const p = e.payload ?? {};
+  return (p["memoryId"] as string | undefined) === id || (p["entryId"] as string | undefined) === id;
+}
+
+function eventHasPromoted(e: RunEvent, id: string): boolean {
+  return (e.payload?.["promoted"] as string | undefined) === id;
+}
+
+function eventHasCandidateRef(e: RunEvent, ref: string): boolean {
+  const p = e.payload ?? {};
+  return (
+    (p["candidateRef"] as string | undefined) === ref ||
+    (p["evidenceRef"] as string | undefined) === ref ||
+    ((p["refs"] as string[] | undefined) ?? []).includes(ref)
+  );
+}
+
+function eventHasCrossDomainRef(e: RunEvent, ref: string): boolean {
+  return ((e.payload?.["refs"] as string[] | undefined) ?? []).includes(ref);
+}
+
 export function computeMemoryCorrectness(assertion: MemoryAssertion, evidence: GlobalEvidenceContext): DimensionScore {
-  const verifiedOk = assertion.verifiedEntries.every((id) =>
-    evidence.runEvents.some((e) => (e.payload?.["memoryId"] as string | undefined) === id || (e.payload?.["entryId"] as string | undefined) === id)
-  );
-  const unverifiedOk = assertion.unverifiedEntries.every((id) =>
-    !evidence.runEvents.some((e) => (e.payload?.["memoryId"] as string | undefined) === id || (e.payload?.["entryId"] as string | undefined) === id)
-  );
-  const noForbidden = assertion.forbiddenPromotions.every((id) =>
-    !evidence.runEvents.some((e) => (e.payload?.["promoted"] as string | undefined) === id)
-  );
-  const candidateOk = assertion.expectedCandidateRefs.every((ref) =>
-    evidence.runEvents.some((e) =>
-      (e.payload?.["candidateRef"] as string | undefined) === ref ||
-      (e.payload?.["evidenceRef"] as string | undefined) === ref ||
-      ((e.payload?.["refs"] as string[] | undefined) ?? []).includes(ref)
-    )
-  );
-  const noCross = assertion.forbiddenCrossDomainRefs.every((ref) =>
-    !evidence.runEvents.some((e) => ((e.payload?.["refs"] as string[] | undefined) ?? []).includes(ref))
-  );
+  const verifiedOk = assertion.verifiedEntries.every((id) => evidence.runEvents.some((e) => eventHasMemoryId(e, id)));
+  const unverifiedOk = assertion.unverifiedEntries.every((id) => !evidence.runEvents.some((e) => eventHasMemoryId(e, id)));
+  const noForbidden = assertion.forbiddenPromotions.every((id) => !evidence.runEvents.some((e) => eventHasPromoted(e, id)));
+  const candidateOk = assertion.expectedCandidateRefs.every((ref) => evidence.runEvents.some((e) => eventHasCandidateRef(e, ref)));
+  const noCross = assertion.forbiddenCrossDomainRefs.every((ref) => !evidence.runEvents.some((e) => eventHasCrossDomainRef(e, ref)));
   const score = verifiedOk && unverifiedOk && candidateOk && noForbidden && noCross ? 1 : 0;
-  return {
-    score,
-    note: score === 1 ? "memory assertions satisfied" : "memory assertion violations",
-  };
+  return { score, note: score === 1 ? "memory assertions satisfied" : "memory assertion violations" };
 }
 
 /**
  * computeDelegationQuality — 1 iff packet and trace consistently select the expected specialist,
  * the specialist is allowed/not forbidden, and no run-event payload names a forbidden system.
  */
+function eventNamesForbiddenSystem(event: RunEvent, forbidden: readonly string[]): string | undefined {
+  const p = event.payload ?? {};
+  for (const key of ["selectedSystemId", "usedSystemId", "systemId"] as const) {
+    const v = p[key];
+    if (typeof v === "string" && forbidden.includes(v)) return v;
+  }
+  return undefined;
+}
+
+function traceSelectedSpecialist(runEvents: readonly RunEvent[], expected: string): boolean {
+  return runEvents.some((event) => {
+    const p = event.payload ?? {};
+    return p["selectedSystemId"] === expected || p["usedSystemId"] === expected;
+  });
+}
+
 export function computeDelegationQuality(input: {
   packet: SpecialistTaskPacket;
   runEvents: readonly RunEvent[];
@@ -240,20 +261,11 @@ export function computeDelegationQuality(input: {
   if (!allowed.includes(packet.systemId) || forbidden.includes(packet.systemId)) {
     return { score: 0, note: "delegation policy violation" };
   }
-  const forbiddenHit = forbidden.find((systemId) =>
-    runEvents.some((event) => {
-      const payload = event.payload ?? {};
-      return payload["selectedSystemId"] === systemId || payload["usedSystemId"] === systemId || payload["systemId"] === systemId;
-    })
-  );
+  const forbiddenHit = forbidden.find((sid) => runEvents.some((e) => eventNamesForbiddenSystem(e, [sid]) !== undefined));
   if (forbiddenHit) {
     return { score: 0, note: `forbidden system named in trace: ${forbiddenHit}` };
   }
-  const selected = runEvents.some((event) => {
-    const payload = event.payload ?? {};
-    return payload["selectedSystemId"] === expectedSpecialist || payload["usedSystemId"] === expectedSpecialist;
-  });
-  if (!selected) {
+  if (!traceSelectedSpecialist(runEvents, expectedSpecialist)) {
     return { score: 0, note: `trace never selected expected specialist ${expectedSpecialist}` };
   }
   return { score: 1, note: "delegation packet and trace within policy" };
@@ -281,44 +293,38 @@ function resolveById(ref: string, ctx: GlobalEvidenceContext): EvidenceResolutio
 }
 
 function gatherAllPaths(ctx: GlobalEvidenceContext): Set<string> {
+  const all = new Set<string>();
+  for (const a of ctx.artifactRecords) if (a.path) all.add(a.path);
+  for (const k of Object.keys(ctx.beforeHashes)) all.add(k);
+  for (const k of Object.keys(ctx.afterHashes)) all.add(k);
+  if (ctx.workspaceBeforeHashes) for (const k of Object.keys(ctx.workspaceBeforeHashes)) all.add(k);
+  if (ctx.workspaceAfterHashes) for (const k of Object.keys(ctx.workspaceAfterHashes)) all.add(k);
+  return all;
+}
+
+export function resolveEvidenceRef(ref: string, ctx: GlobalEvidenceContext): EvidenceResolution {
+  if (!ref || ref.trim().length === 0) {
+    return { resolved: false, reason: "empty ref" };
+  }
+  const idRes = resolveById(ref, ctx);
+  if (idRes) return idRes;
+
   const allPaths = new Set<string>();
   for (const a of ctx.artifactRecords) if (a.path) allPaths.add(a.path);
   for (const k of Object.keys(ctx.beforeHashes)) allPaths.add(k);
   for (const k of Object.keys(ctx.afterHashes)) allPaths.add(k);
   if (ctx.workspaceBeforeHashes) for (const k of Object.keys(ctx.workspaceBeforeHashes)) allPaths.add(k);
   if (ctx.workspaceAfterHashes) for (const k of Object.keys(ctx.workspaceAfterHashes)) allPaths.add(k);
-  return allPaths;
-}
 
-function resolveLineRef(ref: string, allPaths: Set<string>, ctx: GlobalEvidenceContext): EvidenceResolution | undefined {
-  if (!ref.includes(":")) return undefined;
-  const [p, ln] = ref.split(":");
-  const lineNum = ln ? parseInt(ln, 10) : undefined;
-  if (allPaths.has(p)) {
-    const lineMatch = ctx.artifactRecords.some((a) => a.path === p && (a.line === undefined || a.line === lineNum));
-    if (lineMatch || lineNum === undefined) {
-      return { resolved: true, kind: "line" };
+  if (ref.includes(":")) {
+    const [p, ln] = ref.split(":");
+    const lineNum = ln ? parseInt(ln, 10) : undefined;
+    if (allPaths.has(p)) {
+      const lineMatch = ctx.artifactRecords.some((a) => a.path === p && (a.line === undefined || a.line === lineNum));
+      if (lineMatch || lineNum === undefined) return { resolved: true, kind: "line" };
     }
+    return { resolved: false, reason: `unresolvable line ref: ${ref}` };
   }
-  return { resolved: false, reason: `unresolvable line ref: ${ref}` };
-}
-
-/**
- * resolveEvidenceRef — resolves a required evidence ref against GlobalEvidenceContext.
- * Returns { resolved: true, kind } on success; { resolved: false, reason } on failure.
- * Pure/deterministic; never throws.
- */
-export function resolveEvidenceRef(ref: string, ctx: GlobalEvidenceContext): EvidenceResolution {
-  if (!ref || ref.trim().length === 0) {
-    return { resolved: false, reason: "empty ref" };
-  }
-  
-  const idRes = resolveById(ref, ctx);
-  if (idRes) return idRes;
-
-  const allPaths = gatherAllPaths(ctx);
-  const lineRes = resolveLineRef(ref, allPaths, ctx);
-  if (lineRes) return lineRes;
 
   if (allPaths.has(ref) || ref.startsWith(ctx.workspaceRoot)) {
     return { resolved: true, kind: "file" };

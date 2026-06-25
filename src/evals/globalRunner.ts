@@ -223,9 +223,13 @@ export type RunGlobalHarnessResult = {
   readonly markdownPath?: string;
 };
 
-async function loadScenarioDir(scenariosDir: string): Promise<readonly GlobalScenario[]> {
+async function readScenarioDirEntries(scenariosDir: string): Promise<readonly string[]> {
   const entries = await fs.readdir(scenariosDir);
-  const files = entries.filter((entry) => entry.endsWith(".scenario.yaml")).sort();
+  return entries.filter((entry) => entry.endsWith(".scenario.yaml")).sort();
+}
+
+async function loadScenarioDir(scenariosDir: string): Promise<readonly GlobalScenario[]> {
+  const files = await readScenarioDirEntries(scenariosDir);
   const scenarios: GlobalScenario[] = [];
   for (const file of files) {
     const text = await fs.readFile(path.join(scenariosDir, file), "utf8");
@@ -235,8 +239,7 @@ async function loadScenarioDir(scenariosDir: string): Promise<readonly GlobalSce
 }
 
 async function loadScenarioFileMap(scenariosDir: string): Promise<ReadonlyMap<string, string>> {
-  const entries = await fs.readdir(scenariosDir);
-  const files = entries.filter((entry) => entry.endsWith(".scenario.yaml")).sort();
+  const files = await readScenarioDirEntries(scenariosDir);
   const scenarioFiles = new Map<string, string>();
   for (const file of files) {
     const text = await fs.readFile(path.join(scenariosDir, file), "utf8");
@@ -292,42 +295,51 @@ async function copyWorkspaceToTemp(src: string, dest: string): Promise<void> {
   }
 }
 
+function assertTargetInAllowed(target: string, allowedSet: ReadonlySet<string>): { ok: true } | { ok: false; reason: string } {
+  if (target.startsWith("/") || target.includes("..")) {
+    return { ok: false, reason: `patch target escapes workspace: ${target}` };
+  }
+  if (!allowedSet.has(target)) {
+    return { ok: false, reason: `patch target not in allowed set: ${target}` };
+  }
+  return { ok: true };
+}
+
+function assertNoUndeclaredNewFile(targets: readonly string[], allowedSet: ReadonlySet<string>): { ok: true } | { ok: false; reason: string } {
+  for (const t of targets) {
+    const check = assertTargetInAllowed(t, allowedSet);
+    if (!check.ok) return check;
+  }
+  return { ok: true };
+}
 /** Validate that every target path in a patch file is inside the allowed set (changedPaths + declared setup-only allowed paths). New files must be declared. */
 async function validateScriptedPatchTargets(
   patchFileAbs: string,
   allowedSet: ReadonlySet<string>,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const patchText = await fs.readFile(patchFileAbs, "utf8");
-  // Parse both modern (diff --git) and traditional unified (--- a/ +++ b/) headers.
   const targets: string[] = [];
   const gitRegex = /^diff --git a\/(.+?) b\/(.+?)$/gm;
   let m: RegExpExecArray | null;
   while ((m = gitRegex.exec(patchText)) !== null) {
     const target = m[2] ?? m[1];
-    if (target.startsWith("/") || target.includes("..")) {
-      return { ok: false, reason: `patch target escapes workspace: ${target}` };
-    }
+    const check = assertTargetInAllowed(target, allowedSet);
+    if (!check.ok) return check;
     targets.push(target);
   }
   if (targets.length === 0) {
     const tradRegex = /^(\+\+\+|---)\s+[ab]\/(.+?)$/gm;
     while ((m = tradRegex.exec(patchText)) !== null) {
       const target = m[2];
-      if (target.startsWith("/") || target.includes("..")) {
-        return { ok: false, reason: `patch target escapes workspace: ${target}` };
-      }
+      const check = assertTargetInAllowed(target, allowedSet);
+      if (!check.ok) return check;
       targets.push(target);
     }
   }
   if (patchText.trim().length > 0 && targets.length === 0) {
     return { ok: false, reason: "patch contained no parsable targets (fail-closed)" };
   }
-  for (const t of targets) {
-    if (!allowedSet.has(t)) {
-      return { ok: false, reason: `patch target not in allowed set: ${t}` };
-    }
-  }
-  return { ok: true };
+  return assertNoUndeclaredNewFile(targets, allowedSet);
 }
 
 async function pathExists(absolute: string): Promise<boolean> {

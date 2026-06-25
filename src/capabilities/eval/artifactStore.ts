@@ -165,8 +165,17 @@ async function readDirOrEmpty(dir: string): Promise<readonly string[]> {
   }
 }
 
+interface ArtifactCoordinate {
+  readonly callId: string;
+  readonly artifactName: string;
+}
+
+function hasErrorCode(error: unknown): error is { code: unknown } {
+  return typeof error === "object" && error !== null && "code" in error;
+}
+
 function isNotFoundError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  if (!hasErrorCode(error)) return false;
   return error.code === "ENOENT";
 }
 

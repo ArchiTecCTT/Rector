@@ -104,6 +104,95 @@ function countLines(content: string): number {
   return content.trimEnd().split("\n").length;
 }
 
+function collectMustContain(
+  evidenceTexts: readonly string[],
+  mustContain: readonly string[],
+): { covered: string[]; missing: string[] } {
+  const coveredMustContain: string[] = [];
+  const missingMustContain: string[] = [];
+  for (const expected of mustContain) {
+    if (evidenceTexts.some((text) => text.includes(expected))) {
+      coveredMustContain.push(expected);
+    } else {
+      missingMustContain.push(expected);
+    }
+  }
+  return { covered: coveredMustContain, missing: missingMustContain };
+}
+
+function collectForbiddenHits(packetText: string, mustNotContain: readonly string[]): string[] {
+  const forbiddenHits: string[] = [];
+  for (const forbidden of mustNotContain) {
+    if (packetText.includes(forbidden)) {
+      forbiddenHits.push(forbidden);
+    }
+  }
+  return forbiddenHits;
+}
+
+function collectUnresolvedArtifactRefs(
+  evidenceRefs: readonly string[],
+  packetRefs: readonly string[],
+  available: ReadonlySet<string>,
+): string[] {
+  const unresolved: string[] = [];
+  for (const ref of evidenceRefs) {
+    if (!available.has(ref)) unresolved.push(ref);
+  }
+  for (const ref of packetRefs) {
+    if (!available.has(ref)) unresolved.push(ref);
+  }
+  return unresolved;
+}
+
+async function collectUnresolvedFileRefs(
+  items: readonly CapabilityEvidenceItem[],
+  fixtureRoot: string | undefined,
+): Promise<string[]> {
+  if (!fixtureRoot) return [];
+  const unresolved: string[] = [];
+  const rootResolved = path.resolve(fixtureRoot);
+  for (const item of items) {
+    if (item.path === undefined) continue;
+    const resolved = path.resolve(rootResolved, item.path);
+    const withinRoot = resolved === rootResolved || resolved.startsWith(rootResolved + path.sep);
+    if (!withinRoot) {
+      unresolved.push(item.path);
+      continue;
+    }
+    try {
+      await fs.readFile(resolved, "utf8");
+    } catch {
+      unresolved.push(item.path);
+    }
+  }
+  return unresolved;
+}
+
+async function collectOutOfBoundsLineRefs(
+  items: readonly CapabilityEvidenceItem[],
+  fixtureRoot: string | undefined,
+): Promise<string[]> {
+  if (!fixtureRoot) return [];
+  const outOfBounds: string[] = [];
+  const rootResolved = path.resolve(fixtureRoot);
+  for (const item of items) {
+    if (item.path === undefined || item.lineStart === undefined || item.lineEnd === undefined) continue;
+    const resolved = path.resolve(rootResolved, item.path);
+    const withinRoot = resolved === rootResolved || resolved.startsWith(rootResolved + path.sep);
+    if (!withinRoot) continue;
+    try {
+      const content = await fs.readFile(resolved, "utf8");
+      if (item.lineEnd > countLines(content)) {
+        outOfBounds.push(`${item.path}:${item.lineStart}-${item.lineEnd}`);
+      }
+    } catch {
+      // ignore; unresolved file refs handled elsewhere
+    }
+  }
+  return outOfBounds;
+}
+
 /**
  * Proves a capability evidence packet actually covers its oracle: every `oracle.mustContain` is
  * represented by at least one evidence item, no `oracle.mustNotContain` content appears in the
@@ -121,71 +210,29 @@ export async function validateEvidenceCoverage(
   oracle: EvidenceCoverageOracle,
   context: EvidenceCoverageContext,
 ): Promise<EvidenceCoverageResult> {
-  const coveredMustContain: string[] = [];
-  const missingMustContain: string[] = [];
-  const forbiddenHits: string[] = [];
-  const unresolvedArtifactRefs: string[] = [];
-  const unresolvedFileRefs: string[] = [];
-  const outOfBoundsLineRefs: string[] = [];
-
   const evidenceTexts = packet.evidence.map(evidenceItemText);
-
-  for (const expected of oracle.mustContain) {
-    if (evidenceTexts.some((text) => text.includes(expected))) {
-      coveredMustContain.push(expected);
-    } else {
-      missingMustContain.push(expected);
-    }
-  }
-
   const packetText = [packet.summary, ...evidenceTexts].join("\n");
-  for (const forbidden of oracle.mustNotContain) {
-    if (packetText.includes(forbidden)) {
-      forbiddenHits.push(forbidden);
-    }
-  }
 
-  for (const item of packet.evidence) {
-    if (!context.rawArtifactRefs.has(item.rawArtifactRef)) {
-      unresolvedArtifactRefs.push(item.rawArtifactRef);
-    }
-    if (item.path !== undefined && context.fixtureRoot !== undefined) {
-      const rootResolved = path.resolve(context.fixtureRoot);
-      const resolved = path.resolve(rootResolved, item.path);
-      const withinRoot = resolved === rootResolved || resolved.startsWith(rootResolved + path.sep);
-      if (!withinRoot) {
-        unresolvedFileRefs.push(item.path);
-      } else {
-        try {
-          const content = await fs.readFile(resolved, "utf8");
-          if (item.lineStart !== undefined && item.lineEnd !== undefined) {
-            if (item.lineEnd > countLines(content)) {
-              outOfBoundsLineRefs.push(`${item.path}:${item.lineStart}-${item.lineEnd}`);
-            }
-          }
-        } catch {
-          unresolvedFileRefs.push(item.path);
-        }
-      }
-    }
-  }
-
-  for (const ref of packet.rawArtifactRefs) {
-    if (!context.rawArtifactRefs.has(ref)) {
-      unresolvedArtifactRefs.push(ref);
-    }
-  }
+  const must = collectMustContain(evidenceTexts, oracle.mustContain);
+  const forbiddenHits = collectForbiddenHits(packetText, oracle.mustNotContain);
+  const unresolvedArtifactRefs = collectUnresolvedArtifactRefs(
+    packet.evidence.map((e) => e.rawArtifactRef),
+    packet.rawArtifactRefs,
+    context.rawArtifactRefs,
+  );
+  const unresolvedFileRefs = await collectUnresolvedFileRefs(packet.evidence, context.fixtureRoot);
+  const outOfBoundsLineRefs = await collectOutOfBoundsLineRefs(packet.evidence, context.fixtureRoot);
 
   const passed =
-    missingMustContain.length === 0 &&
+    must.missing.length === 0 &&
     forbiddenHits.length === 0 &&
     unresolvedArtifactRefs.length === 0 &&
     unresolvedFileRefs.length === 0 &&
     outOfBoundsLineRefs.length === 0;
 
   const coverage = CapabilityCoverageSchema.parse({
-    coveredMustContain,
-    missingMustContain,
+    coveredMustContain: must.covered,
+    missingMustContain: must.missing,
     forbiddenHits,
     unresolvedArtifactRefs,
     unresolvedFileRefs,
