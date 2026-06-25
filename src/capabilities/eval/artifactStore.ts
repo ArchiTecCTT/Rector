@@ -75,13 +75,14 @@ export class LocalFsRawArtifactStore implements RawArtifactStore {
     const parsed = WriteRawArtifactInputSchema.parse(input);
     const redactedContent = redactString(parsed.content);
     const redactedMetadata = redactSecrets(parsed.metadata);
-    const artifactPath = this.artifactPath(parsed.callId, parsed.artifactName);
-    const recordPath = this.recordPath(parsed.callId, parsed.artifactName);
+    const coord = toCoordinate({ callId: parsed.callId, artifactName: parsed.artifactName });
+    const artifactPath = this.artifactPath(coord);
+    const recordPath = this.recordPath(coord);
     const record: RawArtifactRecord = {
       schemaVersion: RAW_ARTIFACT_SCHEMA_VERSION,
       callId: parsed.callId,
       artifactName: parsed.artifactName,
-      uri: artifactUri(parsed.callId, parsed.artifactName),
+      uri: artifactUri(coord),
       sha256: sha256Hex(redactedContent),
       sizeBytes: Buffer.byteLength(redactedContent, "utf8"),
       contentType: parsed.contentType,
@@ -98,8 +99,8 @@ export class LocalFsRawArtifactStore implements RawArtifactStore {
   async readRawArtifact(uri: string): Promise<StoredRawArtifact> {
     const ref = parseArtifactUri(uri);
     const [recordText, content] = await Promise.all([
-      fs.readFile(this.recordPath(ref.callId, ref.artifactName), "utf8"),
-      fs.readFile(this.artifactPath(ref.callId, ref.artifactName), "utf8"),
+      fs.readFile(this.recordPath(ref), "utf8"),
+      fs.readFile(this.artifactPath(ref), "utf8"),
     ]);
     const rawRecord: unknown = JSON.parse(recordText);
     const record = RawArtifactRecordSchema.parse(rawRecord);
@@ -112,50 +113,48 @@ export class LocalFsRawArtifactStore implements RawArtifactStore {
 
   async listRawArtifacts(callId: string): Promise<readonly RawArtifactRecord[]> {
     const parsedCallId = SafePathSegmentSchema.parse(callId);
-    const callDir = this.callDir(parsedCallId);
-    const entries = await readDirOrEmpty(callDir);
+    const ctx: CallContext = { callId: parsedCallId };
+    const dir = this.callDir(ctx);
+    const entries = await readDirOrEmpty(dir);
     const records = await Promise.all(
       entries
         .filter((entry) => entry.endsWith(".metadata.json"))
         .map(async (entry) => {
-          const recordText = await fs.readFile(path.join(callDir, entry), "utf8");
+          const recordText = await fs.readFile(path.join(dir, entry), "utf8");
           const rawRecord: unknown = JSON.parse(recordText);
           return RawArtifactRecordSchema.parse(rawRecord);
         }),
     );
-    return records.sort((left, right) => compareUtf16(left.artifactName, right.artifactName));
+    return records.sort((left, right) => compareUtf16({ left: left.artifactName, right: right.artifactName }));
   }
 
-  private callDir(callId: string): string {
-    return path.join(this.rootDir, callId);
+  private callDir(ctx: CallContext): string {
+    return path.join(this.rootDir, ctx.callId);
   }
 
-  private artifactPath(callId: string, artifactName: string): string {
-    return path.join(this.callDir(callId), artifactName);
+  private artifactPath(coord: ArtifactCoordinate): string {
+    const c = fromCoordinate(coord);
+    return path.join(this.callDir({ callId: c.callId }), c.artifactName);
   }
 
-  private recordPath(callId: string, artifactName: string): string {
-    return path.join(this.callDir(callId), `${artifactName}.metadata.json`);
+  private recordPath(coord: ArtifactCoordinate): string {
+    const c = fromCoordinate(coord);
+    return path.join(this.callDir({ callId: c.callId }), `${c.artifactName}.metadata.json`);
   }
 }
 
-function artifactUri(callId: string, artifactName: string): string;
-function artifactUri(coord: ArtifactCoordinate): string;
-function artifactUri(arg1: string | ArtifactCoordinate, arg2?: string): string {
-  if (typeof arg1 === "string") {
-    return `artifact://${arg1}/${arg2}`;
-  }
-  const c = fromCoordinate(arg1);
+function artifactUri(coord: ArtifactCoordinate): string {
+  const c = fromCoordinate(coord);
   return `artifact://${c.callId}/${c.artifactName}`;
 }
 
 function parseArtifactUri(uri: string): ArtifactCoordinate {
   const parsed = new URL(uri);
   const artifactName = parsed.pathname.startsWith("/") ? parsed.pathname.slice(1) : parsed.pathname;
-  return toCoordinate(
-    SafePathSegmentSchema.parse(parsed.hostname),
-    SafePathSegmentSchema.parse(artifactName),
-  );
+  return toCoordinate({
+    callId: SafePathSegmentSchema.parse(parsed.hostname),
+    artifactName: SafePathSegmentSchema.parse(artifactName),
+  });
 }
 
 function sha256Hex(content: string): string {
@@ -176,8 +175,16 @@ interface ArtifactCoordinate {
   readonly artifactName: string;
 }
 
-function toCoordinate(callId: string, artifactName: string): ArtifactCoordinate {
-  return { callId, artifactName };
+interface ToCoordinateInput {
+  readonly callId: string;
+  readonly artifactName: string;
+}
+function toCoordinate(input: ToCoordinateInput): ArtifactCoordinate {
+  return { callId: input.callId, artifactName: input.artifactName };
+}
+
+interface CallContext {
+  readonly callId: string;
 }
 
 function fromCoordinate(coord: ArtifactCoordinate): { callId: string; artifactName: string } {
@@ -193,6 +200,11 @@ function isNotFoundError(error: unknown): boolean {
   return error.code === "ENOENT";
 }
 
-function compareUtf16(left: string, right: string): number {
+interface CompareNamesInput {
+  readonly left: string;
+  readonly right: string;
+}
+function compareUtf16(input: CompareNamesInput): number {
+  const { left, right } = input;
   return left < right ? -1 : left > right ? 1 : 0;
 }

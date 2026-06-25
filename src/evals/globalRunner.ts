@@ -58,29 +58,40 @@ async function sha256File(absolutePath: string): Promise<string> {
 }
 
 /** Recursively compute a sorted manifest of {path, sha256} for all relevant files under root. */
-async function computeWorkspaceManifest(root: string): Promise<readonly { path: string; sha256: string }[]> {
+interface ComputeWorkspaceManifestInput {
+  readonly root: string;
+}
+async function computeWorkspaceManifest(input: ComputeWorkspaceManifestInput): Promise<readonly { path: string; sha256: string }[]> {
+  const { root } = input;
   const entries: { path: string; sha256: string }[] = [];
-  async function walk(dir: string, relBase: string) {
+  interface WalkInput { readonly dir: string; readonly relBase: string; }
+  async function walk(winput: WalkInput): Promise<void> {
+    const { dir, relBase } = winput;
     const names = await fs.readdir(dir, { withFileTypes: true });
     for (const dirent of names) {
       if (MANIFEST_EXCLUDE_DIRS.has(dirent.name)) continue;
       const abs = path.join(dir, dirent.name);
       const rel = path.posix.join(relBase, dirent.name.replace(/\\/g, "/"));
       if (dirent.isDirectory()) {
-        await walk(abs, rel);
+        await walk({ dir: abs, relBase: rel });
       } else if (dirent.isFile()) {
         const h = await sha256File(abs);
         entries.push({ path: rel, sha256: h });
       }
     }
   }
-  await walk(root, "");
+  await walk({ dir: root, relBase: "" });
   entries.sort((a, b) => a.path.localeCompare(b.path));
   return entries;
 }
 
 /** Resolve a local project binary deterministically. For `tsx`, prefer workspace node_modules/.bin/tsx, else validated npx --no-install. */
-function resolveLocalBinary(cmd: string, workspaceRoot: string): { cmd: string; argsPrefix: readonly string[] } {
+interface ResolveLocalBinaryInput {
+  readonly cmd: string;
+  readonly workspaceRoot: string;
+}
+function resolveLocalBinary(input: ResolveLocalBinaryInput): { cmd: string; argsPrefix: readonly string[] } {
+  const { cmd, workspaceRoot } = input;
   if (cmd === "tsx") {
     const localBin = path.join(workspaceRoot, "node_modules", ".bin", "tsx");
     // We do not stat here (runner may run before install in some envs); the spawn will surface ENOENT if missing.
@@ -248,13 +259,19 @@ async function loadScenarioFileMap(scenariosDir: string): Promise<ReadonlyMap<st
   return scenarioFiles;
 }
 
-function runValidator(validator: GlobalValidator, workspaceRoot: string, env: NodeJS.ProcessEnv): ValidatorRun {
+interface RunValidatorInput {
+  readonly validator: GlobalValidator;
+  readonly workspaceRoot: string;
+  readonly env: NodeJS.ProcessEnv;
+}
+function runValidator(input: RunValidatorInput): ValidatorRun {
+  const { validator, workspaceRoot, env } = input;
   const startedAt = Date.now();
   // Trusted committed scenario source; spawnSync with shell:false so validator args never reach a
   // shell. cmd/args come from the typed schema (no whitespace split), so spaced args round-trip.
   const cwd = path.resolve(workspaceRoot, validator.cwd);
   const timeoutMs = Math.min(validator.timeoutMs, VALIDATOR_TIMEOUT_CEILING_MS);
-  const { cmd: resolvedCmd, argsPrefix } = resolveLocalBinary(validator.cmd, workspaceRoot);
+  const { cmd: resolvedCmd, argsPrefix } = resolveLocalBinary({ cmd: validator.cmd, workspaceRoot });
   const finalArgs = [...argsPrefix, ...validator.args];
   const result = spawnSync(resolvedCmd, finalArgs, {
     cwd,
@@ -280,7 +297,12 @@ function runValidator(validator: GlobalValidator, workspaceRoot: string, env: No
 }
 
 /** Copy a directory tree (src) into a fresh temp dir (dest). */
-async function copyWorkspaceToTemp(src: string, dest: string): Promise<void> {
+interface CopyWorkspaceInput {
+  readonly src: string;
+  readonly dest: string;
+}
+async function copyWorkspaceToTemp(input: CopyWorkspaceInput): Promise<void> {
+  const { src, dest } = input;
   await fs.mkdir(dest, { recursive: true });
   const entries = await fs.readdir(src, { withFileTypes: true });
   for (const entry of entries) {
@@ -288,14 +310,19 @@ async function copyWorkspaceToTemp(src: string, dest: string): Promise<void> {
     const s = path.join(src, entry.name);
     const d = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      await copyWorkspaceToTemp(s, d);
+      await copyWorkspaceToTemp({ src: s, dest: d });
     } else if (entry.isFile()) {
       await fs.copyFile(s, d);
     }
   }
 }
 
-function assertTargetInAllowed(target: string, allowedSet: ReadonlySet<string>): { ok: true } | { ok: false; reason: string } {
+interface TargetCheckInput {
+  readonly target: string;
+  readonly allowedSet: ReadonlySet<string>;
+}
+function assertTargetInAllowed(input: TargetCheckInput): { ok: true } | { ok: false; reason: string } {
+  const { target, allowedSet } = input;
   if (target.startsWith("/") || target.includes("..")) {
     return { ok: false, reason: `patch target escapes workspace: ${target}` };
   }
@@ -305,25 +332,32 @@ function assertTargetInAllowed(target: string, allowedSet: ReadonlySet<string>):
   return { ok: true };
 }
 
-function assertNoUndeclaredNewFile(targets: readonly string[], allowedSet: ReadonlySet<string>): { ok: true } | { ok: false; reason: string } {
+interface AssertNoUndeclaredInput {
+  readonly targets: readonly string[];
+  readonly allowedSet: ReadonlySet<string>;
+}
+function assertNoUndeclaredNewFile(input: AssertNoUndeclaredInput): { ok: true } | { ok: false; reason: string } {
+  const { targets, allowedSet } = input;
   for (const t of targets) {
-    const check = assertTargetInAllowed(t, allowedSet);
+    const check = assertTargetInAllowed({ target: t, allowedSet });
     if (!check.ok) return check;
   }
   return { ok: true };
 }
 
-function collectTargetsWithRegex(
-  patchText: string,
-  regex: RegExp,
-  allowedSet: ReadonlySet<string>,
-  groupIndex: (m: RegExpExecArray) => string,
-): { ok: true; targets: string[] } | { ok: false; reason: string } {
+interface PatchScanInput {
+  readonly patchText: string;
+  readonly regex: RegExp;
+  readonly allowedSet: ReadonlySet<string>;
+  readonly pickTarget: (m: RegExpExecArray) => string;
+}
+function collectTargetsWithRegex(input: PatchScanInput): { ok: true; targets: string[] } | { ok: false; reason: string } {
+  const { patchText, regex, allowedSet, pickTarget } = input;
   const targets: string[] = [];
   let m: RegExpExecArray | null;
   while ((m = regex.exec(patchText)) !== null) {
-    const target = groupIndex(m);
-    const check = assertTargetInAllowed(target, allowedSet);
+    const target = pickTarget(m);
+    const check = assertTargetInAllowed({ target, allowedSet });
     if (!check.ok) return check;
     targets.push(target);
   }
@@ -337,20 +371,20 @@ async function validateScriptedPatchTargets(
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const patchText = await fs.readFile(patchFileAbs, "utf8");
   const gitRegex = /^diff --git a\/(.+?) b\/(.+?)$/gm;
-  const gitRes = collectTargetsWithRegex(patchText, gitRegex, allowedSet, (m) => m[2] ?? m[1]);
+  const gitRes = collectTargetsWithRegex({ patchText, regex: gitRegex, allowedSet, pickTarget: (m) => m[2] ?? m[1] });
   if (!gitRes.ok) return gitRes;
   let targets = gitRes.targets;
 
   if (targets.length === 0) {
     const tradRegex = /^(\+\+\+|---)\s+[ab]\/(.+?)$/gm;
-    const tradRes = collectTargetsWithRegex(patchText, tradRegex, allowedSet, (m) => m[2]);
+    const tradRes = collectTargetsWithRegex({ patchText, regex: tradRegex, allowedSet, pickTarget: (m) => m[2] });
     if (!tradRes.ok) return tradRes;
     targets = tradRes.targets;
   }
   if (patchText.trim().length > 0 && targets.length === 0) {
     return { ok: false, reason: "patch contained no parsable targets (fail-closed)" };
   }
-  return assertNoUndeclaredNewFile(targets, allowedSet);
+  return assertNoUndeclaredNewFile({ targets, allowedSet });
 }
 
 async function pathExists(absolute: string): Promise<boolean> {
@@ -650,7 +684,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
     const mustUseTemp = setup.copyWorkspaceToTemp || operation.kind === "scripted_patch";
     if (mustUseTemp) {
       tempWorkspace = await mkdtemp(path.join(tmpdir(), "rector-global-temp-"));
-      await copyWorkspaceToTemp(scenarioWorkspace, tempWorkspace);
+      await copyWorkspaceToTemp({ src: scenarioWorkspace, dest: tempWorkspace });
       effectiveWorkspace = tempWorkspace;
     }
     // #7: copy declared setup.fixtures into effectiveWorkspace (SafeRelativePath already validated by schema).
@@ -669,7 +703,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       const abs = path.resolve(effectiveWorkspace, p);
       if (await fs.access(abs).then(() => true).catch(() => false)) beforeHashes.set(p, await sha256File(abs));
     }
-    const beforeManifest = await computeWorkspaceManifest(effectiveWorkspace);
+    const beforeManifest = await computeWorkspaceManifest({ root: effectiveWorkspace });
 
     if (operation.kind === "scripted_patch" && operation.patchFile) {
       const patchAbs = path.resolve(effectiveWorkspace, operation.patchFile);
@@ -697,10 +731,10 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       }
     }
 
-    const validatorRuns = scenario.validators.map((validator) => runValidator(validator, effectiveWorkspace, env));
+    const validatorRuns = scenario.validators.map((validator) => runValidator({ validator, workspaceRoot: effectiveWorkspace, env }));
 
     // afterManifest + afterHashes captured AFTER validators so safety/manifest-diff sees real mutations.
-    const afterManifest = await computeWorkspaceManifest(effectiveWorkspace);
+    const afterManifest = await computeWorkspaceManifest({ root: effectiveWorkspace });
     const afterHashes = new Map<string, string>();
     for (const p of expected.changedPaths.concat(expected.unchangedPaths)) {
       const abs = path.resolve(effectiveWorkspace, p);

@@ -292,13 +292,18 @@ function resolveById(ref: string, ctx: GlobalEvidenceContext): EvidenceResolutio
   return undefined;
 }
 
+function addKeys(set: Set<string>, obj: Record<string, unknown> | undefined): void {
+  if (!obj) return;
+  for (const k of Object.keys(obj)) set.add(k);
+}
+
 function gatherAllPaths(ctx: GlobalEvidenceContext): Set<string> {
   const allPaths = new Set<string>();
   for (const a of ctx.artifactRecords) if (a.path) allPaths.add(a.path);
-  for (const k of Object.keys(ctx.beforeHashes)) allPaths.add(k);
-  for (const k of Object.keys(ctx.afterHashes)) allPaths.add(k);
-  if (ctx.workspaceBeforeHashes) for (const k of Object.keys(ctx.workspaceBeforeHashes)) allPaths.add(k);
-  if (ctx.workspaceAfterHashes) for (const k of Object.keys(ctx.workspaceAfterHashes)) allPaths.add(k);
+  addKeys(allPaths, ctx.beforeHashes);
+  addKeys(allPaths, ctx.afterHashes);
+  addKeys(allPaths, ctx.workspaceBeforeHashes);
+  addKeys(allPaths, ctx.workspaceAfterHashes);
   return allPaths;
 }
 
