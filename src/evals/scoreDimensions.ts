@@ -80,6 +80,14 @@ export function computeReliability(
  * Mismatched before/after hashes for any tracked path → accuracy = 0 (strict).
  * Rejects fabricated refs (path not present in artifactRecords).
  */
+function missingHash(bh: string | undefined, ah: string | undefined): boolean {
+  return bh === undefined || ah === undefined;
+}
+
+function hashMismatch(bh: string, ah: string, expectChange: boolean): boolean {
+  return expectChange ? bh === ah : bh !== ah;
+}
+
 function verifyPathHashes(
   paths: readonly string[],
   beforeHashes: Readonly<Record<string, string>>,
@@ -89,10 +97,10 @@ function verifyPathHashes(
   for (const p of paths) {
     const bh = beforeHashes[p];
     const ah = afterHashes[p];
-    if (bh === undefined || ah === undefined) {
+    if (missingHash(bh, ah)) {
       return { ok: false, note: `missing hash for ${expectChange ? "changed" : "unchanged"} path ${p}` };
     }
-    if (expectChange ? bh === ah : bh !== ah) {
+    if (hashMismatch(bh!, ah!, expectChange)) {
       return {
         ok: false,
         note: expectChange
@@ -102,6 +110,20 @@ function verifyPathHashes(
     }
   }
   return { ok: true };
+}
+
+function anyDirectHashMismatch(
+  changePaths: readonly string[],
+  evidence: GlobalEvidenceContext,
+): string | undefined {
+  for (const p of changePaths) {
+    const bh = evidence.beforeHashes[p];
+    const ah = evidence.afterHashes[p];
+    if (bh !== undefined && ah !== undefined && bh !== ah) {
+      return p;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -121,12 +143,9 @@ export function computeAccuracy(
     const unchangedRes = verifyPathHashes(hashExpectation.unchangedPaths, evidence.beforeHashes, evidence.afterHashes, false);
     if (!unchangedRes.ok) return { score: 0, note: unchangedRes.note! };
   } else {
-    for (const p of changePaths) {
-      const bh = evidence.beforeHashes[p];
-      const ah = evidence.afterHashes[p];
-      if (bh !== undefined && ah !== undefined && bh !== ah) {
-        return { score: 0, note: `hash mismatch on ${p}` };
-      }
+    const directMismatch = anyDirectHashMismatch(changePaths, evidence);
+    if (directMismatch) {
+      return { score: 0, note: `hash mismatch on ${directMismatch}` };
     }
   }
   const resolvable = changePaths.filter((p) => hasPathEvidence(p, evidence)).length;
