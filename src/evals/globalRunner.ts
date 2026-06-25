@@ -123,7 +123,8 @@ export function requiresLiveProvider(scenario: GlobalScenario): boolean {
 export type ValidatorRun = {
   readonly command: string;
   readonly exitCode: number;
-  readonly output: string;
+  readonly output: string; // RAW (for scoring / secret-leak detection in computeSafety)
+  readonly outputRedacted: string;
   readonly durationMs: number;
   readonly timedOut: boolean;
 };
@@ -290,7 +291,8 @@ function runValidator(input: RunValidatorInput): ValidatorRun {
   return {
     command,
     exitCode,
-    output: redactString(rawOutput),
+    output: rawOutput, // RAW for scoring (computeSafety leak detection)
+    outputRedacted: redactString(rawOutput),
     durationMs,
     timedOut,
   };
@@ -526,8 +528,13 @@ async function buildScorecard(input: {
   });
   const delegationQuality = delegationQualityResult.score;
 
-  // evidence_quality: every declared ref must resolve via resolveEvidenceRef
-  const evidenceQuality = computeEvidenceQualityReal(scenario.oracles.mustIncludeEvidence, accuracyCtx);
+  // evidence_quality: score the UNION of oracles.mustIncludeEvidence + expected.evidenceRefs (deduped).
+  // This ensures declared expected.evidenceRefs are actually scored (previously ignored).
+  const evidenceRefsUnion = Array.from(new Set([
+    ...scenario.oracles.mustIncludeEvidence,
+    ...(scenario.expected.evidenceRefs ?? []),
+  ]));
+  const evidenceQuality = computeEvidenceQualityReal(evidenceRefsUnion, accuracyCtx);
 
   // simplicity: deterministic rules (validator budget, no forbidden specialist, validator_only, no avoidable patch)
   const forbiddenSpecialistUsed = forbidden.some((systemId) =>
@@ -733,6 +740,15 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
 
     const validatorRuns = scenario.validators.map((validator) => runValidator({ validator, workspaceRoot: effectiveWorkspace, env }));
 
+    const validatorRunsStored: readonly ValidatorRun[] = validatorRuns.map((v) => ({
+      command: v.command,
+      exitCode: v.exitCode,
+      output: v.outputRedacted,
+      outputRedacted: v.outputRedacted,
+      durationMs: v.durationMs,
+      timedOut: v.timedOut,
+    }));
+
     // afterManifest + afterHashes captured AFTER validators so safety/manifest-diff sees real mutations.
     const afterManifest = await computeWorkspaceManifest({ root: effectiveWorkspace });
     const afterHashes = new Map<string, string>();
@@ -829,7 +845,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
     outcomes.push({
       scenarioId: scenario.id,
       scorecard: realScorecard,
-      validatorRuns,
+      validatorRuns: validatorRunsStored,
       taskPacket: packet,
       runEvents,
       artifactRefs: scenario.oracles.mustIncludeEvidence,
@@ -843,23 +859,40 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
     const manifestChanged = beforeManifest.length !== afterManifest.length || beforeManifest.some((b, i) => b.sha256 !== afterManifest[i]?.sha256);
 
     if (!realScorecard.passed) {
-      const failedValidators = validatorRuns.filter((run) => run.exitCode !== 0);
+      const failedWithIdx = validatorRuns
+        .map((run, idx) => ({ run, idx }))
+        .filter(({ run, idx }) => run.exitCode !== (scenario.validators[idx]?.expectedExitCode ?? 0));
+      const failedValidatorsRaw = failedWithIdx.map(({ run }) => run);
       const failedDims = failedGatedDimensions(realScorecard);
       const dimsClause = failedDims.length > 0 ? ` failed gated dimension(s): ${failedDims.join(", ")}.` : "";
 
-      // Write standalone replayable regression artifact (B5 requirement).
+      const failedValidatorsStored: readonly ValidatorRun[] = failedValidatorsRaw.map((v) => ({
+        command: v.command,
+        exitCode: v.exitCode,
+        output: v.outputRedacted,
+        outputRedacted: v.outputRedacted,
+        durationMs: v.durationMs,
+        timedOut: v.timedOut,
+      }));
+
+      const baseCd = scenario.workspace;
+      const validatorPart = failedValidatorsRaw.map((v) => v.command).join(" && ");
+      const replayCommand = (operation.kind === "scripted_patch" && operation.patchFile)
+        ? `cd ${baseCd} && git apply -C0 ${operation.patchFile} && ${validatorPart}`
+        : `cd ${baseCd} && ${validatorPart}`;
+
       const artifact: RegressionArtifact = {
         schemaVersion: "rector.regression-artifact.v1",
         scenarioId: scenario.id,
         workspace: scenario.workspace,
         tempWorkspace: tempWorkspace,
         operation: operation ? { kind: operation.kind, patchFile: operation.patchFile } : undefined,
-        failedValidators: failedValidators.map((v, idx) => ({
+        failedValidators: failedWithIdx.map(({ run: v, idx }) => ({
           id: scenario.validators[idx]?.id ?? `v${idx}`,
           command: v.command,
           args: scenario.validators[idx]?.args ?? [],
           exitCode: v.exitCode,
-          stdoutRedacted: redactString(v.output),
+          stdoutRedacted: v.outputRedacted,
           stderrRedacted: "",
           durationMs: v.durationMs,
           timedOut: v.timedOut,
@@ -868,11 +901,10 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
         afterHashes: Array.from(afterHashes.entries()).map(([p, h]) => ({ path: p, sha256: h })),
         manifestDiffSummary: manifestChanged ? "manifest-changed" : "no-manifest-change",
       failedDimensions: [...failedDims],
-      replayCommand: `cd ${effectiveWorkspace} && ${failedValidators.map((v) => v.command).join(" && ")}`,
+      replayCommand,
       generatedAt: now().toISOString(),
     };
     RegressionArtifactSchema.parse(artifact);
-    // #12: gate regression artifact writes behind shouldWrite (in-memory report.regressions still populated).
     if (shouldWrite) {
       const regressionsDir = path.join(outputDir, "regressions");
       await fs.mkdir(regressionsDir, { recursive: true });
@@ -892,7 +924,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
 
     regressions.push({
       scenarioId: scenario.id,
-      failedValidators,
+      failedValidators: failedValidatorsStored,
       note: `Replay:${dimsClause} Re-run the validator command(s) below from the scenario workspace (${scenario.workspace}) to reproduce.`,
     });
     }
