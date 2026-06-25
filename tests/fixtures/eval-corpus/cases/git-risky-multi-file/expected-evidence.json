@@ -12,7 +12,7 @@
       "excerpt": "diff --git a/package.json b/package-lock.json",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/git-risky-multi-file/artifact.txt"
+      "rawArtifactRef": "artifact://git-risky-multi-file/artifact.txt"
     },
     {
       "kind": "diff_hunk",
@@ -22,7 +22,7 @@
       "excerpt": "-  \"version\": \"0.3.0\"",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/git-risky-multi-file/artifact.txt"
+      "rawArtifactRef": "artifact://git-risky-multi-file/artifact.txt"
     }
   ],
   "coverage": {
@@ -38,5 +38,5 @@
     "passed": true
   },
   "warnings": [],
-  "rawArtifactRefs": ["artifact://offline/git-risky-multi-file/artifact.txt"]
+  "rawArtifactRefs": ["artifact://git-risky-multi-file/artifact.txt"]
 }

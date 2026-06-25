@@ -10,16 +10,18 @@ expectedSpecialist: coding
 successCriteria:
   - scenario evidence-line-ref-resolves executes
 validators:
-  - id: v1
+  - id: fixture-integrity-verifier
     cmd: node
-    args: [-e, process.exit(0)]
+    args: [src/fixture-integrity.verify.js]
     cwd: .
-    timeoutMs: 10000
+    timeoutMs: 30000
     expectedExitCode: 0
 oracles:
   mustChange: []
-  mustNotChange: []
-  mustIncludeEvidence: []
+  mustNotChange:
+    - src/calculator.ts
+  mustIncludeEvidence:
+    - src/calculator.ts:1
 budgets:
   maxToolCalls: 10
   maxRuntimeMs: 60000
@@ -32,5 +34,7 @@ operation:
 expected:
   status: passed
   changedPaths: []
-  unchangedPaths: []
-  evidenceRefs: []
+  unchangedPaths:
+    - src/calculator.ts
+  evidenceRefs:
+    - src/calculator.ts:1

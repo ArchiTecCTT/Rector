@@ -52,13 +52,23 @@ async function main(): Promise<void> {
   const strictPass = scorecards.filter((s) => s.passed).length;
   if (strictPass < 5) violations.push(`strict-passing scenarios ${strictPass} < 5`);
 
-  // 1 + 4: structured actual vs expected (from harness outcomes directly)
+  // 1 + 4: structured actual vs expected (from harness outcomes and skipped records).
+  // A scenario must never disappear from gate semantics: it must be in outcomes or skipped.
   let intentionalRegressionCount = 0;
+  const accounted = new Set<string>();
   for (const o of outcomes) {
+    accounted.add(o.scenarioId);
     const declared = o.expectedStatus;
     const actual = o.actualStatus;
     if (declared !== actual) violations.push(`${o.scenarioId}: declared ${declared} but actually ${actual}`);
     if (declared === "failed" && actual === "failed") intentionalRegressionCount++;
+  }
+  for (const s of report.skipped) {
+    accounted.add(s.scenarioId);
+    if (s.expectedStatus !== "skipped") violations.push(`${s.scenarioId}: declared ${s.expectedStatus} but actually skipped`);
+  }
+  if (accounted.size !== report.scenarioCount) {
+    violations.push(`accounted scenarios ${accounted.size} != scenario count ${report.scenarioCount}`);
   }
   if (intentionalRegressionCount < 5) violations.push(`intentional regressions ${intentionalRegressionCount} < 5`);
 

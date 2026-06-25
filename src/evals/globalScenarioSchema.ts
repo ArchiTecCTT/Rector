@@ -133,6 +133,8 @@ const GlobalExpectedSchema = z
     changedPaths: z.array(SafeRelativePathSchema),
     unchangedPaths: z.array(SafeRelativePathSchema),
     evidenceRefs: z.array(NonEmptyTextSchema),
+    memoryAssertionPath: SafeRelativePathSchema.optional(),
+    runEventTracePath: SafeRelativePathSchema.optional(),
   })
   .strict();
 

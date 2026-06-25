@@ -9,7 +9,7 @@
       "excerpt": "tests/fixtures/eval-corpus/cases/tsc-downstream-error/src/broken.ts(1,7): error TS2322: Type 'number' is not assignable to type 'string'.",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/tsc-downstream-error/artifact.txt"
+      "rawArtifactRef": "artifact://tsc-downstream-error/artifact.txt"
     }
   ],
   "coverage": {
@@ -24,5 +24,5 @@
     "passed": true
   },
   "warnings": [],
-  "rawArtifactRefs": ["artifact://offline/tsc-downstream-error/artifact.txt"]
+  "rawArtifactRefs": ["artifact://tsc-downstream-error/artifact.txt"]
 }

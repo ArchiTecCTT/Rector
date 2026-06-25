@@ -9,14 +9,14 @@
       "excerpt": "  \"name\": \"rector\",",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/cartographer-inventory-scan/artifact.txt"
+      "rawArtifactRef": "artifact://cartographer-inventory-scan/artifact.txt"
     },
     {
       "kind": "summary",
       "excerpt": "  \"lockfileVersion\": 3,",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/cartographer-inventory-scan/artifact.txt"
+      "rawArtifactRef": "artifact://cartographer-inventory-scan/artifact.txt"
     }
   ],
   "coverage": {
@@ -32,5 +32,5 @@
     "passed": true
   },
   "warnings": [],
-  "rawArtifactRefs": ["artifact://offline/cartographer-inventory-scan/artifact.txt"]
+  "rawArtifactRefs": ["artifact://cartographer-inventory-scan/artifact.txt"]
 }

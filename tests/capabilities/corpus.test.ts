@@ -151,7 +151,7 @@ describe("phase-0 eval corpus fixtures", () => {
         mustNotContain: oracleObj.mustNotContain ?? [],
       };
 
-      const rawArtifactRefs = new Set([`artifact://offline/${fixtureCase.id}/${fixtureCase.artifactPath.split("/").pop()}`]);
+      const rawArtifactRefs = new Set([`artifact://${fixtureCase.id}/${fixtureCase.artifactPath.split("/").pop()}`]);
       const coverageResult = await validateEvidenceCoverage(packet, oracle, {
         rawArtifactRefs,
         fixtureRoot: corpusRoot.pathname,

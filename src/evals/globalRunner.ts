@@ -38,6 +38,7 @@ import {
   computeDelegationQuality as computeDelegationQualityReal,
   computeEvidenceQuality as computeEvidenceQualityReal,
   computeSimplicity as computeSimplicityReal,
+  MemoryAssertionSchema,
   type GlobalEvidenceContext,
   type MemoryAssertion,
 } from "./scoreDimensions";
@@ -119,6 +120,8 @@ export type ValidatorRun = {
 export type SkippedScenario = {
   readonly scenarioId: string;
   readonly reason: string;
+  readonly actualStatus: "skipped";
+  readonly expectedStatus: "passed" | "failed" | "skipped";
 };
 
 export type GlobalScenarioOutcome = {
@@ -156,6 +159,9 @@ function buildProducedArtifactRecords(input: ProducedArtifactInput): readonly Pr
     ...input.runEvents.map((event, index) => ({ id: `event-${index}`, path: undefined })),
     ...input.validators.map((validator) => ({ id: validator.id, path: undefined })),
   ];
+  for (const p of new Set([...input.beforeHashes.keys(), ...input.afterHashes.keys()])) {
+    records.push({ id: `file:${p}`, path: p });
+  }
   if (input.beforeHashes.size > 0 || input.afterHashes.size > 0) {
     records.push({ id: "cartographer.grounding", path: undefined });
   }
@@ -444,26 +450,44 @@ async function buildScorecard(input: {
   // cost_efficiency: deterministic via injected test clock (total runtime <= budget)
   const cost = computeCostEfficiencyReal(validatorRuns, scenario.budgets.maxRuntimeMs);
 
-  // memory_correctness: real MemoryAssertion (never file existence). Offline scenarios without memory assertions legitimately score 1 (no assertion to fail).
+  // memory_correctness: memory scenarios must provide real MemoryAssertion fixtures; non-memory
+  // scenarios remain neutral when no assertion is declared.
   let memoryCorrectness = { score: 1, note: "no memory assertion declared" };
   if (memoryAssertion) {
     memoryCorrectness = computeMemoryCorrectnessReal(memoryAssertion, accuracyCtx);
+  } else if (scenario.type === "memory") {
+    memoryCorrectness = { score: 0, note: "memory scenario missing memoryAssertionPath" };
   }
 
-  // delegation_quality: always packet-derived (buildTaskPacket already called per scenario)
-  const delegationQuality = computeDelegationQualityReal(packet, allowed, forbidden).score;
+  // delegation_quality: packet + trace must agree on the expected specialist boundary.
+  const delegationQualityResult = computeDelegationQualityReal({
+    packet,
+    runEvents,
+    expectedSpecialist: scenario.expectedSpecialist,
+    allowed,
+    forbidden,
+  });
+  const delegationQuality = delegationQualityResult.score;
 
   // evidence_quality: every declared ref must resolve via resolveEvidenceRef
   const evidenceQuality = computeEvidenceQualityReal(scenario.oracles.mustIncludeEvidence, accuracyCtx);
 
   // simplicity: deterministic rules (validator budget, no forbidden specialist, validator_only, no avoidable patch)
+  const forbiddenSpecialistUsed = forbidden.some((systemId) =>
+    runEvents.some((event) => {
+      const payload = event.payload ?? {};
+      return payload["selectedSystemId"] === systemId || payload["usedSystemId"] === systemId || payload["systemId"] === systemId;
+    })
+  );
+  const operationKind = scenario.operation?.kind ?? "validator_only";
+  const validatorBudget = 3;
   const simplicity = computeSimplicityReal({
     validatorCount: scenario.validators.length,
-    validatorBudget: 3,
-    forbiddenSpecialistUsed: false,
-    operationKind: "validator_only",
-    patchUsedWhenValidatorOnlySuffices: false,
-    extraValidatorsBeyondBudget: false,
+    validatorBudget,
+    forbiddenSpecialistUsed,
+    operationKind,
+    patchUsedWhenValidatorOnlySuffices: operationKind === "scripted_patch" && scenario.oracles.mustChange.length === 0 && scenario.expected.changedPaths.length === 0,
+    extraValidatorsBeyondBudget: scenario.validators.length > validatorBudget,
   });
 
   const dimensions = {
@@ -472,7 +496,7 @@ async function buildScorecard(input: {
     safety: { score: safety.score, notes: safety.note },
     cost_efficiency: { score: cost.score, notes: cost.note },
     memory_correctness: { score: memoryCorrectness.score, notes: memoryCorrectness.note },
-    delegation_quality: { score: delegationQuality, notes: `expectedSpecialist=${scenario.expectedSpecialist}` },
+    delegation_quality: { score: delegationQuality, notes: delegationQualityResult.note },
     evidence_quality: { score: evidenceQuality.score, notes: evidenceQuality.note },
     simplicity: { score: simplicity.score, notes: simplicity.note },
   } satisfies Scorecard["dimensions"];
@@ -574,7 +598,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
 
   for (const scenario of scenarios) {
     const skipWithRegression = (reason: string): void => {
-      skipped.push({ scenarioId: scenario.id, reason });
+      skipped.push({ scenarioId: scenario.id, reason, actualStatus: "skipped", expectedStatus: scenario.expected.status });
       regressions.push({ scenarioId: scenario.id, note: reason });
     };
 
@@ -582,6 +606,8 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       skipped.push({
         scenarioId: scenario.id,
         reason: "requires a live provider but LIVE_EVALS=1 is not set; skipped (not failed, not faked)",
+        actualStatus: "skipped",
+        expectedStatus: scenario.expected.status,
       });
       continue;
     }
@@ -674,7 +700,11 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
 
     // Build canonical trace: RUN_CREATED, PHASE_CHANGED, >=1 TOOL_INVOKED per validator, completions, RUN_COMPLETED.
     const phases: ReturnType<typeof RunPhaseSchema.parse>[] = ["CHAT_RECEIVED", "TRIAGE", "EXECUTING", "VALIDATING", "DONE"];
-    const baseEvents = buildRunTrace(`run-${scenario.id}`, phases, { dryRun: true, scenarioId: scenario.id });
+    const baseEvents = buildRunTrace(`run-${scenario.id}`, phases, {
+      dryRun: true,
+      scenarioId: scenario.id,
+      selectedSystemId: scenario.expectedSpecialist,
+    });
     const toolEvents: ReturnType<typeof RunEventSchema.parse>[] = [];
     scenario.validators.forEach((v, idx) => {
       const invoked = RunEventSchema.parse({
@@ -682,7 +712,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
         runId: `run-${scenario.id}`,
         type: "TOOL_INVOKED",
         phase: "EXECUTING",
-        payload: { validatorId: v.id, cmd: v.cmd, dryRun: true },
+        payload: { validatorId: v.id, cmd: v.cmd, dryRun: true, selectedSystemId: scenario.expectedSpecialist },
         createdAt: new Date().toISOString(),
       });
       const completed = RunEventSchema.parse({
@@ -690,13 +720,25 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
         runId: `run-${scenario.id}`,
         type: validatorRuns[idx]?.exitCode === 0 ? "TOOL_COMPLETED" : "VALIDATION_FAILED",
         phase: "VALIDATING",
-        payload: { validatorId: v.id, exitCode: validatorRuns[idx]?.exitCode ?? -1, dryRun: true },
+        payload: { validatorId: v.id, exitCode: validatorRuns[idx]?.exitCode ?? -1, dryRun: true, usedSystemId: scenario.expectedSpecialist },
         createdAt: new Date().toISOString(),
       });
       toolEvents.push(invoked, completed);
     });
-    const runEvents = [...baseEvents, ...toolEvents];
+    let runEvents = [...baseEvents, ...toolEvents];
+    if (scenario.expected.runEventTracePath) {
+      const traceRaw = JSON.parse(await fs.readFile(path.resolve(effectiveWorkspace, scenario.expected.runEventTracePath), "utf8"));
+      const traceEvents = Array.isArray(traceRaw) ? traceRaw : traceRaw.events;
+      runEvents = [...runEvents, ...traceEvents.map((event: unknown) => RunEventSchema.parse(event))];
+    }
     runEvents.forEach((ev) => RunEventSchema.parse(ev));
+
+    let memoryAssertion: MemoryAssertion | undefined;
+    if (scenario.expected.memoryAssertionPath) {
+      memoryAssertion = MemoryAssertionSchema.parse(
+        JSON.parse(await fs.readFile(path.resolve(effectiveWorkspace, scenario.expected.memoryAssertionPath), "utf8")),
+      );
+    }
 
     const realScorecard = await buildScorecard({
       scenario,
@@ -722,6 +764,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       packet,
       allowed,
       forbidden,
+      memoryAssertion,
     });
 
     const actualStatus: "passed" | "failed" | "skipped" = realScorecard.passed ? "passed" : "failed";
@@ -765,7 +808,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
           timedOut: v.timedOut,
         })),
         beforeHashes: Array.from(beforeHashes.entries()).map(([p, h]) => ({ path: p, sha256: h })),
-        afterHashes: [],
+        afterHashes: Array.from(afterHashes.entries()).map(([p, h]) => ({ path: p, sha256: h })),
         manifestDiffSummary: manifestChanged ? "manifest-changed" : "no-manifest-change",
       failedDimensions: [...failedDims],
       replayCommand: `cd ${effectiveWorkspace} && ${failedValidators.map((v) => v.command).join(" && ")}`,

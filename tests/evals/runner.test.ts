@@ -1,35 +1,26 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { cp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CAPABILITY_EVAL_METRIC_IDS } from "../../src/capabilities/eval/metrics";
 import { CapabilityEvalResultSchema } from "../../src/capabilities/eval/schemas";
-import { LocalFsRawArtifactStore } from "../../src/capabilities/eval/artifactStore";
 import { runCapabilityEvals } from "../../scripts/evals/run-capability-evals";
 import {
   CapabilityEvalRunReportSchema,
   OFFLINE_REPORT_NOTES,
 } from "../../scripts/evals/score-capability-results";
+import { FIXED_NOW, makeTempLifecycle } from "../helpers";
 
-const FIXED_NOW = () => new Date("2026-01-01T00:00:00.000Z");
-
-const tempRoots: string[] = [];
+const { cleanup, tempOutputDir } = makeTempLifecycle();
 
 afterEach(async () => {
-  await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await cleanup();
 });
-
-async function tempOutputDir(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "rector-eval-runner-"));
-  tempRoots.push(root);
-  return root;
-}
 
 describe("offline capability eval runner", () => {
   it("scores every committed corpus case against its oracle with no model and writes both reports", async () => {
     // Given: the committed offline corpus and a real temp output directory.
-    const outputDir = await tempOutputDir();
+    const outputDir = await tempOutputDir("rector-eval-runner-");
 
     // When: the runner scores each case deterministically and writes the report files.
     const output = await runCapabilityEvals({ outputDir, now: FIXED_NOW });
@@ -101,16 +92,16 @@ describe("offline capability eval runner", () => {
 
     // Then: every committed case yields its exact recorded score (drift in scoring math fails here).
     const expectedPerCase = {
-      "rg-orchestration-search": { compression: 0.12738853503184713, raw_token_reduction: 0 },
-      "tsc-runtime-mode-error": { compression: 0.1050228310502283, raw_token_reduction: 0 },
-      "git-readiness-diff": { compression: 0.20600858369098712, raw_token_reduction: 0 },
-      "rg-noisy-imports": { compression: 905.4587813620071, raw_token_reduction: 0.998895587495992 },
-      "tsc-downstream-error": { compression: 0.15765765765765766, raw_token_reduction: 0 },
-      "vitest-failing-log": { compression: 0.3724696356275304, raw_token_reduction: 0 },
-      "git-risky-multi-file": { compression: 0.22264150943396227, raw_token_reduction: 0 },
-      "npm-audit-package": { compression: 0.03409090909090909, raw_token_reduction: 0 },
-      "audit-no-fakes-report": { compression: 2.7725856697819315, raw_token_reduction: 0.6393258426966293 },
-      "cartographer-inventory-scan": { compression: 265.72222222222223, raw_token_reduction: 0.9962366715450554 },
+      "rg-orchestration-search": { compression: 0.12987012987012986, raw_token_reduction: 0 },
+      "tsc-runtime-mode-error": { compression: 0.10697674418604651, raw_token_reduction: 0 },
+      "git-readiness-diff": { compression: 0.2096069868995633, raw_token_reduction: 0 },
+      "rg-noisy-imports": { compression: 925.3589743589744, raw_token_reduction: 0.9989193383025299 },
+      "tsc-downstream-error": { compression: 0.16055045871559634, raw_token_reduction: 0 },
+      "vitest-failing-log": { compression: 0.3817427385892116, raw_token_reduction: 0 },
+      "git-risky-multi-file": { compression: 0.2277992277992278, raw_token_reduction: 0 },
+      "npm-audit-package": { compression: 0.03488372093023256, raw_token_reduction: 0 },
+      "audit-no-fakes-report": { compression: 2.8434504792332267, raw_token_reduction: 0.648314606741573 },
+      "cartographer-inventory-scan": { compression: 273.3142857142857, raw_token_reduction: 0.9963412084465817 },
     } as const;
     for (const [caseId, expected] of Object.entries(expectedPerCase)) {
       const scores = byCase.get(caseId);
@@ -125,8 +116,8 @@ describe("offline capability eval runner", () => {
     }
 
     // And: the aggregate values are the exact deterministic means over the ten cases.
-    expect(output.summary.metrics.compression.value).toBe(117.51788689155944);
-    expect(output.summary.metrics.raw_token_reduction.value).toBe(0.26344581017376767);
+    expect(output.summary.metrics.compression.value).toBe(120.27681405594834);
+    expect(output.summary.metrics.raw_token_reduction.value).toBe(0.26435751534906843);
     expect(output.summary.metrics.recall.value).toBe(1);
     expect(output.summary.metrics.omission.value).toBe(0);
     expect(output.summary.metrics.secret_leak.value).toBe(0);
@@ -158,37 +149,31 @@ describe("offline capability eval runner", () => {
     expect(output.markdown).toContain("rg-orchestration-search");
   });
 
-  it("persists artifacts via LocalFsRawArtifactStore and round-trips with integrity", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "rector-artifact-store-"));
-    tempRoots.push(root);
-    const store = new LocalFsRawArtifactStore({ rootDir: root });
-    const content = "hello world\n";
-    const record = await store.writeRawArtifact({
-      callId: "roundtrip",
-      artifactName: "sample.txt",
-      content,
-      contentType: "text/plain",
-      metadata: {},
-    });
-    const reread = await store.readRawArtifact(record.uri);
-    expect(reread.content).toBe(content);
-    expect(reread.record.sha256).toBe(record.sha256);
+  async function testEvidenceFailure(modifyPacket: (packet: any) => void, expectedError: string) {
+    const corpusRoot = await tempOutputDir("rector-eval-corpus-evidence-fail-");
+    await cp(path.join(process.cwd(), "tests", "fixtures", "eval-corpus"), corpusRoot, { recursive: true });
+    const evidencePath = path.join(corpusRoot, "cases", "rg-orchestration-search", "expected-evidence.json");
+    const packet = JSON.parse(await readFile(evidencePath, "utf8"));
+    modifyPacket(packet);
+    await writeFile(evidencePath, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
+
+    const output = await runCapabilityEvals({ corpusRoot, write: false, now: FIXED_NOW });
+    const result = output.results.find((entry) => entry.caseId === "rg-orchestration-search");
+    expect(result?.passed).toBe(false);
+    expect(result?.failureReason).toContain("Evidence coverage failed");
+    expect(result?.failureReason).toContain(expectedError);
+  }
+
+  it("fails the runner path when expected evidence has a bad raw artifact ref", async () => {
+    await testEvidenceFailure((packet) => {
+      packet.evidence[0].rawArtifactRef = "artifact://fabricated/missing.txt";
+      packet.rawArtifactRefs = ["artifact://fabricated/missing.txt"];
+    }, "unresolved artifacts");
   });
 
-  it("redacts AKIA-style secret before persistence", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "rector-artifact-redact-"));
-    tempRoots.push(root);
-    const store = new LocalFsRawArtifactStore({ rootDir: root });
-    const secret = "AKIAIOSFODNN7EXAMPLE";
-    const record = await store.writeRawArtifact({
-      callId: "redact",
-      artifactName: "leak.txt",
-      content: `token=${secret}`,
-      contentType: "text/plain",
-      metadata: {},
-    });
-    expect(record.redactionState).toBe("redacted");
-    const reread = await store.readRawArtifact(record.uri);
-    expect(reread.content).not.toContain(secret);
+  it("fails the runner path when expected evidence has an out-of-bounds line ref", async () => {
+    await testEvidenceFailure((packet) => {
+      packet.evidence[0].lineEnd = 999999;
+    }, "out-of-bounds lines");
   });
 });

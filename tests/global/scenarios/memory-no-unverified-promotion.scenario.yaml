@@ -1,25 +1,26 @@
 schemaVersion: rector.global-scenario.v1
 id: memory-no-unverified-promotion
 title: memory-no-unverified-promotion
-type: coding
+type: memory
 workspace: tests/fixtures/repos/rector-mini-fix
 userGoal: Scenario memory-no-unverified-promotion
-allowedSystems: [coding]
+allowedSystems: [coding, memory]
 forbiddenSystems: [research, writing, design]
-expectedSpecialist: coding
+expectedSpecialist: memory
 successCriteria:
   - scenario memory-no-unverified-promotion executes
 validators:
-  - id: v1
-    cmd: npx
-    args: [--no-install, tsx, src/calculator.verify.ts]
+  - id: fixture-integrity-verifier
+    cmd: node
+    args: [src/fixture-integrity.verify.js]
     cwd: .
     timeoutMs: 30000
     expectedExitCode: 0
 oracles:
   mustChange: []
   mustNotChange: []
-  mustIncludeEvidence: []
+  mustIncludeEvidence:
+    - memory.verified-only
 budgets:
   maxToolCalls: 10
   maxRuntimeMs: 60000
@@ -33,4 +34,7 @@ expected:
   status: failed
   changedPaths: []
   unchangedPaths: []
-  evidenceRefs: []
+  evidenceRefs:
+    - memory.verified-only
+  memoryAssertionPath: memory/forbidden-promotion.assertion.json
+  runEventTracePath: memory/forbidden-promotion.trace.json

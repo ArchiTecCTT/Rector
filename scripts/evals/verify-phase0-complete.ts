@@ -11,7 +11,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EvalCorpusManifestSchema } from "../../tests/fixtures/eval-corpus/manifest.schema";
-import { CapabilityEvidencePacketSchema } from "../../src/capabilities/eval/evidencePacket";
+import {
+  CAPABILITY_EVIDENCE_PACKET_SCHEMA_VERSION,
+  CapabilityEvidencePacketSchema,
+} from "../../src/capabilities/eval/evidencePacket";
 import { CapabilityEvalResultSchema } from "../../src/capabilities/eval/schemas";
 const PHASE_0_BASELINE_SCHEMA_VERSION = "rector.phase0-baseline.v1";
 
@@ -49,9 +52,43 @@ async function main() {
   if (CapabilityEvalResultSchema.safeParse({ schemaVersion: "rector.capability-eval.v1", caseId: "x", capabilityId: "x", passed: true, metricScores: badMetricMissing, omissions: [], rawArtifactRefs: [] }).success) fail("metric schema accepted missing key");
   if (CapabilityEvalResultSchema.safeParse({ schemaVersion: "rector.capability-eval.v1", caseId: "x", capabilityId: "x", passed: true, metricScores: badMetricExtra, omissions: [], rawArtifactRefs: [] }).success) fail("metric schema accepted extra key");
 
-  // 5. Evidence packet schema negatives (invalid line range, empty rawArtifactRef, coverage omission)
-  const badPacket1 = { schemaVersion: "rector.capability-evidence.v1", caseId: "x", rawArtifactRef: "", evidence: [] };
-  const badPacket2 = { schemaVersion: "rector.capability-evidence.v1", caseId: "x", rawArtifactRef: "artifact://x", evidence: [{ path: "f.txt", lineStart: 5, lineEnd: 3, content: "x" }] };
+  // 5. Evidence packet schema negatives mutate one field from a valid base packet so failures prove
+  // the intended constraint, not a stale schema-version typo.
+  const validEvidencePacket = {
+    schemaVersion: CAPABILITY_EVIDENCE_PACKET_SCHEMA_VERSION,
+    capabilityId: "cartographer.grounding",
+    caseId: "x",
+    summary: "valid evidence packet fixture",
+    evidence: [
+      {
+        kind: "summary",
+        path: "cases/x/artifact.txt",
+        lineStart: 1,
+        lineEnd: 1,
+        excerpt: "required anchor",
+        relevance: "high",
+        confidence: 0.95,
+        rawArtifactRef: "artifact://x/artifact.txt",
+      },
+    ],
+    coverage: {
+      coveredMustContain: ["required anchor"],
+      missingMustContain: [],
+      forbiddenHits: [],
+      unresolvedArtifactRefs: [],
+      unresolvedFileRefs: [],
+      outOfBoundsLineRefs: [],
+      passed: true,
+    },
+    warnings: [],
+    rawArtifactRefs: ["artifact://x/artifact.txt"],
+  };
+  if (!CapabilityEvidencePacketSchema.safeParse(validEvidencePacket).success) fail("valid evidence packet fixture did not parse");
+  const badPacket1 = structuredClone(validEvidencePacket);
+  badPacket1.evidence[0].rawArtifactRef = "";
+  const badPacket2 = structuredClone(validEvidencePacket);
+  badPacket2.evidence[0].lineStart = 5;
+  badPacket2.evidence[0].lineEnd = 3;
   if (CapabilityEvidencePacketSchema.safeParse(badPacket1).success) fail("packet schema accepted empty rawArtifactRef");
   if (CapabilityEvidencePacketSchema.safeParse(badPacket2).success) fail("packet schema accepted invalid line range");
 

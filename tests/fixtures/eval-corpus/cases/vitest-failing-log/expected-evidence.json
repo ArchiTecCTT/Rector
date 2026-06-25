@@ -12,7 +12,7 @@
       "excerpt": "No test files found, exiting with code 1",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/vitest-failing-log/artifact.txt"
+      "rawArtifactRef": "artifact://vitest-failing-log/artifact.txt"
     },
     {
       "kind": "log_excerpt",
@@ -22,7 +22,7 @@
       "excerpt": "filter:",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/vitest-failing-log/artifact.txt"
+      "rawArtifactRef": "artifact://vitest-failing-log/artifact.txt"
     }
   ],
   "coverage": {
@@ -38,5 +38,5 @@
     "passed": true
   },
   "warnings": [],
-  "rawArtifactRefs": ["artifact://offline/vitest-failing-log/artifact.txt"]
+  "rawArtifactRefs": ["artifact://vitest-failing-log/artifact.txt"]
 }

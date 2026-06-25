@@ -49,8 +49,21 @@ describe("proxy-regression behavioral semantics (anti-cheat)", () => {
   });
 
   it("delegation_quality = 0 for a static-membership-only case without a matching packet/trace", () => {
-    const fakePacket = { systemId: "coding" } as any;
-    const res = computeDelegationQuality(fakePacket, ["research"], ["coding"]);
+    const fakePacket = SpecialistTaskPacketSchema.parse({
+      taskId: "task",
+      systemId: "coding",
+      userGoal: "goal",
+      successCriteria: [],
+      constraints: [],
+      allowedScopes: [],
+      forbiddenScopes: [],
+      memoryPacketRefs: [],
+      capabilityHints: [],
+      validationRequirements: [],
+      budget: {},
+      riskTolerance: "low",
+    });
+    const res = computeDelegationQuality({ packet: fakePacket, runEvents: [], expectedSpecialist: "coding", allowed: ["coding"], forbidden: [] });
     expect(res.score).toBe(0);
   });
 

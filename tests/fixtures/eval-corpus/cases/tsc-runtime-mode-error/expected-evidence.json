@@ -12,7 +12,7 @@
       "excerpt": "src/index.ts(2,7): error TS2322: Type '\"local\"' is not assignable to type 'RuntimeMode'.",
       "relevance": "high",
       "confidence": 0.95,
-      "rawArtifactRef": "artifact://offline/tsc-runtime-mode-error/artifact.txt"
+      "rawArtifactRef": "artifact://tsc-runtime-mode-error/artifact.txt"
     }
   ],
   "coverage": {
@@ -28,5 +28,5 @@
     "passed": true
   },
   "warnings": [],
-  "rawArtifactRefs": ["artifact://offline/tsc-runtime-mode-error/artifact.txt"]
+  "rawArtifactRefs": ["artifact://tsc-runtime-mode-error/artifact.txt"]
 }

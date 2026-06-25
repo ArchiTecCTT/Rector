@@ -1,8 +1,8 @@
-const { readFileSync } = require("node:fs");
-const { join } = require("node:path");
+const fs = require("node:fs");
+const path = require("node:path");
 
-const sourcePath = join(__dirname, "calculator.ts");
-const source = readFileSync(sourcePath, "utf8");
+const sourcePath = path.join(__dirname, "calculator.ts");
+const source = fs.readFileSync(sourcePath, "utf8");
 
 const hasAddImplementation = /return\s+a\s*\+\s*b\s*;/.test(source);
 const hasSubtractImplementation = /return\s+a\s*-\s*b\s*;/.test(source);
