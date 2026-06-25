@@ -80,4 +80,12 @@ describe("Modules API (Chunk 041)", () => {
     });
     expect(status).toBe(404);
   });
+
+  it("returns 404 for per-id toggle path (regression guard for client contract)", async () => {
+    const { status } = await api(`/api/modules/${NEURO_PREPROCESS_MODULE_ID}`, {
+      method: "POST",
+      body: JSON.stringify({ moduleId: NEURO_PREPROCESS_MODULE_ID, enabled: false }),
+    });
+    expect(status).toBe(404);
+  });
 });

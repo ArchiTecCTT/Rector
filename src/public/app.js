@@ -4055,7 +4055,7 @@ async function toggleModule(moduleId, enabled, checkbox) {
   clearModuleManagerError();
   let errorMsg = null;
   try {
-    const res = await fetch(`/api/modules/${moduleId}`, {
+    const res = await fetch("/api/modules", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ moduleId, enabled }),
