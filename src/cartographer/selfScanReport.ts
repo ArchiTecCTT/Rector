@@ -1,8 +1,28 @@
 import { z } from "zod";
 import type { ScanError } from "./types";
-import { ScanErrorSchema } from "./schemas";
+import { ScanErrorSchema, ScanStageSchema } from "./schemas";
 
 export const SELF_SCAN_SCHEMA_VERSION = "rector.cartographer.selfScan.v1" as const;
+export const SELF_SCAN_ALLOWLIST_SCHEMA_VERSION = "rector.cartographer.selfScanAllowlist.v1" as const;
+
+export const ScanErrorAllowlistEntrySchema = z
+  .object({
+    path: z.string(),
+    stage: ScanStageSchema,
+    messageContains: z.string().min(1),
+    reason: z.string().min(1),
+  })
+  .strict();
+
+export const SelfScanAllowlistSchema = z
+  .object({
+    schemaVersion: z.literal(SELF_SCAN_ALLOWLIST_SCHEMA_VERSION),
+    entries: z.array(ScanErrorAllowlistEntrySchema),
+  })
+  .strict();
+
+export type ScanErrorAllowlistEntry = z.infer<typeof ScanErrorAllowlistEntrySchema>;
+export type SelfScanAllowlist = z.infer<typeof SelfScanAllowlistSchema>;
 
 export const ExpectedPathCheckSchema = z
   .object({ path: z.string().min(1), present: z.boolean() })

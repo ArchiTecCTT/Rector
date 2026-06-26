@@ -59,11 +59,9 @@ async function main(): Promise<void> {
   const artDir = path.join(REPO_ROOT, ".rector", "cartographer");
   await fs.mkdir(artDir, { recursive: true });
 
-  // 1. latest-snapshot.json (real scan snapshot)
   const snapshotPath = path.join(artDir, "latest-snapshot.json");
   await fs.writeFile(snapshotPath, JSON.stringify(result.snapshot, null, 2) + "\n", "utf8");
 
-  // 2. latest-files.json (deterministic normalized list + counts)
   const indexedPaths = result.files.map((f) => f.normalizedPath);
   const filesArtifact = {
     schemaVersion: "rector.cartographer.latestFiles.v1",
@@ -72,11 +70,12 @@ async function main(): Promise<void> {
     indexedFileCount: result.files.length,
     scanErrorCount: result.errors.length,
     normalizedPaths: indexedPaths,
+    scanErrors: result.errors,
   } as const;
   const filesPath = path.join(artDir, "latest-files.json");
   await fs.writeFile(filesPath, JSON.stringify(filesArtifact, null, 2) + "\n", "utf8");
 
-  // 3. Build CartographerSelfScanReport and render scan-report.md
+
   const gitTracked = getGitTracked(REPO_ROOT);
   const indexedSet = new Set(indexedPaths);
   const ignoredPaths = result.ignoredFiles.map((i) => i.path);
