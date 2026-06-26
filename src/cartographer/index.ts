@@ -100,3 +100,10 @@ export {
   ToolProductionAdmissionSchema,
   type CapabilityGraphRecord,
 } from "./capabilityGraphRecords";
+export {
+  buildEvalSuiteGraph,
+  makeValidatedByEvalCaseEdge,
+  type BuildEvalSuiteGraphInput,
+  type BuildEvalSuiteGraphResult,
+  type EvalSuiteCaseRef,
+} from "./evalSuiteGraphAdapter";
