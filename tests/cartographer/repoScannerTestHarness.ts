@@ -3,10 +3,12 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CartographerScanEmitter, CartographerScanEvent, FileNode, FileReader, RepoSnapshot, ScanResult } from "../../src/cartographer";
+import { DEFAULT_MAX_FILE_SIZE_BYTES } from "../../src/cartographer";
 import { defaultFileReader } from "../../src/cartographer/repoScanner";
 
 export const fixedNow = new Date("2026-06-20T00:00:00.000Z");
 export const tempRoots: string[] = [];
+export { DEFAULT_MAX_FILE_SIZE_BYTES } from "../../src/cartographer";
 
 export type FileReadCall = { readonly normalizedPath: string; readonly maxBytes?: number };
 export type ScanEventLabel = { readonly type: CartographerScanEvent["type"]; readonly path: string };
@@ -138,6 +140,28 @@ async function writeFixtureFile(repoRoot: string, normalizedPath: string, conten
   const absolutePath = path.join(repoRoot, ...normalizedPath.split("/"));
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   await fs.writeFile(absolutePath, contents, "utf8");
+}
+
+export async function writeOversizedFile(repoRoot: string, normalizedPath: string): Promise<void> {
+  const absolutePath = path.join(repoRoot, ...normalizedPath.split("/"));
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+  const size = DEFAULT_MAX_FILE_SIZE_BYTES + 1024;
+  await fs.writeFile(absolutePath, Buffer.alloc(size, 0x41));
+}
+
+export async function makeNestedIgnoreLimitationRepo(): Promise<string> {
+  const repoRoot = await fs.mkdtemp(path.join(tmpdir(), "rector-nested-ignore-"));
+  tempRoots.push(repoRoot);
+  await writeFixtureFile(repoRoot, "package.json", "{\"name\":\"nested-ignore\"}\n");
+  await writeFixtureFile(repoRoot, ".gitignore", "root-ignored.txt\n");
+  await writeFixtureFile(repoRoot, ".rectorignore", "root-rector-ignored.txt\n");
+  await writeFixtureFile(repoRoot, "root-ignored.txt", "should be ignored by root gitignore\n");
+  await writeFixtureFile(repoRoot, "root-rector-ignored.txt", "should be ignored by root rectorignore\n");
+  await writeFixtureFile(repoRoot, "subdir/visible.txt", "visible\n");
+  await writeFixtureFile(repoRoot, "subdir/nested/.gitignore", "nested-ignored.txt\n");
+  await writeFixtureFile(repoRoot, "subdir/nested/nested-ignored.txt", "should NOT be ignored because nested gitignore is deferred\n");
+  await writeFixtureFile(repoRoot, "subdir/nested/visible.txt", "also visible\n");
+  return repoRoot;
 }
 
 function normalizedFromRoot(repoRoot: string, absolutePath: string): string {
