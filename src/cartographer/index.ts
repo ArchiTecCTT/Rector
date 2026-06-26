@@ -57,3 +57,4 @@ export type { CartographerGraphStore, PutGraphSnapshotInput } from "./graphStore
 export { InMemoryCartographerGraphStore } from "./inMemoryGraphStore";
 export { SqliteCartographerGraphStore, type SqliteCartographerGraphStoreOptions } from "./sqliteGraphStore";
 export type { GraphSnapshot } from "./graphSnapshot";
+export { buildGraphSnapshot, type BuildGraphInput, type BuildGraphResult } from "./graphBuilder";
