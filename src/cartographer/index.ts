@@ -76,3 +76,7 @@ export {
   type FindTestsResult,
   type LinkedTest,
 } from "./testLinker";
+export {
+  CartographerQueryService,
+  type QueryServiceGraph,
+} from "./queryService";
