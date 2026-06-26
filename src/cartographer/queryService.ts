@@ -416,11 +416,19 @@ export class CartographerQueryService {
   }
 
   async listCapabilities(): Promise<ListCapabilitiesQueryResult> {
-    return { status: "not_configured" };
+    const caps = this.nodes.filter((n) => n.kind === "Capability");
+    if (caps.length === 0) {
+      return { status: "not_configured" };
+    }
+    return { status: "ok", capabilities: sortById(caps).map(clone) };
   }
 
   async getCapability(input: GetCapabilityQueryInput): Promise<GetCapabilityQueryResult> {
-    // Placeholder until Todo 23 wires capability nodes
-    return { status: "not_configured" };
+    const cap = this.nodes.find((n) => n.kind === "Capability" && n.id === input.id);
+    if (!cap) {
+      const anyCaps = this.nodes.some((n) => n.kind === "Capability");
+      return { status: anyCaps ? "not_found" : "not_configured" };
+    }
+    return { status: "ok", capability: clone(cap) };
   }
 }

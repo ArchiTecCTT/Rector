@@ -80,3 +80,23 @@ export {
   CartographerQueryService,
   type QueryServiceGraph,
 } from "./queryService";
+export {
+  buildToolGraph,
+  type BuildToolGraphInput,
+  type BuildToolGraphResult,
+  type ToolProductionAdmission,
+} from "./toolGraphAdapter";
+export {
+  buildCapabilityGraph,
+  type BuildCapabilityGraphInput,
+  type BuildCapabilityGraphResult,
+} from "./capabilityGraphAdapter";
+export {
+  loadCapabilityGraphRecords,
+} from "./capabilityGraphRecordsLoader";
+export {
+  CapabilityGraphRecordSchema,
+  CapabilityGraphRecordsSchema,
+  ToolProductionAdmissionSchema,
+  type CapabilityGraphRecord,
+} from "./capabilityGraphRecords";
