@@ -70,3 +70,9 @@ export {
   type PackageTarget,
   type UnresolvedTarget,
 } from "./importExtractor";
+export {
+  findTests,
+  type FindTestsInput,
+  type FindTestsResult,
+  type LinkedTest,
+} from "./testLinker";
