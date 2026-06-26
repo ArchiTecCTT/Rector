@@ -9,6 +9,12 @@ import {
   type CartographerGraphStore,
 } from "../../src/cartographer";
 import { createSqliteDriver, type SqlDriver } from "../../src/store";
+import {
+  makeStructuralMiniFixture,
+  buildBaselineGraphNodesFromInventory,
+  buildBaselineGraphEdgesFromInventory,
+  scanStructuralMiniFixture,
+} from "./repoScannerTestHarness";
 
 const repoRoot = "/repo/root";
 const otherRepoRoot = "/other/repo";
@@ -220,6 +226,46 @@ describe("SqliteCartographerGraphStore", () => {
 
     const missing = await store.getGraphSnapshot(repoRoot, inventoryB);
     expect(missing).toBeUndefined();
+  });
+
+  it("indexes structural mini fixture deterministically and builds baseline graph nodes/edges with parity to in-memory", async () => {
+    const fixtureRoot = await makeStructuralMiniFixture();
+    const scan = await scanStructuralMiniFixture();
+    const invSnap = scan.snapshot.id;
+    const snapId = makeGraphSnapshotId(fixtureRoot, invSnap);
+
+    const nodes = buildBaselineGraphNodesFromInventory(fixtureRoot, invSnap, scan.files);
+    const edges = buildBaselineGraphEdgesFromInventory(fixtureRoot, invSnap, scan.files);
+
+    const store = sqliteStore();
+    const header = await store.putGraphSnapshot({
+      repoRoot: fixtureRoot,
+      inventorySnapshotId: invSnap,
+      createdAt: fixedCreatedAt,
+      nodes,
+      edges,
+    });
+
+    expect(header.repoRoot).toBe(fixtureRoot);
+    expect(header.inventorySnapshotId).toBe(invSnap);
+
+    const listedNodes = await store.listNodes(snapId);
+    const listedEdges = await store.listEdges(snapId);
+    expect(listedNodes.length).toBe(nodes.length);
+    expect(listedEdges.length).toBe(edges.length);
+
+    const mem = new InMemoryCartographerGraphStore();
+    await mem.putGraphSnapshot({ repoRoot: fixtureRoot, inventorySnapshotId: invSnap, createdAt: fixedCreatedAt, nodes, edges });
+    const memNodes = await mem.listNodes(snapId);
+    const memEdges = await mem.listEdges(snapId);
+    expect(memNodes.map((n) => n.id)).toEqual(listedNodes.map((n) => n.id));
+    expect(memEdges.map((e) => e.id)).toEqual(listedEdges.map((e) => e.id));
+
+    const scan2 = await scanStructuralMiniFixture();
+    const nodes2 = buildBaselineGraphNodesFromInventory(fixtureRoot, scan2.snapshot.id, scan2.files);
+    const edges2 = buildBaselineGraphEdgesFromInventory(fixtureRoot, scan2.snapshot.id, scan2.files);
+    expect(nodes2.map((n) => n.id)).toEqual(nodes.map((n) => n.id));
+    expect(edges2.map((e) => e.id)).toEqual(edges.map((e) => e.id));
   });
 
   it("round-trips JSON properties without loss or type escape", async () => {

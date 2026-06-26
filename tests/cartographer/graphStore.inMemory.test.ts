@@ -5,6 +5,12 @@ import {
   type CartographerGraphEdge,
   makeGraphSnapshotId,
 } from "../../src/cartographer";
+import {
+  makeStructuralMiniFixture,
+  buildBaselineGraphNodesFromInventory,
+  buildBaselineGraphEdgesFromInventory,
+  scanStructuralMiniFixture,
+} from "./repoScannerTestHarness";
 
 const repoRoot = "/repo/root";
 const otherRepoRoot = "/other/repo";
@@ -191,5 +197,39 @@ describe("InMemoryCartographerGraphStore", () => {
 
     const missing = await store.getGraphSnapshot(repoRoot, inventoryB);
     expect(missing).toBeUndefined();
+  });
+
+  it("indexes structural mini fixture deterministically and builds baseline graph nodes/edges", async () => {
+    const fixtureRoot = await makeStructuralMiniFixture();
+    const scan = await scanStructuralMiniFixture();
+    const invSnap = scan.snapshot.id;
+    const snapId = makeGraphSnapshotId(fixtureRoot, invSnap);
+
+    const nodes = buildBaselineGraphNodesFromInventory(fixtureRoot, invSnap, scan.files);
+    const edges = buildBaselineGraphEdgesFromInventory(fixtureRoot, invSnap, scan.files);
+
+    const store = new InMemoryCartographerGraphStore();
+    const header = await store.putGraphSnapshot({
+      repoRoot: fixtureRoot,
+      inventorySnapshotId: invSnap,
+      createdAt: fixedCreatedAt,
+      nodes,
+      edges,
+    });
+
+    expect(header.repoRoot).toBe(fixtureRoot);
+    expect(header.inventorySnapshotId).toBe(invSnap);
+    expect(header.nodeCount).toBeGreaterThan(0);
+
+    const listedNodes = await store.listNodes(snapId);
+    const listedEdges = await store.listEdges(snapId);
+    expect(listedNodes.length).toBe(nodes.length);
+    expect(listedEdges.length).toBe(edges.length);
+
+    const scan2 = await scanStructuralMiniFixture();
+    const nodes2 = buildBaselineGraphNodesFromInventory(fixtureRoot, scan2.snapshot.id, scan2.files);
+    const edges2 = buildBaselineGraphEdgesFromInventory(fixtureRoot, scan2.snapshot.id, scan2.files);
+    expect(nodes2.map((n) => n.id)).toEqual(nodes.map((n) => n.id));
+    expect(edges2.map((e) => e.id)).toEqual(edges.map((e) => e.id));
   });
 });
