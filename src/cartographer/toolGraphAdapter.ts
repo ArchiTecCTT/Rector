@@ -1,4 +1,4 @@
-import type { ToolSchemaDefinition } from "../tools/types";
+import type { ToolSchemaDefinition } from "../tools";
 import { makeToolId } from "./graphIds";
 import type {
   CartographerGraphEdge,

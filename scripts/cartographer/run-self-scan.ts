@@ -16,8 +16,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
-import { scanRepository } from "../../src/cartographer/repoScanner";
 import {
+  scanRepository,
   renderSelfScanReportMarkdown,
   generateForbiddenPathChecks,
   sortExpectedPathChecks,
@@ -25,7 +25,7 @@ import {
   buildGitComparison,
   SELF_SCAN_SCHEMA_VERSION,
   type CartographerSelfScanReport,
-} from "../../src/cartographer/selfScanReport";
+} from "../../src/cartographer";
 
 const SCRIPT_URL = import.meta.url;
 const SCRIPT_PATH = fileURLToPath(SCRIPT_URL);

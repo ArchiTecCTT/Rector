@@ -125,8 +125,7 @@ function isAliasLike(specifier: string): boolean {
   if (specifier.startsWith("@/")) return true;
   if (specifier.startsWith("~/")) return true;
   // Also catch bare ~ or other root-mapped styles seen in some configs.
-  if (specifier === "~" || specifier.startsWith("~/")) return true;
-  return false;
+  return specifier === "~" || specifier.startsWith("~/");
 }
 
 function resolveRelative(

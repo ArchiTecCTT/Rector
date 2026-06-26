@@ -33,8 +33,8 @@ import {
   SelfScanAllowlistSchema,
   type SelfScanAllowlist,
   type ScanErrorAllowlistEntry,
-} from "../../src/cartographer/selfScanReport";
-import type { ScanError } from "../../src/cartographer/types";
+  type ScanError,
+} from "../../src/cartographer";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
@@ -83,7 +83,7 @@ function matchesForbidden(p: string, patterns: readonly string[]): boolean {
     if (p.startsWith(pat + "/")) return true;
     if (p.includes("/" + pat + "/")) return true;
     const base = p.split("/").pop() ?? p;
-    if (base === pat || base.startsWith(pat + "/") || base === pat) return true;
+    if (base === pat || base.startsWith(pat + "/")) return true;
   }
   return false;
 }
@@ -97,6 +97,22 @@ function isNonExampleEnv(p: string): boolean {
 async function readJson<T>(filePath: string): Promise<T> {
   const raw = await fs.readFile(filePath, "utf8");
   return JSON.parse(raw) as T;
+}
+
+async function readAndValidateLatestFilesArtifact(filePath: string): Promise<LatestFilesArtifact> {
+  let art: LatestFilesArtifact;
+  try {
+    art = await readJson<LatestFilesArtifact>(filePath);
+  } catch (e) {
+    fail(`failed to parse latest-files.json: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!Array.isArray(art.normalizedPaths)) {
+    fail("latest-files.json missing normalizedPaths array");
+  }
+  if (!isSortedAscending(art.normalizedPaths)) {
+    fail("normalizedPaths is not sorted ascending (nondeterministic)");
+  }
+  return art;
 }
 
 function resolveAllowlistPath(): string {
@@ -116,6 +132,16 @@ async function loadAllowlist(): Promise<SelfScanAllowlist> {
   } catch (e) {
     // Absent file or parse failure => empty allowlist (strict: zero allowed)
     return { schemaVersion: "rector.cartographer.selfScanAllowlist.v1", entries: [] };
+  }
+}
+
+async function ensureArtifactsExist(paths: readonly string[]): Promise<void> {
+  for (const p of paths) {
+    try {
+      await fs.access(p);
+    } catch {
+      fail(`missing artifact: ${p}`);
+    }
   }
 }
 
@@ -159,28 +185,9 @@ async function main(): Promise<void> {
   const snapshotPath = path.join(artifactsDir, "latest-snapshot.json");
   const mdPath = path.join(artifactsDir, "scan-report.md");
 
-  for (const p of [filesPath, snapshotPath, mdPath]) {
-    try {
-      await fs.access(p);
-    } catch {
-      fail(`missing artifact: ${p}`);
-    }
-  }
+  await ensureArtifactsExist([filesPath, snapshotPath, mdPath]);
 
-  let filesArt: LatestFilesArtifact;
-  try {
-    filesArt = await readJson<LatestFilesArtifact>(filesPath);
-  } catch (e) {
-    fail(`failed to parse latest-files.json: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
-  if (!Array.isArray(filesArt.normalizedPaths)) {
-    fail("latest-files.json missing normalizedPaths array");
-  }
-
-  if (!isSortedAscending(filesArt.normalizedPaths)) {
-    fail("normalizedPaths is not sorted ascending (nondeterministic)");
-  }
+  const filesArt = await readAndValidateLatestFilesArtifact(filesPath);
 
   const indexed = filesArt.normalizedPaths;
 

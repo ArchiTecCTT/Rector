@@ -1,8 +1,7 @@
 import { dirname } from "node:path";
 
 import { ensureRestrictedDir, ensureRestrictedFile } from "../security/filePermissions";
-import { DEFAULT_SQLITE_PATH } from "../store";
-import { createSqliteDriver, type SqlDriver } from "../store/sqlRectorStore";
+import { DEFAULT_SQLITE_PATH, createSqliteDriver, type SqlDriver } from "../store";
 import { hashString } from "./fileHasher";
 import type { CartographerInventoryStore, CreateSnapshotInput, FileNode, RepoSnapshot, ScanError, ScanResult } from "./types";
 

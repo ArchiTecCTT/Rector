@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { ScanError } from "./types";
 import { ScanErrorSchema, ScanStageSchema } from "./schemas";
 
 export const SELF_SCAN_SCHEMA_VERSION = "rector.cartographer.selfScan.v1" as const;
@@ -114,8 +113,7 @@ export function generateForbiddenPathChecks(
       if (p.startsWith(pat + "/")) return true;
       if (p.includes("/" + pat + "/")) return true;
       const base = p.split("/").pop() ?? p;
-      if (base === pat || base.startsWith(pat)) return true;
-      return false;
+      return base === pat || base.startsWith(pat);
     }),
   }));
 }
