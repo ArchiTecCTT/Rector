@@ -58,3 +58,4 @@ export { InMemoryCartographerGraphStore } from "./inMemoryGraphStore";
 export { SqliteCartographerGraphStore, type SqliteCartographerGraphStoreOptions } from "./sqliteGraphStore";
 export type { GraphSnapshot } from "./graphSnapshot";
 export { buildGraphSnapshot, type BuildGraphInput, type BuildGraphResult } from "./graphBuilder";
+export { extractTsSymbols, type ExtractTsSymbolsInput, type ExtractTsSymbolsResult, type ExtractedSymbol, type ExtractionDiagnostic, type SymbolKind } from "./tsSymbolExtractor";
