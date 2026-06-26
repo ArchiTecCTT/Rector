@@ -72,6 +72,30 @@ npm run build
   - Debug/fix workers: `google-vertex/gemini-3.5-flash`
 - Parent orchestrator remains in charge: worker -> GLM review -> Gemini fixes if needed -> verify -> commit -> next chunk.
 
+## Rector Project Skills
+
+Project-scoped OpenCode skills live under `.opencode/skills/<name>/SKILL.md`. They are loaded by OpenCode at session start, so newly added or edited skills require restarting the OpenCode session before they appear in the `skill` tool.
+
+Use these active Rector skills when their domain matches:
+
+- `rector-configured-product-guardian` — v0.3.0 configured-product invariants, onboarding/runtime settings, single chat path, fake/spy CI-only boundaries.
+- `rector-phase-chunk-planner` — chunk planning discipline, source-of-truth reads, scope boundaries, concerns updates, and verification gates.
+- `rector-docs-replacement-surgeon` — Phase 1 documentation replacement, stale local/external/provider-free wording, README/spec/roadmap alignment.
+- `rector-cartographer-graph-builder` — Cartographer structural graph expansion beyond file inventory: symbols, imports, calls, tests, routes, skills, rules, impact edges.
+- `rector-evidence-gatekeeper` — typed evidence, grounded validation, `insufficient_evidence` instead of guessing, safe memory/skill promotion.
+- `rector-fake-purge-auditor` — fake/deterministic double containment, fake seam audits, simulator/tool fallback boundaries, `configured_spy_pipeline` naming.
+
+Deferred Rector skills to add when their phases become active:
+
+- `rector-capability-contract-generator` — universal capability contracts for MCP, ToolRegistry, skills, validators, recipes, memory providers, browser tools, APIs, and plugins.
+- `rector-capability-slm-fabric` — tool-specific Capability-SLM manager, evidence packet extraction, and cheap-model compression over raw tool exhaust.
+- `rector-memory-os-guardian` — MemoryGate, durable memory, contradiction handling, consolidation, pruning, and safe skill promotion.
+- `rector-specialist-system-contracts` — ExecutiveRouter and Coding Specialist System contracts once Phase 11/12 specialist execution begins.
+- `rector-ui-onboarding-qa` — first-run onboarding overlay, readiness UI, provider setup, chat gate, and browser QA.
+- `rector-provider-runtime-settings` — provider setup, ModelRouter configuration, runtime settings schema, env migration, and readiness checks.
+- `rector-security-budget-redaction` — budget enforcement, approvals, sandbox policy, redaction, telemetry safety, and raw artifact policy.
+- `rector-release-evidence-runner` — pre-commit/release evidence bundle, full gates, targeted evals, fake audit, and final completion summary.
+
 ## Commit Identity
 
 All commits (including those made by subagents) must be authored and committed as:
