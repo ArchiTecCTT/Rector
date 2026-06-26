@@ -38,3 +38,18 @@ export * from "./selfScanReport";
 
 export * from "./graphSchemas";
 export * from "./graphTypes";
+export {
+  computeRepoRootHash,
+  makeCapabilityId,
+  makeDefinesEdgeId,
+  makeDirectoryId,
+  makeEdgeId,
+  makeFileId,
+  makeGraphSnapshotId,
+  makeImportEdgeId,
+  makePackageId,
+  makeProjectId,
+  makeSymbolId,
+  makeToolId,
+  normalizePath,
+} from "./graphIds";
