@@ -20,7 +20,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { normalizeCandidate, type NormalizeContext } from "../src/providers/discovery/adapters/index";
+import { normalizeCandidate, type NormalizeContext } from "../src/providers/discovery/adapters";
 import { ModelCandidateSchema } from "../src/providers/discovery/types";
 
 const TS = "2026-01-01T00:00:00.000Z";

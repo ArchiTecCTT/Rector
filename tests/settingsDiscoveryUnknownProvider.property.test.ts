@@ -48,7 +48,7 @@ import type {
   AdapterContext,
   DiscoveryAdapter,
   DiscoveryAdapterRegistry,
-} from "../src/providers/discovery/adapters/index";
+} from "../src/providers/discovery/adapters";
 import { createModelDiscoveryService } from "../src/providers/discovery/service";
 import { DiscoveryResultSchema } from "../src/providers/discovery/types";
 import type { SecretStore } from "../src/security/secretStore";

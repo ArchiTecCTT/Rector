@@ -1,0 +1,36 @@
+schemaVersion: rector.global-scenario.v1
+id: coding-basic-fix-001
+title: Fix the add() bug in rector-mini-fix
+type: coding
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: The add() function subtracts instead of adds. Fix it so the verifier passes.
+allowedSystems: [coding]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: coding
+successCriteria:
+  - calculator verifier exits 0
+  - add returns the sum of its two arguments
+validators:
+  - id: verify-calculator
+    cmd: npx
+    args: ["--no-install", "tsx", "src/calculator.verify.ts"]
+    timeoutMs: 120000
+oracles:
+  mustChange:
+    - src/calculator.ts
+  mustNotChange:
+    - src/calculator.verify.ts
+  mustIncludeEvidence:
+    - cartographer.grounding
+budgets:
+  maxToolCalls: 30
+  maxRuntimeMs: 900000
+  maxMainModelRawToolTokens: 1000
+expected:
+  status: failed
+  changedPaths:
+    - src/calculator.ts
+  unchangedPaths:
+    - src/calculator.verify.ts
+  evidenceRefs:
+    - cartographer.grounding

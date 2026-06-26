@@ -1,0 +1,8 @@
+{
+  "command": "rg --line-number --column --with-filename \"import\" src --max-count 30",
+  "toolVersion": "ripgrep 14.1.0",
+  "capturedAt": "2026-06-24T10:15:00+08:00",
+  "platform": "linux x86_64",
+  "exitCode": 0,
+  "regenerableInCi": true
+}

@@ -23,7 +23,7 @@ import {
   type UpdateMessageInput,
   type UpdateRunInput,
 } from "./schemas";
-import type { RectorStore } from "./index";
+import type { RectorStore } from ".";
 import { ConcurrentTransitionError } from "../orchestration/runStateMachine";
 import {
   compareMemoryPruneCandidates,

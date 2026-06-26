@@ -6,7 +6,7 @@ import {
   type AdapterResult,
   type DiscoveryAdapter,
   type NormalizeContext,
-} from "./index";
+} from ".";
 
 /**
  * Cloudflare Workers AI Discovery_Adapter (design section C — `cloudflare.ts`,

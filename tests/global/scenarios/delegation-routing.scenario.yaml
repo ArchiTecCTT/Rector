@@ -1,0 +1,36 @@
+schemaVersion: rector.global-scenario.v1
+id: delegation-routing-001
+title: Route a coding task to the coding specialist only
+type: delegation
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: A code bug needs fixing. Route to the coding specialist; do not invoke research, writing, or design systems.
+allowedSystems: [coding]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: coding
+successCriteria:
+  - the coding specialist handles the task
+  - no forbidden system is invoked
+validators:
+  - id: verify-calculator
+    cmd: npx
+    args: ["--no-install", "tsx", "src/calculator.verify.ts"]
+    timeoutMs: 120000
+oracles:
+  mustChange:
+    - src/calculator.ts
+  mustNotChange:
+    - src/calculator.verify.ts
+  mustIncludeEvidence:
+    - delegation.coding-only
+budgets:
+  maxToolCalls: 30
+  maxRuntimeMs: 900000
+  maxMainModelRawToolTokens: 1000
+expected:
+  status: failed
+  changedPaths:
+    - src/calculator.ts
+  unchangedPaths:
+    - src/calculator.verify.ts
+  evidenceRefs:
+    - delegation.coding-only

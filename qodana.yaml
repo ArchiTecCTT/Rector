@@ -2,9 +2,27 @@
 # WARNING: Do not store sensitive information in this file, as its contents will be included in the Qodana report. #
 ####################################################################################################################
 
+# TypeScript/Node (ESM) project — no JVM sources; `qodana-jvm` analysed nothing.
 version: "1.0"
-linter: qodana-jvm
+linter: qodana-js
+
 profile:
   name: qodana.recommended
-include:
-  - name: CheckDependencyLicenses
+
+# First-party source only: deps, build output, fixtures and committed
+# real-tool capture corpora are not ours to lint.
+exclude:
+  - name: All
+    paths:
+      - node_modules
+      - dist
+      - coverage
+      - .omo
+      - tests/fixtures
+      - "**/*.d.ts"
+
+# Gate CI on real defects only; `--baseline` in CI scopes the gate to NEW issues.
+failureConditions:
+  severityThresholds:
+    critical: 0
+    high: 0

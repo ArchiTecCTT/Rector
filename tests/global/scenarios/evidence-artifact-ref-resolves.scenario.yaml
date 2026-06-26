@@ -1,0 +1,40 @@
+schemaVersion: rector.global-scenario.v1
+id: evidence-artifact-ref-resolves
+title: evidence-artifact-ref-resolves
+type: coding
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: Scenario evidence-artifact-ref-resolves
+allowedSystems: [coding]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: coding
+successCriteria:
+  - scenario evidence-artifact-ref-resolves executes
+validators:
+  - id: fixture-integrity-verifier
+    cmd: node
+    args: [src/fixture-integrity.verify.js]
+    cwd: .
+    timeoutMs: 30000
+    expectedExitCode: 0
+oracles:
+  mustChange: []
+  mustNotChange:
+    - src/calculator.ts
+  mustIncludeEvidence:
+    - cartographer.grounding
+budgets:
+  maxToolCalls: 10
+  maxRuntimeMs: 60000
+  maxMainModelRawToolTokens: 100
+setup:
+  copyWorkspaceToTemp: false
+  fixtures: []
+operation:
+  kind: validator_only
+expected:
+  status: passed
+  changedPaths: []
+  unchangedPaths:
+    - src/calculator.ts
+  evidenceRefs:
+    - cartographer.grounding

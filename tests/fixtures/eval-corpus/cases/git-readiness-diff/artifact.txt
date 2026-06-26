@@ -1,0 +1,7 @@
+diff --git a/before.ts b/after.ts
+index 75bc6e2..599c8de 100644
+--- a/before.ts
++++ b/after.ts
+@@ -1 +1 @@
+-export const readiness = "unconfigured";
++export const readiness = "configured";

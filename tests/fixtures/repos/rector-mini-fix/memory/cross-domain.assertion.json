@@ -1,0 +1,7 @@
+{
+  "verifiedEntries": ["mem-verified-calculator"],
+  "unverifiedEntries": [],
+  "forbiddenPromotions": [],
+  "expectedCandidateRefs": ["validator:fixture-integrity-verifier"],
+  "forbiddenCrossDomainRefs": ["research.customer-data"]
+}

@@ -1,0 +1,11 @@
+{
+  "caseId": "cartographer-inventory-scan",
+  "artifactKind": "cartographer_inventory",
+  "expectedExitCode": 0,
+  "expectedLineCount": 6563,
+  "mustContain": [
+    "  \"name\": \"rector\",",
+    "  \"lockfileVersion\": 3,"
+  ],
+  "mustNotContain": ["[REDACTED]"]
+}

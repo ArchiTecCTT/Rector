@@ -1,0 +1,12 @@
+{
+  "caseId": "audit-no-fakes-report",
+  "artifactKind": "fake_audit_report",
+  "expectedExitCode": 0,
+  "expectedLineCount": 29,
+  "mustContain": [
+    "Rector no-production-fakes audit (report-only)",
+    "Scanned files: 192",
+    "Findings: 40"
+  ],
+  "mustNotContain": ["[REDACTED]"]
+}

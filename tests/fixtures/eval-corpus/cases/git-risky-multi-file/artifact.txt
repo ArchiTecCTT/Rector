@@ -1,0 +1,11 @@
+diff --git a/package.json b/package-lock.json
+index 1234567..abcdefg 100644
+--- a/package.json
++++ b/package-lock.json
+@@ -1,5 +1,5 @@
+ {
+-  "name": "rector",
+-  "version": "0.3.0"
++  "name": "rector",
++  "version": "0.3.0-alpha.1"
+ }

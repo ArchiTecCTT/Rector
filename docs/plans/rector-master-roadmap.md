@@ -249,6 +249,36 @@ Kill local mode as default product. Deliverables:
 
 Branch: `rector-0.3.0-cartographer`
 
+## Phase 0 — Benchmarks + Capability Eval Scaffolding — DONE — gates passed on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80 (branch `rector-0.3.0`)
+
+Offline-only measurement scaffolding for the capability/SLM-fabric workstream. Scaffold landed on branch `rector-0.3.0`; no live provider calls. **Status: DONE — gates passed on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80**.
+
+- Capability eval schemas + 8-metric scorer + raw artifact store: `src/capabilities/eval/{schemas,metrics,artifactStore}.ts`
+- Committed offline eval corpus (real `rg`/`tsc`/`git` artifacts + deterministic oracles): `tests/fixtures/eval-corpus/`
+- Offline model-free eval runner + report formatter: `scripts/evals/{run-capability-evals,score-capability-results}.ts` (writes `.omo/evidence/eval-report.{json,md}`); npm `eval:capabilities` / `eval:capabilities:report`
+- Report-only fake-seam audit: `scripts/audit/no-production-fakes.ts`; npm `audit:no-fakes` (non-blocking, measures only)
+
+By design, the tiny offline fixtures do NOT meet the live efficiency thresholds (compression ≥10×, raw-token-reduction ≥0.80); the runner reports the real aggregate honestly (aggregate `passed: false`) while every committed case passes its oracle. Live efficiency-threshold attainment is Phase 2.5 work.
+
+**Completion gate (PASSED on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80):** Phase 0 is complete because all of the following passed: `npm run eval:capabilities:gate`, `npm run baseline:phase0`, and `npm run verify:phase0`. No ExecutiveRouter, no real specialist execution, and no live provider are involved. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
+
+## Phase 0.5 — Global Reliability Harness — DONE — gates passed on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80 (branch `rector-0.3.0`)
+
+Offline-by-default reliability harness and specialist-system CONTRACTS proving the architecture can be measured as a persistent assistant delegating to specialist systems. Scaffold landed on branch `rector-0.3.0`; no live provider calls. **Status: DONE — gates passed on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80**.
+
+- Global scenario schema + YAML/JSON loading: `src/evals/globalScenarioSchema.ts`
+- 8-dimension scorecards (+ fake-path status) with JSON/Markdown reporters: `src/evals/scorecards.ts`
+- Offline global runner (one scorecard per scenario, deterministic oracles, report-only fake-path via injected auditor): `src/evals/globalRunner.ts` + `scripts/evals/run-global-harness.ts`; npm `test:global` (writes `.omo/evidence/global-report.{json,md}`)
+- Specialist contract/task/result schemas + validator: `src/systems/contracts.ts`
+- SystemRegistry validation stub (validates + stores contracts, rejects duplicate systemIds — NO execution): `src/systems/registry.ts` + `scripts/evals/run-specialist-system-contracts.ts`; npm `test:systems`; first committed profile `src/systems/specialistProfiles/coding.profile.json`
+- 4 real-fixture global scenarios (coding-basic-fix, memory-boundary, fake-purge, delegation-routing) + the `tests/fixtures/repos/rector-mini-fix/` fixture repo: `tests/global/`
+
+Offline-by-default with live opt-in: live scenarios are SKIPPED when no provider credentials are present (never faked) and are NOT in default CI. The harness honestly reports `passed: 0/4` because the `rector-mini-fix` fixture ships a genuinely failing test (the to-be-fixed state) — the harness proves WIRING (scenario → task packet → trace → oracle → scorecard → regression), NOT specialist execution.
+
+**SCOPE BOUNDARY (critical):** Phase 0.5 delivered CONTRACTS + HARNESS only. The ExecutiveRouter, real specialist execution, and specialist-driven repository mutation are deferred to Phase 11/12 and are NOT implemented. No specialist-execution phase is marked complete here.
+
+**Completion gate (PASSED on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80):** Phase 0.5 is complete because all of the following passed: `npm run test:global:gate`, `npm run verify:phase0.5`, 28 offline scenarios (21 strict-pass, 8 intentional regressions), and strict scorecard semantics, with no claim of specialist execution. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
+
 ## Chunk 047 — Runtime Maturity (post-042a/042b)
 
 Operational seams around the symbolic brainstem. Implement after Chunk 042a and 042b hardening complete.

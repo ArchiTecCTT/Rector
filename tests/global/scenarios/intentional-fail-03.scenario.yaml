@@ -1,0 +1,36 @@
+schemaVersion: rector.global-scenario.v1
+id: intentional-fail-03
+title: intentional-fail-03
+type: coding
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: Scenario intentional-fail-03
+allowedSystems: [coding]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: coding
+successCriteria:
+  - scenario intentional-fail-03 executes
+validators:
+  - id: calculator-source-verifier
+    cmd: node
+    args: [src/calculator-source.verify.js]
+    cwd: .
+    timeoutMs: 30000
+    expectedExitCode: 0
+oracles:
+  mustChange: []
+  mustNotChange: []
+  mustIncludeEvidence: []
+budgets:
+  maxToolCalls: 10
+  maxRuntimeMs: 60000
+  maxMainModelRawToolTokens: 100
+setup:
+  copyWorkspaceToTemp: false
+  fixtures: []
+operation:
+  kind: validator_only
+expected:
+  status: failed
+  changedPaths: []
+  unchangedPaths: []
+  evidenceRefs: []

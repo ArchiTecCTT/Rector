@@ -43,7 +43,7 @@ import type {
   AdapterResult,
   DiscoveryAdapter,
   DiscoveryAdapterRegistry,
-} from "../src/providers/discovery/adapters/index";
+} from "../src/providers/discovery/adapters";
 import {
   DiscoveryErrorCategorySchema,
   DiscoveryResultSchema,

@@ -79,16 +79,9 @@ const OPTIONAL_CHROMA_CLIENT = "chromadb";
 
 function loadChromaClientFactory(): ChromaClientFactory {
   const requireFromHere = createRequire(import.meta.url);
+  let mod: any;
   try {
-    const mod = requireFromHere(OPTIONAL_CHROMA_CLIENT) as {
-      ChromaClient?: new (opts: ChromaClientConnectOptions) => ChromaClient;
-      default?: { ChromaClient?: new (opts: ChromaClientConnectOptions) => ChromaClient };
-    };
-    const ChromaClientCtor = mod.ChromaClient ?? mod.default?.ChromaClient;
-    if (typeof ChromaClientCtor !== "function") {
-      throw new Error("module did not export ChromaClient");
-    }
-    return (options) => new ChromaClientCtor(options);
+    mod = requireFromHere(OPTIONAL_CHROMA_CLIENT);
   } catch {
     throw new Error(
       `The Chroma memory path requires the optional "${OPTIONAL_CHROMA_CLIENT}" dependency, which is ` +
@@ -96,6 +89,15 @@ function loadChromaClientFactory(): ChromaClientFactory {
         `use a local provider (in-memory or local-sqlite-mem) instead (no cloud account or network required).`,
     );
   }
+  const ChromaClientCtor = mod.ChromaClient ?? mod.default?.ChromaClient;
+  if (typeof ChromaClientCtor !== "function") {
+    throw new Error(
+      `The Chroma memory path requires the optional "${OPTIONAL_CHROMA_CLIENT}" dependency, which is ` +
+        `not installed. Run \`npm install ${OPTIONAL_CHROMA_CLIENT}\` to enable Chroma memory, or ` +
+        `use a local provider (in-memory or local-sqlite-mem) instead (no cloud account or network required).`,
+    );
+  }
+  return (options) => new ChromaClientCtor(options);
 }
 
 function defaultClientFactory(options: ChromaClientConnectOptions): ChromaClient {
@@ -297,13 +299,13 @@ export class ChromaMemoryProvider implements MemoryProvider {
       throw new Error("Chroma memory provider requires config.baseUrl (Chroma server URL).");
     }
     // Sync pre-checks only; async SSRF check runs in getCollection() before network access
+    let parsed: URL;
     try {
-      const parsed = new URL(this.chromaUrl);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new Error("Chroma memory provider requires config.baseUrl to be a valid http(s) URL.");
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message.includes("Chroma memory provider")) throw err;
+      parsed = new URL(this.chromaUrl);
+    } catch {
+      throw new Error("Chroma memory provider requires config.baseUrl to be a valid http(s) URL.");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       throw new Error("Chroma memory provider requires config.baseUrl to be a valid http(s) URL.");
     }
     validateCollectionName(this.collectionName);

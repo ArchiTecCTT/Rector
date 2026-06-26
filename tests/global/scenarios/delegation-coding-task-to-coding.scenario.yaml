@@ -1,0 +1,36 @@
+schemaVersion: rector.global-scenario.v1
+id: delegation-coding-task-to-coding
+title: delegation-coding-task-to-coding
+type: coding
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: Scenario delegation-coding-task-to-coding
+allowedSystems: [coding]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: coding
+successCriteria:
+  - scenario delegation-coding-task-to-coding executes
+validators:
+  - id: v1
+    cmd: npx
+    args: [--no-install, tsx, src/calculator.verify.ts]
+    cwd: .
+    timeoutMs: 30000
+    expectedExitCode: 0
+oracles:
+  mustChange: []
+  mustNotChange: []
+  mustIncludeEvidence: []
+budgets:
+  maxToolCalls: 10
+  maxRuntimeMs: 60000
+  maxMainModelRawToolTokens: 100
+setup:
+  copyWorkspaceToTemp: false
+  fixtures: []
+operation:
+  kind: validator_only
+expected:
+  status: failed
+  changedPaths: []
+  unchangedPaths: []
+  evidenceRefs: []

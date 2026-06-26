@@ -1,0 +1,36 @@
+schemaVersion: rector.global-scenario.v1
+id: coding-basic-fix-failing
+title: coding-basic-fix-failing
+type: coding
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: Scenario coding-basic-fix-failing
+allowedSystems: [coding]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: coding
+successCriteria:
+  - scenario coding-basic-fix-failing executes
+validators:
+  - id: calculator-source-verifier
+    cmd: node
+    args: [src/calculator-source.verify.js]
+    cwd: .
+    timeoutMs: 30000
+    expectedExitCode: 1
+oracles:
+  mustChange: []
+  mustNotChange: []
+  mustIncludeEvidence: []
+budgets:
+  maxToolCalls: 10
+  maxRuntimeMs: 60000
+  maxMainModelRawToolTokens: 100
+setup:
+  copyWorkspaceToTemp: false
+  fixtures: []
+operation:
+  kind: validator_only
+expected:
+  status: passed
+  changedPaths: []
+  unchangedPaths: []
+  evidenceRefs: []

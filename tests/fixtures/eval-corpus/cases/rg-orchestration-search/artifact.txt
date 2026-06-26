@@ -1,0 +1,2 @@
+src/notes.md:1:12:Configured orchestration should route through runOrchestratedChatRun.
+src/notes.md:3:1:orchestrationProfile=configured gates chat readiness.

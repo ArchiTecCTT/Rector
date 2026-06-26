@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "rector.capability.evidence.v1",
+  "capabilityId": "cartographer.grounding",
+  "caseId": "git-risky-multi-file",
+  "summary": "git diff of risky multi-file change (package.json + package-lock.json)",
+  "evidence": [
+    {
+      "kind": "diff_hunk",
+      "path": "cases/git-risky-multi-file/artifact.txt",
+      "lineStart": 1,
+      "lineEnd": 1,
+      "excerpt": "diff --git a/package.json b/package-lock.json",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://git-risky-multi-file/artifact.txt"
+    },
+    {
+      "kind": "diff_hunk",
+      "path": "cases/git-risky-multi-file/artifact.txt",
+      "lineStart": 2,
+      "lineEnd": 2,
+      "excerpt": "-  \"version\": \"0.3.0\"",
+      "relevance": "high",
+      "confidence": 0.95,
+      "rawArtifactRef": "artifact://git-risky-multi-file/artifact.txt"
+    }
+  ],
+  "coverage": {
+    "coveredMustContain": [
+      "diff --git a/package.json b/package-lock.json",
+      "-  \"version\": \"0.3.0\""
+    ],
+    "missingMustContain": [],
+    "forbiddenHits": [],
+    "unresolvedArtifactRefs": [],
+    "unresolvedFileRefs": [],
+    "outOfBoundsLineRefs": [],
+    "passed": true
+  },
+  "warnings": [],
+  "rawArtifactRefs": ["artifact://git-risky-multi-file/artifact.txt"]
+}

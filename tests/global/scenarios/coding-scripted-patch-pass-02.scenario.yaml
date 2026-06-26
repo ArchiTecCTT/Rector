@@ -1,0 +1,36 @@
+schemaVersion: rector.global-scenario.v1
+id: coding-scripted-patch-pass-02
+title: coding-scripted-patch-pass-02
+type: coding
+workspace: tests/fixtures/repos/rector-mini-fix
+userGoal: Scenario coding-scripted-patch-pass-02
+allowedSystems: [coding]
+forbiddenSystems: [research, writing, design]
+expectedSpecialist: coding
+successCriteria:
+  - scenario coding-scripted-patch-pass-02 executes
+validators:
+  - id: fixture-integrity-verifier
+    cmd: node
+    args: [src/fixture-integrity.verify.js]
+    cwd: .
+    timeoutMs: 30000
+    expectedExitCode: 0
+oracles:
+  mustChange: []
+  mustNotChange: []
+  mustIncludeEvidence: []
+budgets:
+  maxToolCalls: 10
+  maxRuntimeMs: 60000
+  maxMainModelRawToolTokens: 100
+setup:
+  copyWorkspaceToTemp: false
+  fixtures: []
+operation:
+  kind: validator_only
+expected:
+  status: passed
+  changedPaths: []
+  unchangedPaths: []
+  evidenceRefs: []

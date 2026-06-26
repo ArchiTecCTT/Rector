@@ -1,0 +1,8 @@
+{
+  "command": "npx tsc --noEmit --pretty false tests/fixtures/eval-corpus/cases/tsc-downstream-error/src/broken.ts",
+  "toolVersion": "tsc 5.8.3",
+  "capturedAt": "2026-06-24T10:18:00+08:00",
+  "platform": "linux x86_64",
+  "exitCode": 1,
+  "regenerableInCi": true
+}

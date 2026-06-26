@@ -1,0 +1,11 @@
+{
+  "caseId": "git-risky-multi-file",
+  "artifactKind": "git_diff",
+  "expectedExitCode": 1,
+  "expectedLineCount": 11,
+  "mustContain": [
+    "diff --git a/package.json b/package-lock.json",
+    "-  \"version\": \"0.3.0\""
+  ],
+  "mustNotContain": ["[REDACTED]"]
+}

@@ -1,0 +1,8 @@
+{
+  "command": "npm audit",
+  "toolVersion": "npm 10.8.2",
+  "capturedAt": "2026-06-24T10:25:00+08:00",
+  "platform": "linux x86_64",
+  "exitCode": 0,
+  "regenerableInCi": true
+}
