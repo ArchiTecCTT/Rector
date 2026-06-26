@@ -74,3 +74,9 @@ inspections
 # Teamwork agent artifacts
 ORIGINAL_PROMPT.md
 .agents/
+.opencode/
+!.opencode/
+.opencode/*
+!.opencode/skills/
+!.opencode/skills/**/
+!.opencode/skills/**/SKILL.md
