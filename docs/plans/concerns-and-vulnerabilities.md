@@ -792,6 +792,14 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 - **`fastPrecheck` caveat:** `scanChangedFiles({ fastPrecheck: true })` can miss a same-size content edit that preserves mtime because it skips hashing when size and mtime match. The default mode always hashes and remains correctness-first. This is an accepted performance/correctness tradeoff and is documented as deferred for full correctness in fast mode.
 - **Incremental persistence transactionality (Phase 1A inventory):** Resolved for scan-result persistence. Todo 3 implemented explicit SQLite transaction support in `SqliteCartographerInventoryStore` so that `scanChangedFiles` commits the snapshot, scan errors, file upserts, and deletions atomically. The transaction boundary was locked by tests in Todo 3 and Todo 4 (`inventoryStore.sqlite.test.ts`, `incrementalIndex.test.ts`). Graph-store transactions are not yet in scope (Phase 1C+). Synchronous driver blocking and other inventory caveats below remain.
 
+### Phase 1 Cartographer completion residuals (Todo 24 gate)
+
+- **Source:** Phase 1 acceptance gate (Todo 24, 2026-06-26 on `rector-0.3.0-phase-1`).
+- **Generated artifacts are local-only inspection artifacts:** `npm run cartographer:self-scan` produces `.rector/cartographer/latest-snapshot.json`, `latest-files.json`, and `scan-report.md`. These are explicitly not staged or committed. Tamper QA (temp copy of artifacts dir, remove one artifact, run checker) proves the checker fails with "missing artifact"; temp copy deleted; real artifacts untouched and checker passes on them.
+- **SQLite experimental warning:** `node:sqlite` is experimental in Node; warnings surface during `npm test -- tests/cartographer` (e.g., inventoryStore.sqlite, graphStore). This is a Node runtime limitation, not a code defect in Cartographer.
+- **Fake-purge still deferred:** `simulator.echo` is marked `test_only`/`quarantined` (never `production`); `workspace.validate` carries explicit fake-validation warning. No `PROVIDED_BY` edges are created without a deterministic model-assignment source. Full fake-system purge is Phase 3 / fake-purge workstream; `npm run audit:no-fakes` remains report-only (non-blocking).
+- **Scope fidelity:** Phase 1 complete strictly for Phase 1 scope (inventory hardening + self-scan + structural graph + Tool/Capability adapters using explicit metadata). No live specialist execution, provider routing, Capability-SLM fabric, Memory OS, or later phases are implemented or claimed.
+
 ## Chunk 051 — Inspection Cleanup
 
 ### Baseline

@@ -818,19 +818,32 @@ no runtime SLM calls are introduced
 
 # Phase 1 acceptance gate
 
-Phase 1 should not be considered complete unless all of these pass:
+**Status: COMPLETE (gate passed 2026-06-26 on branch `rector-0.3.0-phase-1`)**
+
+Phase 1 is complete for Phase 1 scope only when all of these pass (executed in `.worktrees/rector-0.3.0-phase-1`):
 
 ```text
 npm run check
 npm test -- tests/cartographer
 npm run cartographer:self-scan
 npm run cartographer:self-scan:check
+npm run build
 npm run verify:foundation
 npm run test:global
 npm run test:systems
 ```
 
-Required inspection artifacts:
+Gate results (concise):
+- `npm run check`: clean
+- `npm test -- tests/cartographer`: 25 files / 191 tests passed
+- `npm run cartographer:self-scan`: indexed=855, ignored=52, errors=0; artifacts written
+- `npm run cartographer:self-scan:check`: PASS
+- `npm run build`: clean
+- `npm run verify:foundation`: PASS
+- `npm run test:global`: 33 scenarios (offline, no model); passed 19/33; fake-path report-only
+- `npm run test:systems`: PASS (1/1 profiles valid)
+
+Required inspection artifacts (generated-only, local-only, not committed):
 
 ```text
 .rector/cartographer/latest-snapshot.json
@@ -839,7 +852,11 @@ Required inspection artifacts:
 docs/plans/2-0/phases/phase-1-cartographer.md
 ```
 
-The global harness should continue to run provider-free.
+**Scope boundary (honest):** Phase 1 complete for inventory hardening, deterministic self-scan + checker, structural graph (symbols/imports/calls/tests), query service, and Tool/Capability graph adapters using explicit metadata. No live specialist execution, no provider routing, no Capability-SLM fabric, no Memory OS, and no fake-purge completion are claimed or implemented. SQLite experimental warning surfaces in test output. Generated artifacts are inspection-only.
+
+The global harness continues to run provider-free.
+
+Failure QA performed: tamper probe on a temp copy of `.rector/cartographer/*` (remove one artifact) proves the checker fails; temp copy deleted; real artifacts untouched.
 
 ---
 
