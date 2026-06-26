@@ -53,3 +53,6 @@ export {
   makeToolId,
   normalizePath,
 } from "./graphIds";
+export type { CartographerGraphStore, PutGraphSnapshotInput } from "./graphStore";
+export { InMemoryCartographerGraphStore } from "./inMemoryGraphStore";
+export type { GraphSnapshot } from "./graphSnapshot";
