@@ -59,3 +59,14 @@ export { SqliteCartographerGraphStore, type SqliteCartographerGraphStoreOptions 
 export type { GraphSnapshot } from "./graphSnapshot";
 export { buildGraphSnapshot, type BuildGraphInput, type BuildGraphResult } from "./graphBuilder";
 export { extractTsSymbols, type ExtractTsSymbolsInput, type ExtractTsSymbolsResult, type ExtractedSymbol, type ExtractionDiagnostic, type SymbolKind } from "./tsSymbolExtractor";
+export {
+  extractImports,
+  type ExtractImportsInput,
+  type ExtractImportsResult,
+  type ImportRecord,
+  type ImportKind,
+  type ResolvedTarget,
+  type FileTarget,
+  type PackageTarget,
+  type UnresolvedTarget,
+} from "./importExtractor";
