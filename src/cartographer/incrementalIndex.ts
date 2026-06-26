@@ -121,6 +121,10 @@ async function emitOutputEvents(input: { readonly emitter?: CartographerScanEmit
 }
 
 async function persistResult(input: { readonly store: ScanChangedFilesInput["store"]; readonly repoRoot: string; readonly result: ScanResult }): Promise<void> {
+  if (typeof input.store.persistScanResult === "function") {
+    await input.store.persistScanResult({ repoRoot: input.repoRoot, result: input.result });
+    return;
+  }
   await input.store.createSnapshot({ repoRoot: input.repoRoot, files: input.result.files, ignoredFiles: input.result.ignoredFiles, deletedFiles: input.result.deletedFiles, changedFiles: input.result.changedFiles, id: input.result.snapshot.id, createdAt: input.result.snapshot.createdAt });
   await input.store.recordErrors(input.result.snapshot.id, input.result.errors);
   await input.store.upsertFiles(input.repoRoot, input.result.files);

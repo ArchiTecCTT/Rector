@@ -85,6 +85,21 @@ export class InMemoryCartographerInventoryStore implements CartographerInventory
     return (this.errorsBySnapshotId.get(snapshotId) ?? []).map(clone);
   }
 
+  async persistScanResult(input: { repoRoot: string; result: import("./types").ScanResult }): Promise<void> {
+    await this.createSnapshot({
+      repoRoot: input.repoRoot,
+      files: input.result.files,
+      ignoredFiles: input.result.ignoredFiles,
+      deletedFiles: input.result.deletedFiles,
+      changedFiles: input.result.changedFiles,
+      id: input.result.snapshot.id,
+      createdAt: input.result.snapshot.createdAt,
+    });
+    await this.recordErrors(input.result.snapshot.id, input.result.errors);
+    await this.upsertFiles(input.repoRoot, input.result.files);
+    await this.removeFiles(input.repoRoot, input.result.deletedFiles);
+  }
+
   private now(): Date {
     return this.options.now?.() ?? new Date();
   }

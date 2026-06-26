@@ -4,7 +4,7 @@ import { ensureRestrictedDir, ensureRestrictedFile } from "../security/filePermi
 import { DEFAULT_SQLITE_PATH } from "../store";
 import { createSqliteDriver, type SqlDriver } from "../store/sqlRectorStore";
 import { hashString } from "./fileHasher";
-import type { CartographerInventoryStore, CreateSnapshotInput, FileNode, RepoSnapshot, ScanError } from "./types";
+import type { CartographerInventoryStore, CreateSnapshotInput, FileNode, RepoSnapshot, ScanError, ScanResult } from "./types";
 
 const SQLITE_MAX_VARIABLES = 999;
 const DELETE_PATHS_PER_STATEMENT = SQLITE_MAX_VARIABLES - 1;
@@ -161,6 +161,29 @@ export class SqliteCartographerInventoryStore implements CartographerInventorySt
         [snapshotId],
       )
       .map(errorFromRow);
+  }
+
+  async persistScanResult(input: { repoRoot: string; result: ScanResult }): Promise<void> {
+    const { repoRoot, result } = input;
+    this.driver.exec("BEGIN");
+    try {
+      await this.createSnapshot({
+        repoRoot,
+        files: result.files,
+        ignoredFiles: result.ignoredFiles,
+        deletedFiles: result.deletedFiles,
+        changedFiles: result.changedFiles,
+        id: result.snapshot.id,
+        createdAt: result.snapshot.createdAt,
+      });
+      await this.recordErrors(result.snapshot.id, result.errors);
+      await this.upsertFiles(repoRoot, result.files);
+      await this.removeFiles(repoRoot, result.deletedFiles);
+      this.driver.exec("COMMIT");
+    } catch (error) {
+      this.driver.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   private migrate(): void {

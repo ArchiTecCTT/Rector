@@ -130,6 +130,7 @@ export interface CartographerInventoryStore {
   createSnapshot(input: CreateSnapshotInput): Promise<RepoSnapshot>;
   recordErrors(snapshotId: string, errors: readonly ScanError[]): Promise<void>;
   listErrors(snapshotId: string): Promise<readonly ScanError[]>;
+  persistScanResult?(input: { repoRoot: string; result: ScanResult }): Promise<void>;
 }
 
 export type LoadIgnoreMatchersResult = {

@@ -190,6 +190,54 @@ describe("Cartographer T8 incremental indexer", () => {
     expect(eventTypes).toContain("CARTOGRAPHER_SCAN_FAILED");
     expect(store.mutatingCalls).toEqual([]);
   });
+
+  it("rolls back snapshot and file state when persistence fails after snapshot creation but before file upsert/removal (SQLite atomic)", async () => {
+    const repoRoot = await makeFixtureRepo();
+    const resolvedRoot = path.resolve(repoRoot);
+    const innerDriver = createSqliteDriver({ path: ":memory:" });
+    openDrivers.add(innerDriver);
+
+    const failingDriver = new (class implements SqlDriver {
+      private snapshotWritten = false;
+      constructor(private readonly inner: SqlDriver) {}
+      get dialect() {
+        return this.inner.dialect;
+      }
+      exec(sql: string): void {
+        this.inner.exec(sql);
+      }
+      run(sql: string, params?: unknown[]): void {
+        if (/INSERT INTO cartographer_snapshots/i.test(sql)) {
+          this.inner.run(sql, params);
+          this.snapshotWritten = true;
+          return;
+        }
+        if (this.snapshotWritten && /(cartographer_files|cartographer_scan_errors)/i.test(sql)) {
+          throw new Error("atomic-test: injected failure after snapshot");
+        }
+        this.inner.run(sql, params);
+      }
+      get<T = unknown>(sql: string, params?: unknown[]): T | undefined {
+        return this.inner.get<T>(sql, params);
+      }
+      all<T = unknown>(sql: string, params?: unknown[]): T[] {
+        return this.inner.all<T>(sql, params);
+      }
+      close(): void {
+        this.inner.close();
+      }
+    })(innerDriver);
+
+    const store = new SqliteCartographerInventoryStore({ driver: failingDriver, now: () => fixedNow });
+
+    await expect(scanChangedFiles({ repoRoot, store, now: () => fixedNow })).rejects.toThrow(
+      /injected failure after snapshot/i,
+    );
+
+    expect(await store.getLatestSnapshot(resolvedRoot)).toBeUndefined();
+    expect(await store.listSnapshots(resolvedRoot)).toEqual([]);
+    expect(await store.listFiles(resolvedRoot)).toEqual([]);
+  });
 });
 
 const fixtureIndexedPaths = [".env.example", ".gitignore", ".rectorignore", "docs/architecture.md", "package.json", "src/app.test.ts", "src/app.ts", "src/index.ts", "tsconfig.json"] as const;
