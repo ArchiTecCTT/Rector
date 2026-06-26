@@ -138,6 +138,24 @@ tests/cartographer/cartographer.integration.test.ts
 
 Existing coverage already includes deterministic fixture scans, ignored env files, symlink skipping, sorted outputs, event ordering, no-read safety for `.env.production`, in-memory and SQLite incremental store parity, added/modified/deleted file detection, became-ignored deletion semantics, and retained prior inventory on recoverable hash failure.
 
+## Phase 1A coverage checklist
+
+This checklist maps every required Phase 1A hardening case (the list under "The required hardening surface is") to its coverage status. Status values are used exactly as: `covered by existing test`, `covered by new test`, `intentionally deferred with reason`. No row claims completion unless backed by a concrete test path and short behavior description. Cases whose focused coverage is explicitly assigned to a later todo are deferred here.
+
+- deterministic sorted output: covered by existing test — `tests/cartographer/repoScanner.test.ts:25` ("indexes, ignores, sorts, emits, and remains deterministic for the fixture repo") asserts `isSortedUtf16` on files/changedFiles/ignoredFiles and exact fixture order.
+- .gitignore / .rectorignore precedence: covered by existing test — `tests/cartographer/ignorePolicy.test.ts:69` ("respects gitignore before rectorignore and supports trailing slash directory patterns") exercises root gitignore winning overlaps and rectorignore filling gaps.
+- binary detection: covered by existing test — `tests/cartographer/fileClassifier.test.ts:39` ("classifies NUL-containing head buffers as binary") and `ignorePolicy.test.ts:92` (binaryDecision source "binary").
+- generated/vendor/lockfile classification: covered by existing test — `tests/cartographer/fileClassifier.test.ts:16` ("classifies required source, test, config, doc, asset, lockfile, generated, and unknown cases") and priority-order test at :50 covering vendor/generated/lockfile.
+- hash changes: covered by existing test — `tests/cartographer/incrementalIndex.test.ts:49` ("detects added files and byte modifications by hash") and :71 ("detects same-size byte edits even when mtime is restored").
+- deleted files: covered by existing test — `tests/cartographer/incrementalIndex.test.ts:33` (deletedFiles expectations, became-ignored deletion semantics) plus plan baseline "added/modified/deleted file detection".
+- symlinks: covered by existing test — `tests/cartographer/repoScanner.test.ts:54` (fixture creates symlink; ignored ref has source "symlink"; descendants not emitted or read).
+- path normalization: covered by existing test — `tests/cartographer/repoScanner.test.ts:74` ("normalizes backslash paths and caps head-sniff reads") plus harness `normalizedFromRoot`.
+- large-file ignores: intentionally deferred with reason — size_limit decision exists in `ignorePolicy.test.ts:91`, but explicit scanner-level contract (files above DEFAULT_MAX_FILE_SIZE_BYTES ignored with source `size_limit`, scanner does not call readAll, result records the ignored file exactly once) is added by Todo 4 per plan "Add explicit large-file ignore coverage".
+- recoverable read errors: covered by existing test — `tests/cartographer/repoScanner.test.ts:99` (hash/read/walk/emit recoverable failures; "retained prior inventory on recoverable hash failure") and `ignorePolicy.test.ts:123` (oversized root gitignore treated as absent with recoverable error).
+- SQLite/in-memory parity: covered by existing test — `tests/cartographer/incrementalIndex.test.ts:31` (identical expectations exercised for both "in-memory" and "sqlite" stores); dedicated `inventoryStore.sqlite.test.ts` / `inventoryStore.inMemory.test.ts` cover snapshot/file/error roundtrips.
+- scan event order: covered by existing test — `tests/cartographer/repoScanner.test.ts:69` (events.map(labelForEvent) equals expectedFixtureEvents); `cartographer.integration.test.ts` confirms sorted per-entry event ordering.
+- snapshot immutability: covered by existing test — `tests/cartographer/repoScanner.test.ts:71` (identical scans produce identical snapshot.id); `incrementalIndex.test.ts:66` (content change yields new id); stores derive deterministic id from payload (see `inventoryStore.*.test.ts` createSnapshot).
+
 ## Required work
 
 ### 1. Add a Phase 1A coverage checklist
