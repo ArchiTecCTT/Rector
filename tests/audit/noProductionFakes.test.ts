@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -74,7 +75,8 @@ describe("no-production-fakes audit", () => {
 
   it("CLI exits zero even when report-only fake findings are present", () => {
     // Given: the audit script is executed through the local tsx CLI against current src.
-    const tsxCli = path.join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
+    const requireFromTest = createRequire(import.meta.url);
+    const tsxCli = path.join(path.dirname(requireFromTest.resolve("tsx/package.json")), "dist/cli.mjs");
 
     // When: the script runs as a subprocess.
     const output = execFileSync(process.execPath, [tsxCli, "scripts/audit/no-production-fakes.ts"], {
@@ -102,7 +104,8 @@ describe("no-production-fakes audit", () => {
 
   it("CLI exits nonzero for a nonexistent scan root argument", async () => {
     // Given: the audit script is executed through tsx with an explicit missing scan root.
-    const tsxCli = path.join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
+    const requireFromTest = createRequire(import.meta.url);
+    const tsxCli = path.join(path.dirname(requireFromTest.resolve("tsx/package.json")), "dist/cli.mjs");
     const missingRoot = await makeMissingRoot();
 
     // When: the subprocess runs with the missing scan-root argument.

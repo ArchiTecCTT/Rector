@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { PERFORMANCE_BASELINE_SECTIONS } from "../scripts/performance-baseline";
@@ -39,7 +40,8 @@ describe("performance baseline script", () => {
       if (!(key in DECOY_SECRETS)) delete env[key];
     }
 
-    const tsxCli = join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
+    const requireFromTest = createRequire(import.meta.url);
+    const tsxCli = join(dirname(requireFromTest.resolve("tsx/package.json")), "dist/cli.mjs");
     const output = execFileSync(process.execPath, [tsxCli, "scripts/performance-baseline.ts"], {
       cwd: process.cwd(),
       encoding: "utf8",
