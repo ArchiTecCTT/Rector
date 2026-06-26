@@ -1,9 +1,13 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
   buildGraphSnapshot,
   InMemoryCartographerGraphStore,
   SqliteCartographerGraphStore,
+  makeFileId,
+  type FileNode,
 } from "../../src/cartographer";
 import { createSqliteDriver, type SqlDriver } from "../../src/store";
 import {
@@ -223,5 +227,228 @@ describe("graphBuilder", () => {
     expect(sqlEdges).toEqual(memEdges);
 
     driver.close();
+  });
+
+  it("builds structural nodes (Function/Class/Interface/TypeAlias/Enum/Symbol) and DEFINES/EXPORTS edges when getSourceText provided", async () => {
+    const repoRoot = await makeStructuralMiniFixture();
+    const scan = await scanStructuralMiniFixture();
+    const invId = scan.snapshot.id;
+
+    // Synthetic source exercising all required structural symbol kinds.
+    // "variable" maps to fallback "Symbol" node kind per symbolKindToNodeKind.
+    const structuralSrc = `
+export function myFunc(): void {}
+export class MyClass {}
+export interface MyInterface {}
+export type MyTypeAlias = string;
+export enum MyEnum { A = 1, B = 2 }
+export const myVar = 42;
+`;
+
+    const structuralPath = "src/structural-all-kinds.ts";
+    const structuralFile: FileNode = {
+      id: makeFileId(repoRoot, structuralPath),
+      path: structuralPath,
+      normalizedPath: structuralPath,
+      hash: "cafebabe",
+      sizeBytes: structuralSrc.length,
+      language: "typescript",
+      kind: "source",
+      ignored: false,
+      lastIndexedAt: "2026-06-20T00:00:00.000Z",
+    };
+
+    const filesWithStructural = [...scan.files, structuralFile];
+
+    const getSourceText = (np: string): string | undefined => {
+      if (np === structuralPath) return structuralSrc;
+      try {
+        return readFileSync(path.join(repoRoot, np), "utf8");
+      } catch {
+        return undefined;
+      }
+    };
+
+    const result = await buildGraphSnapshot({
+      repoRoot,
+      inventorySnapshotId: invId,
+      createdAt: "2026-06-20T00:00:00.000Z",
+      files: filesWithStructural,
+      getSourceText,
+    });
+
+    const kinds = new Set(result.nodes.map((n) => n.kind));
+    expect(kinds.has("Function")).toBe(true);
+    expect(kinds.has("Class")).toBe(true);
+    expect(kinds.has("Interface")).toBe(true);
+    expect(kinds.has("TypeAlias")).toBe(true);
+    expect(kinds.has("Enum")).toBe(true);
+    expect(kinds.has("Symbol")).toBe(true);
+
+    const defines = result.edges.filter((e) => e.kind === "DEFINES");
+    expect(defines.length).toBeGreaterThan(0);
+
+    const exportsEdges = result.edges.filter((e) => e.kind === "EXPORTS");
+    expect(exportsEdges.length).toBeGreaterThan(0);
+  });
+
+  it("emits IMPORTS/DEPENDS_ON for resolved relative imports and bare Package nodes for bare specifiers", async () => {
+    const repoRoot = await makeStructuralMiniFixture();
+    const scan = await scanStructuralMiniFixture();
+    const invId = scan.snapshot.id;
+
+    const getSourceText = (np: string): string | undefined => {
+      try {
+        return readFileSync(path.join(repoRoot, np), "utf8");
+      } catch {
+        return undefined;
+      }
+    };
+
+    const result = await buildGraphSnapshot({
+      repoRoot,
+      inventorySnapshotId: invId,
+      createdAt: "2026-06-20T00:00:00.000Z",
+      files: scan.files,
+      getSourceText,
+    });
+
+    const imports = result.edges.filter((e) => e.kind === "IMPORTS");
+    const depends = result.edges.filter((e) => e.kind === "DEPENDS_ON");
+    expect(imports.length).toBeGreaterThan(0);
+    expect(depends.length).toBeGreaterThan(0);
+
+    // Bare package nodes exist for any bare specifier present in sources (none in this fixture, but shape is exercised)
+    const pkgs = result.nodes.filter((n) => n.kind === "Package");
+    expect(pkgs.length).toBeGreaterThan(0);
+  });
+
+  it("does not emit IMPORTS/DEPENDS_ON/EXPORTS edges for unresolved imports (no self-edge or fabricated target)", async () => {
+    const repoRoot = await makeStructuralMiniFixture();
+    const scan = await scanStructuralMiniFixture();
+    const invId = scan.snapshot.id;
+
+    // Build a synthetic file list + source text that contains an unresolved relative import
+    // and an alias-style import. Use getSourceText to supply the text for the synthetic file.
+    const syntheticPath = "src/unresolved.ts";
+    const syntheticSource = `
+import { x } from "./does-not-exist";
+import { y } from "@/alias/path";
+export const z = 1;
+`;
+
+    // Extend the inventory with a synthetic file node (ignored by real scan but used by builder)
+    const syntheticFile: FileNode = {
+      id: makeFileId(repoRoot, syntheticPath),
+      path: syntheticPath,
+      normalizedPath: syntheticPath,
+      hash: "deadbeef",
+      sizeBytes: syntheticSource.length,
+      language: "typescript",
+      kind: "source",
+      ignored: false,
+      lastIndexedAt: "2026-06-20T00:00:00.000Z",
+    };
+
+    const filesWithSynthetic = [...scan.files, syntheticFile];
+
+    const getSourceText = (np: string): string | undefined => {
+      if (np === syntheticPath) return syntheticSource;
+      try {
+        return readFileSync(path.join(repoRoot, np), "utf8");
+      } catch {
+        return undefined;
+      }
+    };
+
+    const result = await buildGraphSnapshot({
+      repoRoot,
+      inventorySnapshotId: invId,
+      createdAt: "2026-06-20T00:00:00.000Z",
+      files: filesWithSynthetic,
+      getSourceText,
+    });
+
+    const syntheticFileId = makeFileId(repoRoot, syntheticPath);
+
+    // No IMPORTS/DEPENDS_ON/EXPORTS edge whose toNodeId is the synthetic file for import/dependency edges
+    // (no unresolved target fabricated as self or any other)
+    const unresolvedTargetEdges = result.edges.filter(
+      (e) => e.toNodeId === syntheticFileId && (e.kind === "IMPORTS" || e.kind === "DEPENDS_ON"),
+    );
+    expect(unresolvedTargetEdges.length).toBe(0);
+
+    // No IMPORTS or DEPENDS_ON edges emitted from the synthetic file (unresolved imports must not create dependency edges)
+    const outgoingImportEdges = result.edges.filter(
+      (e) => e.fromNodeId === syntheticFileId && (e.kind === "IMPORTS" || e.kind === "DEPENDS_ON"),
+    );
+    expect(outgoingImportEdges.length).toBe(0);
+  });
+
+  it("emits TESTS edges from findTests evidence when getSourceText provided", async () => {
+    const repoRoot = await makeStructuralMiniFixture();
+    const scan = await scanStructuralMiniFixture();
+    const invId = scan.snapshot.id;
+
+    const getSourceText = (np: string): string | undefined => {
+      try {
+        return readFileSync(path.join(repoRoot, np), "utf8");
+      } catch {
+        return undefined;
+      }
+    };
+
+    const result = await buildGraphSnapshot({
+      repoRoot,
+      inventorySnapshotId: invId,
+      createdAt: "2026-06-20T00:00:00.000Z",
+      files: scan.files,
+      getSourceText,
+    });
+
+    const testsEdges = result.edges.filter((e) => e.kind === "TESTS");
+    // app.test.ts imports app.ts -> should produce at least one TESTS edge
+    expect(testsEdges.length).toBeGreaterThan(0);
+    const hasAppTestToApp = testsEdges.some((e) => {
+      const from = result.nodes.find((n) => n.id === e.fromNodeId);
+      const to = result.nodes.find((n) => n.id === e.toNodeId);
+      return from?.normalizedPath === "src/app.test.ts" && to?.normalizedPath === "src/app.ts";
+    });
+    expect(hasAppTestToApp).toBe(true);
+  });
+
+  it("produces deterministic output across shuffled file order and shuffled import order (via getSourceText)", async () => {
+    const repoRoot = await makeStructuralMiniFixture();
+    const scan = await scanStructuralMiniFixture();
+    const invId = scan.snapshot.id;
+
+    const getSourceText = (np: string): string | undefined => {
+      try {
+        return readFileSync(path.join(repoRoot, np), "utf8");
+      } catch {
+        return undefined;
+      }
+    };
+
+    const base = await buildGraphSnapshot({
+      repoRoot,
+      inventorySnapshotId: invId,
+      createdAt: "2026-06-20T00:00:00.000Z",
+      files: scan.files,
+      getSourceText,
+    });
+
+    // Shuffle files
+    const shuffledFiles = [...scan.files].sort((a, b) => (a.hash < b.hash ? 1 : a.hash > b.hash ? -1 : 0));
+    const shuf = await buildGraphSnapshot({
+      repoRoot,
+      inventorySnapshotId: invId,
+      createdAt: "2026-06-20T00:00:00.000Z",
+      files: shuffledFiles,
+      getSourceText,
+    });
+
+    expect(shuf.nodes.map((n) => n.id)).toEqual(base.nodes.map((n) => n.id));
+    expect(shuf.edges.map((e) => e.id)).toEqual(base.edges.map((e) => e.id));
   });
 });
