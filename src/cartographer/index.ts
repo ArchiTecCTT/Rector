@@ -34,3 +34,4 @@ export { SqliteCartographerInventoryStore, type SqliteCartographerInventoryStore
 export { scanRepository } from "./repoScanner";
 export { scanChangedFiles } from "./incrementalIndex";
 export { buildScanSummary } from "./scanResult";
+export * from "./selfScanReport";
