@@ -155,15 +155,22 @@ function isErrorAllowlisted(err: ScanError, allowlist: SelfScanAllowlist): boole
   return allowlist.entries.some((e) => errorMatchesEntry(err, e));
 }
 
+const FORBIDDEN_ENV_FILENAME_RE =
+  /(^|[\s"'`:,\/])((\.env)(?!\.example)(\.[A-Za-z0-9_-]+)?)($|[\s"'`:,\/])/;
+
+function lineSkipsEnvFilenameCheck(line: string): boolean {
+  return /\.env \(non-example\)/i.test(line);
+}
+
+function matchedEnvFilenameIsForbidden(candidate: string | undefined): boolean {
+  return Boolean(candidate && candidate !== ".env.example");
+}
+
 function containsForbiddenEnvInContent(text: string): boolean {
-  const lines = text.split(/\r?\n/);
-  for (const line of lines) {
-    if (/\.env \(non-example\)/i.test(line)) continue;
-    const m = line.match(/(^|[\s"'`:,\/])((\.env)(?!\.example)(\.[A-Za-z0-9_-]+)?)($|[\s"'`:,\/])/);
-    if (m) {
-      const candidate = m[2];
-      if (candidate && candidate !== ".env.example") return true;
-    }
+  for (const line of text.split(/\r?\n/)) {
+    if (lineSkipsEnvFilenameCheck(line)) continue;
+    const match = line.match(FORBIDDEN_ENV_FILENAME_RE);
+    if (matchedEnvFilenameIsForbidden(match?.[2])) return true;
   }
   return false;
 }

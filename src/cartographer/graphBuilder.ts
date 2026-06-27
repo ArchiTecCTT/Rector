@@ -71,160 +71,45 @@ export async function buildGraphSnapshot(input: BuildGraphInput): Promise<BuildG
   const projectId = makeProjectId(repoRoot);
   const packageId = makePackageId(repoRoot, ".");
 
-  // Collect unique directory normalized paths (all ancestor dirs of files)
-  const dirSet = new Set<string>();
-  for (const f of files) {
-    let p = f.normalizedPath;
-    while (p.includes("/")) {
-      p = p.slice(0, p.lastIndexOf("/"));
-      if (p.length > 0 && p !== ".") {
-        dirSet.add(p);
-      }
-    }
-  }
-
-  const nodes: CartographerGraphNode[] = [];
-
-  nodes.push({
-    id: projectId,
-    snapshotId,
-    kind: "Project",
-    label: projectLabel,
-    path: ".",
-    normalizedPath: ".",
-    properties: {},
-  });
-
-  nodes.push({
-    id: packageId,
-    snapshotId,
-    kind: "Package",
-    label: packageLabel,
-    path: "package.json",
-    normalizedPath: "package.json",
-    properties: {},
-  });
-
-  for (const dir of [...dirSet].sort(compareUtf16)) {
-    nodes.push({
-      id: makeDirectoryId(repoRoot, dir),
-      snapshotId,
-      kind: "Directory",
-      label: dir.split("/").pop() ?? dir,
-      path: dir,
-      normalizedPath: dir,
-      properties: {},
-    });
-  }
-
-  // Sort files for stable emission order before final id sort
+  const dirSet = collectAncestorDirectories(files);
   const sortedFiles = [...files].sort((a, b) => compareUtf16(a.normalizedPath, b.normalizedPath));
+  const nodes = emitBaselineInventoryNodes({
+    repoRoot,
+    snapshotId,
+    projectId,
+    packageId,
+    projectLabel,
+    packageLabel,
+    dirSet,
+    sortedFiles,
+  });
 
-  for (const f of sortedFiles) {
-    const gkind = fileKindToGraphKind(f.kind);
-    nodes.push({
-      id: makeFileId(repoRoot, f.normalizedPath),
-      snapshotId,
-      kind: gkind,
-      label: f.normalizedPath.split("/").pop() ?? f.normalizedPath,
-      path: f.normalizedPath,
-      normalizedPath: f.normalizedPath,
-      language: f.language,
-      fileHash: f.hash,
-      startLine: 1,
-      properties: { kind: f.kind },
-    });
-  }
-
-  // Structural extraction (only when getSourceText provided)
   const indexedNormalized = sortedFiles.map((f) => normalizePath(f.normalizedPath));
 
-  const edges: CartographerGraphEdge[] = [];
-
-  // Baseline CONTAINS edges (Project, dirs, files) — must be emitted even without structural extraction
-  // Project contains Package
-  edges.push({
-    id: makeEdgeId("CONTAINS", projectId, packageId),
+  const edges = emitBaselineContainsEdges({
+    repoRoot,
     snapshotId,
-    kind: "CONTAINS",
-    fromNodeId: projectId,
-    toNodeId: packageId,
-    properties: {},
+    projectId,
+    packageId,
+    dirSet,
+    sortedFiles,
   });
-
-  // Project contains each top-level dir; dir contains child dir
-  for (const dir of [...dirSet].sort(compareUtf16)) {
-    const dirId = makeDirectoryId(repoRoot, dir);
-    const parent = parentOf(dir);
-    const parentId = parent === "." ? projectId : makeDirectoryId(repoRoot, parent);
-    edges.push({
-      id: makeEdgeId("CONTAINS", parentId, dirId),
-      snapshotId,
-      kind: "CONTAINS",
-      fromNodeId: parentId,
-      toNodeId: dirId,
-      properties: {},
-    });
-  }
-
-  // Parent (dir or project) contains each file
-  for (const f of sortedFiles) {
-    const fileId = makeFileId(repoRoot, f.normalizedPath);
-    const parent = parentOf(f.normalizedPath);
-    const parentId = parent === "." ? projectId : makeDirectoryId(repoRoot, parent);
-    edges.push({
-      id: makeEdgeId("CONTAINS", parentId, fileId),
-      snapshotId,
-      kind: "CONTAINS",
-      fromNodeId: parentId,
-      toNodeId: fileId,
-      properties: {},
-    });
-  }
 
   // Collect structural nodes/edges deterministically
   const structuralNodes: CartographerGraphNode[] = [];
   const structuralEdges: CartographerGraphEdge[] = [];
 
-  // Bare package nodes discovered from imports (deduped by specifier)
-  const barePackages = new Map<string, string>(); // specifier -> packageId
-
-  // For each file, run extractors if source available
-  for (const f of sortedFiles) {
-    const src = getSourceText ? getSourceText(f.normalizedPath) : undefined;
-    if (src === undefined) continue;
-    // C2: structural extraction is for TS/JS files only; skip docs/config/JSON/etc.
-    if (!isTsOrJsLanguage(f.language)) continue;
-
-    const fileId = makeFileId(repoRoot, f.normalizedPath);
-
-    // Symbols -> Symbol + kinded nodes + DEFINES + EXPORTS
-    const symRes = extractTsSymbols({ filePath: f.normalizedPath, sourceText: src });
-    emitSymbolNodesAndEdges({
-      structuralNodes,
-      structuralEdges,
-      snapshotId,
-      repoRoot,
-      fileId,
-      normalizedPath: f.normalizedPath,
-      language: f.language,
-      hash: f.hash,
-      symbols: symRes.symbols,
-    });
-
-    // Imports/exports -> IMPORTS / DEPENDS_ON / EXPORTS (for export-from) + bare Package nodes
-    const impRes = extractImports({ filePath: f.normalizedPath, sourceText: src, indexedFiles: indexedNormalized });
-    emitImportAndExportEdges({
-      structuralNodes,
-      structuralEdges,
-      snapshotId,
-      repoRoot,
-      fileId,
-      normalizedPath: f.normalizedPath,
-      imports: impRes.imports,
-      barePackages,
-    });
-  }
+  const barePackages = new Map<string, string>();
+  emitStructuralExtractionForFiles({
+    sortedFiles,
+    getSourceText,
+    indexedNormalized,
+    structuralNodes,
+    structuralEdges,
+    snapshotId,
+    repoRoot,
+    barePackages,
+  });
 
   // Emit TESTS edges from findTests evidence (import-first, basename fallback)
   // C3: compute links once per source file (findTests result is independent of the test file).
@@ -259,6 +144,194 @@ export async function buildGraphSnapshot(input: BuildGraphInput): Promise<BuildG
     nodes: sortedNodes,
     edges: sortedEdges,
   };
+}
+
+
+function collectAncestorDirectories(files: readonly FileNode[]): Set<string> {
+  const dirSet = new Set<string>();
+  for (const f of files) {
+    let p = f.normalizedPath;
+    while (p.includes("/")) {
+      p = p.slice(0, p.lastIndexOf("/"));
+      if (p.length > 0 && p !== ".") {
+        dirSet.add(p);
+      }
+    }
+  }
+  return dirSet;
+}
+
+function emitBaselineInventoryNodes(args: {
+  repoRoot: string;
+  snapshotId: string;
+  projectId: string;
+  packageId: string;
+  projectLabel: string;
+  packageLabel: string;
+  dirSet: Set<string>;
+  sortedFiles: readonly FileNode[];
+}): CartographerGraphNode[] {
+  const nodes: CartographerGraphNode[] = [];
+  const {
+    repoRoot,
+    snapshotId,
+    projectId,
+    packageId,
+    projectLabel,
+    packageLabel,
+    dirSet,
+    sortedFiles,
+  } = args;
+
+  nodes.push({
+    id: projectId,
+    snapshotId,
+    kind: "Project",
+    label: projectLabel,
+    path: ".",
+    normalizedPath: ".",
+    properties: {},
+  });
+
+  nodes.push({
+    id: packageId,
+    snapshotId,
+    kind: "Package",
+    label: packageLabel,
+    path: "package.json",
+    normalizedPath: "package.json",
+    properties: {},
+  });
+
+  for (const dir of [...dirSet].sort(compareUtf16)) {
+    nodes.push({
+      id: makeDirectoryId(repoRoot, dir),
+      snapshotId,
+      kind: "Directory",
+      label: dir.split("/").pop() ?? dir,
+      path: dir,
+      normalizedPath: dir,
+      properties: {},
+    });
+  }
+
+  for (const f of sortedFiles) {
+    const gkind = fileKindToGraphKind(f.kind);
+    nodes.push({
+      id: makeFileId(repoRoot, f.normalizedPath),
+      snapshotId,
+      kind: gkind,
+      label: f.normalizedPath.split("/").pop() ?? f.normalizedPath,
+      path: f.normalizedPath,
+      normalizedPath: f.normalizedPath,
+      language: f.language,
+      fileHash: f.hash,
+      startLine: 1,
+      properties: { kind: f.kind },
+    });
+  }
+
+  return nodes;
+}
+
+function emitStructuralExtractionForFiles(args: {
+  sortedFiles: readonly FileNode[];
+  getSourceText?: (normalizedPath: string) => string | undefined;
+  indexedNormalized: readonly string[];
+  structuralNodes: CartographerGraphNode[];
+  structuralEdges: CartographerGraphEdge[];
+  snapshotId: string;
+  repoRoot: string;
+  barePackages: Map<string, string>;
+}): void {
+  if (!args.getSourceText) return;
+
+  for (const f of args.sortedFiles) {
+    const src = args.getSourceText(f.normalizedPath);
+    if (src === undefined) continue;
+    if (!isTsOrJsLanguage(f.language)) continue;
+
+    const fileId = makeFileId(args.repoRoot, f.normalizedPath);
+    const symRes = extractTsSymbols({ filePath: f.normalizedPath, sourceText: src });
+    emitSymbolNodesAndEdges({
+      structuralNodes: args.structuralNodes,
+      structuralEdges: args.structuralEdges,
+      snapshotId: args.snapshotId,
+      repoRoot: args.repoRoot,
+      fileId,
+      normalizedPath: f.normalizedPath,
+      language: f.language,
+      hash: f.hash,
+      symbols: symRes.symbols,
+    });
+
+    const impRes = extractImports({
+      filePath: f.normalizedPath,
+      sourceText: src,
+      indexedFiles: args.indexedNormalized,
+    });
+    emitImportAndExportEdges({
+      structuralNodes: args.structuralNodes,
+      structuralEdges: args.structuralEdges,
+      snapshotId: args.snapshotId,
+      repoRoot: args.repoRoot,
+      fileId,
+      normalizedPath: f.normalizedPath,
+      imports: impRes.imports,
+      barePackages: args.barePackages,
+    });
+  }
+}
+
+function emitBaselineContainsEdges(args: {
+  repoRoot: string;
+  snapshotId: string;
+  projectId: string;
+  packageId: string;
+  dirSet: Set<string>;
+  sortedFiles: readonly FileNode[];
+}): CartographerGraphEdge[] {
+  const edges: CartographerGraphEdge[] = [];
+  const { repoRoot, snapshotId, projectId, packageId, dirSet, sortedFiles } = args;
+
+  edges.push({
+    id: makeEdgeId("CONTAINS", projectId, packageId),
+    snapshotId,
+    kind: "CONTAINS",
+    fromNodeId: projectId,
+    toNodeId: packageId,
+    properties: {},
+  });
+
+  for (const dir of [...dirSet].sort(compareUtf16)) {
+    const dirId = makeDirectoryId(repoRoot, dir);
+    const parent = parentOf(dir);
+    const parentId = parent === "." ? projectId : makeDirectoryId(repoRoot, parent);
+    edges.push({
+      id: makeEdgeId("CONTAINS", parentId, dirId),
+      snapshotId,
+      kind: "CONTAINS",
+      fromNodeId: parentId,
+      toNodeId: dirId,
+      properties: {},
+    });
+  }
+
+  for (const f of sortedFiles) {
+    const fileId = makeFileId(repoRoot, f.normalizedPath);
+    const parent = parentOf(f.normalizedPath);
+    const parentId = parent === "." ? projectId : makeDirectoryId(repoRoot, parent);
+    edges.push({
+      id: makeEdgeId("CONTAINS", parentId, fileId),
+      snapshotId,
+      kind: "CONTAINS",
+      fromNodeId: parentId,
+      toNodeId: fileId,
+      properties: {},
+    });
+  }
+
+  return edges;
 }
 
 function hasOwnProp(o: unknown, k: string): o is Record<string, unknown> {
@@ -404,6 +477,84 @@ function ensureBarePackageNode(args: {
   return pkgNodeId;
 }
 
+type ImportEdgeEmitCtx = {
+  structuralNodes: CartographerGraphNode[];
+  structuralEdges: CartographerGraphEdge[];
+  snapshotId: string;
+  repoRoot: string;
+  fileId: string;
+  normalizedPath: string;
+  barePackages: Map<string, string>;
+};
+
+function importRecordEvidence(
+  normalizedPath: string,
+  rec: ReturnType<typeof extractImports>["imports"][number]
+): CartographerGraphEdge["evidence"] {
+  return { path: normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence };
+}
+
+function pushImportDependsPair(
+  ctx: ImportEdgeEmitCtx,
+  importEdgeId: string,
+  toNodeId: string,
+  rec: ReturnType<typeof extractImports>["imports"][number]
+): void {
+  const evidence = importRecordEvidence(ctx.normalizedPath, rec);
+  const props = { specifier: rec.specifier };
+  ctx.structuralEdges.push({
+    id: importEdgeId,
+    snapshotId: ctx.snapshotId,
+    kind: "IMPORTS",
+    fromNodeId: ctx.fileId,
+    toNodeId,
+    evidence,
+    properties: props,
+  });
+  ctx.structuralEdges.push({
+    id: makeEdgeId("DEPENDS_ON", ctx.fileId, toNodeId),
+    snapshotId: ctx.snapshotId,
+    kind: "DEPENDS_ON",
+    fromNodeId: ctx.fileId,
+    toNodeId,
+    evidence,
+    properties: props,
+  });
+}
+
+function pushExportFromEdge(
+  ctx: ImportEdgeEmitCtx,
+  toNodeId: string,
+  rec: ReturnType<typeof extractImports>["imports"][number]
+): void {
+  ctx.structuralEdges.push({
+    id: makeEdgeId("EXPORTS", ctx.fileId, toNodeId),
+    snapshotId: ctx.snapshotId,
+    kind: "EXPORTS",
+    fromNodeId: ctx.fileId,
+    toNodeId,
+    evidence: importRecordEvidence(ctx.normalizedPath, rec),
+    properties: { specifier: rec.specifier },
+  });
+}
+
+function resolveImportTargetNodeId(
+  ctx: ImportEdgeEmitCtx,
+  target: ReturnType<typeof extractImports>["imports"][number]["target"]
+): string | undefined {
+  if (target.kind === "file") {
+    return makeFileId(ctx.repoRoot, target.normalizedPath);
+  }
+  if (target.kind !== "package") return undefined;
+  return ensureBarePackageNode({
+    structuralNodes: ctx.structuralNodes,
+    snapshotId: ctx.snapshotId,
+    repoRoot: ctx.repoRoot,
+    barePackages: ctx.barePackages,
+    specifier: target.specifier,
+  });
+}
+
 function emitImportAndExportEdges(args: {
   structuralNodes: CartographerGraphNode[];
   structuralEdges: CartographerGraphEdge[];
@@ -414,89 +565,27 @@ function emitImportAndExportEdges(args: {
   imports: ReturnType<typeof extractImports>["imports"];
   barePackages: Map<string, string>;
 }) {
+  const ctx: ImportEdgeEmitCtx = {
+    structuralNodes: args.structuralNodes,
+    structuralEdges: args.structuralEdges,
+    snapshotId: args.snapshotId,
+    repoRoot: args.repoRoot,
+    fileId: args.fileId,
+    normalizedPath: args.normalizedPath,
+    barePackages: args.barePackages,
+  };
+
   for (const rec of args.imports) {
-    const edgeId = makeImportEdgeId(args.fileId, rec.specifier);
-    if (rec.target.kind === "file") {
-      const toFileId = makeFileId(args.repoRoot, rec.target.normalizedPath);
-      args.structuralEdges.push({
-        id: edgeId,
-        snapshotId: args.snapshotId,
-        kind: "IMPORTS",
-        fromNodeId: args.fileId,
-        toNodeId: toFileId,
-        evidence: { path: args.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
-        properties: { specifier: rec.specifier },
-      });
-      // DEPENDS_ON for resolved local imports
-      args.structuralEdges.push({
-        id: makeEdgeId("DEPENDS_ON", args.fileId, toFileId),
-        snapshotId: args.snapshotId,
-        kind: "DEPENDS_ON",
-        fromNodeId: args.fileId,
-        toNodeId: toFileId,
-        evidence: { path: args.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
-        properties: { specifier: rec.specifier },
-      });
-    } else if (rec.target.kind === "package") {
-      // Bare package node (synthetic, only for bare specifiers from imports)
-      const pkgNodeId = ensureBarePackageNode({
-        structuralNodes: args.structuralNodes,
-        snapshotId: args.snapshotId,
-        repoRoot: args.repoRoot,
-        barePackages: args.barePackages,
-        specifier: rec.target.specifier,
-      });
-      args.structuralEdges.push({
-        id: edgeId,
-        snapshotId: args.snapshotId,
-        kind: "IMPORTS",
-        fromNodeId: args.fileId,
-        toNodeId: pkgNodeId,
-        evidence: { path: args.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
-        properties: { specifier: rec.specifier },
-      });
-      args.structuralEdges.push({
-        id: makeEdgeId("DEPENDS_ON", args.fileId, pkgNodeId),
-        snapshotId: args.snapshotId,
-        kind: "DEPENDS_ON",
-        fromNodeId: args.fileId,
-        toNodeId: pkgNodeId,
-        evidence: { path: args.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
-        properties: { specifier: rec.specifier },
-      });
+    const importEdgeId = makeImportEdgeId(ctx.fileId, rec.specifier);
+    const importTargetId = resolveImportTargetNodeId(ctx, rec.target);
+    if (importTargetId) {
+      pushImportDependsPair(ctx, importEdgeId, importTargetId, rec);
     }
 
-    // EXPORTS for export-from
-    if (rec.kind === "exportFrom") {
-      if (rec.target.kind === "file") {
-        const toFileId = makeFileId(args.repoRoot, rec.target.normalizedPath);
-        args.structuralEdges.push({
-          id: makeEdgeId("EXPORTS", args.fileId, toFileId),
-          snapshotId: args.snapshotId,
-          kind: "EXPORTS",
-          fromNodeId: args.fileId,
-          toNodeId: toFileId,
-          evidence: { path: args.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
-          properties: { specifier: rec.specifier },
-        });
-      } else if (rec.target.kind === "package") {
-        const pkgNodeId = ensureBarePackageNode({
-          structuralNodes: args.structuralNodes,
-          snapshotId: args.snapshotId,
-          repoRoot: args.repoRoot,
-          barePackages: args.barePackages,
-          specifier: rec.target.specifier,
-        });
-        args.structuralEdges.push({
-          id: makeEdgeId("EXPORTS", args.fileId, pkgNodeId),
-          snapshotId: args.snapshotId,
-          kind: "EXPORTS",
-          fromNodeId: args.fileId,
-          toNodeId: pkgNodeId,
-          evidence: { path: args.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
-          properties: { specifier: rec.specifier },
-        });
-      }
+    if (rec.kind !== "exportFrom") continue;
+    const exportTargetId = resolveImportTargetNodeId(ctx, rec.target);
+    if (exportTargetId) {
+      pushExportFromEdge(ctx, exportTargetId, rec);
     }
   }
 }

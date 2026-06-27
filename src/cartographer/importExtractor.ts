@@ -89,6 +89,37 @@ export type ExtractImportsResult = {
 };
 
 const SUPPORTED_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts"] as const;
+const JS_SPECIFIER_EXTS = new Set([".js", ".jsx", ".mjs", ".cts"]);
+
+function firstIndexedPathWithExtensions(indexed: Set<string>, base: string): string | null {
+  for (const ext of SUPPORTED_EXTS) {
+    const withExt = base + ext;
+    if (indexed.has(withExt)) return withExt;
+  }
+  return null;
+}
+
+function firstIndexedIndexEntry(indexed: Set<string>, base: string): string | null {
+  for (const ext of SUPPORTED_EXTS) {
+    const idx = path.posix.join(base, `index${ext}`);
+    if (indexed.has(idx)) return idx;
+  }
+  return null;
+}
+
+function probeIndexedBaseAndExtensions(indexed: Set<string>, base: string): string | null {
+  if (indexed.has(base)) return base;
+  const withExtension = firstIndexedPathWithExtensions(indexed, base);
+  if (withExtension) return withExtension;
+  return firstIndexedIndexEntry(indexed, base);
+}
+
+function probeJsSpecifierToSource(indexed: Set<string>, base: string): string | null {
+  const extname = path.posix.extname(base);
+  if (!JS_SPECIFIER_EXTS.has(extname)) return null;
+  const stem = base.slice(0, base.length - extname.length);
+  return probeIndexedBaseAndExtensions(indexed, stem);
+}
 
 function scriptKindFor(filePath: string): ScriptKind {
   const lower = filePath.toLowerCase();
@@ -145,35 +176,10 @@ function resolveRelative(
   const base = normalizePath(joined);
 
   // ESM convention: a ".js" specifier in a TS file resolves to the TS source.
-  // Probe the TS extensions for ".js"/".jsx"/".mjs"/".cts" specifiers.
-  const JS_EXTS = new Set([".js", ".jsx", ".mjs", ".cts"]);
-  if (JS_EXTS.has(path.posix.extname(base))) {
-    const stem = base.slice(0, base.length - path.posix.extname(base).length);
-    // exact stem match (e.g. "./config/env" -> "src/config/env")
-    if (indexed.has(stem)) return stem;
-    for (const ext of SUPPORTED_EXTS) {
-      const withExt = stem + ext;
-      if (indexed.has(withExt)) return withExt;
-    }
-    for (const ext of SUPPORTED_EXTS) {
-      const idx = path.posix.join(stem, `index${ext}`);
-      if (indexed.has(idx)) return idx;
-    }
-  }
+  const jsResolved = probeJsSpecifierToSource(indexed, base);
+  if (jsResolved) return jsResolved;
 
-  if (indexed.has(base)) return base;
-
-  for (const ext of SUPPORTED_EXTS) {
-    const withExt = base + ext;
-    if (indexed.has(withExt)) return withExt;
-  }
-
-  for (const ext of SUPPORTED_EXTS) {
-    const idx = path.posix.join(base, `index${ext}`);
-    if (indexed.has(idx)) return idx;
-  }
-
-  return null;
+  return probeIndexedBaseAndExtensions(indexed, base);
 }
 
 function resolveTarget(

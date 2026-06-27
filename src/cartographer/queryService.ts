@@ -173,6 +173,128 @@ type ResolveTargetResult =
   | { kind: "not_found" }
   | { kind: "invalid_input"; reason: string };
 
+function isReverseDependencyEdge(kind: CartographerGraphEdge["kind"]): boolean {
+  return kind === "DEPENDS_ON" || kind === "IMPORTS";
+}
+
+function isImportOrDependsOn(kind: CartographerGraphEdge["kind"]): boolean {
+  return kind === "IMPORTS" || kind === "DEPENDS_ON";
+}
+
+function validateNormalizedPathList(
+  paths: readonly string[]
+): { ok: true; normalized: string[] } | { ok: false; reason: string } {
+  const normalized: string[] = [];
+  for (const p of paths) {
+    const v = validateQueryPath(p);
+    if (!v.valid) {
+      return { ok: false, reason: v.reason };
+    }
+    normalized.push(v.normalized);
+  }
+  return { ok: true, normalized };
+}
+
+function computeStructuralImpactSets(
+  changed: readonly string[],
+  nodes: readonly CartographerGraphNode[],
+  edges: readonly CartographerGraphEdge[]
+): { impacted: Set<string>; probableTests: Set<string> } {
+  const impacted = new Set<string>();
+  const probableTests = new Set<string>();
+  const nodeById = nodeByIdMap(nodes);
+
+  for (const cp of changed) {
+    const fileNodes = nodes.filter((n) => n.normalizedPath === cp && isFileLikeKind(n.kind));
+    for (const fn of fileNodes) {
+      accumulateImpactForFileNode(fn, edges, nodeById, impacted, probableTests);
+    }
+    impacted.add(cp);
+  }
+
+  return { impacted, probableTests };
+}
+
+function appendSymbolContainerFileEdges(
+  targets: readonly CartographerGraphNode[],
+  nodes: readonly CartographerGraphNode[],
+  edges: readonly CartographerGraphEdge[],
+  direction: "outbound" | "inbound",
+  into: CartographerGraphEdge[]
+): void {
+  for (const t of targets) {
+    if (!isSymbolKind(t.kind) || !t.normalizedPath) continue;
+    const file = findContainingFileForSymbol(nodes, t);
+    if (!file) continue;
+    const fileEdges = edges.filter((e) => {
+      if (!isImportOrDependsOn(e.kind)) return false;
+      return direction === "outbound" ? e.fromNodeId === file.id : e.toNodeId === file.id;
+    });
+    into.push(...fileEdges);
+  }
+}
+
+function dedupeEdgesById(edges: readonly CartographerGraphEdge[]): CartographerGraphEdge[] {
+  const unique = new Map<string, CartographerGraphEdge>();
+  for (const e of edges) unique.set(e.id, e);
+  return sortById([...unique.values()]);
+}
+
+function collectTestsLinkedFromGraph(
+  targetFiles: readonly CartographerGraphNode[],
+  nodes: readonly CartographerGraphNode[],
+  edges: readonly CartographerGraphEdge[]
+): Array<{ normalizedPath: string; relation: "import" | "basename"; evidence: string }> {
+  const linked: Array<{ normalizedPath: string; relation: "import" | "basename"; evidence: string }> = [];
+  for (const tf of targetFiles) {
+    const testEdges = edges.filter((e) => e.toNodeId === tf.id && e.kind === "TESTS");
+    for (const te of testEdges) {
+      const tn = nodes.find((nn) => nn.id === te.fromNodeId);
+      if (!tn?.normalizedPath) continue;
+      linked.push({
+        normalizedPath: tn.normalizedPath,
+        relation: readRelation(te.properties),
+        evidence: te.evidence?.text ?? "",
+      });
+    }
+  }
+  return linked;
+}
+
+function nodeByIdMap(nodes: readonly CartographerGraphNode[]): Map<string, CartographerGraphNode> {
+  return new Map(nodes.map((n) => [n.id, n]));
+}
+
+function addProbableTestsForTarget(
+  targetNodeId: string,
+  edges: readonly CartographerGraphEdge[],
+  nodeById: Map<string, CartographerGraphNode>,
+  probableTests: Set<string>
+): void {
+  for (const te of edges) {
+    if (te.toNodeId !== targetNodeId || te.kind !== "TESTS") continue;
+    const tn = nodeById.get(te.fromNodeId);
+    if (tn?.normalizedPath) probableTests.add(tn.normalizedPath);
+  }
+}
+
+function accumulateImpactForFileNode(
+  fileNode: CartographerGraphNode,
+  edges: readonly CartographerGraphEdge[],
+  nodeById: Map<string, CartographerGraphNode>,
+  impacted: Set<string>,
+  probableTests: Set<string>
+): void {
+  for (const edge of edges) {
+    if (edge.toNodeId !== fileNode.id || !isReverseDependencyEdge(edge.kind)) continue;
+    const from = nodeById.get(edge.fromNodeId);
+    if (!from?.normalizedPath) continue;
+    impacted.add(from.normalizedPath);
+    addProbableTestsForTarget(from.id, edges, nodeById, probableTests);
+  }
+  addProbableTestsForTarget(fileNode.id, edges, nodeById, probableTests);
+}
+
 function resolveTargetToNodes(target: QueryTarget, nodes: readonly CartographerGraphNode[]): ResolveTargetResult {
   if (target.kind === "file") {
     const v = validateQueryPath(target.normalizedPath);
@@ -239,9 +361,7 @@ export class CartographerQueryService {
       return { status: "not_found", path: norm };
     }
     const symbols = this.nodes.filter((n) => n.normalizedPath === norm && isSymbolKind(n.kind));
-    const imports = this.edges.filter(
-      (e) => e.fromNodeId === fileNode.id && (e.kind === "IMPORTS" || e.kind === "DEPENDS_ON")
-    );
+    const imports = this.edges.filter((e) => e.fromNodeId === fileNode.id && isImportOrDependsOn(e.kind));
     return {
       status: "ok",
       file: clone(fileNode),
@@ -279,30 +399,13 @@ export class CartographerQueryService {
     const targets = res.nodes;
     const depEdges: CartographerGraphEdge[] = [];
     for (const t of targets) {
-      const outs = this.edges.filter(
-        (e) => e.fromNodeId === t.id && (e.kind === "IMPORTS" || e.kind === "DEPENDS_ON")
-      );
+      const outs = this.edges.filter((e) => e.fromNodeId === t.id && isImportOrDependsOn(e.kind));
       depEdges.push(...outs);
     }
-    // For symbols, include containing file deps first
-    for (const t of targets) {
-      if (isSymbolKind(t.kind) && t.normalizedPath) {
-        const file = this.nodes.find(
-          (n) => n.normalizedPath === t.normalizedPath && isFileLikeKind(n.kind)
-        );
-        if (file) {
-          const fileDeps = this.edges.filter(
-            (e) => e.fromNodeId === file.id && (e.kind === "IMPORTS" || e.kind === "DEPENDS_ON")
-          );
-          depEdges.push(...fileDeps);
-        }
-      }
-    }
-    const unique = new Map<string, CartographerGraphEdge>();
-    for (const e of depEdges) unique.set(e.id, e);
+    appendSymbolContainerFileEdges(targets, this.nodes, this.edges, "outbound", depEdges);
     return {
       status: "ok",
-      edges: sortById([...unique.values()]).map(clone),
+      edges: dedupeEdgesById(depEdges).map(clone),
       targetNodes: sortById(targets).map(clone),
     };
   }
@@ -319,29 +422,14 @@ export class CartographerQueryService {
     const depEdges: CartographerGraphEdge[] = [];
     const targetIds = new Set(targets.map((t) => t.id));
     for (const e of this.edges) {
-      if (targetIds.has(e.toNodeId) && (e.kind === "IMPORTS" || e.kind === "DEPENDS_ON")) {
+      if (targetIds.has(e.toNodeId) && isImportOrDependsOn(e.kind)) {
         depEdges.push(e);
       }
     }
-    // For symbols, include containing file dependents as well
-    for (const t of targets) {
-      if (isSymbolKind(t.kind) && t.normalizedPath) {
-        const file = this.nodes.find(
-          (n) => n.normalizedPath === t.normalizedPath && isFileLikeKind(n.kind)
-        );
-        if (file) {
-          const fileRev = this.edges.filter(
-            (e) => e.toNodeId === file.id && (e.kind === "IMPORTS" || e.kind === "DEPENDS_ON")
-          );
-          depEdges.push(...fileRev);
-        }
-      }
-    }
-    const unique = new Map<string, CartographerGraphEdge>();
-    for (const e of depEdges) unique.set(e.id, e);
+    appendSymbolContainerFileEdges(targets, this.nodes, this.edges, "inbound", depEdges);
     return {
       status: "ok",
-      edges: sortById([...unique.values()]).map(clone),
+      edges: dedupeEdgesById(depEdges).map(clone),
       targetNodes: sortById(targets).map(clone),
     };
   }
@@ -375,45 +463,16 @@ export class CartographerQueryService {
   }
 
   async getImpact(input: GetImpactQueryInput): Promise<GetImpactQueryResult> {
-    const changed: string[] = [];
-    for (const p of input.changedNormalizedPaths) {
-      const v = validateQueryPath(p);
-      if (!v.valid) {
-        return { status: "invalid_input", reason: v.reason };
-      }
-      changed.push(v.normalized);
+    const validated = validateNormalizedPathList(input.changedNormalizedPaths);
+    if (!validated.ok) {
+      return { status: "invalid_input", reason: validated.reason };
     }
 
-    const impacted = new Set<string>();
-    const probableTests = new Set<string>();
-
-    for (const cp of changed) {
-      const fileNodes = this.nodes.filter((n) => n.normalizedPath === cp && isFileLikeKind(n.kind));
-      for (const fn of fileNodes) {
-        // reverse dependents via DEPENDS_ON / IMPORTS
-        const rev = this.edges.filter(
-          (e) => e.toNodeId === fn.id && (e.kind === "DEPENDS_ON" || e.kind === "IMPORTS")
-        );
-        for (const r of rev) {
-          const from = this.nodes.find((nn) => nn.id === r.fromNodeId);
-          if (from?.normalizedPath) {
-            impacted.add(from.normalizedPath);
-            const impactedTestEdges = this.edges.filter((e) => e.toNodeId === from.id && e.kind === "TESTS");
-            for (const te of impactedTestEdges) {
-              const tn = this.nodes.find((nn) => nn.id === te.fromNodeId);
-              if (tn?.normalizedPath) probableTests.add(tn.normalizedPath);
-            }
-          }
-        }
-        // TESTS edges point from test -> target
-        const testEdges = this.edges.filter((e) => e.toNodeId === fn.id && e.kind === "TESTS");
-        for (const te of testEdges) {
-          const tn = this.nodes.find((nn) => nn.id === te.fromNodeId);
-          if (tn?.normalizedPath) probableTests.add(tn.normalizedPath);
-        }
-      }
-      impacted.add(cp);
-    }
+    const { impacted, probableTests } = computeStructuralImpactSets(
+      validated.normalized,
+      this.nodes,
+      this.edges
+    );
 
     return {
       status: "ok",
@@ -432,18 +491,7 @@ export class CartographerQueryService {
 
     // Prefer graph TESTS edges
     const targetFiles = this.nodes.filter((n) => n.normalizedPath === norm && isFileLikeKind(n.kind));
-    const linked: Array<{ normalizedPath: string; relation: "import" | "basename"; evidence: string }> = [];
-    for (const tf of targetFiles) {
-      const testEdges = this.edges.filter((e) => e.toNodeId === tf.id && e.kind === "TESTS");
-      for (const te of testEdges) {
-        const tn = this.nodes.find((nn) => nn.id === te.fromNodeId);
-        if (tn?.normalizedPath) {
-          const relation = readRelation(te.properties);
-          const evidence = te.evidence?.text ?? "";
-          linked.push({ normalizedPath: tn.normalizedPath, relation, evidence });
-        }
-      }
-    }
+    const linked = collectTestsLinkedFromGraph(targetFiles, this.nodes, this.edges);
     if (linked.length > 0) {
       const dedup = new Map<string, (typeof linked)[number]>();
       for (const l of linked) dedup.set(l.normalizedPath, l);
