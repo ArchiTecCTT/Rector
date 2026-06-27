@@ -1,7 +1,7 @@
 # Phase 1 — Cartographer Test, Harden, and Expand Plan
 
 **Repository:** `ArchiTecCTT/Rector`  
-**Base branch:** `main`  
+**Base branch:** `rector-0.3.0`  
 **Source state:** after merged PR #17 / merge commit `14b2aeda544f010e79b300c87d34fd16de4dea01`  
 **Status:** implementation plan  
 **Phase:** 1 — Cartographer test, harden, then expand
@@ -137,6 +137,24 @@ tests/cartographer/cartographer.integration.test.ts
 ```
 
 Existing coverage already includes deterministic fixture scans, ignored env files, symlink skipping, sorted outputs, event ordering, no-read safety for `.env.production`, in-memory and SQLite incremental store parity, added/modified/deleted file detection, became-ignored deletion semantics, and retained prior inventory on recoverable hash failure.
+
+## Phase 1A coverage checklist
+
+This checklist maps every required Phase 1A hardening case (the list under "The required hardening surface is") to its coverage status. Status values are used exactly as: `covered by existing test`, `covered by new test`, `intentionally deferred with reason`. No row claims completion unless backed by a concrete test path and short behavior description. Cases whose focused coverage is explicitly assigned to a later todo are deferred here.
+
+- deterministic sorted output: covered by existing test — `tests/cartographer/repoScanner.test.ts:25` ("indexes, ignores, sorts, emits, and remains deterministic for the fixture repo") asserts `isSortedUtf16` on files/changedFiles/ignoredFiles and exact fixture order.
+- .gitignore / .rectorignore precedence: covered by existing test — `tests/cartographer/ignorePolicy.test.ts:69` ("respects gitignore before rectorignore and supports trailing slash directory patterns") exercises root gitignore winning overlaps and rectorignore filling gaps.
+- binary detection: covered by existing test — `tests/cartographer/fileClassifier.test.ts:39` ("classifies NUL-containing head buffers as binary") and `ignorePolicy.test.ts:92` (binaryDecision source "binary").
+- generated/vendor/lockfile classification: covered by existing test — `tests/cartographer/fileClassifier.test.ts:16` ("classifies required source, test, config, doc, asset, lockfile, generated, and unknown cases") and priority-order test at :50 covering vendor/generated/lockfile.
+- hash changes: covered by existing test — `tests/cartographer/incrementalIndex.test.ts:49` ("detects added files and byte modifications by hash") and :71 ("detects same-size byte edits even when mtime is restored").
+- deleted files: covered by existing test — `tests/cartographer/incrementalIndex.test.ts:33` (deletedFiles expectations, became-ignored deletion semantics) plus plan baseline "added/modified/deleted file detection".
+- symlinks: covered by existing test — `tests/cartographer/repoScanner.test.ts:54` (fixture creates symlink; ignored ref has source "symlink"; descendants not emitted or read).
+- path normalization: covered by existing test — `tests/cartographer/repoScanner.test.ts:74` ("normalizes backslash paths and caps head-sniff reads") plus harness `normalizedFromRoot`.
+- large-file ignores: covered by new test — `tests/cartographer/repoScanner.test.ts:153` ("ignores files above DEFAULT_MAX_FILE_SIZE_BYTES before calling readAll and records them exactly once with source size_limit") plus harness `writeOversizedFile`; `ignorePolicy.test.ts:99` asserts `size_limit` source. Scanner-level contract (no readAll, single ignored ref) is exercised and locked by Todo 4.
+- recoverable read errors: covered by existing test — `tests/cartographer/repoScanner.test.ts:99` (hash/read/walk/emit recoverable failures; "retained prior inventory on recoverable hash failure") and `ignorePolicy.test.ts:123` (oversized root gitignore treated as absent with recoverable error).
+- SQLite/in-memory parity: covered by existing test — `tests/cartographer/incrementalIndex.test.ts:31` (identical expectations exercised for both "in-memory" and "sqlite" stores); dedicated `inventoryStore.sqlite.test.ts` / `inventoryStore.inMemory.test.ts` cover snapshot/file/error roundtrips.
+- scan event order: covered by existing test — `tests/cartographer/repoScanner.test.ts:69` (events.map(labelForEvent) equals expectedFixtureEvents); `cartographer.integration.test.ts` confirms sorted per-entry event ordering.
+- snapshot immutability: covered by existing test — `tests/cartographer/repoScanner.test.ts:71` (identical scans produce identical snapshot.id); `incrementalIndex.test.ts:66` (content change yields new id); stores derive deterministic id from payload (see `inventoryStore.*.test.ts` createSnapshot).
 
 ## Required work
 
@@ -363,6 +381,8 @@ RunTrace
 ```
 
 Minimum edge kinds:
+
+`CALLS` is **schema-reserved** in Phase 1 (listed in `GraphEdgeKindSchema`) but **not extracted** by the deterministic Phase 1C builder; no `CALLS` edges are emitted until a later call-graph phase.
 
 ```text
 CONTAINS
@@ -800,19 +820,32 @@ no runtime SLM calls are introduced
 
 # Phase 1 acceptance gate
 
-Phase 1 should not be considered complete unless all of these pass:
+**Status: COMPLETE (gate passed 2026-06-26 on branch `rector-0.3.0-phase-1`)**
+
+Phase 1 is complete for Phase 1 scope only when all of these pass (executed in `.worktrees/rector-0.3.0-phase-1`):
 
 ```text
 npm run check
 npm test -- tests/cartographer
 npm run cartographer:self-scan
 npm run cartographer:self-scan:check
+npm run build
 npm run verify:foundation
 npm run test:global
 npm run test:systems
 ```
 
-Required inspection artifacts:
+Gate results (concise):
+- `npm run check`: clean
+- `npm test -- tests/cartographer`: 25 files / 191 tests passed
+- `npm run cartographer:self-scan`: indexed=855, ignored=52, errors=0; artifacts written
+- `npm run cartographer:self-scan:check`: PASS
+- `npm run build`: clean
+- `npm run verify:foundation`: PASS
+- `npm run test:global`: 33 scenarios (offline, no model); passed 19/33; fake-path report-only
+- `npm run test:systems`: PASS (1/1 profiles valid)
+
+Required inspection artifacts (generated-only, local-only, not committed):
 
 ```text
 .rector/cartographer/latest-snapshot.json
@@ -821,7 +854,11 @@ Required inspection artifacts:
 docs/plans/2-0/phases/phase-1-cartographer.md
 ```
 
-The global harness should continue to run provider-free.
+**Scope boundary (honest):** Phase 1 complete for inventory hardening, deterministic self-scan + checker, structural graph (symbols/imports/tests; `CALLS` is schema-reserved only — no `CALLS` edges emitted), query service, and Tool/Capability graph adapters using explicit metadata. No live specialist execution, no provider routing, no Capability-SLM fabric, no Memory OS, and no fake-purge completion are claimed or implemented. SQLite experimental warning surfaces in test output. Generated artifacts are inspection-only.
+
+The global harness continues to run provider-free.
+
+Failure QA performed: tamper probe on a temp copy of `.rector/cartographer/*` (remove one artifact) proves the checker fails; temp copy deleted; real artifacts untouched.
 
 ---
 

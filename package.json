@@ -54,7 +54,9 @@
     "test:coverage": "vitest run --coverage --testTimeout=10000 --maxWorkers=2",
     "verify:phase0": "tsx scripts/evals/verify-phase0-complete.ts",
     "verify:phase0.5": "tsx scripts/evals/verify-phase0-5-complete.ts",
-    "verify:foundation": "npm run verify:phase0 && npm run verify:phase0.5"
+    "verify:foundation": "npm run verify:phase0 && npm run verify:phase0.5",
+    "cartographer:self-scan": "tsx scripts/cartographer/run-self-scan.ts",
+    "cartographer:self-scan:check": "tsx scripts/cartographer/check-self-scan.ts"
   },
   "engines": {
     "node": ">=22.5.0"

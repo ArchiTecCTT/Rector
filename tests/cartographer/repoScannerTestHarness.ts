@@ -2,11 +2,24 @@ import type { Dirent, Stats } from "node:fs";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { CartographerScanEmitter, CartographerScanEvent, FileNode, FileReader, RepoSnapshot, ScanResult } from "../../src/cartographer";
+import {
+  DEFAULT_MAX_FILE_SIZE_BYTES,
+  makeDirectoryId,
+  makeFileId,
+  makeGraphSnapshotId,
+  makePackageId,
+  makeProjectId,
+  scanRepository,
+  type CartographerGraphEdge,
+  type CartographerGraphNode,
+} from "../../src/cartographer";
 import { defaultFileReader } from "../../src/cartographer/repoScanner";
 
 export const fixedNow = new Date("2026-06-20T00:00:00.000Z");
 export const tempRoots: string[] = [];
+export { DEFAULT_MAX_FILE_SIZE_BYTES } from "../../src/cartographer";
 
 export type FileReadCall = { readonly normalizedPath: string; readonly maxBytes?: number };
 export type ScanEventLabel = { readonly type: CartographerScanEvent["type"]; readonly path: string };
@@ -140,7 +153,188 @@ async function writeFixtureFile(repoRoot: string, normalizedPath: string, conten
   await fs.writeFile(absolutePath, contents, "utf8");
 }
 
+export async function writeOversizedFile(repoRoot: string, normalizedPath: string): Promise<void> {
+  const absolutePath = path.join(repoRoot, ...normalizedPath.split("/"));
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+  const size = DEFAULT_MAX_FILE_SIZE_BYTES + 1024;
+  await fs.writeFile(absolutePath, Buffer.alloc(size, 0x41));
+}
+
+export async function makeNestedIgnoreLimitationRepo(): Promise<string> {
+  const repoRoot = await fs.mkdtemp(path.join(tmpdir(), "rector-nested-ignore-"));
+  tempRoots.push(repoRoot);
+  await writeFixtureFile(repoRoot, "package.json", "{\"name\":\"nested-ignore\"}\n");
+  await writeFixtureFile(repoRoot, ".gitignore", "root-ignored.txt\n");
+  await writeFixtureFile(repoRoot, ".rectorignore", "root-rector-ignored.txt\n");
+  await writeFixtureFile(repoRoot, "root-ignored.txt", "should be ignored by root gitignore\n");
+  await writeFixtureFile(repoRoot, "root-rector-ignored.txt", "should be ignored by root rectorignore\n");
+  await writeFixtureFile(repoRoot, "subdir/visible.txt", "visible\n");
+  await writeFixtureFile(repoRoot, "subdir/nested/.gitignore", "nested-ignored.txt\n");
+  await writeFixtureFile(repoRoot, "subdir/nested/nested-ignored.txt", "should NOT be ignored because nested gitignore is deferred\n");
+  await writeFixtureFile(repoRoot, "subdir/nested/visible.txt", "also visible\n");
+  return repoRoot;
+}
+
 function normalizedFromRoot(repoRoot: string, absolutePath: string): string {
   const relativePath = path.relative(repoRoot, absolutePath);
   return relativePath === "" ? "." : relativePath.split(path.sep).join("/").replace(/\\/g, "/");
+}
+
+export async function fixtureFileExists(normalizedPath: string): Promise<boolean> {
+  const root = await makeStructuralMiniFixture();
+  const abs = path.join(root, normalizedPath);
+  try {
+    await fs.access(abs);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function findTestFileForSource(
+  sourceNormalized: string,
+  overrideRoot?: string,
+): Promise<string | undefined> {
+  const root = overrideRoot ?? (await makeStructuralMiniFixture());
+  const candidate = sourceNormalized.replace(/\.(ts|tsx|js|jsx|mts|cts)$/, ".test.ts");
+  const abs = path.join(root, candidate);
+  try {
+    await fs.access(abs);
+    return candidate;
+  } catch {
+    return undefined;
+  }
+}
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const STRUCTURAL_MINI_FIXTURE_ROOT = path.resolve(__dirname, "../fixtures/repos/cartographer-structural-mini");
+
+export async function makeStructuralMiniFixture(): Promise<string> {
+  return STRUCTURAL_MINI_FIXTURE_ROOT;
+}
+
+export async function scanStructuralMiniFixture(): Promise<ScanResult> {
+  const repoRoot = await makeStructuralMiniFixture();
+  return scanRepository({ repoRoot, now: () => fixedNow });
+}
+
+export function buildBaselineGraphNodesFromInventory(
+  repoRoot: string,
+  inventorySnapshotId: string,
+  files: readonly FileNode[],
+): readonly CartographerGraphNode[] {
+  const nodes: CartographerGraphNode[] = [];
+  const rootHash = repoRoot;
+  const projectId = makeProjectId(rootHash);
+  nodes.push({
+    id: projectId,
+    snapshotId: makeGraphSnapshotId(rootHash, inventorySnapshotId),
+    kind: "Project",
+    label: "cartographer-structural-mini",
+    path: ".",
+    normalizedPath: ".",
+    properties: {},
+  });
+
+  const pkgId = makePackageId(rootHash, ".");
+  nodes.push({
+    id: pkgId,
+    snapshotId: makeGraphSnapshotId(rootHash, inventorySnapshotId),
+    kind: "Package",
+    label: "package.json",
+    path: "package.json",
+    normalizedPath: "package.json",
+    properties: {},
+  });
+
+  const dirSet = new Set<string>();
+  for (const f of files) {
+    const dir = f.normalizedPath.includes("/") ? f.normalizedPath.slice(0, f.normalizedPath.lastIndexOf("/")) : ".";
+    if (dir !== "." && !dirSet.has(dir)) {
+      dirSet.add(dir);
+      nodes.push({
+        id: makeDirectoryId(rootHash, dir),
+        snapshotId: makeGraphSnapshotId(rootHash, inventorySnapshotId),
+        kind: "Directory",
+        label: dir.split("/").pop() ?? dir,
+        path: dir,
+        normalizedPath: dir,
+        properties: {},
+      });
+    }
+  }
+
+  for (const f of files) {
+    nodes.push({
+      id: makeFileId(rootHash, f.normalizedPath),
+      snapshotId: makeGraphSnapshotId(rootHash, inventorySnapshotId),
+      kind: "File",
+      label: f.normalizedPath.split("/").pop() ?? f.normalizedPath,
+      path: f.normalizedPath,
+      normalizedPath: f.normalizedPath,
+      language: f.language,
+      fileHash: f.hash,
+      startLine: 1,
+      endLine: undefined,
+      properties: { kind: f.kind },
+    });
+  }
+
+  return nodes;
+}
+
+export function buildBaselineGraphEdgesFromInventory(
+  repoRoot: string,
+  inventorySnapshotId: string,
+  files: readonly FileNode[],
+): readonly CartographerGraphEdge[] {
+  const edges: CartographerGraphEdge[] = [];
+  const rootHash = repoRoot;
+  const projectId = makeProjectId(rootHash);
+  const pkgId = makePackageId(rootHash, ".");
+  const snapId = makeGraphSnapshotId(rootHash, inventorySnapshotId);
+
+  edges.push({
+    id: `edge:CONTAINS:${projectId}:${pkgId}`,
+    snapshotId: snapId,
+    kind: "CONTAINS",
+    fromNodeId: projectId,
+    toNodeId: pkgId,
+    properties: {},
+  });
+
+  const dirToId = new Map<string, string>();
+  const emittedDirEdges = new Set<string>();
+  for (const f of files) {
+    const dir = f.normalizedPath.includes("/") ? f.normalizedPath.slice(0, f.normalizedPath.lastIndexOf("/")) : ".";
+    if (dir !== ".") {
+      const dirId = makeDirectoryId(rootHash, dir);
+      dirToId.set(dir, dirId);
+      const dirEdgeId = `edge:CONTAINS:${projectId}:${dirId}`;
+      if (!emittedDirEdges.has(dirEdgeId)) {
+        emittedDirEdges.add(dirEdgeId);
+        edges.push({
+          id: dirEdgeId,
+          snapshotId: snapId,
+          kind: "CONTAINS",
+          fromNodeId: projectId,
+          toNodeId: dirId,
+          properties: {},
+        });
+      }
+    }
+    const fileId = makeFileId(rootHash, f.normalizedPath);
+    const parent = dir === "." ? projectId : dirToId.get(dir) ?? projectId;
+    edges.push({
+      id: `edge:CONTAINS:${parent}:${fileId}`,
+      snapshotId: snapId,
+      kind: "CONTAINS",
+      fromNodeId: parent,
+      toNodeId: fileId,
+      properties: {},
+    });
+  }
+
+  return edges;
 }

@@ -24,7 +24,7 @@ const ASSET_EXTENSIONS = new Set([
   "webp",
   "bmp",
 ]);
-const SOURCE_EXTENSIONS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "rs", "java", "kt"]);
+const SOURCE_EXTENSIONS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts", "py", "go", "rs", "java", "kt"]);
 const TEST_SEGMENTS = new Set(["__tests__", "tests", "test"]);
 const FIXTURE_SEGMENTS = new Set(["fixtures", "__fixtures__", "examples", "samples"]);
 const GENERATED_NAME_PATTERNS = [/\.generated\./, /(^|\/)generated\//];
@@ -76,6 +76,8 @@ function classifyLanguage(extension: string): LanguageId {
   switch (extension) {
     case "ts":
     case "tsx":
+    case "mts":
+    case "cts":
       return "typescript";
     case "js":
     case "jsx":

@@ -17,6 +17,8 @@ describe("Cartographer T3 file classifier", () => {
     // Given: representative file facts from the T3 acceptance list.
     const cases = [
       { path: "src/index.ts", expected: { kind: "source", language: "typescript" } },
+      { path: "src/mod.mts", expected: { kind: "source", language: "typescript" } },
+      { path: "src/util.cts", expected: { kind: "source", language: "typescript" } },
       { path: "app.test.ts", expected: { kind: "test", language: "typescript" } },
       { path: "tsconfig.json", expected: { kind: "config", language: "json" } },
       { path: "vitest.config.ts", expected: { kind: "config", language: "typescript" } },
