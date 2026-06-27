@@ -359,8 +359,9 @@ describe("CartographerQueryService (Todo 22)", () => {
     const res = await svc.getFile({ normalizedPath: "src/app.ts" });
     expect(res.status).toBe("ok");
     if (res.status === "ok" && expected) {
+      const { lastIndexedAt: _lastIndexedAt, mtimeMs: _mtimeMs, ...stableExpected } = expected;
       expect(res.file.normalizedPath).toBe("src/app.ts");
-      expect(res.fileNode).toEqual(expected);
+      expect(res.fileNode).toEqual({ ...stableExpected, lastIndexedAt: "1970-01-01T00:00:00.000Z" });
       expect(Array.isArray(res.symbols)).toBe(true);
       expect(Array.isArray(res.imports)).toBe(true);
     }
@@ -437,6 +438,79 @@ describe("CartographerQueryService (Todo 22)", () => {
       expect(hasFileEdge).toBe(true);
       // targetNodes includes the symbol
       expect(res.targetNodes.some((n) => n.symbolName === "libFn")).toBe(true);
+    }
+  });
+
+  it("getImpact traverses reverse IMPORTS/DEPENDS_ON to a fixpoint across transitive dependents", async () => {
+    const core = {
+      id: "file:abc:src/core.ts",
+      snapshotId: "s1",
+      kind: "File" as const,
+      label: "core.ts",
+      path: "src/core.ts",
+      normalizedPath: "src/core.ts",
+      properties: {},
+    };
+    const mid = {
+      id: "file:abc:src/mid.ts",
+      snapshotId: "s1",
+      kind: "File" as const,
+      label: "mid.ts",
+      path: "src/mid.ts",
+      normalizedPath: "src/mid.ts",
+      properties: {},
+    };
+    const leaf = {
+      id: "file:abc:src/leaf.ts",
+      snapshotId: "s1",
+      kind: "File" as const,
+      label: "leaf.ts",
+      path: "src/leaf.ts",
+      normalizedPath: "src/leaf.ts",
+      properties: {},
+    };
+    const testFile = {
+      id: "file:abc:src/leaf.test.ts",
+      snapshotId: "s1",
+      kind: "Test" as const,
+      label: "leaf.test.ts",
+      path: "src/leaf.test.ts",
+      normalizedPath: "src/leaf.test.ts",
+      properties: {},
+    };
+    const edges: CartographerGraphEdge[] = [
+      {
+        id: "edge:IMPORTS:mid:core",
+        snapshotId: "s1",
+        kind: "IMPORTS" as const,
+        fromNodeId: mid.id,
+        toNodeId: core.id,
+        properties: {},
+      },
+      {
+        id: "edge:DEPENDS_ON:leaf:mid",
+        snapshotId: "s1",
+        kind: "DEPENDS_ON" as const,
+        fromNodeId: leaf.id,
+        toNodeId: mid.id,
+        properties: {},
+      },
+      {
+        id: "edge:TESTS:leaf-test:leaf",
+        snapshotId: "s1",
+        kind: "TESTS" as const,
+        fromNodeId: testFile.id,
+        toNodeId: leaf.id,
+        properties: { relation: "import" },
+        evidence: { path: "src/leaf.test.ts", text: "import" },
+      },
+    ];
+    const svc = CartographerQueryService.fromGraph({ nodes: [core, mid, leaf, testFile], edges });
+    const res = await svc.getImpact({ changedNormalizedPaths: ["src/core.ts"] });
+    expect(res.status).toBe("ok");
+    if (res.status === "ok") {
+      expect(res.impactedFiles).toEqual(["src/core.ts", "src/leaf.ts", "src/mid.ts"]);
+      expect(res.probableTests).toEqual(["src/leaf.test.ts"]);
     }
   });
 

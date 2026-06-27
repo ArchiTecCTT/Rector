@@ -109,6 +109,15 @@ const route = require("./routes/userRoute");
     expect(recs[0].target).toEqual({ kind: "file", normalizedPath: "src/config/env.ts" });
   });
 
+  it("resolves .cjs import specifiers to indexed .cts source (not .cts extension probe)", () => {
+    const indexed = ["src/mod.cts", "src/app.ts"] as const;
+    const src = `import { run } from "./mod.cjs";`;
+    const result = extractImports(makeInput("src/app.ts", src, indexed));
+    expect(result.diagnostics).toEqual([]);
+    expect(result.imports).toHaveLength(1);
+    expect(result.imports[0].target).toEqual({ kind: "file", normalizedPath: "src/mod.cts" });
+  });
+
   it("treats bare specifiers as package targets without fabricating local files", () => {
     const src = `
 import express from "express";

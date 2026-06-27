@@ -256,7 +256,10 @@ function visitExportDeclaration(
   }
 
   if (node.moduleSpecifier && isStringLiteral(node.moduleSpecifier)) {
-    name = `${name} from`;
+    // export * from "mod" — name is already "* from"; do not append a second " from"
+    if (name !== "* from") {
+      name = `${name} from`;
+    }
   }
 
   // Type-only re-exports are still "export" kind for our purposes.

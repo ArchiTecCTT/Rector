@@ -92,19 +92,41 @@ function inventoryKindFromGraphProperties(
   return "unknown";
 }
 
+function readNumberProperty(props: CartographerGraphNode["properties"], key: string): number | undefined {
+  const v = props[key];
+  return typeof v === "number" ? v : undefined;
+}
+
+function readBooleanProperty(props: CartographerGraphNode["properties"], key: string): boolean | undefined {
+  const v = props[key];
+  return typeof v === "boolean" ? v : undefined;
+}
+
+function readStringProperty(props: CartographerGraphNode["properties"], key: string): string | undefined {
+  const v = props[key];
+  return typeof v === "string" ? v : undefined;
+}
+
 function reconstructInventoryFileNodeFromGraph(graphFile: CartographerGraphNode): FileNode {
   const normalizedPath = graphFile.normalizedPath ?? graphFile.path ?? graphFile.id;
   const path = graphFile.path ?? normalizedPath;
   const language = graphFile.language ?? "unknown";
+  const props = graphFile.properties;
   return FileNodeSchema.parse({
     id: graphFile.id,
     path,
     normalizedPath,
     hash: graphFile.fileHash ?? "unknown",
-    sizeBytes: 0,
+    sizeBytes: readNumberProperty(props, "sizeBytes") ?? 0,
+    ...(readNumberProperty(props, "mtimeMs") !== undefined
+      ? { mtimeMs: readNumberProperty(props, "mtimeMs") }
+      : {}),
     language,
-    kind: inventoryKindFromGraphProperties(graphFile.properties),
-    ignored: false,
+    kind: inventoryKindFromGraphProperties(props),
+    ignored: readBooleanProperty(props, "ignored") ?? false,
+    ...(readStringProperty(props, "ignoreReason") !== undefined
+      ? { ignoreReason: readStringProperty(props, "ignoreReason") }
+      : {}),
     lastIndexedAt: "1970-01-01T00:00:00.000Z",
   });
 }
@@ -114,7 +136,14 @@ function parseInventoryFileNode(graphFile: CartographerGraphNode): FileNode {
   if (typeof raw === "string") {
     try {
       const json: unknown = JSON.parse(raw);
-      const parsed = FileNodeSchema.safeParse(json);
+      const withIndexedAt = {
+        ...(json as Record<string, unknown>),
+        lastIndexedAt:
+          typeof (json as { lastIndexedAt?: unknown }).lastIndexedAt === "string"
+            ? (json as { lastIndexedAt: string }).lastIndexedAt
+            : "1970-01-01T00:00:00.000Z",
+      };
+      const parsed = FileNodeSchema.safeParse(withIndexedAt);
       if (parsed.success) {
         return parsed.data;
       }
@@ -260,13 +289,29 @@ function computeStructuralImpactSets(
   const impacted = new Set<string>();
   const probableTests = new Set<string>();
   const nodeById = nodeByIdMap(nodes);
+  const queue = [...changed];
 
   for (const cp of changed) {
+    impacted.add(cp);
+  }
+
+  while (queue.length > 0) {
+    const cp = queue.shift();
+    if (cp === undefined) break;
     const fileNodes = nodes.filter((n) => n.normalizedPath === cp && isFileLikeKind(n.kind));
     for (const fn of fileNodes) {
-      accumulateImpactForFileNode(fn, edges, nodeById, impacted, probableTests);
+      addProbableTestsForTarget(fn.id, edges, nodeById, probableTests);
+      for (const edge of edges) {
+        if (edge.toNodeId !== fn.id || !isReverseDependencyEdge(edge.kind)) continue;
+        const from = nodeById.get(edge.fromNodeId);
+        if (!from?.normalizedPath) continue;
+        if (!impacted.has(from.normalizedPath)) {
+          impacted.add(from.normalizedPath);
+          queue.push(from.normalizedPath);
+        }
+        addProbableTestsForTarget(from.id, edges, nodeById, probableTests);
+      }
     }
-    impacted.add(cp);
   }
 
   return { impacted, probableTests };
@@ -333,23 +378,6 @@ function addProbableTestsForTarget(
     const tn = nodeById.get(te.fromNodeId);
     if (tn?.normalizedPath) probableTests.add(tn.normalizedPath);
   }
-}
-
-function accumulateImpactForFileNode(
-  fileNode: CartographerGraphNode,
-  edges: readonly CartographerGraphEdge[],
-  nodeById: Map<string, CartographerGraphNode>,
-  impacted: Set<string>,
-  probableTests: Set<string>
-): void {
-  for (const edge of edges) {
-    if (edge.toNodeId !== fileNode.id || !isReverseDependencyEdge(edge.kind)) continue;
-    const from = nodeById.get(edge.fromNodeId);
-    if (!from?.normalizedPath) continue;
-    impacted.add(from.normalizedPath);
-    addProbableTestsForTarget(from.id, edges, nodeById, probableTests);
-  }
-  addProbableTestsForTarget(fileNode.id, edges, nodeById, probableTests);
 }
 
 function resolveTargetToNodes(target: QueryTarget, nodes: readonly CartographerGraphNode[]): ResolveTargetResult {

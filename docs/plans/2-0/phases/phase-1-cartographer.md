@@ -854,7 +854,7 @@ Required inspection artifacts (generated-only, local-only, not committed):
 docs/plans/2-0/phases/phase-1-cartographer.md
 ```
 
-**Scope boundary (honest):** Phase 1 complete for inventory hardening, deterministic self-scan + checker, structural graph (symbols/imports/calls/tests), query service, and Tool/Capability graph adapters using explicit metadata. No live specialist execution, no provider routing, no Capability-SLM fabric, no Memory OS, and no fake-purge completion are claimed or implemented. SQLite experimental warning surfaces in test output. Generated artifacts are inspection-only.
+**Scope boundary (honest):** Phase 1 complete for inventory hardening, deterministic self-scan + checker, structural graph (symbols/imports/tests; `CALLS` is schema-reserved only — no `CALLS` edges emitted), query service, and Tool/Capability graph adapters using explicit metadata. No live specialist execution, no provider routing, no Capability-SLM fabric, no Memory OS, and no fake-purge completion are claimed or implemented. SQLite experimental warning surfaces in test output. Generated artifacts are inspection-only.
 
 The global harness continues to run provider-free.
 

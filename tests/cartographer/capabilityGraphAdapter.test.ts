@@ -104,6 +104,26 @@ describe("capabilityGraphAdapter", () => {
     expect(warnings).toContain("production-capability-wraps-nonproduction-tool:fake.tool");
   });
 
+  it("emits WRAPPED_BY once when toolNames repeat", () => {
+    const rec: CapabilityGraphRecord = {
+      id: "dup-wrap",
+      label: "dup-wrap",
+      toolNames: ["workspace.read_file", "workspace.read_file"],
+      evalCaseIds: ["eval-1", "eval-1"],
+      productionAdmission: "production",
+      risk: "low",
+      source: "manual_fixture",
+      warnings: [],
+    };
+    const res = buildCapabilityGraph({ snapshotId: "s", records: [rec] });
+    const wrapped = res.edges.filter((e) => e.kind === "WRAPPED_BY");
+    const validated = res.edges.filter((e) => e.kind === "VALIDATED_BY");
+    expect(wrapped).toHaveLength(1);
+    expect(wrapped[0].toNodeId).toBe("tool:workspace.read_file");
+    expect(validated).toHaveLength(1);
+    expect(validated[0].toNodeId).toBe("evalcase:eval-1");
+  });
+
   it("deduplicates guardrail warnings when toolNames repeat", () => {
     const rec: CapabilityGraphRecord = {
       id: "dup",

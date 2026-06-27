@@ -88,7 +88,8 @@ export type { E } from "./types";
     const names = exports.map((e: ExtractedSymbol) => e.name);
 
     expect(names.some((n) => n.includes("{ a, b as c }"))).toBe(true);
-    expect(names.some((n) => n.includes("* from"))).toBe(true);
+    expect(names.some((n) => n === "* from")).toBe(true);
+    expect(names.some((n) => n === "* from from")).toBe(false);
     expect(names.some((n) => n.includes("{ d } from"))).toBe(true);
     expect(names.some((n) => n.includes("{ E } from"))).toBe(true);
 

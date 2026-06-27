@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execSync } from "node:child_process";
@@ -59,7 +60,7 @@ async function writeText(filePath: string, text: string): Promise<void> {
 }
 
 describe("Cartographer self-scan checker (Todo 9: allowlist + secret leak)", () => {
-  const tmpBase = path.join("/tmp", `rector-cartographer-checker-qa-${process.pid}-${Date.now()}`);
+  const tmpBase = path.join(os.tmpdir(), `rector-cartographer-checker-qa-${process.pid}-${Date.now()}`);
   let allowlistBackup: string | null = null;
 
   beforeEach(async () => {
@@ -249,9 +250,9 @@ describe("Cartographer self-scan checker (Todo 9: allowlist + secret leak)", () 
     expect(r.stderr + r.stdout).toMatch(/synthetic secret marker/i);
   });
 
-  it("failure QA on /tmp copy does not modify real worktree .rector/.omo", async () => {
-    // Create a tampered copy in /tmp
-    const tamperDir = path.join("/tmp", `rector-cartographer-tamper-${Date.now()}`);
+  it("failure QA on OS temp copy does not modify real worktree .rector/.omo", async () => {
+    // Create a tampered copy in the OS temp directory
+    const tamperDir = path.join(os.tmpdir(), `rector-cartographer-tamper-${Date.now()}`);
     await fs.rm(tamperDir, { recursive: true, force: true });
     const files = {
       schemaVersion: "rector.cartographer.latestFiles.v1",

@@ -36,7 +36,6 @@ export { scanChangedFiles } from "./incrementalIndex";
 export { buildScanSummary } from "./scanResult";
 export * from "./selfScanReport";
 
-export * from "./graphSchemas";
 export * from "./graphTypes";
 export {
   computeRepoRootHash,

@@ -99,7 +99,8 @@ export function buildCapabilityGraph(input: BuildCapabilityGraphInput): BuildCap
       properties: props,
     });
 
-    for (const toolName of rec.toolNames) {
+    const uniqueToolNames = [...new Set(rec.toolNames)];
+    for (const toolName of uniqueToolNames) {
       const toolId = makeToolId(toolName);
       edges.push({
         id: makeEdgeId("WRAPPED_BY", capId, toolId),
@@ -111,7 +112,8 @@ export function buildCapabilityGraph(input: BuildCapabilityGraphInput): BuildCap
       });
     }
 
-    for (const caseId of rec.evalCaseIds) {
+    const uniqueEvalCaseIds = [...new Set(rec.evalCaseIds)];
+    for (const caseId of uniqueEvalCaseIds) {
       const evalTargetId = `evalcase:${caseId}`;
       edges.push({
         id: makeEdgeId("VALIDATED_BY", capId, evalTargetId),

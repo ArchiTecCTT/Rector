@@ -57,13 +57,21 @@ export const CartographerSelfScanReportSchema = z
     gitComparison: GitComparisonSchema,
     scanErrors: z.array(ScanErrorSchema),
   })
-  .strict();
+  .strict()
+  .refine((r) => r.scanErrorCount === r.scanErrors.length, {
+    path: ["scanErrorCount"],
+    message: "scanErrorCount must match scanErrors.length",
+  });
 
 export type CartographerSelfScanReport = z.infer<typeof CartographerSelfScanReportSchema>;
 
 export const CleanSelfScanReportSchema = CartographerSelfScanReportSchema.refine(
-  (r) => r.scanErrorCount === 0 && r.forbiddenPathChecks.every((c) => !c.matched),
-  { message: "report must be clean: zero scan errors and no forbidden path hits" }
+  (r) =>
+    r.scanErrorCount === 0 &&
+    r.scanErrors.length === 0 &&
+    r.scanErrorCount === r.scanErrors.length &&
+    r.forbiddenPathChecks.every((c) => !c.matched),
+  { message: "report must be clean: zero scan errors, counter/list consistency, and no forbidden path hits" }
 );
 
 export function sortExpectedPathChecks(
@@ -108,14 +116,28 @@ export function generateForbiddenPathChecks(
 ): { pathPattern: string; matched: boolean }[] {
   return patterns.map((pat) => ({
     pathPattern: pat,
-    matched: indexedPaths.some((p) => {
-      if (p === pat) return true;
-      if (p.startsWith(pat + "/")) return true;
-      if (p.includes("/" + pat + "/")) return true;
-      const base = p.split("/").pop() ?? p;
-      return base === pat || base.startsWith(pat);
-    }),
+    matched: indexedPaths.some((p) => pathMatchesForbiddenPattern(p, pat)),
   }));
+}
+
+function pathMatchesForbiddenPattern(normalizedPath: string, pattern: string): boolean {
+  if (normalizedPath === pattern) return true;
+  if (normalizedPath.startsWith(pattern + "/")) return true;
+  if (normalizedPath.includes("/" + pattern + "/")) return true;
+  const base = normalizedPath.split("/").pop() ?? normalizedPath;
+  if (base === pattern) return true;
+  if (!base.startsWith(pattern)) return false;
+  return basenameForbiddenContinuationAllowed(base, pattern);
+}
+
+function basenameForbiddenContinuationAllowed(base: string, pattern: string): boolean {
+  if (base.length <= pattern.length) return false;
+  const next = base[pattern.length];
+  // ".git" must not match ".gitignore"; ".env" may match ".env.local".
+  if (pattern === ".git") {
+    return next === "." || next === "/";
+  }
+  return true;
 }
 
 export function buildGitComparison(input: {

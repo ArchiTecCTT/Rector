@@ -227,10 +227,7 @@ function emitBaselineInventoryNodes(args: {
       language: f.language,
       fileHash: f.hash,
       startLine: 1,
-      properties: {
-        kind: f.kind,
-        inventoryFileNode: JSON.stringify(f),
-      },
+      properties: fileNodeStableProperties(f),
     });
   }
 
@@ -252,7 +249,7 @@ function emitStructuralExtractionForFiles(args: {
   for (const f of args.sortedFiles) {
     const src = args.getSourceText(f.normalizedPath);
     if (src === undefined) continue;
-    if (!isTsOrJsLanguage(f.language)) continue;
+    if (!isStructuralSourceFile(f)) continue;
 
     const fileId = makeFileId(args.repoRoot, f.normalizedPath);
     const symRes = extractTsSymbols({ filePath: f.normalizedPath, sourceText: src });
@@ -399,6 +396,24 @@ function compareUtf16(left: string, right: string): number {
 
 function isTsOrJsLanguage(language: FileNode["language"]): boolean {
   return language === "typescript" || language === "javascript";
+}
+
+function isStructuralSourceFile(f: FileNode): boolean {
+  return f.kind === "source" && isTsOrJsLanguage(f.language);
+}
+
+function fileNodeStableProperties(f: FileNode): Record<string, string | number | boolean | null> {
+  const { lastIndexedAt: _lastIndexedAt, mtimeMs: _mtimeMs, ...stableInventory } = f;
+  const props: Record<string, string | number | boolean | null> = {
+    kind: f.kind,
+    sizeBytes: f.sizeBytes,
+    ignored: f.ignored,
+    inventoryFileNode: JSON.stringify(stableInventory),
+  };
+  if (f.ignoreReason !== undefined) {
+    props.ignoreReason = f.ignoreReason;
+  }
+  return props;
 }
 
 function emitSymbolNodesAndEdges(args: {
@@ -606,7 +621,7 @@ function emitTestEdges(args: {
   if (args.getSourceText) {
     const testFileSet = new Set(args.sortedFiles.filter((f) => f.kind === "test").map((f) => f.normalizedPath));
     for (const srcFile of args.sortedFiles) {
-      if (srcFile.kind === "test") continue;
+      if (!isStructuralSourceFile(srcFile)) continue;
       const srcText = args.getSourceText(srcFile.normalizedPath);
       if (srcText === undefined) continue;
       const linkRes = findTests({

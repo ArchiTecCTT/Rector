@@ -92,7 +92,7 @@ export type ExtractImportsResult = {
 };
 
 const SUPPORTED_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts"] as const;
-const JS_SPECIFIER_EXTS = new Set([".js", ".jsx", ".mjs", ".cts"]);
+const JS_SPECIFIER_EXTS = new Set([".js", ".jsx", ".mjs", ".cjs"]);
 
 function firstIndexedPathWithExtensions(indexed: Set<string>, base: string): string | null {
   for (const ext of SUPPORTED_EXTS) {

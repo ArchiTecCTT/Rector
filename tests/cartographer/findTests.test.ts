@@ -101,6 +101,15 @@ describe("findTests (Todo 20)", () => {
     expect(r3.linkedTests[0].normalizedPath).toBe("src/mod.test.mts");
   });
 
+  it("rejects basename fallback when multiple source files share the same stem", () => {
+    const indexed = ["src/a/util.ts", "src/b/util.ts", "src/util.test.ts"] as const;
+    const sources = new Map<string, string>([["src/util.test.ts", `describe("util", () => {});`]]);
+    const r1 = findTests(makeInput("src/a/util.ts", indexed, sources));
+    const r2 = findTests(makeInput("src/b/util.ts", indexed, sources));
+    expect(r1.linkedTests).toEqual([]);
+    expect(r2.linkedTests).toEqual([]);
+  });
+
   it("duplicate basename candidates without import relation return empty (no fabricated certainty)", () => {
     const target = "src/amb.ts";
     const indexed = ["src/amb.ts", "src/amb.test.ts", "src/amb.spec.ts"] as const;

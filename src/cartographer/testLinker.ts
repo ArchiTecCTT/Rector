@@ -132,10 +132,32 @@ function findImportLinkedTests(
   return linked;
 }
 
+function isIndexedSourcePath(normalizedPath: string): boolean {
+  const base = basenameOf(normalizedPath);
+  return !isTestFileCandidate(base);
+}
+
+function countIndexedSourcesWithStem(indexedFiles: readonly string[], stem: string): number {
+  let count = 0;
+  for (const f of indexedFiles) {
+    const norm = normalizePath(f);
+    if (!isIndexedSourcePath(norm)) continue;
+    if (targetBasenameNoExt(norm) === stem) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function findBasenameFallback(
   candidates: readonly string[],
   targetBaseNoExt: string,
+  indexedFiles: readonly string[],
 ): LinkedTest[] {
+  if (countIndexedSourcesWithStem(indexedFiles, targetBaseNoExt) !== 1) {
+    return [];
+  }
+
   const basenameMatches: string[] = [];
   for (const cand of candidates) {
     const base = basenameOf(cand);
@@ -175,7 +197,7 @@ export function findTests(input: FindTestsInput): FindTestsResult {
   }
 
   // 2) Basename convention fallback (only if no import links)
-  const basenameLinked = findBasenameFallback(candidates, targetBaseNoExt);
+  const basenameLinked = findBasenameFallback(candidates, targetBaseNoExt, indexedFiles);
 
   return {
     targetNormalizedPath: target,

@@ -71,6 +71,12 @@ describe("graphBuilder", () => {
     const testNode = result.nodes.find((n) => n.kind === "Test" && n.normalizedPath === "src/app.test.ts");
     expect(testNode).toBeDefined();
 
+    const appFile = result.nodes.find((n) => n.kind === "File" && n.normalizedPath === "src/app.ts");
+    expect(appFile).toBeDefined();
+    const inventoryFileNode = JSON.parse(String(appFile?.properties.inventoryFileNode ?? "{}")) as Record<string, unknown>;
+    expect(inventoryFileNode.lastIndexedAt).toBeUndefined();
+    expect(inventoryFileNode.mtimeMs).toBeUndefined();
+
     const configPkg = result.nodes.find((n) => n.kind === "Config" && n.normalizedPath === "package.json");
     expect(configPkg).toBeDefined();
 

@@ -72,6 +72,16 @@ describe("Cartographer self-scan report (Todo 6)", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects via base and Clean schemas when scanErrorCount disagrees with scanErrors list", () => {
+    const mismatch: CartographerSelfScanReport = {
+      ...baseReport,
+      scanErrorCount: 0,
+      scanErrors: [{ path: "x", stage: "read", message: "boom", recoverable: true }],
+    };
+    expect(CartographerSelfScanReportSchema.safeParse(mismatch).success).toBe(false);
+    expect(CleanSelfScanReportSchema.safeParse(mismatch).success).toBe(false);
+  });
+
   it("sorts expected path checks and forbidden path checks using deterministic UTF-16 order", () => {
     const unsortedExpected = [
       { path: "src/z", present: true },
@@ -111,6 +121,8 @@ describe("Cartographer self-scan report (Todo 6)", () => {
     expect(checks.find((c: { pathPattern: string; matched: boolean }) => c.pathPattern === "node_modules")?.matched).toBe(true);
     expect(checks.find((c: { pathPattern: string; matched: boolean }) => c.pathPattern === ".env")?.matched).toBe(true);
     expect(checks.find((c: { pathPattern: string; matched: boolean }) => c.pathPattern === ".git")?.matched).toBe(false);
+    const gitignoreOnly = generateForbiddenPathChecks([".git"], [".gitignore", "src/.gitignore"]);
+    expect(gitignoreOnly.every((c) => !c.matched)).toBe(true);
   });
 
   it("builds a git comparison structure from raw counts and lists", () => {
@@ -134,7 +146,7 @@ describe("Cartographer self-scan report (Todo 6)", () => {
     const reportWithError = {
       ...baseReport,
       scanErrorCount: 1,
-      scanErrors: [{ path: "src/bad.ts", stage: "read", message: "permission denied", recoverable: true }],
+      scanErrors: [{ path: "src/bad.ts", stage: "read" as const, message: "permission denied", recoverable: true }],
     };
     const md = renderSelfScanReportMarkdown(reportWithError);
     expect(md).toContain("schemaVersion: rector.cartographer.selfScan.v1");
