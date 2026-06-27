@@ -57,7 +57,7 @@ export function makeFileId(repoRoot: string, normalizedPath: string): string {
   return `file:${repoRootHash(repoRoot)}:${p}`;
 }
 
-export function makeSymbolId(
+function buildSymbolIdParts(
   repoRoot: string,
   normalizedPath: string,
   isExported: boolean,
@@ -67,6 +67,16 @@ export function makeSymbolId(
   const p = normalizePath(normalizedPath);
   const marker = isExported ? "export" : "local";
   return `symbol:${repoRootHash(repoRoot)}:${p}:${marker}:${name}:${startLine}`;
+}
+
+export function makeSymbolId(
+  repoRoot: string,
+  normalizedPath: string,
+  isExported: boolean,
+  name: string,
+  startLine: number
+): string {
+  return buildSymbolIdParts(repoRoot, normalizedPath, isExported, name, startLine);
 }
 
 export function makeToolId(name: string): string {
