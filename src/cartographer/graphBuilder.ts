@@ -193,6 +193,8 @@ export async function buildGraphSnapshot(input: BuildGraphInput): Promise<BuildG
   for (const f of sortedFiles) {
     const src = getSourceText ? getSourceText(f.normalizedPath) : undefined;
     if (src === undefined) continue;
+    // C2: structural extraction is for TS/JS files only; skip docs/config/JSON/etc.
+    if (f.language !== "typescript" && f.language !== "javascript") continue;
 
     const fileId = makeFileId(repoRoot, f.normalizedPath);
 
@@ -344,33 +346,31 @@ export async function buildGraphSnapshot(input: BuildGraphInput): Promise<BuildG
   }
 
   // Emit TESTS edges from findTests evidence (import-first, basename fallback)
+  // C3: compute links once per source file (findTests result is independent of the test file).
   if (getSourceText) {
-    for (const f of sortedFiles) {
-      if (f.kind !== "test") continue;
-      for (const srcFile of sortedFiles) {
-        if (srcFile.kind === "test") continue;
-        const srcText = getSourceText(srcFile.normalizedPath);
-        if (srcText === undefined) continue;
-        const linkRes = findTests({
-          targetNormalizedPath: srcFile.normalizedPath,
-          indexedFiles: indexedNormalized,
-          getSourceText: (p) => getSourceText(p),
+    const testFileSet = new Set(sortedFiles.filter((f) => f.kind === "test").map((f) => f.normalizedPath));
+    for (const srcFile of sortedFiles) {
+      if (srcFile.kind === "test") continue;
+      const srcText = getSourceText(srcFile.normalizedPath);
+      if (srcText === undefined) continue;
+      const linkRes = findTests({
+        targetNormalizedPath: srcFile.normalizedPath,
+        indexedFiles: indexedNormalized,
+        getSourceText: (p) => getSourceText(p),
+      });
+      for (const lt of linkRes.linkedTests) {
+        if (!testFileSet.has(lt.normalizedPath)) continue;
+        const testFileId = makeFileId(repoRoot, lt.normalizedPath);
+        const targetFileId = makeFileId(repoRoot, srcFile.normalizedPath);
+        structuralEdges.push({
+          id: makeEdgeId("TESTS", testFileId, targetFileId),
+          snapshotId,
+          kind: "TESTS",
+          fromNodeId: testFileId,
+          toNodeId: targetFileId,
+          evidence: { path: lt.normalizedPath, text: lt.evidence },
+          properties: { relation: lt.relation },
         });
-        for (const lt of linkRes.linkedTests) {
-          if (lt.normalizedPath === f.normalizedPath) {
-            const testFileId = makeFileId(repoRoot, f.normalizedPath);
-            const targetFileId = makeFileId(repoRoot, srcFile.normalizedPath);
-            structuralEdges.push({
-              id: makeEdgeId("TESTS", testFileId, targetFileId),
-              snapshotId,
-              kind: "TESTS",
-              fromNodeId: testFileId,
-              toNodeId: targetFileId,
-              evidence: { path: f.normalizedPath, text: lt.evidence },
-              properties: { relation: lt.relation },
-            });
-          }
-        }
       }
     }
   }

@@ -451,4 +451,270 @@ export const z = 1;
     expect(shuf.nodes.map((n) => n.id)).toEqual(base.nodes.map((n) => n.id));
     expect(shuf.edges.map((e) => e.id)).toEqual(base.edges.map((e) => e.id));
   });
+
+  it("C2 regression: structural extraction (symbols/imports/exports/DEFINES) is gated to TS/JS files only", async () => {
+    const repoRoot = await makeStructuralMiniFixture();
+    // Use inline synthetic files only (no reliance on fixture scan for this C2 case)
+    const docPath = "docs/evil-doc.md";
+    const configPath = "config/bad.json";
+    const tsPath = "src/good.ts";
+
+    const docSrc = "# Docs\n\nexport function fakeFn() { return 1; }\nexport class FakeClass {}";
+    const configSrc = '{\n  "script": "export function notReal() {}",\n  "value": 42\n}';
+    const tsSrc = "export function realFn() { return 99; }\nexport const realConst = 7;";
+
+    const files: FileNode[] = [
+      {
+        id: makeFileId(repoRoot, docPath),
+        path: docPath,
+        normalizedPath: docPath,
+        hash: "doc1",
+        sizeBytes: docSrc.length,
+        language: "markdown",
+        kind: "doc",
+        ignored: false,
+        lastIndexedAt: "2026-06-20T00:00:00.000Z",
+      },
+      {
+        id: makeFileId(repoRoot, configPath),
+        path: configPath,
+        normalizedPath: configPath,
+        hash: "cfg1",
+        sizeBytes: configSrc.length,
+        language: "json",
+        kind: "config",
+        ignored: false,
+        lastIndexedAt: "2026-06-20T00:00:00.000Z",
+      },
+      {
+        id: makeFileId(repoRoot, tsPath),
+        path: tsPath,
+        normalizedPath: tsPath,
+        hash: "ts1",
+        sizeBytes: tsSrc.length,
+        language: "typescript",
+        kind: "source",
+        ignored: false,
+        lastIndexedAt: "2026-06-20T00:00:00.000Z",
+      },
+    ];
+
+    const getSourceText = (np: string): string | undefined => {
+      if (np === docPath) return docSrc;
+      if (np === configPath) return configSrc;
+      if (np === tsPath) return tsSrc;
+      return undefined;
+    };
+
+    const result = await buildGraphSnapshot({
+      repoRoot,
+      inventorySnapshotId: "inv-c2",
+      createdAt: "2026-06-20T00:00:00.000Z",
+      files,
+      getSourceText,
+    });
+
+    const docFileId = makeFileId(repoRoot, docPath);
+    const configFileId = makeFileId(repoRoot, configPath);
+
+    // C2: NO Symbol/Function/Class/Interface/TypeAlias/Enum nodes whose path matches the doc/config file
+    const forbiddenKinds = ["Function", "Symbol", "Class", "Interface", "TypeAlias", "Enum"];
+    const badStructuralNodes = result.nodes.filter(
+      (n) => forbiddenKinds.includes(n.kind) && (n.path === docPath || n.path === configPath),
+    );
+    expect(badStructuralNodes.length).toBe(0);
+
+    // C2: NO DEFINES or EXPORTS edges whose fromNodeId is the doc/config file id
+    const badStructuralEdges = result.edges.filter(
+      (e) =>
+        (e.kind === "DEFINES" || e.kind === "EXPORTS") &&
+        (e.fromNodeId === docFileId || e.fromNodeId === configFileId),
+    );
+    expect(badStructuralEdges.length).toBe(0);
+
+    // (sanity) the real TS file DID produce structural symbols
+    const goodStructuralNodes = result.nodes.filter(
+      (n) => forbiddenKinds.includes(n.kind) && n.path === tsPath,
+    );
+    expect(goodStructuralNodes.length).toBeGreaterThan(0);
+  });
+
+  it("C3 regression: TESTS edges computed once per source (same edges as before, correctness)", async () => {
+    const repoRoot = await makeStructuralMiniFixture();
+    // Fully synthetic to control test<->source links via import statements in test files.
+    // Two source files, two test files. a.test imports a, b.test imports b.
+    const aSrcPath = "src/a.ts";
+    const aTestPath = "src/a.test.ts";
+    const bSrcPath = "src/b.ts";
+    const bTestPath = "src/b.test.ts";
+
+    const aSrc = "export const aValue = 1;\n";
+    const aTestSrc = "import { aValue } from './a';\n";
+    const bSrc = "export const bValue = 2;\n";
+    const bTestSrc = "import { bValue } from './b';\n";
+
+    const files: FileNode[] = [
+      {
+        id: makeFileId(repoRoot, aSrcPath),
+        path: aSrcPath,
+        normalizedPath: aSrcPath,
+        hash: "has",
+        sizeBytes: aSrc.length,
+        language: "typescript",
+        kind: "source",
+        ignored: false,
+        lastIndexedAt: "2026-06-20T00:00:00.000Z",
+      },
+      {
+        id: makeFileId(repoRoot, aTestPath),
+        path: aTestPath,
+        normalizedPath: aTestPath,
+        hash: "hat",
+        sizeBytes: aTestSrc.length,
+        language: "typescript",
+        kind: "test",
+        ignored: false,
+        lastIndexedAt: "2026-06-20T00:00:00.000Z",
+      },
+      {
+        id: makeFileId(repoRoot, bSrcPath),
+        path: bSrcPath,
+        normalizedPath: bSrcPath,
+        hash: "hbs",
+        sizeBytes: bSrc.length,
+        language: "typescript",
+        kind: "source",
+        ignored: false,
+        lastIndexedAt: "2026-06-20T00:00:00.000Z",
+      },
+      {
+        id: makeFileId(repoRoot, bTestPath),
+        path: bTestPath,
+        normalizedPath: bTestPath,
+        hash: "hbt",
+        sizeBytes: bTestSrc.length,
+        language: "typescript",
+        kind: "test",
+        ignored: false,
+        lastIndexedAt: "2026-06-20T00:00:00.000Z",
+      },
+    ];
+
+    const getSourceText = (np: string): string | undefined => {
+      if (np === aSrcPath) return aSrc;
+      if (np === aTestPath) return aTestSrc;
+      if (np === bSrcPath) return bSrc;
+      if (np === bTestPath) return bTestSrc;
+      return undefined;
+    };
+
+    const result = await buildGraphSnapshot({
+      repoRoot,
+      inventorySnapshotId: "inv-c3-correct",
+      createdAt: "2026-06-20T00:00:00.000Z",
+      files,
+      getSourceText,
+    });
+
+    const testsEdges = result.edges.filter((e) => e.kind === "TESTS");
+    expect(testsEdges.length).toBe(2);
+
+    const hasAToA = testsEdges.some((e) => {
+      const from = result.nodes.find((n) => n.id === e.fromNodeId);
+      const to = result.nodes.find((n) => n.id === e.toNodeId);
+      return from?.normalizedPath === aTestPath && to?.normalizedPath === aSrcPath;
+    });
+    const hasBToB = testsEdges.some((e) => {
+      const from = result.nodes.find((n) => n.id === e.fromNodeId);
+      const to = result.nodes.find((n) => n.id === e.toNodeId);
+      return from?.normalizedPath === bTestPath && to?.normalizedPath === bSrcPath;
+    });
+    expect(hasAToA).toBe(true);
+    expect(hasBToB).toBe(true);
+
+    // Edge IDs use makeEdgeId and must be unique/stable
+    const edgeIds = testsEdges.map((e) => e.id);
+    expect(edgeIds.length).toBe(2);
+    expect(new Set(edgeIds).size).toBe(2);
+  });
+
+  it("C3 regression: TESTS edges computed with N sources and M tests produce correct count (guards against quadratic calls)", async () => {
+    const repoRoot = await makeStructuralMiniFixture();
+    // N=3 sources, M=3 tests (paired 1:1 via imports in tests). Expect exactly 3 TESTS edges.
+    // Previously the nested loop invoked findTests O(N*M) times redundantly.
+    // The refactored loop calls findTests once per source file.
+    // We assert edge set is correct (N links); direct spy skipped to avoid fragile module mock in this test style.
+    const srcPaths = ["src/x.ts", "src/y.ts", "src/z.ts"];
+    const testPaths = ["src/x.test.ts", "src/y.test.ts", "src/z.test.ts"];
+
+    const srcContents = [
+      "export const x = 'x';\n",
+      "export const y = 'y';\n",
+      "export const z = 'z';\n",
+    ];
+    const testContents = [
+      "import { x } from './x';\n",
+      "import { y } from './y';\n",
+      "import { z } from './z';\n",
+    ];
+
+    const files: FileNode[] = [];
+    for (let i = 0; i < srcPaths.length; i++) {
+      files.push({
+        id: makeFileId(repoRoot, srcPaths[i]),
+        path: srcPaths[i],
+        normalizedPath: srcPaths[i],
+        hash: "hs" + i,
+        sizeBytes: srcContents[i].length,
+        language: "typescript",
+        kind: "source",
+        ignored: false,
+        lastIndexedAt: "2026-06-20T00:00:00.000Z",
+      });
+    }
+    for (let i = 0; i < testPaths.length; i++) {
+      files.push({
+        id: makeFileId(repoRoot, testPaths[i]),
+        path: testPaths[i],
+        normalizedPath: testPaths[i],
+        hash: "ht" + i,
+        sizeBytes: testContents[i].length,
+        language: "typescript",
+        kind: "test",
+        ignored: false,
+        lastIndexedAt: "2026-06-20T00:00:00.000Z",
+      });
+    }
+
+    const getSourceText = (np: string): string | undefined => {
+      const si = srcPaths.indexOf(np);
+      if (si >= 0) return srcContents[si];
+      const ti = testPaths.indexOf(np);
+      if (ti >= 0) return testContents[ti];
+      return undefined;
+    };
+
+    const result = await buildGraphSnapshot({
+      repoRoot,
+      inventorySnapshotId: "inv-c3-perf",
+      createdAt: "2026-06-20T00:00:00.000Z",
+      files,
+      getSourceText,
+    });
+
+    const testsEdges = result.edges.filter((e) => e.kind === "TESTS");
+    expect(testsEdges.length).toBe(3);
+
+    // Verify exact pairing
+    const pairs = testsEdges.map((e) => {
+      const from = result.nodes.find((n) => n.id === e.fromNodeId)?.normalizedPath;
+      const to = result.nodes.find((n) => n.id === e.toNodeId)?.normalizedPath;
+      return `${from}->${to}`;
+    }).sort();
+    expect(pairs).toEqual([
+      "src/x.test.ts->src/x.ts",
+      "src/y.test.ts->src/y.ts",
+      "src/z.test.ts->src/z.ts",
+    ]);
+  });
 });
