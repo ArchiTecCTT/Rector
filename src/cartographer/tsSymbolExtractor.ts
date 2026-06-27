@@ -137,29 +137,47 @@ function isDefaultExport(node: Node): boolean {
 }
 
 /**
- * Extract a name for a declaration node when possible.
- * For anonymous default exports we return "default".
+ * Returns true for declaration kinds that carry a .name (or can be anonymous default for fn/class).
  */
-function getDeclarationName(node: Node): string | undefined {
-  // FunctionDeclaration / ClassDeclaration / InterfaceDeclaration / TypeAlias / Enum
-  if (
+function isNameBearingDeclaration(node: Node): boolean {
+  return (
     isFunctionDeclaration(node) ||
     isClassDeclaration(node) ||
     isInterfaceDeclaration(node) ||
     isTypeAliasDeclaration(node) ||
     isEnumDeclaration(node)
-  ) {
-    if (node.name) {
-      return node.name.text;
-    }
-    // Anonymous default export function/class
-    if (isDefaultExport(node)) {
-      return "default";
-    }
+  );
+}
+
+/**
+ * True only for anonymous (no .name) default-exported function or class declarations.
+ */
+function isAnonymousDefaultDeclaration(node: Node): boolean {
+  if (isFunctionDeclaration(node)) {
+    return !node.name && isDefaultExport(node);
+  }
+  if (isClassDeclaration(node)) {
+    return !node.name && isDefaultExport(node);
+  }
+  return false;
+}
+
+/**
+ * Extract a name for a declaration node when possible.
+ * For anonymous default exports we return "default".
+ */
+function getDeclarationName(node: Node): string | undefined {
+  if (!isNameBearingDeclaration(node)) {
     return undefined;
   }
-
-  // VariableStatement: we will handle inside visitVariableStatement
+  const decl = node as { name?: { text?: string } };
+  if (decl.name?.text) {
+    return decl.name.text;
+  }
+  // Anonymous default export function/class
+  if (isAnonymousDefaultDeclaration(node)) {
+    return "default";
+  }
   return undefined;
 }
 
@@ -188,6 +206,39 @@ function makeSymbol(
 }
 
 /**
+ * Collects direct (non-nested) variable binding names from an Identifier or
+ * ObjectBindingPattern / ArrayBindingPattern. Returns pairs of the node to use
+ * for makeSymbol (the id or the BindingElement) and the name text.
+ * Matches prior logic: only direct identifiers; nested patterns and rests are ignored.
+ */
+function collectVariableNamesFromBindingName(
+  nameNode: Node,
+): { bindingNode: Node; name: string }[] {
+  if (isIdentifier(nameNode)) {
+    return [{ bindingNode: nameNode, name: nameNode.text }];
+  }
+  if (isObjectBindingPattern(nameNode)) {
+    const results: { bindingNode: Node; name: string }[] = [];
+    for (const el of nameNode.elements) {
+      if (isBindingElement(el) && isIdentifier(el.name)) {
+        results.push({ bindingNode: el, name: el.name.text });
+      }
+    }
+    return results;
+  }
+  if (isArrayBindingPattern(nameNode)) {
+    const results: { bindingNode: Node; name: string }[] = [];
+    for (const el of nameNode.elements) {
+      if (isBindingElement(el) && isIdentifier(el.name)) {
+        results.push({ bindingNode: el, name: el.name.text });
+      }
+    }
+    return results;
+  }
+  return [];
+}
+
+/**
  * Handle VariableStatement: may contain multiple declarations.
  * We emit one symbol per exported/local binding we can name.
  */
@@ -198,32 +249,11 @@ function visitVariableStatement(
 ): void {
   const isExported = hasExportModifier(stmt);
   for (const decl of stmt.declarationList.declarations) {
-    // Simple identifier binding
-    if (isIdentifier(decl.name)) {
+    const bindings = collectVariableNamesFromBindingName(decl.name);
+    for (const { bindingNode, name } of bindings) {
       out.push(
-        makeSymbol(sourceFile, decl, "variable", decl.name.text, isExported),
+        makeSymbol(sourceFile, bindingNode, "variable", name, isExported),
       );
-      continue;
-    }
-    // Object binding pattern: export const { a, b: c } = ...
-    if (isObjectBindingPattern(decl.name)) {
-      for (const el of decl.name.elements) {
-        if (isBindingElement(el) && isIdentifier(el.name)) {
-          out.push(
-            makeSymbol(sourceFile, el, "variable", el.name.text, isExported),
-          );
-        }
-      }
-    }
-    // Array binding pattern: export const [a, b] = ...
-    if (isArrayBindingPattern(decl.name)) {
-      for (const el of decl.name.elements) {
-        if (isBindingElement(el) && isIdentifier(el.name)) {
-          out.push(
-            makeSymbol(sourceFile, el, "variable", el.name.text, isExported),
-          );
-        }
-      }
     }
   }
 }
@@ -277,6 +307,52 @@ function visitExportDeclaration(
 }
 
 /**
+ * Emit symbol for a function/class/interface/typeAlias/enum using shared name/export logic.
+ * Preserves "default" fallback exactly for fn/class that reach without a name.
+ */
+function emitNamedDeclarationSymbol(
+  sourceFile: SourceFile,
+  node: Node,
+  kind: "function" | "class" | "interface" | "typeAlias" | "enum",
+  out: ExtractedSymbol[],
+): void {
+  let name = getDeclarationName(node);
+  if (!name) {
+    if (kind === "function" || kind === "class") {
+      name = "default";
+    } else {
+      return;
+    }
+  }
+  const isExported =
+    kind === "function" || kind === "class"
+      ? hasExportModifier(node) || isDefaultExport(node)
+      : hasExportModifier(node);
+  out.push(makeSymbol(sourceFile, node, kind, name, isExported));
+}
+
+/**
+ * Small dispatcher for the named declaration kinds; keeps visitNode lean.
+ */
+function visitNamedDeclaration(
+  sourceFile: SourceFile,
+  node: Node,
+  out: ExtractedSymbol[],
+): void {
+  if (isFunctionDeclaration(node)) {
+    emitNamedDeclarationSymbol(sourceFile, node, "function", out);
+  } else if (isClassDeclaration(node)) {
+    emitNamedDeclarationSymbol(sourceFile, node, "class", out);
+  } else if (isInterfaceDeclaration(node)) {
+    emitNamedDeclarationSymbol(sourceFile, node, "interface", out);
+  } else if (isTypeAliasDeclaration(node)) {
+    emitNamedDeclarationSymbol(sourceFile, node, "typeAlias", out);
+  } else if (isEnumDeclaration(node)) {
+    emitNamedDeclarationSymbol(sourceFile, node, "enum", out);
+  }
+}
+
+/**
  * Main recursive visitor using forEachChild.
  */
 function visitNode(
@@ -284,30 +360,8 @@ function visitNode(
   node: Node,
   out: ExtractedSymbol[],
 ): void {
-  // Declarations we care about
-  if (isFunctionDeclaration(node)) {
-    const name = getDeclarationName(node) ?? "default";
-    const exported = hasExportModifier(node) || isDefaultExport(node);
-    out.push(makeSymbol(sourceFile, node, "function", name, exported));
-  } else if (isClassDeclaration(node)) {
-    const name = getDeclarationName(node) ?? "default";
-    const exported = hasExportModifier(node) || isDefaultExport(node);
-    out.push(makeSymbol(sourceFile, node, "class", name, exported));
-  } else if (isInterfaceDeclaration(node)) {
-    const name = getDeclarationName(node);
-    if (name) {
-      out.push(makeSymbol(sourceFile, node, "interface", name, hasExportModifier(node)));
-    }
-  } else if (isTypeAliasDeclaration(node)) {
-    const name = getDeclarationName(node);
-    if (name) {
-      out.push(makeSymbol(sourceFile, node, "typeAlias", name, hasExportModifier(node)));
-    }
-  } else if (isEnumDeclaration(node)) {
-    const name = getDeclarationName(node);
-    if (name) {
-      out.push(makeSymbol(sourceFile, node, "enum", name, hasExportModifier(node)));
-    }
+  if (isNameBearingDeclaration(node)) {
+    visitNamedDeclaration(sourceFile, node, out);
   } else if (isVariableStatement(node)) {
     visitVariableStatement(sourceFile, node, out);
   } else if (isExportDeclaration(node)) {
