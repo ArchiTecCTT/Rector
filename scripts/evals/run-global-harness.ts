@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { emitHarnessTelemetry } from "../../src/observability/appInsightsAdapter";
+import { emitHarnessTelemetry } from "../../src/observability";
 import { auditNoProductionFakes } from "../audit/no-production-fakes";
 import { runGlobalHarness } from "../../src/evals/globalRunner";
 
