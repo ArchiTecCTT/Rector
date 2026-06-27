@@ -36,5 +36,10 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html", "json", "json-summary", "lcov", "clover"],
+      reportsDirectory: "./coverage",
+    },
   },
 });

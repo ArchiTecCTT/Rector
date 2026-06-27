@@ -1,10 +1,7 @@
-import { dirname } from "node:path";
-
-import { ensureRestrictedDir, ensureRestrictedFile } from "../security/filePermissions";
-import { DEFAULT_SQLITE_PATH } from "../store";
-import { createSqliteDriver, type SqlDriver } from "../store/sqlRectorStore";
+import { type SqlDriver } from "../store";
+import { createCartographerSqliteDriver } from "./cartographerSqliteDriver";
 import { hashString } from "./fileHasher";
-import type { CartographerInventoryStore, CreateSnapshotInput, FileNode, RepoSnapshot, ScanError } from "./types";
+import type { CartographerInventoryStore, CreateSnapshotInput, FileNode, RepoSnapshot, ScanError, ScanResult } from "./types";
 
 const SQLITE_MAX_VARIABLES = 999;
 const DELETE_PATHS_PER_STATEMENT = SQLITE_MAX_VARIABLES - 1;
@@ -52,14 +49,7 @@ export class SqliteCartographerInventoryStore implements CartographerInventorySt
   private readonly nowFn: () => Date;
 
   constructor(options: SqliteCartographerInventoryStoreOptions = {}) {
-    const path = options.path ?? DEFAULT_SQLITE_PATH;
-    if (options.driver) {
-      this.driver = options.driver;
-    } else {
-      if (path !== ":memory:") ensureRestrictedDir(dirname(path));
-      this.driver = createSqliteDriver({ path });
-      if (path !== ":memory:") ensureRestrictedFile(path);
-    }
+    this.driver = createCartographerSqliteDriver(options);
     this.nowFn = options.now ?? (() => new Date());
     this.migrate();
   }
@@ -161,6 +151,29 @@ export class SqliteCartographerInventoryStore implements CartographerInventorySt
         [snapshotId],
       )
       .map(errorFromRow);
+  }
+
+  async persistScanResult(input: { repoRoot: string; result: ScanResult }): Promise<void> {
+    const { repoRoot, result } = input;
+    this.driver.exec("BEGIN");
+    try {
+      await this.createSnapshot({
+        repoRoot,
+        files: result.files,
+        ignoredFiles: result.ignoredFiles,
+        deletedFiles: result.deletedFiles,
+        changedFiles: result.changedFiles,
+        id: result.snapshot.id,
+        createdAt: result.snapshot.createdAt,
+      });
+      await this.recordErrors(result.snapshot.id, result.errors);
+      await this.upsertFiles(repoRoot, result.files);
+      await this.removeFiles(repoRoot, result.deletedFiles);
+      this.driver.exec("COMMIT");
+    } catch (error) {
+      this.driver.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   private migrate(): void {

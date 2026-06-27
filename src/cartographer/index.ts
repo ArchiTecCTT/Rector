@@ -34,3 +34,78 @@ export { SqliteCartographerInventoryStore, type SqliteCartographerInventoryStore
 export { scanRepository } from "./repoScanner";
 export { scanChangedFiles } from "./incrementalIndex";
 export { buildScanSummary } from "./scanResult";
+export * from "./selfScanReport";
+
+export * from "./graphSchemas";
+export * from "./graphTypes";
+export {
+  computeRepoRootHash,
+  makeCapabilityId,
+  makeDefinesEdgeId,
+  makeDirectoryId,
+  makeEdgeId,
+  makeFileId,
+  makeGraphSnapshotId,
+  makeImportEdgeId,
+  makePackageId,
+  makeProjectId,
+  makeSymbolId,
+  makeToolId,
+  normalizePath,
+} from "./graphIds";
+export type { CartographerGraphStore, PutGraphSnapshotInput } from "./graphStore";
+export { InMemoryCartographerGraphStore } from "./inMemoryGraphStore";
+export { SqliteCartographerGraphStore, type SqliteCartographerGraphStoreOptions } from "./sqliteGraphStore";
+export type { GraphSnapshot } from "./graphSnapshot";
+export { buildGraphSnapshot, type BuildGraphInput, type BuildGraphResult } from "./graphBuilder";
+export { extractTsSymbols, type ExtractTsSymbolsInput, type ExtractTsSymbolsResult, type ExtractedSymbol, type ExtractionDiagnostic, type SymbolKind } from "./tsSymbolExtractor";
+export {
+  extractImports,
+  type ExtractImportsInput,
+  type ExtractImportsResult,
+  type ImportRecord,
+  type ImportKind,
+  type ResolvedTarget,
+  type FileTarget,
+  type PackageTarget,
+  type UnresolvedTarget,
+} from "./importExtractor";
+export {
+  findTests,
+  type FindTestsInput,
+  type FindTestsResult,
+  type LinkedTest,
+} from "./testLinker";
+export {
+  CartographerQueryService,
+  type QueryServiceGraph,
+} from "./queryService";
+export {
+  buildToolGraph,
+  type BuildToolGraphInput,
+  type BuildToolGraphResult,
+  type ToolProductionAdmission,
+} from "./toolGraphAdapter";
+export {
+  buildCapabilityGraph,
+  type BuildCapabilityGraphInput,
+  type BuildCapabilityGraphResult,
+} from "./capabilityGraphAdapter";
+export {
+  loadCapabilityGraphRecords,
+} from "./capabilityGraphRecordsLoader";
+export {
+  CapabilityGraphRecordSchema,
+  CapabilityGraphRecordsSchema,
+  CapabilityRiskSchema,
+  ToolProductionAdmissionSchema,
+  type CapabilityGraphRecord,
+  type CapabilityRisk,
+} from "./capabilityGraphRecords";
+export {
+  buildEvalSuiteGraph,
+  makeValidatedByEvalCaseEdge,
+  type BuildEvalSuiteGraphInput,
+  type BuildEvalSuiteGraphResult,
+  type EvalSuiteCaseRef,
+} from "./evalSuiteGraphAdapter";

@@ -1,0 +1,393 @@
+import path from "node:path";
+
+import {
+  createSourceFile,
+  ScriptTarget,
+  forEachChild,
+  isImportDeclaration,
+  isExportDeclaration,
+  isStringLiteral,
+  isCallExpression,
+  isIdentifier,
+  SyntaxKind,
+  type SourceFile,
+  type Node,
+  type ImportDeclaration,
+  type ExportDeclaration,
+  type CallExpression,
+} from "typescript";
+
+import { normalizePath } from "./graphIds";
+import {
+  collectSyntaxParseDiagnostics,
+  evidenceFor,
+  lineOf,
+  scriptKindFor,
+} from "./tsSourceHelpers";
+import type { ExtractionDiagnostic } from "./tsSourceHelpers";
+
+/**
+ * importExtractor (Todo 19)
+ *
+ * Uses ONLY TypeScript Compiler API syntax parsing:
+ * - createSourceFile with setParentNodes: true
+ * - forEachChild traversal
+ * - sourceFile.getLineAndCharacterOfPosition for 1-based lines
+ *
+ * No program construction, no type analysis, no tsconfig, no resolution beyond
+ * deterministic relative lookup against a provided indexed file list.
+ *
+ * Extracts:
+ * - static import declarations
+ * - static-string dynamic import() literals
+ * - export-from declarations (including export type * from)
+ * - syntax-obvious CommonJS require("lit") calls (identifier callee + string literal arg)
+ *
+ * Resolution:
+ * - Only relative specifiers (starting with "./" or "../") are resolved against indexedFiles.
+ * - Deterministic candidates: exact, +supported extensions, +/index+extension.
+ * - Bare specifiers become package targets.
+ * - Path-alias-like specifiers (e.g. "@/...", "~/...") become unresolved/not_configured.
+ * - Unresolved relative become unresolved/not_found.
+ * - Never fabricate file nodes for unresolved cases.
+ */
+
+export type ImportKind = "staticImport" | "dynamicImport" | "exportFrom" | "requireCall";
+
+export type FileTarget = {
+  readonly kind: "file";
+  readonly normalizedPath: string;
+};
+
+export type PackageTarget = {
+  readonly kind: "package";
+  readonly specifier: string;
+};
+
+export type UnresolvedTarget = {
+  readonly kind: "unresolved";
+  readonly reason: "not_found" | "not_configured";
+};
+
+export type ResolvedTarget = FileTarget | PackageTarget | UnresolvedTarget;
+
+export type ImportRecord = {
+  readonly kind: ImportKind;
+  readonly specifier: string;
+  readonly target: ResolvedTarget;
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly evidence: string;
+};
+
+export type ExtractImportsInput = {
+  readonly filePath: string;
+  readonly sourceText: string;
+  readonly indexedFiles: readonly string[];
+};
+
+export type ExtractImportsResult = {
+  readonly imports: readonly ImportRecord[];
+  readonly diagnostics: readonly ExtractionDiagnostic[];
+};
+
+const SUPPORTED_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts"] as const;
+const JS_SPECIFIER_EXTS = new Set([".js", ".jsx", ".mjs", ".cts"]);
+
+function firstIndexedPathWithExtensions(indexed: Set<string>, base: string): string | null {
+  for (const ext of SUPPORTED_EXTS) {
+    const withExt = base + ext;
+    if (indexed.has(withExt)) return withExt;
+  }
+  return null;
+}
+
+function firstIndexedIndexEntry(indexed: Set<string>, base: string): string | null {
+  for (const ext of SUPPORTED_EXTS) {
+    const idx = path.posix.join(base, `index${ext}`);
+    if (indexed.has(idx)) return idx;
+  }
+  return null;
+}
+
+function probeIndexedBaseAndExtensions(indexed: Set<string>, base: string): string | null {
+  if (indexed.has(base)) return base;
+  const withExtension = firstIndexedPathWithExtensions(indexed, base);
+  if (withExtension) return withExtension;
+  return firstIndexedIndexEntry(indexed, base);
+}
+
+function probeJsSpecifierToSource(indexed: Set<string>, base: string): string | null {
+  const extname = path.posix.extname(base);
+  if (!JS_SPECIFIER_EXTS.has(extname)) return null;
+  const stem = base.slice(0, base.length - extname.length);
+  return probeIndexedBaseAndExtensions(indexed, stem);
+}
+
+function isAliasLike(specifier: string): boolean {
+  // Phase 1: common tsconfig path alias patterns are reported unresolved/not_configured.
+  // Do not implement alias resolution.
+  if (specifier.startsWith("@/")) return true;
+  if (specifier.startsWith("~/")) return true;
+  // Also catch bare ~ or other root-mapped styles seen in some configs.
+  return specifier === "~";
+}
+
+function resolveRelative(
+  specifier: string,
+  importerFile: string,
+  indexed: Set<string>,
+): string | null {
+  if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+    return null;
+  }
+  const normImporter = normalizePath(importerFile);
+  const importerDir = normImporter.includes("/")
+    ? normImporter.slice(0, normImporter.lastIndexOf("/"))
+    : ".";
+  // Join relative to importer dir (posix)
+  const joined = path.posix.join(importerDir === "." ? "" : importerDir, specifier);
+  const base = normalizePath(joined);
+
+  // ESM convention: a ".js" specifier in a TS file resolves to the TS source.
+  const jsResolved = probeJsSpecifierToSource(indexed, base);
+  if (jsResolved) return jsResolved;
+
+  return probeIndexedBaseAndExtensions(indexed, base);
+}
+
+function resolveTarget(
+  specifier: string,
+  importerFile: string,
+  indexed: Set<string>,
+): ResolvedTarget {
+  if (specifier.startsWith("./") || specifier.startsWith("../")) {
+    const resolved = resolveRelative(specifier, importerFile, indexed);
+    if (resolved) {
+      return { kind: "file", normalizedPath: resolved };
+    }
+    return { kind: "unresolved", reason: "not_found" };
+  }
+
+  if (isAliasLike(specifier)) {
+    return { kind: "unresolved", reason: "not_configured" };
+  }
+
+  // Bare specifier or subpath package (e.g. "express", "zod", "@scope/pkg", "foo/bar")
+  return { kind: "package", specifier };
+}
+
+function makeRecord(
+  sourceFile: SourceFile,
+  node: Node,
+  kind: ImportKind,
+  specifier: string,
+  target: ResolvedTarget,
+): ImportRecord {
+  const start = node.getStart(sourceFile);
+  const end = node.getEnd();
+  const startLine = lineOf(sourceFile, start);
+  const endLine = lineOf(sourceFile, end);
+  return {
+    kind,
+    specifier,
+    target,
+    startLine,
+    endLine,
+    evidence: evidenceFor(sourceFile, node),
+  };
+}
+
+function recordUnresolvedDiagnostic(
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  sourceFile: SourceFile,
+  node: Node,
+  spec: string,
+  reason: string,
+  prefix: string,
+): void {
+  diagnostics.push({
+    path: filePath,
+    line: lineOf(sourceFile, node.getStart(sourceFile)),
+    message: `${prefix} ${spec} (${reason})`,
+  });
+}
+
+function handleSpecifierRecord(
+  sourceFile: SourceFile,
+  node: Node,
+  kind: ImportKind,
+  specifier: string,
+  target: ResolvedTarget,
+  out: ImportRecord[],
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  prefix: string,
+): void {
+  out.push(makeRecord(sourceFile, node, kind, specifier, target));
+  if (target.kind === "unresolved") {
+    recordUnresolvedDiagnostic(diagnostics, filePath, sourceFile, node, specifier, target.reason, prefix);
+  }
+}
+
+function handleImportDeclaration(
+  node: Node,
+  sourceFile: SourceFile,
+  out: ImportRecord[],
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  indexed: Set<string>,
+): void {
+  const mod = (node as ImportDeclaration).moduleSpecifier;
+  if (isStringLiteral(mod)) {
+    const spec = mod.text;
+    const target = resolveTarget(spec, filePath, indexed);
+    handleSpecifierRecord(
+      sourceFile,
+      node,
+      "staticImport",
+      spec,
+      target,
+      out,
+      diagnostics,
+      filePath,
+      "unresolved import",
+    );
+  }
+}
+
+function handleExportDeclaration(
+  node: Node,
+  sourceFile: SourceFile,
+  out: ImportRecord[],
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  indexed: Set<string>,
+): void {
+  const mod = (node as ExportDeclaration).moduleSpecifier;
+  if (mod && isStringLiteral(mod)) {
+    const spec = mod.text;
+    const target = resolveTarget(spec, filePath, indexed);
+    handleSpecifierRecord(
+      sourceFile,
+      node,
+      "exportFrom",
+      spec,
+      target,
+      out,
+      diagnostics,
+      filePath,
+      "unresolved export from",
+    );
+  }
+}
+
+function handleDynamicImport(
+  node: Node,
+  sourceFile: SourceFile,
+  out: ImportRecord[],
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  indexed: Set<string>,
+): void {
+  const call = node as CallExpression; // narrowed by caller: isCallExpression(node) && ImportKeyword
+  const arg = call.arguments[0];
+  if (arg && isStringLiteral(arg)) {
+    const spec = arg.text;
+    const target = resolveTarget(spec, filePath, indexed);
+    handleSpecifierRecord(
+      sourceFile,
+      node,
+      "dynamicImport",
+      spec,
+      target,
+      out,
+      diagnostics,
+      filePath,
+      "unresolved dynamic import",
+    );
+  }
+}
+
+function handleRequireCall(
+  node: Node,
+  sourceFile: SourceFile,
+  out: ImportRecord[],
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  indexed: Set<string>,
+): void {
+  const call = node as CallExpression;
+  const callee = call.expression;
+  if (isIdentifier(callee) && callee.text === "require") {
+    const arg = call.arguments[0];
+    if (arg && isStringLiteral(arg)) {
+      const spec = arg.text;
+      const target = resolveTarget(spec, filePath, indexed);
+      handleSpecifierRecord(
+        sourceFile,
+        node,
+        "requireCall",
+        spec,
+        target,
+        out,
+        diagnostics,
+        filePath,
+        "unresolved require",
+      );
+    }
+  }
+}
+
+function visitNode(
+  sourceFile: SourceFile,
+  node: Node,
+  out: ImportRecord[],
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  indexed: Set<string>,
+): void {
+  if (isImportDeclaration(node)) {
+    handleImportDeclaration(node, sourceFile, out, diagnostics, filePath, indexed);
+  } else if (isExportDeclaration(node)) {
+    handleExportDeclaration(node, sourceFile, out, diagnostics, filePath, indexed);
+  } else if (isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword) {
+    handleDynamicImport(node, sourceFile, out, diagnostics, filePath, indexed);
+  } else if (isCallExpression(node)) {
+    handleRequireCall(node, sourceFile, out, diagnostics, filePath, indexed);
+  }
+
+  forEachChild(node, (child) => visitNode(sourceFile, child, out, diagnostics, filePath, indexed));
+}
+
+export function extractImports(input: ExtractImportsInput): ExtractImportsResult {
+  const { filePath, sourceText, indexedFiles } = input;
+
+  const scriptKind = scriptKindFor(filePath);
+  const sourceFile = createSourceFile(
+    filePath,
+    sourceText,
+    ScriptTarget.Latest,
+    /*setParentNodes*/ true,
+    scriptKind,
+  );
+
+  const imports: ImportRecord[] = [];
+  const diagnostics: ExtractionDiagnostic[] = collectSyntaxParseDiagnostics(sourceFile, filePath);
+
+  const indexed = new Set(indexedFiles.map((p) => normalizePath(p)));
+
+  visitNode(sourceFile, sourceFile, imports, diagnostics, filePath, indexed);
+
+  // Deterministic sort: startLine asc, then specifier asc
+  const sorted = [...imports].sort((a, b) => {
+    if (a.startLine !== b.startLine) return a.startLine - b.startLine;
+    return a.specifier < b.specifier ? -1 : a.specifier > b.specifier ? 1 : 0;
+  });
+
+  return {
+    imports: sorted,
+    diagnostics,
+  };
+}

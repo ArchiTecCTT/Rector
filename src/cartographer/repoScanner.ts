@@ -1,9 +1,8 @@
 import path from "node:path";
 import { defaultFileReader, normalizeRepositoryPath } from "./fileReader";
-import { classifyFile } from "./fileClassifier";
-import { hashString, hashViaReader } from "./fileHasher";
+import { hashViaReader } from "./fileHasher";
 import { loadIgnoreMatchers, shouldIgnoreFile } from "./ignorePolicy";
-import { assembleScanResult, buildScanSummary } from "./scanResult";
+import { assembleScanResult, buildFileNode, buildScanSummary } from "./scanResult";
 import type { CartographerScanEmitter, CartographerScanEvent, FileNode, FileReader, IgnoredFileRef, ScanError, ScanOptions, ScanRepositoryInput, ScanResult } from "./types";
 import { DEFAULT_HEAD_SNIFF_BYTES, DEFAULT_MAX_FILE_SIZE_BYTES } from "./types";
 
@@ -209,24 +208,6 @@ async function applyIgnoreDecision(
   state.ignoredFiles.push(ignoredFile);
   await collectEmitterError(state.errors, state.emitter, { type: "CARTOGRAPHER_FILE_IGNORED", path: ignoredFile.path, ignoredFile, timestamp: state.now().toISOString() });
   return true;
-}
-
-function buildFileNode(input: { readonly repoRoot: string; readonly entry: WalkEntry; readonly hash: string; readonly lastIndexedAt: string }): FileNode {
-  const extensionStart = input.entry.basename.lastIndexOf(".");
-  const extension = extensionStart >= 0 ? input.entry.basename.slice(extensionStart + 1) : "";
-  const classification = classifyFile({ normalizedPath: input.entry.normalizedPath, basename: input.entry.basename, extension });
-  return {
-    id: hashString(`${input.repoRoot}\u0000${input.entry.normalizedPath}`).slice(0, 16),
-    path: input.entry.normalizedPath,
-    normalizedPath: input.entry.normalizedPath,
-    hash: input.hash,
-    sizeBytes: input.entry.sizeBytes,
-    mtimeMs: input.entry.mtimeMs,
-    language: classification.language,
-    kind: classification.kind,
-    ignored: false,
-    lastIndexedAt: input.lastIndexedAt,
-  };
 }
 
 async function emitScanOutputEvents(input: { readonly events: readonly ScanOutputEvent[]; readonly result: ScanResult; readonly emitter?: CartographerScanEmitter; readonly errors: ScanError[]; readonly now: () => Date }): Promise<void> {

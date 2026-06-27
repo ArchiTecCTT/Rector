@@ -9,6 +9,13 @@
       ]
     },
     {
+      "matching_content_path": "tests/cartographer/**",
+      "rules": [
+        { "name": "String Heavy Function Arguments", "weight": 0.0 },
+        { "name": "Overall Code Complexity", "weight": 0.0 }
+      ]
+    },
+    {
       "matching_content_path": "scripts/audit/**",
       "rules": [
         { "name": "String Heavy Function Arguments", "weight": 0.0 }

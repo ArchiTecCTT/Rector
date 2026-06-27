@@ -1,0 +1,23 @@
+[
+  {
+    "id": "cartographer.grounding",
+    "label": "Cartographer grounding",
+    "toolNames": ["workspace.read_file", "workspace.list_dir"],
+    "evalCaseIds": [
+      "rg-orchestration-search",
+      "tsc-runtime-mode-error",
+      "git-readiness-diff",
+      "rg-noisy-imports",
+      "tsc-downstream-error",
+      "vitest-failing-log",
+      "git-risky-multi-file",
+      "npm-audit-package",
+      "audit-no-fakes-report",
+      "cartographer-inventory-scan"
+    ],
+    "productionAdmission": "production",
+    "risk": "medium",
+    "source": "phase0_eval",
+    "warnings": []
+  }
+]

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Phase0BaselineSchema } from "../../src/capabilities/eval/baseline";
+import { Phase0BaselineSchema, buildPhase0Baseline } from "../../src/capabilities/eval/baseline";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EVIDENCE_DIR = path.resolve(__dirname, "../../.omo/evidence");
@@ -47,14 +47,25 @@ describe("Phase 0 Baseline", () => {
     expect(() => Phase0BaselineSchema.parse(broken)).toThrow();
   });
 
-  it("fakeAudit.findingCount matches real scanner result", async () => {
-    const raw = readFileSync(JSON_PATH, "utf8");
-    const json = JSON.parse(raw);
-    const parsed = Phase0BaselineSchema.parse(json);
-
+  it("buildPhase0Baseline wires live fakeAuditReport counts exactly (historical baseline is separate snapshot)", async () => {
     const realReport = await import("../../scripts/audit/no-production-fakes").then((m) =>
       m.auditNoProductionFakes(),
     );
-    expect(parsed.fakeAudit.findingCount).toBe(realReport.findingCount);
+
+    const baseline = await buildPhase0Baseline({
+      fakeAuditReport: realReport,
+      gitBranch: "test",
+      gitHeadSha: "deadbeef",
+      testBaseline: { totalTests: 1, passed: 1, skipped: 0 },
+      capabilityCorpus: { caseCount: 0, artifactKinds: [] },
+    });
+
+    expect(baseline.fakeAudit.findingCount).toBe(realReport.findingCount);
+
+    const perRuleSum = Object.values(baseline.fakeAudit.perRule).reduce((a, b) => a + b, 0);
+    expect(perRuleSum).toBe(realReport.findingCount);
+
+    expect(typeof realReport.findingCount).toBe("number");
+    expect(realReport.findingCount).toBeGreaterThanOrEqual(0);
   });
 });

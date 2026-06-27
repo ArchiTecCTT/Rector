@@ -6,13 +6,16 @@ import { DEFAULT_HEAD_SNIFF_BYTES, scanRepository, type CartographerScanEmitter,
 import { normalizeRepositoryPath } from "../../src/cartographer/repoScanner";
 import {
   collectEvents,
+  DEFAULT_MAX_FILE_SIZE_BYTES,
   fixedNow,
   isSortedUtf16,
   labelForEvent,
   makeFixtureRepo,
+  makeNestedIgnoreLimitationRepo,
   makeSpyingReader,
   stripVolatile,
   tempRoots,
+  writeOversizedFile,
   type ScanEventLabel,
 } from "./repoScannerTestHarness";
 
@@ -145,6 +148,40 @@ describe("Cartographer T5 repo scanner", () => {
     ).rejects.toBeInstanceOf(Error);
     expect(events.map((event) => event.type)).toEqual(["CARTOGRAPHER_SCAN_STARTED", "CARTOGRAPHER_SCAN_FAILED"]);
     expect(events[1]).toMatchObject({ type: "CARTOGRAPHER_SCAN_FAILED", error: { path: path.resolve(repoRoot), stage: "walk", message: "root denied", recoverable: false } });
+  });
+
+  it("ignores files above DEFAULT_MAX_FILE_SIZE_BYTES before calling readAll and records them exactly once with source size_limit", async () => {
+    // Given: a repo containing one oversized file and a spying reader that throws on readAll for it.
+    const repoRoot = await makeFixtureRepo();
+    await writeOversizedFile(repoRoot, "oversized.bin");
+    const { reader, allCalls } = makeSpyingReader(repoRoot, [
+      { method: "readAll", normalizedPath: "oversized.bin", message: "readAll must not be called for oversized files" },
+    ]);
+
+    // When: the scanner runs.
+    const result = await scanRepository({ repoRoot, fileReader: reader, now: () => fixedNow });
+
+    // Then: scan succeeds, oversized file appears exactly once in ignoredFiles with source size_limit,
+    // and the readAll spy proves the oversized file was never passed to readAll.
+    expect(result.errors.some((e) => e.message.includes("readAll must not be called"))).toBe(false);
+    const oversizedRefs = result.ignoredFiles.filter((ref) => ref.path === "oversized.bin");
+    expect(oversizedRefs).toHaveLength(1);
+    expect(oversizedRefs[0]).toEqual({ path: "oversized.bin", reason: `file exceeds ${DEFAULT_MAX_FILE_SIZE_BYTES} bytes`, source: "size_limit", isDirectory: false });
+    expect(allCalls.some((call) => call.normalizedPath === "oversized.bin")).toBe(false);
+  });
+
+  it("applies root .gitignore and root .rectorignore but intentionally does not apply nested .gitignore (deferred limitation)", async () => {
+    // Given: a repo with root ignores and a nested .gitignore inside a subdirectory.
+    const repoRoot = await makeNestedIgnoreLimitationRepo();
+
+    // When: the scanner runs.
+    const result = await scanRepository({ repoRoot, now: () => fixedNow });
+
+    // Then: root ignores are applied; the file covered only by the nested .gitignore is indexed (behavior is explicitly deferred).
+    expect(result.ignoredFiles.some((ref) => ref.path === "root-ignored.txt" && ref.source === "gitignore")).toBe(true);
+    expect(result.ignoredFiles.some((ref) => ref.path === "root-rector-ignored.txt" && ref.source === "rectorignore")).toBe(true);
+    expect(result.files.some((f) => f.normalizedPath === "subdir/nested/nested-ignored.txt")).toBe(true);
+    expect(result.ignoredFiles.some((ref) => ref.path === "subdir/nested/nested-ignored.txt")).toBe(false);
   });
 });
 
