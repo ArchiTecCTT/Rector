@@ -72,12 +72,7 @@ function sortLinked(a: LinkedTest, b: LinkedTest): number {
   return a.normalizedPath < b.normalizedPath ? -1 : a.normalizedPath > b.normalizedPath ? 1 : 0;
 }
 
-export function findTests(input: FindTestsInput): FindTestsResult {
-  const { targetNormalizedPath, indexedFiles, getSourceText } = input;
-  const target = normalizePath(targetNormalizedPath);
-  const targetBaseNoExt = targetBasenameNoExt(target);
-
-  // Collect candidate test files from indexed list
+function collectTestCandidates(indexedFiles: readonly string[]): string[] {
   const candidates: string[] = [];
   for (const f of indexedFiles) {
     const norm = normalizePath(f);
@@ -86,29 +81,47 @@ export function findTests(input: FindTestsInput): FindTestsResult {
       candidates.push(norm);
     }
   }
+  return candidates;
+}
 
+function makeImportExtractionInput(
+  filePath: string,
+  sourceText: string,
+  indexedFiles: readonly string[],
+): ExtractImportsInput {
+  return {
+    filePath,
+    sourceText,
+    indexedFiles,
+  };
+}
+
+function findImportEvidence(
+  imports: readonly { target: { kind: string; normalizedPath?: string }; evidence: string }[],
+  target: string,
+): string | undefined {
+  for (const rec of imports) {
+    if (rec.target.kind === "file" && rec.target.normalizedPath === target) {
+      return rec.evidence;
+    }
+  }
+  return undefined;
+}
+
+function findImportLinkedTests(
+  candidates: readonly string[],
+  target: string,
+  getSourceText: (normalizedPath: string) => string | undefined,
+  indexedFiles: readonly string[],
+): LinkedTest[] {
   const linked: LinkedTest[] = [];
-
-  // 1) Import-relation pass
   for (const cand of candidates) {
     const text = getSourceText(cand);
     if (text === undefined) continue;
-    const ex: ExtractImportsInput = {
-      filePath: cand,
-      sourceText: text,
-      indexedFiles,
-    };
+    const ex = makeImportExtractionInput(cand, text, indexedFiles);
     const res = extractImports(ex);
-    let importsTarget = false;
-    let evidence = "";
-    for (const rec of res.imports) {
-      if (rec.target.kind === "file" && rec.target.normalizedPath === target) {
-        importsTarget = true;
-        evidence = rec.evidence;
-        break;
-      }
-    }
-    if (importsTarget) {
+    const evidence = findImportEvidence(res.imports, target);
+    if (evidence !== undefined) {
       linked.push({
         normalizedPath: cand,
         relation: "import",
@@ -116,16 +129,13 @@ export function findTests(input: FindTestsInput): FindTestsResult {
       });
     }
   }
+  return linked;
+}
 
-  if (linked.length > 0) {
-    // Import wins; return sorted, no basename fallback
-    return {
-      targetNormalizedPath: target,
-      linkedTests: [...linked].sort(sortLinked),
-    };
-  }
-
-  // 2) Basename convention fallback (only if no import links)
+function findBasenameFallback(
+  candidates: readonly string[],
+  targetBaseNoExt: string,
+): LinkedTest[] {
   const basenameMatches: string[] = [];
   for (const cand of candidates) {
     const base = basenameOf(cand);
@@ -135,16 +145,40 @@ export function findTests(input: FindTestsInput): FindTestsResult {
   }
 
   if (basenameMatches.length === 1) {
-    linked.push({
-      normalizedPath: basenameMatches[0],
-      relation: "basename",
-      evidence: "basename convention",
-    });
+    return [
+      {
+        normalizedPath: basenameMatches[0],
+        relation: "basename",
+        evidence: "basename convention",
+      },
+    ];
   }
   // else: 0 or >1 -> empty (no invention)
+  return [];
+}
+
+export function findTests(input: FindTestsInput): FindTestsResult {
+  const { targetNormalizedPath, indexedFiles, getSourceText } = input;
+  const target = normalizePath(targetNormalizedPath);
+  const targetBaseNoExt = targetBasenameNoExt(target);
+
+  const candidates = collectTestCandidates(indexedFiles);
+
+  // 1) Import-relation pass
+  const importLinked = findImportLinkedTests(candidates, target, getSourceText, indexedFiles);
+  if (importLinked.length > 0) {
+    // Import wins; return sorted, no basename fallback
+    return {
+      targetNormalizedPath: target,
+      linkedTests: [...importLinked].sort(sortLinked),
+    };
+  }
+
+  // 2) Basename convention fallback (only if no import links)
+  const basenameLinked = findBasenameFallback(candidates, targetBaseNoExt);
 
   return {
     targetNormalizedPath: target,
-    linkedTests: [...linked].sort(sortLinked),
+    linkedTests: [...basenameLinked].sort(sortLinked),
   };
 }

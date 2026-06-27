@@ -216,25 +216,38 @@ function snapshotFromRow(row: GraphSnapshotRow): GraphSnapshot {
   };
 }
 
+function withOptional<T extends Record<string, unknown>, K extends string>(
+  base: T,
+  key: K,
+  value: unknown,
+  mapper?: (v: unknown) => unknown,
+): T {
+  if (value === null || value === undefined) {
+    return base;
+  }
+  const mapped = mapper ? mapper(value) : value;
+  return { ...base, [key]: mapped } as T;
+}
+
 function nodeFromRow(row: GraphNodeRow): CartographerGraphNode {
   const properties = CartographerGraphNodeSchema.shape.properties.parse(
     JSON.parse(row.properties_json),
   );
-  const candidate = {
+  let candidate: Record<string, unknown> = {
     id: row.id,
     snapshotId: row.snapshot_id,
     kind: row.kind,
     label: row.label,
-    ...(row.path !== null ? { path: row.path } : {}),
-    ...(row.normalized_path !== null ? { normalizedPath: row.normalized_path } : {}),
-    ...(row.symbol_name !== null ? { symbolName: row.symbol_name } : {}),
-    ...(row.symbol_kind !== null ? { symbolKind: row.symbol_kind } : {}),
-    ...(row.language !== null ? { language: row.language } : {}),
-    ...(row.file_hash !== null ? { fileHash: row.file_hash } : {}),
-    ...(row.start_line !== null ? { startLine: Number(row.start_line) } : {}),
-    ...(row.end_line !== null ? { endLine: Number(row.end_line) } : {}),
     properties,
   };
+  candidate = withOptional(candidate, "path", row.path);
+  candidate = withOptional(candidate, "normalizedPath", row.normalized_path);
+  candidate = withOptional(candidate, "symbolName", row.symbol_name);
+  candidate = withOptional(candidate, "symbolKind", row.symbol_kind);
+  candidate = withOptional(candidate, "language", row.language);
+  candidate = withOptional(candidate, "fileHash", row.file_hash);
+  candidate = withOptional(candidate, "startLine", row.start_line, (v) => Number(v));
+  candidate = withOptional(candidate, "endLine", row.end_line, (v) => Number(v));
   return CartographerGraphNodeSchema.parse(candidate);
 }
 
