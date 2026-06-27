@@ -194,204 +194,56 @@ export async function buildGraphSnapshot(input: BuildGraphInput): Promise<BuildG
     const src = getSourceText ? getSourceText(f.normalizedPath) : undefined;
     if (src === undefined) continue;
     // C2: structural extraction is for TS/JS files only; skip docs/config/JSON/etc.
-    if (f.language !== "typescript" && f.language !== "javascript") continue;
+    if (!isTsOrJsLanguage(f.language)) continue;
 
     const fileId = makeFileId(repoRoot, f.normalizedPath);
 
     // Symbols -> Symbol + kinded nodes + DEFINES + EXPORTS
     const symRes = extractTsSymbols({ filePath: f.normalizedPath, sourceText: src });
-    for (const s of symRes.symbols) {
-      const symId = makeSymbolId(repoRoot, f.normalizedPath, s.isExported, s.name, s.startLine);
-      const kinded = symbolKindToNodeKind(s.kind);
-      structuralNodes.push({
-        id: symId,
-        snapshotId,
-        kind: kinded,
-        label: s.name,
-        path: f.normalizedPath,
-        normalizedPath: f.normalizedPath,
-        symbolName: s.name,
-        symbolKind: s.kind,
-        language: f.language,
-        fileHash: f.hash,
-        startLine: s.startLine,
-        endLine: s.endLine,
-        properties: { isExported: s.isExported },
-      });
-      // DEFINES from file to symbol
-      structuralEdges.push({
-        id: makeDefinesEdgeId(fileId, symId),
-        snapshotId,
-        kind: "DEFINES",
-        fromNodeId: fileId,
-        toNodeId: symId,
-        evidence: { path: f.normalizedPath, startLine: s.startLine, endLine: s.endLine, text: s.evidence },
-        properties: {},
-      });
-      // EXPORTS for exported symbols
-      if (s.isExported) {
-        structuralEdges.push({
-          id: makeEdgeId("EXPORTS", fileId, symId),
-          snapshotId,
-          kind: "EXPORTS",
-          fromNodeId: fileId,
-          toNodeId: symId,
-          evidence: { path: f.normalizedPath, startLine: s.startLine, endLine: s.endLine, text: s.evidence },
-          properties: {},
-        });
-      }
-    }
+    emitSymbolNodesAndEdges({
+      structuralNodes,
+      structuralEdges,
+      snapshotId,
+      repoRoot,
+      fileId,
+      normalizedPath: f.normalizedPath,
+      language: f.language,
+      hash: f.hash,
+      symbols: symRes.symbols,
+    });
 
     // Imports/exports -> IMPORTS / DEPENDS_ON / EXPORTS (for export-from) + bare Package nodes
     const impRes = extractImports({ filePath: f.normalizedPath, sourceText: src, indexedFiles: indexedNormalized });
-    for (const rec of impRes.imports) {
-      const edgeId = makeImportEdgeId(fileId, rec.specifier);
-      if (rec.target.kind === "file") {
-        const toFileId = makeFileId(repoRoot, rec.target.normalizedPath);
-        structuralEdges.push({
-          id: edgeId,
-          snapshotId,
-          kind: "IMPORTS",
-          fromNodeId: fileId,
-          toNodeId: toFileId,
-          evidence: { path: f.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
-          properties: { specifier: rec.specifier },
-        });
-        // DEPENDS_ON for resolved local imports
-        structuralEdges.push({
-          id: makeEdgeId("DEPENDS_ON", fileId, toFileId),
-          snapshotId,
-          kind: "DEPENDS_ON",
-          fromNodeId: fileId,
-          toNodeId: toFileId,
-          evidence: { path: f.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
-          properties: { specifier: rec.specifier },
-        });
-      } else if (rec.target.kind === "package") {
-        // Bare package node (synthetic, only for bare specifiers from imports)
-        let pkgNodeId = barePackages.get(rec.target.specifier);
-        if (!pkgNodeId) {
-          pkgNodeId = makePackageId(repoRoot, rec.target.specifier);
-          barePackages.set(rec.target.specifier, pkgNodeId);
-          structuralNodes.push({
-            id: pkgNodeId,
-            snapshotId,
-            kind: "Package",
-            label: rec.target.specifier,
-            path: rec.target.specifier,
-            normalizedPath: rec.target.specifier,
-            properties: { bare: true },
-          });
-        }
-        structuralEdges.push({
-          id: edgeId,
-          snapshotId,
-          kind: "IMPORTS",
-          fromNodeId: fileId,
-          toNodeId: pkgNodeId,
-          evidence: { path: f.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
-          properties: { specifier: rec.specifier },
-        });
-        structuralEdges.push({
-          id: makeEdgeId("DEPENDS_ON", fileId, pkgNodeId),
-          snapshotId,
-          kind: "DEPENDS_ON",
-          fromNodeId: fileId,
-          toNodeId: pkgNodeId,
-          evidence: { path: f.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
-          properties: { specifier: rec.specifier },
-        });
-      }
-
-      // EXPORTS for export-from
-      if (rec.kind === "exportFrom") {
-        if (rec.target.kind === "file") {
-          const toFileId = makeFileId(repoRoot, rec.target.normalizedPath);
-          structuralEdges.push({
-            id: makeEdgeId("EXPORTS", fileId, toFileId),
-            snapshotId,
-            kind: "EXPORTS",
-            fromNodeId: fileId,
-            toNodeId: toFileId,
-            evidence: { path: f.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
-            properties: { specifier: rec.specifier },
-          });
-        } else if (rec.target.kind === "package") {
-          let pkgNodeId = barePackages.get(rec.target.specifier);
-          if (!pkgNodeId) {
-            pkgNodeId = makePackageId(repoRoot, rec.target.specifier);
-            barePackages.set(rec.target.specifier, pkgNodeId);
-            structuralNodes.push({
-              id: pkgNodeId,
-              snapshotId,
-              kind: "Package",
-              label: rec.target.specifier,
-              path: rec.target.specifier,
-              normalizedPath: rec.target.specifier,
-              properties: { bare: true },
-            });
-          }
-          structuralEdges.push({
-            id: makeEdgeId("EXPORTS", fileId, pkgNodeId),
-            snapshotId,
-            kind: "EXPORTS",
-            fromNodeId: fileId,
-            toNodeId: pkgNodeId,
-            evidence: { path: f.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
-            properties: { specifier: rec.specifier },
-          });
-        }
-      }
-    }
+    emitImportAndExportEdges({
+      structuralNodes,
+      structuralEdges,
+      snapshotId,
+      repoRoot,
+      fileId,
+      normalizedPath: f.normalizedPath,
+      imports: impRes.imports,
+      barePackages,
+    });
   }
 
   // Emit TESTS edges from findTests evidence (import-first, basename fallback)
   // C3: compute links once per source file (findTests result is independent of the test file).
-  if (getSourceText) {
-    const testFileSet = new Set(sortedFiles.filter((f) => f.kind === "test").map((f) => f.normalizedPath));
-    for (const srcFile of sortedFiles) {
-      if (srcFile.kind === "test") continue;
-      const srcText = getSourceText(srcFile.normalizedPath);
-      if (srcText === undefined) continue;
-      const linkRes = findTests({
-        targetNormalizedPath: srcFile.normalizedPath,
-        indexedFiles: indexedNormalized,
-        getSourceText: (p) => getSourceText(p),
-      });
-      for (const lt of linkRes.linkedTests) {
-        if (!testFileSet.has(lt.normalizedPath)) continue;
-        const testFileId = makeFileId(repoRoot, lt.normalizedPath);
-        const targetFileId = makeFileId(repoRoot, srcFile.normalizedPath);
-        structuralEdges.push({
-          id: makeEdgeId("TESTS", testFileId, targetFileId),
-          snapshotId,
-          kind: "TESTS",
-          fromNodeId: testFileId,
-          toNodeId: targetFileId,
-          evidence: { path: lt.normalizedPath, text: lt.evidence },
-          properties: { relation: lt.relation },
-        });
-      }
-    }
-  }
+  emitTestEdges({
+    structuralEdges,
+    snapshotId,
+    repoRoot,
+    sortedFiles,
+    indexedNormalized,
+    getSourceText,
+  });
 
   // Merge structural nodes/edges into main collections (dedup by id for nodes, by id for edges)
-  const nodeById = new Map<string, CartographerGraphNode>();
-  for (const n of nodes) nodeById.set(n.id, n);
-  for (const n of structuralNodes) {
-    if (!nodeById.has(n.id)) nodeById.set(n.id, n);
-  }
-  const mergedNodes = [...nodeById.values()];
-
-  const edgeById = new Map<string, CartographerGraphEdge>();
-  for (const e of edges) edgeById.set(e.id, e);
-  for (const e of structuralEdges) {
-    if (!edgeById.has(e.id)) edgeById.set(e.id, e);
-  }
-  const mergedEdges = [...edgeById.values()];
-
-  const sortedNodes = [...mergedNodes].sort((a, b) => compareUtf16(a.id, b.id));
-  const sortedEdges = [...mergedEdges].sort((a, b) => compareUtf16(a.id, b.id));
+  const { nodes: sortedNodes, edges: sortedEdges } = mergeStructuralGraph({
+    baseNodes: nodes,
+    baseEdges: edges,
+    structuralNodes,
+    structuralEdges,
+  });
 
   const snapshot: GraphSnapshot = {
     id: snapshotId,
@@ -465,4 +317,255 @@ function symbolKindToNodeKind(k: SymbolKind): CartographerGraphNode["kind"] {
 
 function compareUtf16(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+// --- extracted helpers (behavior-preserving refactor to reduce complexity of buildGraphSnapshot) ---
+
+function isTsOrJsLanguage(language: FileNode["language"]): boolean {
+  return language === "typescript" || language === "javascript";
+}
+
+function emitSymbolNodesAndEdges(args: {
+  structuralNodes: CartographerGraphNode[];
+  structuralEdges: CartographerGraphEdge[];
+  snapshotId: string;
+  repoRoot: string;
+  fileId: string;
+  normalizedPath: string;
+  language: FileNode["language"];
+  hash: string;
+  symbols: ReturnType<typeof extractTsSymbols>["symbols"];
+}) {
+  const { structuralNodes, structuralEdges, snapshotId, repoRoot, fileId, normalizedPath, language, hash, symbols } = args;
+  for (const s of symbols) {
+    const symId = makeSymbolId(repoRoot, normalizedPath, s.isExported, s.name, s.startLine);
+    const kinded = symbolKindToNodeKind(s.kind);
+    structuralNodes.push({
+      id: symId,
+      snapshotId,
+      kind: kinded,
+      label: s.name,
+      path: normalizedPath,
+      normalizedPath,
+      symbolName: s.name,
+      symbolKind: s.kind,
+      language,
+      fileHash: hash,
+      startLine: s.startLine,
+      endLine: s.endLine,
+      properties: { isExported: s.isExported },
+    });
+    // DEFINES from file to symbol
+    structuralEdges.push({
+      id: makeDefinesEdgeId(fileId, symId),
+      snapshotId,
+      kind: "DEFINES",
+      fromNodeId: fileId,
+      toNodeId: symId,
+      evidence: { path: normalizedPath, startLine: s.startLine, endLine: s.endLine, text: s.evidence },
+      properties: {},
+    });
+    // EXPORTS for exported symbols
+    if (s.isExported) {
+      structuralEdges.push({
+        id: makeEdgeId("EXPORTS", fileId, symId),
+        snapshotId,
+        kind: "EXPORTS",
+        fromNodeId: fileId,
+        toNodeId: symId,
+        evidence: { path: normalizedPath, startLine: s.startLine, endLine: s.endLine, text: s.evidence },
+        properties: {},
+      });
+    }
+  }
+}
+
+function ensureBarePackageNode(args: {
+  structuralNodes: CartographerGraphNode[];
+  snapshotId: string;
+  repoRoot: string;
+  barePackages: Map<string, string>;
+  specifier: string;
+}): string {
+  let pkgNodeId = args.barePackages.get(args.specifier);
+  if (!pkgNodeId) {
+    pkgNodeId = makePackageId(args.repoRoot, args.specifier);
+    args.barePackages.set(args.specifier, pkgNodeId);
+    args.structuralNodes.push({
+      id: pkgNodeId,
+      snapshotId: args.snapshotId,
+      kind: "Package",
+      label: args.specifier,
+      path: args.specifier,
+      normalizedPath: args.specifier,
+      properties: { bare: true },
+    });
+  }
+  return pkgNodeId;
+}
+
+function emitImportAndExportEdges(args: {
+  structuralNodes: CartographerGraphNode[];
+  structuralEdges: CartographerGraphEdge[];
+  snapshotId: string;
+  repoRoot: string;
+  fileId: string;
+  normalizedPath: string;
+  imports: ReturnType<typeof extractImports>["imports"];
+  barePackages: Map<string, string>;
+}) {
+  for (const rec of args.imports) {
+    const edgeId = makeImportEdgeId(args.fileId, rec.specifier);
+    if (rec.target.kind === "file") {
+      const toFileId = makeFileId(args.repoRoot, rec.target.normalizedPath);
+      args.structuralEdges.push({
+        id: edgeId,
+        snapshotId: args.snapshotId,
+        kind: "IMPORTS",
+        fromNodeId: args.fileId,
+        toNodeId: toFileId,
+        evidence: { path: args.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
+        properties: { specifier: rec.specifier },
+      });
+      // DEPENDS_ON for resolved local imports
+      args.structuralEdges.push({
+        id: makeEdgeId("DEPENDS_ON", args.fileId, toFileId),
+        snapshotId: args.snapshotId,
+        kind: "DEPENDS_ON",
+        fromNodeId: args.fileId,
+        toNodeId: toFileId,
+        evidence: { path: args.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
+        properties: { specifier: rec.specifier },
+      });
+    } else if (rec.target.kind === "package") {
+      // Bare package node (synthetic, only for bare specifiers from imports)
+      const pkgNodeId = ensureBarePackageNode({
+        structuralNodes: args.structuralNodes,
+        snapshotId: args.snapshotId,
+        repoRoot: args.repoRoot,
+        barePackages: args.barePackages,
+        specifier: rec.target.specifier,
+      });
+      args.structuralEdges.push({
+        id: edgeId,
+        snapshotId: args.snapshotId,
+        kind: "IMPORTS",
+        fromNodeId: args.fileId,
+        toNodeId: pkgNodeId,
+        evidence: { path: args.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
+        properties: { specifier: rec.specifier },
+      });
+      args.structuralEdges.push({
+        id: makeEdgeId("DEPENDS_ON", args.fileId, pkgNodeId),
+        snapshotId: args.snapshotId,
+        kind: "DEPENDS_ON",
+        fromNodeId: args.fileId,
+        toNodeId: pkgNodeId,
+        evidence: { path: args.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
+        properties: { specifier: rec.specifier },
+      });
+    }
+
+    // EXPORTS for export-from
+    if (rec.kind === "exportFrom") {
+      if (rec.target.kind === "file") {
+        const toFileId = makeFileId(args.repoRoot, rec.target.normalizedPath);
+        args.structuralEdges.push({
+          id: makeEdgeId("EXPORTS", args.fileId, toFileId),
+          snapshotId: args.snapshotId,
+          kind: "EXPORTS",
+          fromNodeId: args.fileId,
+          toNodeId: toFileId,
+          evidence: { path: args.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
+          properties: { specifier: rec.specifier },
+        });
+      } else if (rec.target.kind === "package") {
+        const pkgNodeId = ensureBarePackageNode({
+          structuralNodes: args.structuralNodes,
+          snapshotId: args.snapshotId,
+          repoRoot: args.repoRoot,
+          barePackages: args.barePackages,
+          specifier: rec.target.specifier,
+        });
+        args.structuralEdges.push({
+          id: makeEdgeId("EXPORTS", args.fileId, pkgNodeId),
+          snapshotId: args.snapshotId,
+          kind: "EXPORTS",
+          fromNodeId: args.fileId,
+          toNodeId: pkgNodeId,
+          evidence: { path: args.normalizedPath, startLine: rec.startLine, endLine: rec.endLine, text: rec.evidence },
+          properties: { specifier: rec.specifier },
+        });
+      }
+    }
+  }
+}
+
+function emitTestEdges(args: {
+  structuralEdges: CartographerGraphEdge[];
+  snapshotId: string;
+  repoRoot: string;
+  sortedFiles: readonly FileNode[];
+  indexedNormalized: string[];
+  getSourceText?: (normalizedPath: string) => string | undefined;
+}) {
+  // Emit TESTS edges from findTests evidence (import-first, basename fallback)
+  // C3: compute links once per source file (findTests result is independent of the test file).
+  if (args.getSourceText) {
+    const testFileSet = new Set(args.sortedFiles.filter((f) => f.kind === "test").map((f) => f.normalizedPath));
+    for (const srcFile of args.sortedFiles) {
+      if (srcFile.kind === "test") continue;
+      const srcText = args.getSourceText(srcFile.normalizedPath);
+      if (srcText === undefined) continue;
+      const linkRes = findTests({
+        targetNormalizedPath: srcFile.normalizedPath,
+        indexedFiles: args.indexedNormalized,
+        getSourceText: (p) => args.getSourceText!(p),
+      });
+      for (const lt of linkRes.linkedTests) {
+        if (!testFileSet.has(lt.normalizedPath)) continue;
+        const testFileId = makeFileId(args.repoRoot, lt.normalizedPath);
+        const targetFileId = makeFileId(args.repoRoot, srcFile.normalizedPath);
+        args.structuralEdges.push({
+          id: makeEdgeId("TESTS", testFileId, targetFileId),
+          snapshotId: args.snapshotId,
+          kind: "TESTS",
+          fromNodeId: testFileId,
+          toNodeId: targetFileId,
+          evidence: { path: lt.normalizedPath, text: lt.evidence },
+          properties: { relation: lt.relation },
+        });
+      }
+    }
+  }
+}
+
+function mergeStructuralGraph(args: {
+  baseNodes: CartographerGraphNode[];
+  baseEdges: CartographerGraphEdge[];
+  structuralNodes: CartographerGraphNode[];
+  structuralEdges: CartographerGraphEdge[];
+}): { nodes: CartographerGraphNode[]; edges: CartographerGraphEdge[] } {
+  // Merge structural nodes/edges into main collections (dedup by id for nodes, by id for edges)
+  const nodeById = new Map<string, CartographerGraphNode>();
+  for (const n of args.baseNodes) nodeById.set(n.id, n);
+  for (const n of args.structuralNodes) {
+    if (!nodeById.has(n.id)) nodeById.set(n.id, n);
+  }
+  const mergedNodes = [...nodeById.values()];
+
+  const edgeById = new Map<string, CartographerGraphEdge>();
+  for (const e of args.baseEdges) edgeById.set(e.id, e);
+  for (const e of args.structuralEdges) {
+    if (!edgeById.has(e.id)) edgeById.set(e.id, e);
+  }
+  const mergedEdges = [...edgeById.values()];
+
+  const sortedNodes = [...mergedNodes].sort((a, b) => compareUtf16(a.id, b.id));
+  const sortedEdges = [...mergedEdges].sort((a, b) => compareUtf16(a.id, b.id));
+
+  return {
+    nodes: sortedNodes,
+    edges: sortedEdges,
+  };
 }
