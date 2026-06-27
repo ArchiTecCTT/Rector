@@ -9,7 +9,7 @@ import {
   makeFileId,
   type FileNode,
 } from "../../src/cartographer";
-import { createSqliteDriver, type SqlDriver } from "../../src/store";
+import { createSqliteDriver } from "../../src/store";
 import {
   makeStructuralMiniFixture,
   scanStructuralMiniFixture,

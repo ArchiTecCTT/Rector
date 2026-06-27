@@ -4,7 +4,6 @@ import {
   findTests,
   type FindTestsInput,
   type FindTestsResult,
-  type LinkedTest,
 } from "../../src/cartographer/testLinker";
 
 function makeInput(

@@ -12,10 +12,6 @@ import {
   scanRepository,
   shouldIgnoreFile,
   SqliteCartographerInventoryStore,
-  CartographerGraphNodeSchema,
-  CartographerQueryStatusSchema,
-  GraphNodeKindSchema,
-  MUST_EMIT_NOW_NODE_KINDS,
 } from "../../src/cartographer";
 import type { CartographerInventoryStore, ScanResult } from "../../src/cartographer";
 import { cartographer } from "../../src";

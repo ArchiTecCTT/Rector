@@ -1,4 +1,4 @@
-import { getEnv, type Env } from "./config/env";
+import { getEnv } from "./config/env";
 import { userRoute } from "./routes/userRoute";
 
 export interface AppConfig {

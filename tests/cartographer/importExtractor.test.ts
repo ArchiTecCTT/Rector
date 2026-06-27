@@ -4,10 +4,7 @@ import {
   extractImports,
   type ExtractImportsInput,
   type ExtractImportsResult,
-  type ImportRecord,
   type ResolvedTarget,
-  type PackageTarget,
-  type UnresolvedTarget,
 } from "../../src/cartographer/importExtractor";
 
 const miniIndexed = [
