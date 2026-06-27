@@ -218,6 +218,148 @@ function makeRecord(
   };
 }
 
+function recordUnresolvedDiagnostic(
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  sourceFile: SourceFile,
+  node: Node,
+  spec: string,
+  reason: string,
+  prefix: string,
+): void {
+  diagnostics.push({
+    path: filePath,
+    line: lineOf(sourceFile, node.getStart(sourceFile)),
+    message: `${prefix} ${spec} (${reason})`,
+  });
+}
+
+function handleSpecifierRecord(
+  sourceFile: SourceFile,
+  node: Node,
+  kind: ImportKind,
+  specifier: string,
+  target: ResolvedTarget,
+  out: ImportRecord[],
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  prefix: string,
+): void {
+  out.push(makeRecord(sourceFile, node, kind, specifier, target));
+  if (target.kind === "unresolved") {
+    recordUnresolvedDiagnostic(diagnostics, filePath, sourceFile, node, specifier, target.reason, prefix);
+  }
+}
+
+function handleImportDeclaration(
+  node: Node,
+  sourceFile: SourceFile,
+  out: ImportRecord[],
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  indexed: Set<string>,
+): void {
+  const mod = (node as ImportDeclaration).moduleSpecifier;
+  if (isStringLiteral(mod)) {
+    const spec = mod.text;
+    const target = resolveTarget(spec, filePath, indexed);
+    handleSpecifierRecord(
+      sourceFile,
+      node,
+      "staticImport",
+      spec,
+      target,
+      out,
+      diagnostics,
+      filePath,
+      "unresolved import",
+    );
+  }
+}
+
+function handleExportDeclaration(
+  node: Node,
+  sourceFile: SourceFile,
+  out: ImportRecord[],
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  indexed: Set<string>,
+): void {
+  const mod = (node as ExportDeclaration).moduleSpecifier;
+  if (mod && isStringLiteral(mod)) {
+    const spec = mod.text;
+    const target = resolveTarget(spec, filePath, indexed);
+    handleSpecifierRecord(
+      sourceFile,
+      node,
+      "exportFrom",
+      spec,
+      target,
+      out,
+      diagnostics,
+      filePath,
+      "unresolved export from",
+    );
+  }
+}
+
+function handleDynamicImport(
+  node: Node,
+  sourceFile: SourceFile,
+  out: ImportRecord[],
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  indexed: Set<string>,
+): void {
+  const call = node as CallExpression; // narrowed by caller: isCallExpression(node) && ImportKeyword
+  const arg = call.arguments[0];
+  if (arg && isStringLiteral(arg)) {
+    const spec = arg.text;
+    const target = resolveTarget(spec, filePath, indexed);
+    handleSpecifierRecord(
+      sourceFile,
+      node,
+      "dynamicImport",
+      spec,
+      target,
+      out,
+      diagnostics,
+      filePath,
+      "unresolved dynamic import",
+    );
+  }
+}
+
+function handleRequireCall(
+  node: Node,
+  sourceFile: SourceFile,
+  out: ImportRecord[],
+  diagnostics: ExtractionDiagnostic[],
+  filePath: string,
+  indexed: Set<string>,
+): void {
+  const call = node as CallExpression;
+  const callee = call.expression;
+  if (isIdentifier(callee) && callee.text === "require") {
+    const arg = call.arguments[0];
+    if (arg && isStringLiteral(arg)) {
+      const spec = arg.text;
+      const target = resolveTarget(spec, filePath, indexed);
+      handleSpecifierRecord(
+        sourceFile,
+        node,
+        "requireCall",
+        spec,
+        target,
+        out,
+        diagnostics,
+        filePath,
+        "unresolved require",
+      );
+    }
+  }
+}
+
 function visitNode(
   sourceFile: SourceFile,
   node: Node,
@@ -227,65 +369,13 @@ function visitNode(
   indexed: Set<string>,
 ): void {
   if (isImportDeclaration(node)) {
-    const mod = (node as ImportDeclaration).moduleSpecifier;
-    if (isStringLiteral(mod)) {
-      const spec = mod.text;
-      const target = resolveTarget(spec, filePath, indexed);
-      out.push(makeRecord(sourceFile, node, "staticImport", spec, target));
-      if (target.kind === "unresolved") {
-        diagnostics.push({
-          path: filePath,
-          line: lineOf(sourceFile, node.getStart(sourceFile)),
-          message: `unresolved import ${spec} (${target.reason})`,
-        });
-      }
-    }
+    handleImportDeclaration(node, sourceFile, out, diagnostics, filePath, indexed);
   } else if (isExportDeclaration(node)) {
-    const mod = (node as ExportDeclaration).moduleSpecifier;
-    if (mod && isStringLiteral(mod)) {
-      const spec = mod.text;
-      const target = resolveTarget(spec, filePath, indexed);
-      out.push(makeRecord(sourceFile, node, "exportFrom", spec, target));
-      if (target.kind === "unresolved") {
-        diagnostics.push({
-          path: filePath,
-          line: lineOf(sourceFile, node.getStart(sourceFile)),
-          message: `unresolved export from ${spec} (${target.reason})`,
-        });
-      }
-    }
+    handleExportDeclaration(node, sourceFile, out, diagnostics, filePath, indexed);
   } else if (isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword) {
-    const arg = node.arguments[0];
-    if (arg && isStringLiteral(arg)) {
-      const spec = arg.text;
-      const target = resolveTarget(spec, filePath, indexed);
-      out.push(makeRecord(sourceFile, node, "dynamicImport", spec, target));
-      if (target.kind === "unresolved") {
-        diagnostics.push({
-          path: filePath,
-          line: lineOf(sourceFile, node.getStart(sourceFile)),
-          message: `unresolved dynamic import ${spec} (${target.reason})`,
-        });
-      }
-    }
+    handleDynamicImport(node, sourceFile, out, diagnostics, filePath, indexed);
   } else if (isCallExpression(node)) {
-    const call = node as CallExpression;
-    const callee = call.expression;
-    if (isIdentifier(callee) && callee.text === "require") {
-      const arg = call.arguments[0];
-      if (arg && isStringLiteral(arg)) {
-        const spec = arg.text;
-        const target = resolveTarget(spec, filePath, indexed);
-        out.push(makeRecord(sourceFile, node, "requireCall", spec, target));
-        if (target.kind === "unresolved") {
-          diagnostics.push({
-            path: filePath,
-            line: lineOf(sourceFile, node.getStart(sourceFile)),
-            message: `unresolved require ${spec} (${target.reason})`,
-          });
-        }
-      }
-    }
+    handleRequireCall(node, sourceFile, out, diagnostics, filePath, indexed);
   }
 
   forEachChild(node, (child) => visitNode(sourceFile, child, out, diagnostics, filePath, indexed));
