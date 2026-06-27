@@ -84,6 +84,90 @@ function readRelation(props: CartographerGraphEdge["properties"]): "import" | "b
   return v === "basename" ? "basename" : "import";
 }
 
+function findFileLikeNodesByNormalizedPath(
+  nodes: readonly CartographerGraphNode[],
+  norm: string
+): readonly CartographerGraphNode[] {
+  return nodes.filter((n) => n.normalizedPath === norm && isFileLikeKind(n.kind));
+}
+
+function findSymbolNodesByNormalizedPath(
+  nodes: readonly CartographerGraphNode[],
+  norm: string
+): readonly CartographerGraphNode[] {
+  return nodes.filter((s) => s.normalizedPath === norm && isSymbolKind(s.kind));
+}
+
+function findSymbolNodesByName(
+  nodes: readonly CartographerGraphNode[],
+  name: string
+): readonly CartographerGraphNode[] {
+  return nodes.filter((s) => s.symbolName === name && isSymbolKind(s.kind));
+}
+
+function findContainingFileForSymbol(
+  nodes: readonly CartographerGraphNode[],
+  sym: CartographerGraphNode
+): CartographerGraphNode | undefined {
+  if (!sym.normalizedPath) return undefined;
+  return nodes.find(
+    (f) => f.normalizedPath === sym.normalizedPath && isFileLikeKind(f.kind)
+  );
+}
+
+type Collectors = {
+  readonly nodeMap: Map<string, CartographerGraphNode>;
+  readonly edgeMap: Map<string, CartographerGraphEdge>;
+  addNode(n?: CartographerGraphNode): void;
+  addEdge(e?: CartographerGraphEdge): void;
+};
+
+function makeNodeAndEdgeCollectors(): Collectors {
+  const nodeMap = new Map<string, CartographerGraphNode>();
+  const edgeMap = new Map<string, CartographerGraphEdge>();
+  const addNode = (n?: CartographerGraphNode) => {
+    if (n) nodeMap.set(n.id, n);
+  };
+  const addEdge = (e?: CartographerGraphEdge) => {
+    if (e) edgeMap.set(e.id, e);
+  };
+  return { nodeMap, edgeMap, addNode, addEdge };
+}
+
+function addContextForPathHint(
+  nodes: readonly CartographerGraphNode[],
+  edges: readonly CartographerGraphEdge[],
+  norm: string,
+  addNode: (n?: CartographerGraphNode) => void,
+  addEdge: (e?: CartographerGraphEdge) => void
+): void {
+  const files = findFileLikeNodesByNormalizedPath(nodes, norm);
+  for (const f of files) {
+    addNode(f);
+    const syms = findSymbolNodesByNormalizedPath(nodes, norm);
+    for (const s of syms) addNode(s);
+    const outs = edges.filter((e) => e.fromNodeId === f.id);
+    for (const o of outs) {
+      addEdge(o);
+      const to = nodes.find((nn) => nn.id === o.toNodeId);
+      addNode(to);
+    }
+  }
+}
+
+function addContextForSymbolHint(
+  nodes: readonly CartographerGraphNode[],
+  name: string,
+  addNode: (n?: CartographerGraphNode) => void
+): void {
+  const syms = findSymbolNodesByName(nodes, name);
+  for (const s of syms) {
+    addNode(s);
+    const file = findContainingFileForSymbol(nodes, s);
+    addNode(file);
+  }
+}
+
 type ResolveTargetResult =
   | { kind: "ok"; nodes: readonly CartographerGraphNode[] }
   | { kind: "not_found" }
@@ -264,15 +348,7 @@ export class CartographerQueryService {
 
   async getRelevantContext(input: GetRelevantContextInput): Promise<GetRelevantContextResult> {
     const hints = input.hints ?? {};
-    const nodeMap = new Map<string, CartographerGraphNode>();
-    const edgeMap = new Map<string, CartographerGraphEdge>();
-
-    const addNode = (n?: CartographerGraphNode) => {
-      if (n) nodeMap.set(n.id, n);
-    };
-    const addEdge = (e?: CartographerGraphEdge) => {
-      if (e) edgeMap.set(e.id, e);
-    };
+    const { nodeMap, edgeMap, addNode, addEdge } = makeNodeAndEdgeCollectors();
 
     if (hints.paths) {
       for (const p of hints.paths) {
@@ -281,31 +357,13 @@ export class CartographerQueryService {
           return { status: "invalid_input", reason: v.reason };
         }
         const norm = v.normalized;
-        const files = this.nodes.filter((n) => n.normalizedPath === norm && isFileLikeKind(n.kind));
-        for (const f of files) {
-          addNode(f);
-          const syms = this.nodes.filter((s) => s.normalizedPath === norm && isSymbolKind(s.kind));
-          for (const s of syms) addNode(s);
-          const outs = this.edges.filter((e) => e.fromNodeId === f.id);
-          for (const o of outs) {
-            addEdge(o);
-            const to = this.nodes.find((nn) => nn.id === o.toNodeId);
-            addNode(to);
-          }
-        }
+        addContextForPathHint(this.nodes, this.edges, norm, addNode, addEdge);
       }
     }
 
     if (hints.symbolNames) {
       for (const nm of hints.symbolNames) {
-        const syms = this.nodes.filter((s) => s.symbolName === nm && isSymbolKind(s.kind));
-        for (const s of syms) {
-          addNode(s);
-          const file = this.nodes.find(
-            (f) => f.normalizedPath === s.normalizedPath && isFileLikeKind(f.kind)
-          );
-          addNode(file);
-        }
+        addContextForSymbolHint(this.nodes, nm, addNode);
       }
     }
 
