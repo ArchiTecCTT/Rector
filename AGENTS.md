@@ -66,11 +66,23 @@ npm run build
 - Commit each completed chunk separately.
 - Keep `docs/plans/concerns-and-vulnerabilities.md` updated with concerns, vulnerabilities, limitations, and deferred fixes.
 - No background/async subagents; foreground only. Background subagents caused stale-run failures.
-- Preferred model routing for this project:
-  - Implementors/workers: `azure-openai-responses/gpt-5.5`
-  - Reviewers: `vultr/zai-org/GLM-5.1-FP8-normalize:high`
-  - Debug/fix workers: `google-vertex/gemini-3.5-flash`
-- Parent orchestrator remains in charge: worker -> GLM review -> Gemini fixes if needed -> verify -> commit -> next chunk.
+- Parent orchestrator remains in charge: plan (optional) → coder → verify → librarian → commit → next chunk.
+
+### Subagent routing (do not use `general-purpose` for implementation)
+
+Spawn project agents from `.grok/agents/` — see `.grok/skills/rector-subagent-routing/SKILL.md`:
+
+| Role | `subagent_type` | Model |
+|---|---|---|
+| Low–mid implementation | `rector-generalCoder-fast` | `grok-composer-2.5-fast` |
+| Hard / cross-cutting implementation | `rector-generalCoder-deep` | `cf-glm-5-2` (Cloudflare Workers AI GLM 5.2) |
+| Post-verify doc sync | `rector-librarian` | `grok-composer-2.5-fast` |
+| Codebase map / search only | `explore` | per `config.toml` |
+| Plan before coding | `plan` | per `config.toml` |
+
+**Deep coder rate limit:** never more than **2** concurrent `rector-generalCoder-deep` subagents — Cloudflare Workers AI rate limits `cf-glm-5-2`. Queue or wait for completion before spawning a third.
+
+Coders do not edit docs (unless explicitly asked); **librarian runs after** `npm test` + `npm run build` pass to sync chunk plans, concerns, and `AGENTS.md` facts.
 
 ## Rector Project Skills
 
@@ -78,6 +90,7 @@ Project-scoped OpenCode skills live under `.opencode/skills/<name>/SKILL.md`. Th
 
 Use these active Rector skills when their domain matches:
 
+- `rector-subagent-routing` — spawn routing for `rector-generalCoder-fast`, `rector-generalCoder-deep`, and `rector-librarian`; deep-coder concurrency cap (max 2).
 - `rector-configured-product-guardian` — v0.3.0 configured-product invariants, onboarding/runtime settings, single chat path, fake/spy CI-only boundaries.
 - `rector-phase-chunk-planner` — chunk planning discipline, source-of-truth reads, scope boundaries, concerns updates, and verification gates.
 - `rector-docs-replacement-surgeon` — Phase 1 documentation replacement, stale local/external/provider-free wording, README/spec/roadmap alignment.
