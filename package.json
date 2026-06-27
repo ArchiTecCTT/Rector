@@ -56,7 +56,8 @@
     "verify:phase0.5": "tsx scripts/evals/verify-phase0-5-complete.ts",
     "verify:foundation": "npm run verify:phase0 && npm run verify:phase0.5",
     "cartographer:self-scan": "tsx scripts/cartographer/run-self-scan.ts",
-    "cartographer:self-scan:check": "tsx scripts/cartographer/check-self-scan.ts"
+    "cartographer:self-scan:check": "tsx scripts/cartographer/check-self-scan.ts",
+    "evidence:sync": "tsx scripts/azure/sync-evidence.ts"
   },
   "engines": {
     "node": ">=22.5.0"
@@ -72,7 +73,9 @@
     "@azure/core-auth": "^1.10.1",
     "@azure/core-rest-pipeline": "^1.24.0",
     "@azure/identity": "^4.13.1",
+    "@azure/keyvault-secrets": "^4.11.2",
     "@azure/openai": "^2.0.0",
+    "@azure/storage-blob": "^12.33.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cloudflare": "^6.4.0",
     "express": "^4.21.0",
@@ -80,7 +83,6 @@
     "ignore": "^7.0.5",
     "openai": "^6.44.0",
     "opencode-codebase-index": "^0.11.0",
-
     "yaml": "^2.9.0",
     "zod": "^3.23.8"
   },
@@ -96,6 +98,7 @@
     "wrangler": "^4.101.0"
   },
   "optionalDependencies": {
+    "applicationinsights": "^3.15.1",
     "ioredis": "^5.6.1",
     "rate-limiter-flexible": "^5.0.5"
   }

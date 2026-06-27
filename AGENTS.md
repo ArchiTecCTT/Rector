@@ -120,7 +120,7 @@ The VM's default git identity is `Ubuntu <…@…cloudapp.net>`, which does NOT 
 
 ## Current Implemented Chunks
 
-Completed through Chunk 50 (see `docs/plans/chunks/050-cartographer-inventory-slice.md`). Foundation chunks 0–25:
+Completed through Chunk 52 (see `docs/plans/chunks/052-azure-dev-harness-stack.md`). Chunk 51 (`051-inspection-cleanup`) remains in the worktree plan queue. Foundation chunks 0–25:
 
 0. Source-of-truth docs and stale doc quarantine
 1. Open-source foundation and Apache-2.0 setup
@@ -153,7 +153,7 @@ Neuro-symbolic + cloud transition chunks (26–37) include SLM preprocessor, adv
 
 Current test baseline after Phase 0.5 (branch `rector-0.3.0`):
 
-- `npm test`: 344 files (344 passed, 1 skipped) / 2338 tests (2338 passed, 5 skipped). Skips are live-memory only (`tests/memoryLive.integration.test.ts`, offline).
+- `npm test`: 367 files (367 passed, 1 skipped) / 2539 tests (2534 passed, 5 skipped). Skips are live-memory only (`tests/memoryLive.integration.test.ts`, offline).
 - `npm run build`: passing
 - `npm audit`: 0 vulnerabilities
 

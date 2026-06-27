@@ -5,6 +5,14 @@
 
 ## Open
 
+### Chunk 052 — Azure dev harness (Blob / Key Vault / App Insights)
+
+- **Blob RBAC lag:** `Storage Blob Data Contributor` was assigned to the CLI user on `stgrectordev`; `auth-mode login` uploads may fail until Azure RBAC propagates (typically minutes). Use `npm run evidence:sync` after propagation; no connection string stored in Key Vault by default.
+- **Key Vault access model:** `kv-rector-dev` uses vault access policies for the signed-in developer only — not VM managed identity. Multi-machine dev requires repeating policy setup or switching to RBAC + group assignment later.
+- **App Insights optional dep:** `applicationinsights` is an optional dependency; adapter no-ops safely when the package or `defaultClient` is unavailable (CI stays offline).
+- **Secret store duality:** `RECTOR_SECRET_STORE=azure-key-vault` routes API secret reads to Key Vault; local `secrets.enc` remains the default for `npm test` and contributors. Key rotation CLI (`rotate-key`) still targets local file backing only.
+- **Accidental marketplace resource:** `strectorddev` (`Microsoft.Solutions/applications` Confidential Ledger digest app) in `rg-rector-dev` is unused — defer deletion until confirmed no billing attachment.
+
 ### Full security/architecture audit 2026-06-15 — HIGH findings
 
 - **Source:** Kilo multi-agent security audit (see `audits/security-architecture-audit-2026-06-15.md` for full report).

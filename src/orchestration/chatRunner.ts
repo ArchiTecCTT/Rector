@@ -31,6 +31,8 @@ import type { LiveRepairAgent } from "./validationHealing";
 import {
   type InMemoryObservabilityTrace,
   type ObservabilitySummary,
+  forwardObservabilityTrace,
+  observabilityForwardingEnabled,
 } from "../observability";
 import {
   isLiveLLMProvider,
@@ -213,6 +215,9 @@ export async function runOrchestratedChatRun(
   } finally {
     clearTimeout(timeoutId);
     clearRunControl(runControl.runId ?? "timeout-pending");
+    if (observabilityForwardingEnabled()) {
+      await forwardObservabilityTrace(args.observability);
+    }
   }
 }
 

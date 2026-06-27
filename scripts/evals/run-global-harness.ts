@@ -1,12 +1,14 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { emitHarnessTelemetry } from "../../src/observability/appInsightsAdapter.js";
 import { auditNoProductionFakes } from "../audit/no-production-fakes";
 import { runGlobalHarness } from "../../src/evals/globalRunner";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
 async function main(): Promise<void> {
+  const startedAt = Date.now();
   const result = await runGlobalHarness({
     fakePathAuditor: async () => {
       const audit = await auditNoProductionFakes({ repoRoot: REPO_ROOT });
@@ -26,6 +28,12 @@ async function main(): Promise<void> {
       .filter((line) => line.length > 0)
       .join("\n") + "\n",
   );
+  emitHarnessTelemetry({
+    harness: "global-harness",
+    status: report.passedCount === report.executedCount ? "pass" : "fail",
+    durationMs: Date.now() - startedAt,
+    detail: `${report.passedCount}/${report.executedCount} passed`,
+  });
 }
 
 function isMain(): boolean {

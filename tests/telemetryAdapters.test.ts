@@ -9,7 +9,13 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSentryAdapter } from "../src/observability/sentryAdapter.js";
 import { createPostHogAdapter } from "../src/observability/posthogAdapter.js";
-import { createObservabilityAdapters } from "../src/observability";
+import { createAppInsightsAdapter } from "../src/observability/appInsightsAdapter.js";
+import {
+  createInMemoryObservabilityTrace,
+  createObservabilityAdapters,
+  forwardObservabilityTrace,
+  observabilityForwardingEnabled,
+} from "../src/observability";
 import type { ObservabilitySpan, ObservabilitySummary } from "../src/observability";
 
 // ── Test data ──────────────────────────────────────────────────────────────────
@@ -186,6 +192,7 @@ describe("createObservabilityAdapters", () => {
     process.env = { ...originalEnv };
     delete process.env.SENTRY_DSN;
     delete process.env.POSTHOG_API_KEY;
+    delete process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
   });
 
   afterEach(() => {
@@ -197,10 +204,12 @@ describe("createObservabilityAdapters", () => {
     expect(adapters.sentry.name).toBe("sentry");
     expect(adapters.postHog.name).toBe("posthog");
     expect(adapters.openTelemetry.name).toBe("opentelemetry");
+    expect(adapters.appInsights.name).toBe("appInsights");
     // All should be no-ops
     expect(adapters.sentry.captureSpan(SAMPLE_SPAN)).resolves.toBeUndefined();
     expect(adapters.postHog.captureSpan(SAMPLE_SPAN)).resolves.toBeUndefined();
     expect(adapters.openTelemetry.captureSpan(SAMPLE_SPAN)).resolves.toBeUndefined();
+    expect(adapters.appInsights.captureSpan(SAMPLE_SPAN)).resolves.toBeUndefined();
   });
 
   it("returns real Sentry adapter when SENTRY_DSN is set", () => {
@@ -231,6 +240,50 @@ describe("createObservabilityAdapters", () => {
     expect(adapters.openTelemetry.name).toBe("opentelemetry");
     expect(adapters.openTelemetry.captureSummary(SAMPLE_SUMMARY)).resolves.toBeUndefined();
   });
+
+  it("returns App Insights adapter when connection string is set", () => {
+    process.env.APPLICATIONINSIGHTS_CONNECTION_STRING = "InstrumentationKey=test";
+    const adapters = createObservabilityAdapters();
+    expect(adapters.appInsights.name).toBe("appInsights");
+    expect(adapters.appInsights.captureSpan(SAMPLE_SPAN)).resolves.toBeUndefined();
+  });
+});
+
+describe("observability forwarding", () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
+    delete process.env.SENTRY_DSN;
+    delete process.env.POSTHOG_API_KEY;
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it("is disabled without telemetry env vars", () => {
+    expect(observabilityForwardingEnabled({})).toBe(false);
+  });
+
+  it("is enabled when App Insights connection string is set", () => {
+    expect(observabilityForwardingEnabled({ APPLICATIONINSIGHTS_CONNECTION_STRING: "InstrumentationKey=test" })).toBe(true);
+  });
+
+  it("forwards trace spans to adapters without throwing", async () => {
+    const trace = createInMemoryObservabilityTrace({ provider: "local" });
+    await trace.recordSpan("TRIAGE", async () => "ok");
+    await expect(forwardObservabilityTrace(trace)).resolves.toBeUndefined();
+  });
+});
+
+describe("createAppInsightsAdapter", () => {
+  it("returns no-op adapter without connection string", async () => {
+    const adapter = createAppInsightsAdapter();
+    expect(adapter.name).toBe("appInsights");
+    await expect(adapter.captureSpan(SAMPLE_SPAN)).resolves.toBeUndefined();
+  });
 });
 
 // ── Redaction verification ─────────────────────────────────────────────────────
@@ -242,6 +295,7 @@ describe("telemetry adapter redaction", () => {
     process.env = { ...originalEnv };
     delete process.env.SENTRY_DSN;
     delete process.env.POSTHOG_API_KEY;
+    delete process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
   });
 
   afterEach(() => {
@@ -289,6 +343,7 @@ describe("lazy require behavior", () => {
     process.env = { ...originalEnv };
     delete process.env.SENTRY_DSN;
     delete process.env.POSTHOG_API_KEY;
+    delete process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
   });
 
   afterEach(() => {
