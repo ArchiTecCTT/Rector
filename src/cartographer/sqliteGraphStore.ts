@@ -1,7 +1,5 @@
-import { dirname } from "node:path";
-
-import { ensureRestrictedDir, ensureRestrictedFile } from "../security/filePermissions";
-import { DEFAULT_SQLITE_PATH, createSqliteDriver, type SqlDriver } from "../store";
+import { type SqlDriver } from "../store";
+import { createCartographerSqliteDriver } from "./cartographerSqliteDriver";
 import { makeGraphSnapshotId } from "./graphIds";
 import {
   CartographerGraphEdgeSchema,
@@ -57,14 +55,7 @@ export class SqliteCartographerGraphStore implements CartographerGraphStore {
   private readonly driver: SqlDriver;
 
   constructor(options: SqliteCartographerGraphStoreOptions = {}) {
-    const path = options.path ?? DEFAULT_SQLITE_PATH;
-    if (options.driver) {
-      this.driver = options.driver;
-    } else {
-      if (path !== ":memory:") ensureRestrictedDir(dirname(path));
-      this.driver = createSqliteDriver({ path });
-      if (path !== ":memory:") ensureRestrictedFile(path);
-    }
+    this.driver = createCartographerSqliteDriver(options);
     this.migrate();
   }
 

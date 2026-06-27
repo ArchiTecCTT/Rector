@@ -1,7 +1,5 @@
-import { dirname } from "node:path";
-
-import { ensureRestrictedDir, ensureRestrictedFile } from "../security/filePermissions";
-import { DEFAULT_SQLITE_PATH, createSqliteDriver, type SqlDriver } from "../store";
+import { type SqlDriver } from "../store";
+import { createCartographerSqliteDriver } from "./cartographerSqliteDriver";
 import { hashString } from "./fileHasher";
 import type { CartographerInventoryStore, CreateSnapshotInput, FileNode, RepoSnapshot, ScanError, ScanResult } from "./types";
 
@@ -51,14 +49,7 @@ export class SqliteCartographerInventoryStore implements CartographerInventorySt
   private readonly nowFn: () => Date;
 
   constructor(options: SqliteCartographerInventoryStoreOptions = {}) {
-    const path = options.path ?? DEFAULT_SQLITE_PATH;
-    if (options.driver) {
-      this.driver = options.driver;
-    } else {
-      if (path !== ":memory:") ensureRestrictedDir(dirname(path));
-      this.driver = createSqliteDriver({ path });
-      if (path !== ":memory:") ensureRestrictedFile(path);
-    }
+    this.driver = createCartographerSqliteDriver(options);
     this.nowFn = options.now ?? (() => new Date());
     this.migrate();
   }

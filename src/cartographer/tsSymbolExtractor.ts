@@ -1,8 +1,6 @@
 import {
   createSourceFile,
   ScriptTarget,
-  ScriptKind,
-  flattenDiagnosticMessageText,
   SyntaxKind,
   canHaveModifiers,
   getModifiers,
@@ -25,8 +23,17 @@ import {
   type Node,
   type VariableStatement,
   type ExportDeclaration,
-  type DiagnosticWithLocation,
 } from "typescript";
+
+import {
+  collectSyntaxParseDiagnostics,
+  evidenceFor,
+  lineOf,
+  scriptKindFor,
+  type ExtractionDiagnostic,
+} from "./tsSourceHelpers";
+
+export type { ExtractionDiagnostic };
 
 /**
  * tsSymbolExtractor (Todo 18)
@@ -58,12 +65,6 @@ export type ExtractedSymbol = {
   readonly evidence: string;
 };
 
-export type ExtractionDiagnostic = {
-  readonly path: string;
-  readonly line: number;
-  readonly message: string;
-};
-
 export type ExtractTsSymbolsInput = {
   readonly filePath: string;
   readonly sourceText: string;
@@ -73,43 +74,6 @@ export type ExtractTsSymbolsResult = {
   readonly symbols: readonly ExtractedSymbol[];
   readonly diagnostics: readonly ExtractionDiagnostic[];
 };
-
-/**
- * Map extension to the correct ScriptKind for createSourceFile.
- * Only TS/JS family is supported for symbol extraction.
- */
-function scriptKindFor(filePath: string): ScriptKind {
-  const lower = filePath.toLowerCase();
-  if (lower.endsWith(".tsx")) return ScriptKind.TSX;
-  if (lower.endsWith(".ts")) return ScriptKind.TS;
-  if (lower.endsWith(".jsx")) return ScriptKind.JSX;
-  if (lower.endsWith(".js")) return ScriptKind.JS;
-  if (lower.endsWith(".mts")) return ScriptKind.TS;
-  if (lower.endsWith(".cts")) return ScriptKind.TS;
-  // Default to TS for unknown but we only call this for supported extensions upstream.
-  return ScriptKind.TS;
-}
-
-/**
- * Get 1-based line number for a position.
- */
-function lineOf(sourceFile: SourceFile, pos: number): number {
-  const lc = sourceFile.getLineAndCharacterOfPosition(pos);
-  return lc.line + 1;
-}
-
-/**
- * Get a stable evidence string: the trimmed first line of the declaration.
- * Bounded to the declaration's start line only.
- */
-function evidenceFor(sourceFile: SourceFile, node: Node): string {
-  const start = node.getStart(sourceFile);
-  const startLine = lineOf(sourceFile, start);
-  const lineStart = sourceFile.getLineStarts()[startLine - 1] ?? 0;
-  const lineEnd = sourceFile.getLineStarts()[startLine] ?? sourceFile.text.length;
-  const rawLine = sourceFile.text.slice(lineStart, lineEnd);
-  return rawLine.trimEnd();
-}
 
 /**
  * Determine if a node has an export modifier.
@@ -373,13 +337,6 @@ function visitNode(
 }
 
 /**
- * Type predicate to access parse diagnostics without casts at the call site.
- */
-function hasParseDiagnostics(sf: SourceFile): sf is SourceFile & { parseDiagnostics: readonly DiagnosticWithLocation[] } {
-  return Object.prototype.hasOwnProperty.call(sf, "parseDiagnostics");
-}
-
-/**
  * Extract symbols using syntax parsing only.
  * Returns symbols (sorted by startLine then name for determinism) and any parse diagnostics.
  */
@@ -396,20 +353,7 @@ export function extractTsSymbols(input: ExtractTsSymbolsInput): ExtractTsSymbols
   );
 
   const symbols: ExtractedSymbol[] = [];
-  const diagnostics: ExtractionDiagnostic[] = [];
-
-  // Surface syntax errors reported by the parser.
-  // The parser attaches them directly to the returned source file object.
-  const diags = hasParseDiagnostics(sourceFile) ? sourceFile.parseDiagnostics : [];
-  for (const d of diags) {
-    const line = d.start !== undefined ? lineOf(sourceFile, d.start) : 1;
-    const message = flattenDiagnosticMessageText(d.messageText, "\n");
-    diagnostics.push({
-      path: filePath,
-      line,
-      message,
-    });
-  }
+  const diagnostics: ExtractionDiagnostic[] = collectSyntaxParseDiagnostics(sourceFile, filePath);
 
   // Traverse and collect symbols even if there were errors (partial results are acceptable).
   visitNode(sourceFile, sourceFile, symbols);

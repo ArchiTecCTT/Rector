@@ -1,5 +1,4 @@
-import type { ToolSchemaDefinition } from "../tools";
-import type { ToolRegistryEntry } from "../tools/types";
+import type { ToolRegistryEntry, ToolSchemaDefinition } from "../tools";
 import { makeToolId } from "./graphIds";
 import { getDefaultToolProductionAdmission } from "./toolProductionAdmission";
 import type {

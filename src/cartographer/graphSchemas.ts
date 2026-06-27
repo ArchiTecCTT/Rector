@@ -366,7 +366,7 @@ export const STRUCTURAL_PHASE1_NODE_KINDS = [
   "Capability",
 ] as const;
 
-/** @deprecated Alias for {@link BASELINE_INVENTORY_NODE_KINDS}. */
+/** Legacy alias for {@link BASELINE_INVENTORY_NODE_KINDS}. */
 export const MUST_EMIT_NOW_NODE_KINDS = BASELINE_INVENTORY_NODE_KINDS;
 
 /** Kinds present in GraphNodeKindSchema but not emitted by Phase 1 builders/adapters yet. */

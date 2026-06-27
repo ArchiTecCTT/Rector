@@ -3,8 +3,6 @@ import path from "node:path";
 import {
   createSourceFile,
   ScriptTarget,
-  ScriptKind,
-  flattenDiagnosticMessageText,
   forEachChild,
   isImportDeclaration,
   isExportDeclaration,
@@ -17,11 +15,16 @@ import {
   type ImportDeclaration,
   type ExportDeclaration,
   type CallExpression,
-  type DiagnosticWithLocation,
 } from "typescript";
 
 import { normalizePath } from "./graphIds";
-import type { ExtractionDiagnostic } from "./tsSymbolExtractor";
+import {
+  collectSyntaxParseDiagnostics,
+  evidenceFor,
+  lineOf,
+  scriptKindFor,
+} from "./tsSourceHelpers";
+import type { ExtractionDiagnostic } from "./tsSourceHelpers";
 
 /**
  * importExtractor (Todo 19)
@@ -119,35 +122,6 @@ function probeJsSpecifierToSource(indexed: Set<string>, base: string): string | 
   if (!JS_SPECIFIER_EXTS.has(extname)) return null;
   const stem = base.slice(0, base.length - extname.length);
   return probeIndexedBaseAndExtensions(indexed, stem);
-}
-
-function scriptKindFor(filePath: string): ScriptKind {
-  const lower = filePath.toLowerCase();
-  if (lower.endsWith(".tsx")) return ScriptKind.TSX;
-  if (lower.endsWith(".ts")) return ScriptKind.TS;
-  if (lower.endsWith(".jsx")) return ScriptKind.JSX;
-  if (lower.endsWith(".js")) return ScriptKind.JS;
-  if (lower.endsWith(".mts")) return ScriptKind.TS;
-  if (lower.endsWith(".cts")) return ScriptKind.TS;
-  return ScriptKind.TS;
-}
-
-function lineOf(sourceFile: SourceFile, pos: number): number {
-  const lc = sourceFile.getLineAndCharacterOfPosition(pos);
-  return lc.line + 1;
-}
-
-function evidenceFor(sourceFile: SourceFile, node: Node): string {
-  const start = node.getStart(sourceFile);
-  const startLine = lineOf(sourceFile, start);
-  const lineStart = sourceFile.getLineStarts()[startLine - 1] ?? 0;
-  const lineEnd = sourceFile.getLineStarts()[startLine] ?? sourceFile.text.length;
-  const rawLine = sourceFile.text.slice(lineStart, lineEnd);
-  return rawLine.trimEnd();
-}
-
-function hasParseDiagnostics(sf: SourceFile): sf is SourceFile & { parseDiagnostics: readonly DiagnosticWithLocation[] } {
-  return Object.prototype.hasOwnProperty.call(sf, "parseDiagnostics");
 }
 
 function isAliasLike(specifier: string): boolean {
@@ -400,19 +374,7 @@ export function extractImports(input: ExtractImportsInput): ExtractImportsResult
   );
 
   const imports: ImportRecord[] = [];
-  const diagnostics: ExtractionDiagnostic[] = [];
-
-  // Surface syntax parse diagnostics (recoverable)
-  const diags = hasParseDiagnostics(sourceFile) ? sourceFile.parseDiagnostics : [];
-  for (const d of diags) {
-    const line = d.start !== undefined ? lineOf(sourceFile, d.start) : 1;
-    const message = flattenDiagnosticMessageText(d.messageText, "\n");
-    diagnostics.push({
-      path: filePath,
-      line,
-      message,
-    });
-  }
+  const diagnostics: ExtractionDiagnostic[] = collectSyntaxParseDiagnostics(sourceFile, filePath);
 
   const indexed = new Set(indexedFiles.map((p) => normalizePath(p)));
 
