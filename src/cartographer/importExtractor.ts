@@ -125,7 +125,7 @@ function isAliasLike(specifier: string): boolean {
   if (specifier.startsWith("@/")) return true;
   if (specifier.startsWith("~/")) return true;
   // Also catch bare ~ or other root-mapped styles seen in some configs.
-  return specifier === "~" || specifier.startsWith("~/");
+  return specifier === "~";
 }
 
 function resolveRelative(
@@ -143,6 +143,23 @@ function resolveRelative(
   // Join relative to importer dir (posix)
   const joined = path.posix.join(importerDir === "." ? "" : importerDir, specifier);
   const base = normalizePath(joined);
+
+  // ESM convention: a ".js" specifier in a TS file resolves to the TS source.
+  // Probe the TS extensions for ".js"/".jsx"/".mjs"/".cts" specifiers.
+  const JS_EXTS = new Set([".js", ".jsx", ".mjs", ".cts"]);
+  if (JS_EXTS.has(path.posix.extname(base))) {
+    const stem = base.slice(0, base.length - path.posix.extname(base).length);
+    // exact stem match (e.g. "./config/env" -> "src/config/env")
+    if (indexed.has(stem)) return stem;
+    for (const ext of SUPPORTED_EXTS) {
+      const withExt = stem + ext;
+      if (indexed.has(withExt)) return withExt;
+    }
+    for (const ext of SUPPORTED_EXTS) {
+      const idx = path.posix.join(stem, `index${ext}`);
+      if (indexed.has(idx)) return idx;
+    }
+  }
 
   if (indexed.has(base)) return base;
 

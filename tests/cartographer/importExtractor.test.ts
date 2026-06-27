@@ -197,4 +197,39 @@ const req2 = require("./ok" + extra);
     const obvious = result.imports.filter((r) => r.specifier.startsWith("./"));
     expect(obvious.length).toBe(0);
   });
+
+  it("C1: resolves ESM-style .js relative specifier to .ts source file", () => {
+    const src = `import { getEnv } from "./config/env.js";`;
+    const result = extractImports(makeInput("src/app.ts", src));
+    expect(result.diagnostics).toEqual([]);
+
+    const rec = result.imports.find((r) => r.specifier === "./config/env.js");
+    expect(rec).toBeDefined();
+    expect(rec?.target).toEqual({ kind: "file", normalizedPath: "src/config/env.ts" });
+  });
+
+  it("C1: .js specifier with no matching TS/JS file remains unresolved not_found", () => {
+    const src = `import x from "./missing.js";`;
+    const result = extractImports(makeInput("src/app.ts", src));
+    expect(result.imports.length).toBe(1);
+    expect(result.imports[0].target.kind).toBe("unresolved");
+    expect(getUnresolvedReason(result.imports[0].target)).toBe("not_found");
+  });
+
+  it("C1: resolves .jsx specifier to .tsx source when present", () => {
+    const localIndexed = [...miniIndexed, "src/widgets/Widget.tsx"];
+    const src = `import Widget from "./widgets/Widget.jsx";`;
+    const result = extractImports(makeInput("src/app.ts", src, localIndexed));
+    const rec = result.imports.find((r) => r.specifier === "./widgets/Widget.jsx");
+    expect(rec?.target).toEqual({ kind: "file", normalizedPath: "src/widgets/Widget.tsx" });
+  });
+
+  it("A1: alias-like ~/ still resolves to not_configured after redundant condition removal", () => {
+    const src = `import x from "~/foo";`;
+    const result = extractImports(makeInput("src/app.ts", src));
+    const rec = result.imports[0];
+    expect(rec.specifier).toBe("~/foo");
+    expect(rec.target.kind).toBe("unresolved");
+    expect(getUnresolvedReason(rec.target)).toBe("not_configured");
+  });
 });
