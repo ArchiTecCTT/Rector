@@ -1,6 +1,5 @@
 import type { ToolSchemaDefinition } from "../tools";
 import type { ToolRegistryEntry } from "../tools/types";
-import type { ToolProductionAdmission } from "./capabilityGraphRecords";
 import { makeToolId } from "./graphIds";
 import { getDefaultToolProductionAdmission } from "./toolProductionAdmission";
 import type {
