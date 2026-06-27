@@ -27,11 +27,15 @@ Auth: `az login` user credentials (`DefaultAzureCredential`). VM managed identit
 
 ```bash
 az login
-direnv allow   # loads .envrc storage + App Insights + KV URL
-npm run dev    # forwards spans when telemetry env vars set
+direnv allow
+npm run azure:daily-touch    # KV + Blob + App Insights (one command)
+npm run dev                # Foundry via models; KV when RECTOR_SECRET_STORE=azure-key-vault
 npm run eval:capabilities
-RECTOR_EVIDENCE_SYNC=azure-blob npm run evidence:sync
+npm run evidence:sync
+npm run cartographer:self-scan && npm run cartographer:sync
 ```
+
+See `AGENTS.md` § Azure Daily Ritual and `.grok/skills/rector-azure-daily-ritual/SKILL.md`.
 
 ## Verification
 

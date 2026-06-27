@@ -45,6 +45,58 @@ Stale/quarantined docs have warning banners. If stale docs conflict with source-
 - Fake-seam audit (report-only, non-blocking): `npm run audit:no-fakes`
 - Global reliability harness (offline, one scorecard per scenario): `npm run test:global` — runs the committed scenarios against the fixture workspace and writes `.omo/evidence/global-report.{json,md}`; live scenarios are SKIPPED when no credentials are present
 - Specialist contract validation: `npm run test:systems` — validates committed specialist profiles against the contract schema (no execution)
+- Azure daily ritual (dev VM, opt-in): `npm run azure:daily-touch` — Key Vault list + Blob uploads + App Insights heartbeat
+- Harness Blob sync: `npm run evidence:sync` — when `RECTOR_EVIDENCE_SYNC=azure-blob`
+- Cartographer Blob sync: `npm run cartographer:sync` — uploads `.rector/cartographer/*` after `npm run cartographer:self-scan`
+
+## Azure Daily Ritual (Grok Build + Founders Hub)
+
+**Goal:** Touch **5 Azure services** daily while developing Rector — VM, Foundry, Blob, Key Vault, App Insights — for Microsoft for Startups Founders Hub eligibility.
+
+| # | Service | Resource | Daily touch |
+|---|---|---|---|
+| 1 | VM | `ornyx-1` | Grok Build sessions (automatic) |
+| 2 | Foundry | Azure OpenAI deployments | Model calls in Grok Build (automatic) |
+| 3 | Blob Storage | `stgrectordev` | `npm run azure:daily-touch` or `npm run evidence:sync` |
+| 4 | Key Vault | `kv-rector-dev` | `npm run azure:daily-touch`; `RECTOR_SECRET_STORE=azure-key-vault` on `npm run dev` |
+| 5 | App Insights | `appi-rector-dev` | `npm run azure:daily-touch`; `npm run dev` + harness scripts |
+
+**Auth:** `az login` user credentials on the dev VM (no VM managed identity). Config lives in `.envrc` (gitignored) — see `.env.example` for variable names.
+
+### Session start (every Grok Build day)
+
+```bash
+az account show >/dev/null 2>&1 || az login
+direnv allow                    # loads .envrc Azure vars
+npm run azure:daily-touch       # KV + Blob + App Insights in one command
+```
+
+### After harness / cartographer work
+
+```bash
+npm run eval:capabilities       # optional
+npm run test:global             # optional
+npm run evidence:sync           # harness reports → harness-evidence container
+
+npm run cartographer:self-scan  # if graph stale
+npm run cartographer:sync       # cartographer container on stgrectordev
+```
+
+### Azure MCP (Grok Build)
+
+MCP server `azure` (`@azure/mcp`) is configured in `~/.grok/config.toml`. Restart Grok Build after config changes. Use namespaces: `storage`, `keyvault`, `monitor`, `foundry`.
+
+### Grok skill
+
+Load `.grok/skills/rector-azure-daily-ritual/SKILL.md` at session start when Azure usage is the goal (restart session after adding the skill).
+
+### Implemented helpers (Chunk 052+)
+
+1. **`npm run azure:daily-touch`** — one-shot morning ritual (KV list, harness Blob upload if reports exist, cartographer Blob upload if artifacts exist, App Insights `rector.azure.daily_touch` event).
+2. **`rector-azure-daily-ritual` skill** — agent checklist for session start + MCP prompts.
+3. **`npm run cartographer:sync`** — uploads `latest-snapshot.json`, `latest-files.json`, `scan-report.md` from `.rector/cartographer/`.
+
+**Not in CI:** Azure env vars unset in `npm test` / GitHub Actions — local dev VM only.
 
 Phase 0 added these measurement surfaces: `src/capabilities/eval/*` (eval schemas, 8-metric scorer, raw artifact store), `scripts/evals/*` (offline runner + report formatter), `scripts/audit/*` (fake-seam scanner), and `tests/fixtures/eval-corpus/` (committed real `rg`/`tsc`/`git` artifacts + oracles).
 
@@ -97,6 +149,7 @@ Use these active Rector skills when their domain matches:
 - `rector-cartographer-graph-builder` — Cartographer structural graph expansion beyond file inventory: symbols, imports, calls, tests, routes, skills, rules, impact edges.
 - `rector-evidence-gatekeeper` — typed evidence, grounded validation, `insufficient_evidence` instead of guessing, safe memory/skill promotion.
 - `rector-fake-purge-auditor` — fake/deterministic double containment, fake seam audits, simulator/tool fallback boundaries, `configured_spy_pipeline` naming.
+- `rector-azure-daily-ritual` — Grok Build session-start checklist for 5-service Azure daily usage (Founders Hub); `azure:daily-touch`, evidence/cartographer sync, Azure MCP.
 
 Deferred Rector skills to add when their phases become active:
 

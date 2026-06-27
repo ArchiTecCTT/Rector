@@ -57,7 +57,9 @@
     "verify:foundation": "npm run verify:phase0 && npm run verify:phase0.5",
     "cartographer:self-scan": "tsx scripts/cartographer/run-self-scan.ts",
     "cartographer:self-scan:check": "tsx scripts/cartographer/check-self-scan.ts",
-    "evidence:sync": "tsx scripts/azure/sync-evidence.ts"
+    "evidence:sync": "tsx scripts/azure/sync-evidence.ts",
+    "cartographer:sync": "tsx scripts/azure/sync-cartographer.ts",
+    "azure:daily-touch": "tsx scripts/azure/daily-touch.ts"
   },
   "engines": {
     "node": ">=22.5.0"

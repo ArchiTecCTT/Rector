@@ -5,8 +5,12 @@
  * Spans and summaries are redacted before export.
  */
 
+import { createRequire } from "node:module";
+
 import type { ObservabilityAdapter, ObservabilitySpan, ObservabilitySummary } from ".";
 import { redactString } from "../security/redaction.js";
+
+const require = createRequire(import.meta.url);
 
 interface TelemetryClient {
   trackEvent(event: { name: string; properties?: Record<string, string> }): void;
@@ -139,6 +143,41 @@ export interface HarnessTelemetryInput {
   status: "pass" | "fail" | "skip";
   durationMs?: number;
   detail?: string;
+}
+
+export interface AzureDailyTouchTelemetryInput {
+  steps: string;
+  ok: boolean;
+}
+
+export function emitAzureDailyTouchTelemetry(input: AzureDailyTouchTelemetryInput): void {
+  const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING?.trim();
+  if (!connectionString) return;
+
+  const adapter = createAppInsightsAdapter({ connectionString });
+  void adapter.captureSummary({
+    traceId: `azure-daily-touch-${new Date().toISOString().slice(0, 10)}`,
+    spanCount: 0,
+    durationMs: 0,
+    status: input.ok ? "OK" : "ERROR",
+    modelCallCount: 0,
+    estimatedCostUsd: 0,
+    providers: ["azure"],
+    spans: [],
+  }).then(() => {
+    const mod = loadAppInsights();
+    try {
+      mod?.defaultClient.trackEvent({
+        name: "rector.azure.daily_touch",
+        properties: {
+          steps: redactString(input.steps),
+          ok: String(input.ok),
+        },
+      });
+    } catch {
+      return;
+    }
+  });
 }
 
 export function emitHarnessTelemetry(input: HarnessTelemetryInput): void {
