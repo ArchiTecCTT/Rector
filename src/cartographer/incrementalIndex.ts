@@ -1,8 +1,7 @@
 import path from "node:path";
-import { classifyFile } from "./fileClassifier";
-import { hashString, hashViaReader } from "./fileHasher";
+import { hashViaReader } from "./fileHasher";
 import { defaultFileReader, emitSafely, walkRepository, type WalkEntry } from "./repoScanner";
-import { assembleScanResult, buildScanSummary } from "./scanResult";
+import { assembleScanResult, buildFileNode, buildScanSummary } from "./scanResult";
 import type { CartographerScanEmitter, CartographerScanEvent, FileNode, IgnoredFileRef, ScanChangedFilesInput, ScanError, ScanResult } from "./types";
 import { isCurrentlyIgnored } from "./types";
 
@@ -72,24 +71,6 @@ async function buildHashedFile(input: { readonly repoRoot: string; readonly entr
     return undefined;
   }
   return buildFileNode({ repoRoot: input.repoRoot, entry: input.entry, hash: hashResult.hash, lastIndexedAt: input.now().toISOString() });
-}
-
-function buildFileNode(input: { readonly repoRoot: string; readonly entry: WalkEntry; readonly hash: string; readonly lastIndexedAt: string }): FileNode {
-  const extensionStart = input.entry.basename.lastIndexOf(".");
-  const extension = extensionStart >= 0 ? input.entry.basename.slice(extensionStart + 1) : "";
-  const classification = classifyFile({ normalizedPath: input.entry.normalizedPath, basename: input.entry.basename, extension });
-  return {
-    id: hashString(`${input.repoRoot}\u0000${input.entry.normalizedPath}`).slice(0, 16),
-    path: input.entry.normalizedPath,
-    normalizedPath: input.entry.normalizedPath,
-    hash: input.hash,
-    sizeBytes: input.entry.sizeBytes,
-    mtimeMs: input.entry.mtimeMs,
-    language: classification.language,
-    kind: classification.kind,
-    ignored: false,
-    lastIndexedAt: input.lastIndexedAt,
-  };
 }
 
 function removedInventoryPaths(input: { readonly prior: ReadonlyMap<string, FileNode>; readonly currentNonIgnoredPaths: ReadonlySet<string>; readonly ignoredFiles: readonly IgnoredFileRef[] }): string[] {

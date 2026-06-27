@@ -1,5 +1,7 @@
+import { classifyFile } from "./fileClassifier";
 import { hashString } from "./fileHasher";
 import type { FileNode, IgnoredFileRef, RepoSnapshot, ScanError, ScanResult, ScanSummary } from "./types";
+import type { WalkEntry } from "./repoScanner";
 
 export type AssembleScanResultInput = {
   readonly repoRoot: string;
@@ -30,6 +32,24 @@ export function buildScanSummary(snapshot: RepoSnapshot): ScanSummary {
     ignoredFileCount: snapshot.ignoredFileCount,
     deletedFileCount: snapshot.deletedFileCount ?? 0,
     changedFileCount: snapshot.changedFileCount ?? 0,
+  };
+}
+
+export function buildFileNode(input: { readonly repoRoot: string; readonly entry: WalkEntry; readonly hash: string; readonly lastIndexedAt: string }): FileNode {
+  const extensionStart = input.entry.basename.lastIndexOf(".");
+  const extension = extensionStart >= 0 ? input.entry.basename.slice(extensionStart + 1) : "";
+  const classification = classifyFile({ normalizedPath: input.entry.normalizedPath, basename: input.entry.basename, extension });
+  return {
+    id: hashString(`${input.repoRoot}\u0000${input.entry.normalizedPath}`).slice(0, 16),
+    path: input.entry.normalizedPath,
+    normalizedPath: input.entry.normalizedPath,
+    hash: input.hash,
+    sizeBytes: input.entry.sizeBytes,
+    mtimeMs: input.entry.mtimeMs,
+    language: classification.language,
+    kind: classification.kind,
+    ignored: false,
+    lastIndexedAt: input.lastIndexedAt,
   };
 }
 
