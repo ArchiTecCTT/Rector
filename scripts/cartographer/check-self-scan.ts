@@ -177,45 +177,50 @@ function containsSecretLeak(text: string): boolean {
   return false;
 }
 
-async function main(): Promise<void> {
-  const argDir = process.argv[2];
-  const artifactsDir = argDir ? path.resolve(argDir) : path.join(REPO_ROOT, ".rector", "cartographer");
+function resolveArtifactsDir(argDir?: string): string {
+  return argDir ? path.resolve(argDir) : path.join(REPO_ROOT, ".rector", "cartographer");
+}
 
-  const filesPath = path.join(artifactsDir, "latest-files.json");
-  const snapshotPath = path.join(artifactsDir, "latest-snapshot.json");
-  const mdPath = path.join(artifactsDir, "scan-report.md");
+type ArtifactPaths = {
+  readonly filesPath: string;
+  readonly snapshotPath: string;
+  readonly mdPath: string;
+};
 
-  await ensureArtifactsExist([filesPath, snapshotPath, mdPath]);
+function artifactPaths(artifactsDir: string): ArtifactPaths {
+  return {
+    filesPath: path.join(artifactsDir, "latest-files.json"),
+    snapshotPath: path.join(artifactsDir, "latest-snapshot.json"),
+    mdPath: path.join(artifactsDir, "scan-report.md"),
+  };
+}
 
-  const filesArt = await readAndValidateLatestFilesArtifact(filesPath);
-
-  const indexed = filesArt.normalizedPaths;
-
+function verifyExpectedPaths(indexed: readonly string[]): void {
   for (const exp of DEFAULT_EXPECTED) {
     const present = indexed.some((p) => p === exp || p.startsWith(exp + "/"));
     if (!present) {
       fail(`expected path not indexed: ${exp}`);
     }
   }
+}
 
+function verifyForbiddenIndexedPaths(indexed: readonly string[]): void {
   for (const p of indexed) {
     if (matchesForbidden(p, FORBIDDEN_DIR_PATTERNS)) {
       fail(`forbidden path indexed: ${p}`);
     }
   }
+}
 
+function verifyNoIndexedEnvFiles(indexed: readonly string[]): void {
   for (const p of indexed) {
     if (isNonExampleEnv(p)) {
       fail(`env file indexed (non-example): ${p}`);
     }
   }
+}
 
-  if (typeof filesArt.scanErrorCount !== "number") {
-    fail("scanErrorCount missing or invalid in latest-files.json");
-  }
-
-  const allowlist = await loadAllowlist();
-
+function verifyScanErrors(filesArt: LatestFilesArtifact, allowlist: SelfScanAllowlist): void {
   const errors: readonly ScanError[] = Array.isArray(filesArt.scanErrors) ? filesArt.scanErrors : [];
   if (filesArt.scanErrorCount !== errors.length) {
     // keep counts honest; if mismatch, treat as error surface
@@ -229,26 +234,61 @@ async function main(): Promise<void> {
       fail(`nonzero scan errors not allowlisted: ${unallowed.length} (first: path=${first.path} stage=${first.stage} msg=${first.message})`);
     }
   }
+}
 
-  // Content leakage checks on generated artifacts (JSON + MD)
-  const filesRaw = await fs.readFile(filesPath, "utf8");
-  const mdRaw = await fs.readFile(mdPath, "utf8");
-
+function verifyGeneratedArtifactsDoNotLeak(filesRaw: string, mdRaw: string): void {
   if (containsForbiddenEnvInContent(filesRaw) || containsForbiddenEnvInContent(mdRaw)) {
     fail("generated artifact contains forbidden non-example .env filename in content");
   }
   if (containsSecretLeak(filesRaw) || containsSecretLeak(mdRaw)) {
     fail("generated artifact contains synthetic secret marker (leak)");
   }
+}
 
+async function verifySnapshotCountMatches(snapshotPath: string, expectedCount: number): Promise<void> {
   try {
     const snap = await readJson<{ indexedFileCount?: number }>(snapshotPath);
-    if (typeof snap.indexedFileCount === "number" && snap.indexedFileCount !== filesArt.indexedFileCount) {
+    if (typeof snap.indexedFileCount === "number" && snap.indexedFileCount !== expectedCount) {
       fail("snapshot indexedFileCount does not match latest-files count");
     }
   } catch {
     // secondary
   }
+}
+
+async function main(): Promise<void> {
+  const argDir = process.argv[2];
+  const artifactsDir = resolveArtifactsDir(argDir);
+
+  const { filesPath, snapshotPath, mdPath } = artifactPaths(artifactsDir);
+
+  await ensureArtifactsExist([filesPath, snapshotPath, mdPath]);
+
+  const filesArt = await readAndValidateLatestFilesArtifact(filesPath);
+
+  const indexed = filesArt.normalizedPaths;
+
+  verifyExpectedPaths(indexed);
+
+  verifyForbiddenIndexedPaths(indexed);
+
+  verifyNoIndexedEnvFiles(indexed);
+
+  if (typeof filesArt.scanErrorCount !== "number") {
+    fail("scanErrorCount missing or invalid in latest-files.json");
+  }
+
+  const allowlist = await loadAllowlist();
+
+  verifyScanErrors(filesArt, allowlist);
+
+  // Content leakage checks on generated artifacts (JSON + MD)
+  const filesRaw = await fs.readFile(filesPath, "utf8");
+  const mdRaw = await fs.readFile(mdPath, "utf8");
+
+  verifyGeneratedArtifactsDoNotLeak(filesRaw, mdRaw);
+
+  await verifySnapshotCountMatches(snapshotPath, filesArt.indexedFileCount);
 
   console.log(`[cartographer:self-scan:check] PASS (artifactsDir=${artifactsDir})`);
   console.log(`  indexed=${filesArt.indexedFileCount} errors=${filesArt.scanErrorCount}`);

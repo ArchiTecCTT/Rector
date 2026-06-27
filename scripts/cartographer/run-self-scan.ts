@@ -49,6 +49,69 @@ function getGitTracked(repoRoot: string): string[] {
   }
 }
 
+function artifactPaths(repoRoot: string) {
+  const artDir = path.join(repoRoot, ".rector", "cartographer");
+  return {
+    artDir,
+    snapshotPath: path.join(artDir, "latest-snapshot.json"),
+    filesPath: path.join(artDir, "latest-files.json"),
+    mdPath: path.join(artDir, "scan-report.md"),
+  };
+}
+
+async function writeSnapshotArtifact(snapshotPath: string, snapshot: unknown): Promise<void> {
+  await fs.writeFile(snapshotPath, JSON.stringify(snapshot, null, 2) + "\n", "utf8");
+}
+
+function buildLatestFilesArtifact(
+  repoRoot: string,
+  indexedPaths: readonly string[],
+  scanErrorCount: number,
+  scanErrors: readonly any[],
+) {
+  return {
+    schemaVersion: "rector.cartographer.latestFiles.v1",
+    repoRoot,
+    generatedAt: new Date().toISOString(),
+    indexedFileCount: indexedPaths.length,
+    scanErrorCount,
+    normalizedPaths: indexedPaths,
+    scanErrors,
+  } as const;
+}
+
+async function writeLatestFilesArtifact(filesPath: string, filesArtifact: unknown): Promise<void> {
+  await fs.writeFile(filesPath, JSON.stringify(filesArtifact, null, 2) + "\n", "utf8");
+}
+
+function buildSelfScanReport(params: any): CartographerSelfScanReport {
+  return {
+    schemaVersion: SELF_SCAN_SCHEMA_VERSION,
+    repoRoot: params.repoRoot,
+    snapshotId: params.snapshotId,
+    generatedAt: new Date().toISOString(),
+    indexedFileCount: params.indexedFileCount,
+    ignoredFileCount: params.ignoredFileCount,
+    deletedFileCount: params.deletedFileCount,
+    changedFileCount: params.changedFileCount,
+    scanErrorCount: params.scanErrorCount,
+    expectedPathChecks: sortExpectedPathChecks(params.expectedPathChecks),
+    forbiddenPathChecks: sortForbiddenPathChecks(params.forbiddenPathChecks),
+    gitComparison: params.gitComparison,
+    scanErrors: [...params.scanErrors],
+  };
+}
+
+async function writeMarkdownReport(mdPath: string, md: string): Promise<void> {
+  await fs.writeFile(mdPath, md, "utf8");
+}
+
+function logArtifactsWritten(snapshotPath: string, filesPath: string, mdPath: string): void {
+  console.log(`[cartographer:self-scan] wrote ${snapshotPath}`);
+  console.log(`[cartographer:self-scan] wrote ${filesPath}`);
+  console.log(`[cartographer:self-scan] wrote ${mdPath}`);
+}
+
 async function main(): Promise<void> {
   console.log(`[cartographer:self-scan] repoRoot=${REPO_ROOT}`);
   const result = await scanRepository({ repoRoot: REPO_ROOT });
@@ -56,25 +119,14 @@ async function main(): Promise<void> {
     `[cartographer:self-scan] indexed=${result.files.length} ignored=${result.ignoredFiles.length} errors=${result.errors.length}`,
   );
 
-  const artDir = path.join(REPO_ROOT, ".rector", "cartographer");
+  const { artDir, snapshotPath, filesPath, mdPath } = artifactPaths(REPO_ROOT);
   await fs.mkdir(artDir, { recursive: true });
 
-  const snapshotPath = path.join(artDir, "latest-snapshot.json");
-  await fs.writeFile(snapshotPath, JSON.stringify(result.snapshot, null, 2) + "\n", "utf8");
+  await writeSnapshotArtifact(snapshotPath, result.snapshot);
 
   const indexedPaths = result.files.map((f) => f.normalizedPath);
-  const filesArtifact = {
-    schemaVersion: "rector.cartographer.latestFiles.v1",
-    repoRoot: REPO_ROOT,
-    generatedAt: new Date().toISOString(),
-    indexedFileCount: result.files.length,
-    scanErrorCount: result.errors.length,
-    normalizedPaths: indexedPaths,
-    scanErrors: result.errors,
-  } as const;
-  const filesPath = path.join(artDir, "latest-files.json");
-  await fs.writeFile(filesPath, JSON.stringify(filesArtifact, null, 2) + "\n", "utf8");
-
+  const filesArtifact = buildLatestFilesArtifact(REPO_ROOT, indexedPaths, result.errors.length, result.errors);
+  await writeLatestFilesArtifact(filesPath, filesArtifact);
 
   const gitTracked = getGitTracked(REPO_ROOT);
   const indexedSet = new Set(indexedPaths);
@@ -108,29 +160,24 @@ async function main(): Promise<void> {
   });
   const forbiddenChecks = [...dirChecks, { pathPattern: ".env (non-example)", matched: hasBadEnv }];
 
-  const report: CartographerSelfScanReport = {
-    schemaVersion: SELF_SCAN_SCHEMA_VERSION,
+  const report = buildSelfScanReport({
     repoRoot: REPO_ROOT,
     snapshotId: result.snapshot.id,
-    generatedAt: new Date().toISOString(),
     indexedFileCount: result.snapshot.indexedFileCount,
     ignoredFileCount: result.snapshot.ignoredFileCount,
     deletedFileCount: result.snapshot.deletedFileCount ?? 0,
     changedFileCount: result.snapshot.changedFileCount ?? 0,
     scanErrorCount: result.errors.length,
-    expectedPathChecks: sortExpectedPathChecks(expectedChecks),
-    forbiddenPathChecks: sortForbiddenPathChecks(forbiddenChecks),
+    expectedPathChecks: expectedChecks,
+    forbiddenPathChecks: forbiddenChecks,
     gitComparison: gitComp,
-    scanErrors: [...result.errors],
-  };
+    scanErrors: result.errors,
+  });
 
   const md = renderSelfScanReportMarkdown(report);
-  const mdPath = path.join(artDir, "scan-report.md");
-  await fs.writeFile(mdPath, md, "utf8");
+  await writeMarkdownReport(mdPath, md);
 
-  console.log(`[cartographer:self-scan] wrote ${snapshotPath}`);
-  console.log(`[cartographer:self-scan] wrote ${filesPath}`);
-  console.log(`[cartographer:self-scan] wrote ${mdPath}`);
+  logArtifactsWritten(snapshotPath, filesPath, mdPath);
 }
 
 main().catch((err: unknown) => {
