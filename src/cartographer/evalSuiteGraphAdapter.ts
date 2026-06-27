@@ -38,7 +38,8 @@ export function buildEvalSuiteGraph(input: BuildEvalSuiteGraphInput): BuildEvalS
   const nodes: CartographerGraphNode[] = [];
   const edges: CartographerGraphEdge[] = [];
 
-  for (const caseId of evalCaseIds) {
+  const uniqueCaseIds = [...new Set(evalCaseIds)];
+  for (const caseId of uniqueCaseIds) {
     const evalTargetId = `evalcase:${caseId}`;
     nodes.push({
       id: evalTargetId,

@@ -48,4 +48,18 @@ describe("evalSuiteGraphAdapter", () => {
     const hasProvided = res.edges.some((e) => e.kind === "PROVIDED_BY");
     expect(hasProvided).toBe(false);
   });
+
+  it("dedupes duplicate evalCaseIds preserving first-seen order (regression C4 for duplicate RunTrace node ids)", () => {
+    const input: BuildEvalSuiteGraphInput = {
+      snapshotId: "snap:dup",
+      evalCaseIds: ["c1", "c1", "c2", "c1"],
+    };
+    const res = buildEvalSuiteGraph(input);
+    expect(res.nodes.length).toBe(2);
+    const ids = res.nodes.map((n) => n.id);
+    expect(ids).toEqual(["evalcase:c1", "evalcase:c2"]);
+    // deterministic on repeat (and same after dedupe + sort)
+    const res2 = buildEvalSuiteGraph(input);
+    expect(res2.nodes.map((n) => n.id)).toEqual(ids);
+  });
 });
