@@ -40,6 +40,7 @@ Stale/quarantined docs have warning banners. If stale docs conflict with source-
 - Install: `npm install`
 - Test: `npm test`
 - Build: `npm run build`
+- Dependency audit: `npm audit`
 - Dev server: `npm run dev`
 - Capability evals (offline, no model): `npm run eval:capabilities` (and `npm run eval:capabilities:report`) — runs the committed eval corpus and writes `.omo/evidence/eval-report.{json,md}`
 - Fake-seam audit (report-only, non-blocking): `npm run audit:no-fakes`
@@ -109,6 +110,7 @@ Before claiming completion, run fresh:
 ```bash
 npm test
 npm run build
+npm audit
 ```
 
 ## Implementation Workflow
@@ -134,7 +136,7 @@ Spawn project agents from `.grok/agents/` — see `.grok/skills/rector-subagent-
 
 **Deep coder rate limit:** never more than **2** concurrent `rector-generalCoder-deep` subagents — Cloudflare Workers AI rate limits `cf-glm-5-2`. Queue or wait for completion before spawning a third.
 
-Coders do not edit docs (unless explicitly asked); **librarian runs after** `npm test` + `npm run build` pass to sync chunk plans, concerns, and `AGENTS.md` facts.
+Coders do not edit docs (unless explicitly asked); **librarian runs after** `npm test` + `npm run build` + `npm audit` pass to sync chunk plans, concerns, and `AGENTS.md` facts.
 
 ## Rector Project Skills
 
