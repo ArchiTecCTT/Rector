@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createHash } from "node:crypto";
-import { emitHarnessTelemetry } from "../../src/observability/appInsightsAdapter.js";
+import { emitHarnessTelemetry } from "../../src/observability/appInsightsAdapter";
 import { redactString } from "../../src/security/redaction";
 import {
   CAPABILITY_EVAL_METRIC_IDS,

@@ -5,6 +5,15 @@
 
 ## Open
 
+### 2026-06-27 OpenTelemetry baggage audit regression — RESOLVED
+
+- **Source:** GitHub Verify / Node 22 & 24 dependency audit failure after `applicationinsights` pulled vulnerable OpenTelemetry transitive packages affected by GHSA-8988-4f7v-96qf.
+- **Severity:** Moderate (transitive unbounded memory allocation in W3C baggage propagation).
+- **Status:** **RESOLVED**.
+- **Resolution:** Added targeted npm overrides for the affected OpenTelemetry 2.7.1 / 0.218.0 package family to patched 2.8.0 / 0.219.0 releases; kept `applicationinsights` on the current 3.x line instead of using `npm audit fix --force` to downgrade to a breaking 2.x line.
+- **Evidence:** `npm audit` reports 0 vulnerabilities; `npm test` and `npm run build` pass locally after the lockfile refresh.
+- **Follow-up:** Re-check overrides when `applicationinsights` / `@azure/monitor-opentelemetry` publish dependency ranges that natively admit the patched OpenTelemetry versions, then remove redundant overrides.
+
 ### Chunk 052 — Azure dev harness (Blob / Key Vault / App Insights)
 
 - **Blob RBAC lag:** `Storage Blob Data Contributor` was assigned to the CLI user on `stgrectordev`; `auth-mode login` uploads may fail until Azure RBAC propagates (typically minutes). Use `npm run evidence:sync` after propagation; no connection string stored in Key Vault by default.

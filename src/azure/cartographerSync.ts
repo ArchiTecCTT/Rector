@@ -42,13 +42,9 @@ export async function collectCartographerFiles(cartographerDir: string): Promise
 
   for (const name of CARTOGRAPHER_ARTIFACT_NAMES) {
     const localPath = path.join(absDir, name);
-    try {
-      const info = await stat(localPath);
-      if (!info.isFile()) continue;
-      files.push({ localPath, blobPath: name });
-    } catch {
-      continue;
-    }
+    const info = await stat(localPath).catch(() => null);
+    if (!info?.isFile()) continue;
+    files.push({ localPath, blobPath: name });
   }
 
   return files;
