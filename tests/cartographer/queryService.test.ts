@@ -336,4 +336,137 @@ describe("CartographerQueryService (Todo 22)", () => {
       expect(Array.isArray(res.imports)).toBe(true);
     }
   });
+
+  it("S1 regression: resolveTargetToNodes symbol branch validates isSymbolKind (symbol query by id/name must not return file nodes)", async () => {
+    const fileNode: CartographerGraphNode = {
+      id: "file:src/app.ts",
+      snapshotId: "s1",
+      kind: "File",
+      label: "app.ts",
+      path: "src/app.ts",
+      normalizedPath: "src/app.ts",
+      symbolName: "fake",
+      properties: {},
+    };
+    const svc = CartographerQueryService.fromGraph({ nodes: [fileNode], edges: [] });
+
+    const byId = await svc.getDependencies({ target: { kind: "symbol", id: fileNode.id } });
+    expect(byId.status).toBe("not_found");
+
+    const byName = await svc.getDependencies({ target: { kind: "symbol", name: "fake" } });
+    expect(byName.status).toBe("not_found");
+  });
+
+  it("C6 regression: getDependents for symbol target includes containing-file reverse edges (mirrors getDependencies fallback)", async () => {
+    const libFile = {
+      id: "file:abc:src/lib.ts",
+      snapshotId: "s1",
+      kind: "File" as const,
+      label: "lib.ts",
+      path: "src/lib.ts",
+      normalizedPath: "src/lib.ts",
+      properties: {},
+    };
+    const libSym = {
+      id: "symbol:abc:src/lib.ts:libFn:1",
+      snapshotId: "s1",
+      kind: "Function" as const,
+      label: "libFn",
+      path: "src/lib.ts",
+      normalizedPath: "src/lib.ts",
+      symbolName: "libFn",
+      symbolKind: "function" as const,
+      startLine: 10,
+      properties: {},
+    };
+    const appFile = {
+      id: "file:abc:src/app.ts",
+      snapshotId: "s1",
+      kind: "File" as const,
+      label: "app.ts",
+      path: "src/app.ts",
+      normalizedPath: "src/app.ts",
+      properties: {},
+    };
+    const eImp = {
+      id: "edge:IMPORTS:file:abc:src/app.ts:./lib",
+      snapshotId: "s1",
+      kind: "IMPORTS" as const,
+      fromNodeId: appFile.id,
+      toNodeId: libFile.id,
+      properties: { specifier: "./lib" },
+    };
+    const svc = CartographerQueryService.fromGraph({ nodes: [libFile, libSym, appFile], edges: [eImp] });
+
+    const res = await svc.getDependents({ target: { kind: "symbol", name: "libFn" } });
+    expect(res.status).toBe("ok");
+    if (res.status === "ok") {
+      // must include the file->file edge (IMPORTS are file-to-file)
+      const hasFileEdge = res.edges.some(
+        (e) => e.fromNodeId === appFile.id && e.toNodeId === libFile.id && e.kind === "IMPORTS"
+      );
+      expect(hasFileEdge).toBe(true);
+      // targetNodes includes the symbol
+      expect(res.targetNodes.some((n) => n.symbolName === "libFn")).toBe(true);
+    }
+  });
+
+  it("C5 regression: getImpact collects probableTests for impacted dependents (lib.ts -> app.ts -> app.test.ts)", async () => {
+    const libFile = {
+      id: "file:abc:src/lib.ts",
+      snapshotId: "s1",
+      kind: "File" as const,
+      label: "lib.ts",
+      path: "src/lib.ts",
+      normalizedPath: "src/lib.ts",
+      properties: {},
+    };
+    const appFile = {
+      id: "file:abc:src/app.ts",
+      snapshotId: "s1",
+      kind: "File" as const,
+      label: "app.ts",
+      path: "src/app.ts",
+      normalizedPath: "src/app.ts",
+      properties: {},
+    };
+    const testFile = {
+      id: "file:abc:src/app.test.ts",
+      snapshotId: "s1",
+      kind: "Test" as const,
+      label: "app.test.ts",
+      path: "src/app.test.ts",
+      normalizedPath: "src/app.test.ts",
+      properties: {},
+    };
+    const eImp = {
+      id: "edge:IMPORTS:file:abc:src/app.ts:./lib",
+      snapshotId: "s1",
+      kind: "IMPORTS" as const,
+      fromNodeId: appFile.id,
+      toNodeId: libFile.id,
+      properties: { specifier: "./lib" },
+    };
+    const eTest = {
+      id: "edge:TESTS:file:abc:src/app.test.ts:file:abc:src/app.ts",
+      snapshotId: "s1",
+      kind: "TESTS" as const,
+      fromNodeId: testFile.id,
+      toNodeId: appFile.id,
+      properties: { relation: "import" },
+      evidence: { path: "src/app.test.ts", text: "import" },
+    };
+    const svc = CartographerQueryService.fromGraph({ nodes: [libFile, appFile, testFile], edges: [eImp, eTest] });
+
+    const res = await svc.getImpact({ changedNormalizedPaths: ["src/lib.ts"] });
+    expect(res.status).toBe("ok");
+    if (res.status === "ok") {
+      expect(res.impactedFiles).toContain("src/lib.ts");
+      expect(res.impactedFiles).toContain("src/app.ts");
+      expect(res.probableTests).toContain("src/app.test.ts");
+      // deterministic sorted
+      expect(res.impactedFiles).toEqual([...res.impactedFiles].sort());
+      expect(res.probableTests).toEqual([...res.probableTests].sort());
+    }
+  });
 });

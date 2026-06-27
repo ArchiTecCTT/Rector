@@ -104,14 +104,14 @@ function resolveTargetToNodes(target: QueryTarget, nodes: readonly CartographerG
   }
   // symbol
   if (target.id) {
-    const n = nodes.find((nn) => nn.id === target.id);
+    const n = nodes.find((nn) => nn.id === target.id && isSymbolKind(nn.kind));
     if (n) {
       return { kind: "ok", nodes: [n] };
     }
     return { kind: "not_found" };
   }
   if (target.name) {
-    const matches = nodes.filter((nn) => nn.symbolName === target.name);
+    const matches = nodes.filter((nn) => nn.symbolName === target.name && isSymbolKind(nn.kind));
     if (matches.length === 0) {
       return { kind: "not_found" };
     }
@@ -239,6 +239,20 @@ export class CartographerQueryService {
         depEdges.push(e);
       }
     }
+    // For symbols, include containing file dependents as well
+    for (const t of targets) {
+      if (isSymbolKind(t.kind) && t.normalizedPath) {
+        const file = this.nodes.find(
+          (n) => n.normalizedPath === t.normalizedPath && isFileLikeKind(n.kind)
+        );
+        if (file) {
+          const fileRev = this.edges.filter(
+            (e) => e.toNodeId === file.id && (e.kind === "IMPORTS" || e.kind === "DEPENDS_ON")
+          );
+          depEdges.push(...fileRev);
+        }
+      }
+    }
     const unique = new Map<string, CartographerGraphEdge>();
     for (const e of depEdges) unique.set(e.id, e);
     return {
@@ -324,7 +338,14 @@ export class CartographerQueryService {
         );
         for (const r of rev) {
           const from = this.nodes.find((nn) => nn.id === r.fromNodeId);
-          if (from?.normalizedPath) impacted.add(from.normalizedPath);
+          if (from?.normalizedPath) {
+            impacted.add(from.normalizedPath);
+            const impactedTestEdges = this.edges.filter((e) => e.toNodeId === from.id && e.kind === "TESTS");
+            for (const te of impactedTestEdges) {
+              const tn = this.nodes.find((nn) => nn.id === te.fromNodeId);
+              if (tn?.normalizedPath) probableTests.add(tn.normalizedPath);
+            }
+          }
         }
         // TESTS edges point from test -> target
         const testEdges = this.edges.filter((e) => e.toNodeId === fn.id && e.kind === "TESTS");
