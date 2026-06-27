@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { FileNodeSchema } from "./schemas";
+
 // ---------------------------------------------------------------------------
 // Node / Edge kinds (Phase 1 reservation per plan)
 // ---------------------------------------------------------------------------
@@ -182,6 +184,7 @@ export const GetFileQueryResultSchema = z.discriminatedUnion("status", [
   z
     .object({
       status: z.literal("ok"),
+      fileNode: FileNodeSchema,
       file: CartographerGraphNodeSchema,
       symbols: z.array(CartographerGraphNodeSchema),
       imports: z.array(CartographerGraphEdgeSchema),
@@ -333,10 +336,11 @@ export const GetCapabilityQueryResultSchema = z.discriminatedUnion("status", [
 export type GetCapabilityQueryResult = z.infer<typeof GetCapabilityQueryResultSchema>;
 
 // ---------------------------------------------------------------------------
-// Phase 1 kind policy: mustEmitNow (baseline) vs schemaReserved (later)
+// Phase 1 kind policy: baseline inventory, emitted structural/adapters, schema-reserved (later)
 // ---------------------------------------------------------------------------
 
-export const MUST_EMIT_NOW_NODE_KINDS = [
+/** Baseline inventory-derived node kinds (Phase 1A file graph). */
+export const BASELINE_INVENTORY_NODE_KINDS = [
   "Project",
   "Package",
   "Directory",
@@ -346,17 +350,29 @@ export const MUST_EMIT_NOW_NODE_KINDS = [
   "Test",
 ] as const;
 
-export const SCHEMA_RESERVED_NODE_KINDS = [
+/**
+ * Node kinds emitted in Phase 1C/1D beyond baseline inventory (symbols, tools, capabilities).
+ * `Symbol` is the schema umbrella for variable/export symbols when no specialized kind applies;
+ * builders today usually emit Function/Class/Interface/TypeAlias/Enum directly.
+ */
+export const STRUCTURAL_PHASE1_NODE_KINDS = [
   "Symbol",
   "Function",
   "Class",
   "Interface",
   "TypeAlias",
   "Enum",
-  "Route",
-  "EnvironmentVariable",
   "Tool",
   "Capability",
+] as const;
+
+/** @deprecated Alias for {@link BASELINE_INVENTORY_NODE_KINDS}. */
+export const MUST_EMIT_NOW_NODE_KINDS = BASELINE_INVENTORY_NODE_KINDS;
+
+/** Kinds present in GraphNodeKindSchema but not emitted by Phase 1 builders/adapters yet. */
+export const SCHEMA_RESERVED_NODE_KINDS = [
+  "Route",
+  "EnvironmentVariable",
   "Skill",
   "Rule",
   "RunTrace",

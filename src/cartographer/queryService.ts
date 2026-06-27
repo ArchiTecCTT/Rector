@@ -28,7 +28,9 @@ import {
   type ListCapabilitiesQueryResult,
   type QueryTarget,
 } from "./graphSchemas";
+import { FileNodeSchema } from "./schemas";
 import { findTests as findTestsLinker } from "./testLinker";
+import type { FileNode } from "./types";
 
 function clone<T>(v: T): T {
   return structuredClone(v);
@@ -66,6 +68,61 @@ function validateQueryPath(p: string): { valid: true; normalized: string } | { v
 
 function isFileLikeKind(kind: CartographerGraphNode["kind"]): boolean {
   return kind === "File" || kind === "Test" || kind === "Doc" || kind === "Config";
+}
+
+function inventoryKindFromGraphProperties(
+  props: CartographerGraphNode["properties"],
+): FileNode["kind"] {
+  const k = props["kind"];
+  if (
+    k === "source" ||
+    k === "test" ||
+    k === "config" ||
+    k === "doc" ||
+    k === "generated" ||
+    k === "fixture" ||
+    k === "asset" ||
+    k === "binary" ||
+    k === "lockfile" ||
+    k === "vendor" ||
+    k === "unknown"
+  ) {
+    return k;
+  }
+  return "unknown";
+}
+
+function reconstructInventoryFileNodeFromGraph(graphFile: CartographerGraphNode): FileNode {
+  const normalizedPath = graphFile.normalizedPath ?? graphFile.path ?? graphFile.id;
+  const path = graphFile.path ?? normalizedPath;
+  const language = graphFile.language ?? "unknown";
+  return FileNodeSchema.parse({
+    id: graphFile.id,
+    path,
+    normalizedPath,
+    hash: graphFile.fileHash ?? "unknown",
+    sizeBytes: 0,
+    language,
+    kind: inventoryKindFromGraphProperties(graphFile.properties),
+    ignored: false,
+    lastIndexedAt: "1970-01-01T00:00:00.000Z",
+  });
+}
+
+function parseInventoryFileNode(graphFile: CartographerGraphNode): FileNode {
+  const raw = graphFile.properties["inventoryFileNode"];
+  if (typeof raw === "string") {
+    try {
+      const json: unknown = JSON.parse(raw);
+      const parsed = FileNodeSchema.safeParse(json);
+      if (parsed.success) {
+        return parsed.data;
+      }
+    } catch {
+      // malformed JSON — fall through to reconstructed inventory record
+    }
+  }
+  return reconstructInventoryFileNodeFromGraph(graphFile);
 }
 
 function isSymbolKind(kind: CartographerGraphNode["kind"]): boolean {
@@ -364,6 +421,7 @@ export class CartographerQueryService {
     const imports = this.edges.filter((e) => e.fromNodeId === fileNode.id && isImportOrDependsOn(e.kind));
     return {
       status: "ok",
+      fileNode: clone(parseInventoryFileNode(fileNode)),
       file: clone(fileNode),
       symbols: sortById(symbols).map(clone),
       imports: sortById(imports).map(clone),

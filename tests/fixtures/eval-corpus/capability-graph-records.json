@@ -16,6 +16,7 @@
       "cartographer-inventory-scan"
     ],
     "productionAdmission": "production",
+    "risk": "medium",
     "source": "phase0_eval",
     "warnings": []
   }

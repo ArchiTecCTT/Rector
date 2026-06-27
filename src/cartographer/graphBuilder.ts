@@ -227,7 +227,10 @@ function emitBaselineInventoryNodes(args: {
       language: f.language,
       fileHash: f.hash,
       startLine: 1,
-      properties: { kind: f.kind },
+      properties: {
+        kind: f.kind,
+        inventoryFileNode: JSON.stringify(f),
+      },
     });
   }
 

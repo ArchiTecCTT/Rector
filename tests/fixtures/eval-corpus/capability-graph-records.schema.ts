@@ -1,25 +1,12 @@
-import { z } from "zod";
-
-export const ToolProductionAdmissionSchema = z.enum([
-  "production",
-  "test_only",
-  "report_only",
-  "quarantined",
-]);
-export type ToolProductionAdmission = z.infer<typeof ToolProductionAdmissionSchema>;
-
-export const CapabilityGraphRecordSchema = z
-  .object({
-    id: z.string().min(1),
-    label: z.string().min(1),
-    toolNames: z.array(z.string().min(1)),
-    evalCaseIds: z.array(z.string().min(1)),
-    productionAdmission: ToolProductionAdmissionSchema,
-    source: z.enum(["phase0_eval", "tool_registry", "manual_fixture"]),
-    warnings: z.array(z.string().min(1)).default([]),
-  })
-  .strict();
-
-export type CapabilityGraphRecord = z.infer<typeof CapabilityGraphRecordSchema>;
-
-export const CapabilityGraphRecordsSchema = z.array(CapabilityGraphRecordSchema);
+/**
+ * Eval-corpus mirror: re-export canonical schemas from src to prevent drift.
+ */
+export {
+  CapabilityGraphRecordSchema,
+  CapabilityGraphRecordsSchema,
+  CapabilityRiskSchema,
+  ToolProductionAdmissionSchema,
+  type CapabilityGraphRecord,
+  type CapabilityRisk,
+  type ToolProductionAdmission,
+} from "../../../src/cartographer/capabilityGraphRecords";

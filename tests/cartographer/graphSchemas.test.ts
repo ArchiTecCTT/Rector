@@ -8,8 +8,10 @@ import {
   GraphEdgeKindSchema,
   GraphNodeKindSchema,
   GraphSnapshotSchema,
+  BASELINE_INVENTORY_NODE_KINDS,
   MUST_EMIT_NOW_NODE_KINDS,
   SCHEMA_RESERVED_NODE_KINDS,
+  STRUCTURAL_PHASE1_NODE_KINDS,
   type CartographerQueryStatus,
   type GetFileGraphQueryResult,
   type GraphNodeKind,
@@ -106,8 +108,9 @@ describe("Cartographer graph contract schemas (Todo 11)", () => {
     expect(GraphEdgeKindSchema.safeParse("CALLS_LLM").success).toBe(false);
   });
 
-  it("distinguishes mustEmitNow vs schemaReserved node kinds", () => {
-    // mustEmitNow are the baseline inventory-derived kinds
+  it("distinguishes baseline inventory, structural Phase 1, mustEmitNow alias, and schemaReserved kinds", () => {
+    expect(BASELINE_INVENTORY_NODE_KINDS).toEqual(MUST_EMIT_NOW_NODE_KINDS);
+    // baseline inventory-derived kinds
     expect(MUST_EMIT_NOW_NODE_KINDS).toContain("Project");
     expect(MUST_EMIT_NOW_NODE_KINDS).toContain("Package");
     expect(MUST_EMIT_NOW_NODE_KINDS).toContain("Directory");
@@ -116,20 +119,30 @@ describe("Cartographer graph contract schemas (Todo 11)", () => {
     expect(MUST_EMIT_NOW_NODE_KINDS).toContain("Config");
     expect(MUST_EMIT_NOW_NODE_KINDS).toContain("Test");
 
-    // schemaReserved are for later extraction/adapters
-    expect(SCHEMA_RESERVED_NODE_KINDS).toContain("Symbol");
-    expect(SCHEMA_RESERVED_NODE_KINDS).toContain("Function");
-    expect(SCHEMA_RESERVED_NODE_KINDS).toContain("Class");
+    expect(STRUCTURAL_PHASE1_NODE_KINDS).toContain("Symbol");
+    expect(STRUCTURAL_PHASE1_NODE_KINDS).toContain("Function");
+    expect(STRUCTURAL_PHASE1_NODE_KINDS).toContain("Class");
+    expect(STRUCTURAL_PHASE1_NODE_KINDS).toContain("Tool");
+    expect(STRUCTURAL_PHASE1_NODE_KINDS).toContain("Capability");
+    expect(STRUCTURAL_PHASE1_NODE_KINDS).not.toContain("File");
+
+    // schemaReserved are for later phases (not emitted in Phase 1C/1D)
     expect(SCHEMA_RESERVED_NODE_KINDS).toContain("Route");
-    expect(SCHEMA_RESERVED_NODE_KINDS).toContain("Tool");
-    expect(SCHEMA_RESERVED_NODE_KINDS).toContain("Capability");
     expect(SCHEMA_RESERVED_NODE_KINDS).toContain("Skill");
     expect(SCHEMA_RESERVED_NODE_KINDS).toContain("Rule");
     expect(SCHEMA_RESERVED_NODE_KINDS).toContain("RunTrace");
+    expect(SCHEMA_RESERVED_NODE_KINDS).not.toContain("Tool");
+    expect(SCHEMA_RESERVED_NODE_KINDS).not.toContain("Capability");
+    expect(SCHEMA_RESERVED_NODE_KINDS).not.toContain("Function");
 
-    // no overlap
-    const overlap = MUST_EMIT_NOW_NODE_KINDS.filter((k) => (SCHEMA_RESERVED_NODE_KINDS as readonly string[]).includes(k));
-    expect(overlap).toEqual([]);
+    const baselineOverlap = MUST_EMIT_NOW_NODE_KINDS.filter((k) =>
+      (SCHEMA_RESERVED_NODE_KINDS as readonly string[]).includes(k)
+    );
+    expect(baselineOverlap).toEqual([]);
+    const structuralReservedOverlap = STRUCTURAL_PHASE1_NODE_KINDS.filter((k) =>
+      (SCHEMA_RESERVED_NODE_KINDS as readonly string[]).includes(k)
+    );
+    expect(structuralReservedOverlap).toEqual([]);
   });
 
   it("parses valid node and edge with strict objects", () => {

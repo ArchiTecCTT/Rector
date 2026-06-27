@@ -4,6 +4,8 @@ import {
   type BuildCapabilityGraphInput,
 } from "../../src/cartographer/capabilityGraphAdapter";
 import type { CapabilityGraphRecord } from "../../src/cartographer/capabilityGraphRecords";
+import { createDefaultToolRegistry } from "../../src/tools";
+import { buildToolGraph } from "../../src/cartographer/toolGraphAdapter";
 
 describe("capabilityGraphAdapter", () => {
   it("builds Capability nodes only from explicit records and maps evalCaseIds to VALIDATED_BY", () => {
@@ -13,6 +15,7 @@ describe("capabilityGraphAdapter", () => {
       toolNames: ["workspace.read_file"],
       evalCaseIds: ["rg-orchestration-search", "tsc-runtime-mode-error"],
       productionAdmission: "production",
+      risk: "low",
       source: "phase0_eval",
       warnings: [],
     };
@@ -21,6 +24,7 @@ describe("capabilityGraphAdapter", () => {
     const cap = res.nodes.find((n) => n.kind === "Capability");
     expect(cap).toBeDefined();
     expect(cap?.id).toBe("capability:cartographer.grounding");
+    expect(cap?.properties.risk).toBe("low");
     const wrapped = res.edges.filter((e) => e.kind === "WRAPPED_BY");
     expect(wrapped.length).toBe(1);
     expect(wrapped[0].toNodeId).toBe("tool:workspace.read_file");
@@ -35,21 +39,109 @@ describe("capabilityGraphAdapter", () => {
     expect(res.edges.length).toBe(0);
   });
 
-  it("never promotes simulator.echo into capability records", () => {
+  it("downgrades simulator.echo production capabilities using default admissions when toolAdmissions omitted", () => {
     const rec: CapabilityGraphRecord = {
       id: "c1",
       label: "c1",
       toolNames: ["simulator.echo"],
       evalCaseIds: [],
       productionAdmission: "production",
+      risk: "high",
       source: "manual_fixture",
       warnings: [],
     };
     const res = buildCapabilityGraph({ snapshotId: "s", records: [rec] });
-    // The adapter must still emit the WRAPPED_BY, but the capability itself carries productionAdmission from the record.
-    // The contract test asserts that capability metadata source (not the adapter) must not list simulator.echo as production capability.
-    // Here we simply ensure the adapter does not fabricate a capability id from the tool name.
+    const cap = res.nodes.find((n) => n.kind === "Capability");
+    expect(cap?.properties.productionAdmission).toBe("quarantined");
+    const warnings = JSON.parse(String(cap?.properties.warnings ?? "[]")) as string[];
+    expect(warnings).toContain("production-capability-wraps-nonproduction-tool:simulator.echo");
+  });
+
+  it("downgrades production capabilities that wrap non-production tools when toolAdmissions are supplied", () => {
+    const registry = createDefaultToolRegistry();
+    const toolGraph = buildToolGraph({ snapshotId: "snap-tools", toolEntries: registry.snapshot() });
+    const toolAdmissions = Object.fromEntries(
+      toolGraph.nodes.map((n) => [n.label, n.properties.productionAdmission as string]),
+    ) as Record<string, "production" | "test_only" | "report_only" | "quarantined">;
+
+    const rec: CapabilityGraphRecord = {
+      id: "c1",
+      label: "c1",
+      toolNames: ["simulator.echo"],
+      evalCaseIds: [],
+      productionAdmission: "production",
+      risk: "high",
+      source: "manual_fixture",
+      warnings: [],
+    };
+    const res = buildCapabilityGraph({ snapshotId: "s", records: [rec], toolAdmissions });
     const cap = res.nodes.find((n) => n.kind === "Capability");
     expect(cap?.id).toBe("capability:c1");
+    expect(cap?.properties.productionAdmission).toBe("quarantined");
+    const warnings = JSON.parse(String(cap?.properties.warnings ?? "[]")) as string[];
+    expect(warnings).toContain("production-capability-wraps-nonproduction-tool:simulator.echo");
+  });
+
+  it("downgrades when explicit toolAdmissions mark a tool quarantined", () => {
+    const rec: CapabilityGraphRecord = {
+      id: "c-quarantine",
+      label: "c-quarantine",
+      toolNames: ["fake.tool"],
+      evalCaseIds: [],
+      productionAdmission: "production",
+      risk: "destructive",
+      source: "manual_fixture",
+      warnings: [],
+    };
+    const res = buildCapabilityGraph({
+      snapshotId: "s",
+      records: [rec],
+      toolAdmissions: { "fake.tool": "quarantined" },
+    });
+    const cap = res.nodes.find((n) => n.kind === "Capability");
+    expect(cap?.properties.productionAdmission).toBe("quarantined");
+    const warnings = JSON.parse(String(cap?.properties.warnings ?? "[]")) as string[];
+    expect(warnings).toContain("production-capability-wraps-nonproduction-tool:fake.tool");
+  });
+
+  it("deduplicates guardrail warnings when toolNames repeat", () => {
+    const rec: CapabilityGraphRecord = {
+      id: "dup",
+      label: "dup",
+      toolNames: ["simulator.echo", "simulator.echo"],
+      evalCaseIds: [],
+      productionAdmission: "production",
+      risk: "high",
+      source: "manual_fixture",
+      warnings: [],
+    };
+    const res = buildCapabilityGraph({ snapshotId: "s", records: [rec] });
+    const cap = res.nodes.find((n) => n.kind === "Capability");
+    const warnings = JSON.parse(String(cap?.properties.warnings ?? "[]")) as string[];
+    const matches = warnings.filter((w) => w === "production-capability-wraps-nonproduction-tool:simulator.echo");
+    expect(matches).toHaveLength(1);
+  });
+
+  it("keeps production admission for production-safe tool sets", () => {
+    const registry = createDefaultToolRegistry();
+    const toolGraph = buildToolGraph({ snapshotId: "snap-tools", toolEntries: registry.snapshot() });
+    const toolAdmissions = Object.fromEntries(
+      toolGraph.nodes.map((n) => [n.label, n.properties.productionAdmission as string]),
+    ) as Record<string, "production" | "test_only" | "report_only" | "quarantined">;
+
+    const rec: CapabilityGraphRecord = {
+      id: "safe",
+      label: "safe",
+      toolNames: ["workspace.read_file"],
+      evalCaseIds: [],
+      productionAdmission: "production",
+      risk: "low",
+      source: "manual_fixture",
+      warnings: [],
+    };
+    const res = buildCapabilityGraph({ snapshotId: "s", records: [rec], toolAdmissions });
+    const cap = res.nodes.find((n) => n.kind === "Capability");
+    expect(cap?.properties.productionAdmission).toBe("production");
+    expect(cap?.properties.risk).toBe("low");
   });
 });

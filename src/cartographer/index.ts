@@ -97,8 +97,10 @@ export {
 export {
   CapabilityGraphRecordSchema,
   CapabilityGraphRecordsSchema,
+  CapabilityRiskSchema,
   ToolProductionAdmissionSchema,
   type CapabilityGraphRecord,
+  type CapabilityRisk,
 } from "./capabilityGraphRecords";
 export {
   buildEvalSuiteGraph,

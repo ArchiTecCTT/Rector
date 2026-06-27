@@ -3,7 +3,9 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { CapabilityGraphRecordSchema as SrcCapabilityGraphRecordSchema } from "../../src/cartographer/capabilityGraphRecords";
 import { loadCapabilityGraphRecords } from "../../src/cartographer/capabilityGraphRecordsLoader";
+import { CapabilityGraphRecordSchema as FixtureCapabilityGraphRecordSchema } from "../fixtures/eval-corpus/capability-graph-records.schema";
 
 const corpusFixturePath = path.join(
   process.cwd(),
@@ -30,6 +32,10 @@ afterEach(async () => {
 });
 
 describe("capabilityGraphRecordsLoader", () => {
+  it("keeps eval-corpus capability schema re-exported from src", () => {
+    expect(FixtureCapabilityGraphRecordSchema).toBe(SrcCapabilityGraphRecordSchema);
+  });
+
   it("loads the committed fixture from the default path", async () => {
     const records = await loadCapabilityGraphRecords();
     expect(records.length).toBe(1);
@@ -51,6 +57,25 @@ describe("capabilityGraphRecordsLoader", () => {
   it("rejects a missing file path", async () => {
     const missingPath = path.join(tmpdir(), "rector-capability-graph-records-missing.json");
     await expect(loadCapabilityGraphRecords(missingPath)).rejects.toThrow();
+  });
+
+  it("rejects records missing explicit risk", async () => {
+    const missingRiskPath = await makeTempFile(
+      "missing-risk.json",
+      JSON.stringify([
+        {
+          id: "no.risk",
+          label: "No risk field",
+          toolNames: ["workspace.read_file"],
+          evalCaseIds: [],
+          productionAdmission: "production",
+          source: "phase0_eval",
+          warnings: [],
+        },
+      ]),
+    );
+
+    await expect(loadCapabilityGraphRecords(missingRiskPath)).rejects.toThrow();
   });
 
   it("rejects schema-invalid JSON records", async () => {

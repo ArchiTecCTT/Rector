@@ -1,19 +1,19 @@
 import type { ToolSchemaDefinition } from "../tools";
+import type { ToolRegistryEntry } from "../tools/types";
+import type { ToolProductionAdmission } from "./capabilityGraphRecords";
 import { makeToolId } from "./graphIds";
+import { getDefaultToolProductionAdmission } from "./toolProductionAdmission";
 import type {
   CartographerGraphEdge,
   CartographerGraphNode,
 } from "./graphTypes";
 
-export type ToolProductionAdmission =
-  | "production"
-  | "test_only"
-  | "report_only"
-  | "quarantined";
+export type { ToolProductionAdmission } from "./capabilityGraphRecords";
 
 export type BuildToolGraphInput = {
   readonly snapshotId: string;
-  readonly tools: readonly ToolSchemaDefinition[];
+  readonly tools?: readonly ToolSchemaDefinition[];
+  readonly toolEntries?: readonly ToolRegistryEntry[] | ReadonlyMap<string, ToolRegistryEntry>;
 };
 
 export type BuildToolGraphResult = {
@@ -25,15 +25,26 @@ function compareId(a: { id: string }, b: { id: string }): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-function getProductionAdmission(name: string): ToolProductionAdmission {
-  if (name === "simulator.echo") {
-    return "test_only";
+function resolveToolWorkItems(
+  input: BuildToolGraphInput,
+): Array<{ definition: ToolSchemaDefinition; entry?: ToolRegistryEntry }> {
+  if (Array.isArray(input.toolEntries)) {
+    return input.toolEntries.map((entry) => ({ definition: entry.definition, entry }));
   }
-  return "production";
+  if (input.toolEntries) {
+    return [...input.toolEntries.values()].map((entry) => ({
+      definition: entry.definition,
+      entry,
+    }));
+  }
+  if (input.tools) {
+    return input.tools.map((definition) => ({ definition, entry: undefined }));
+  }
+  return [];
 }
 
-function getToolSource(): string {
-  return "builtin";
+function getToolSource(entry?: ToolRegistryEntry): string {
+  return entry?.source ?? "builtin";
 }
 
 function getWarningsForTool(name: string): readonly string[] {
@@ -46,20 +57,23 @@ function getWarningsForTool(name: string): readonly string[] {
 }
 
 export function buildToolGraph(input: BuildToolGraphInput): BuildToolGraphResult {
-  const { snapshotId, tools } = input;
+  const { snapshotId } = input;
   const nodes: CartographerGraphNode[] = [];
-  for (const t of tools) {
-    const admission = getProductionAdmission(t.name);
+  for (const { definition: t, entry } of resolveToolWorkItems(input)) {
+    const admission = getDefaultToolProductionAdmission(t.name);
     const warnings = getWarningsForTool(t.name);
     const props: Record<string, string | number | boolean | null> = {
       description: t.description,
       risk: t.risk,
       requiresApproval: t.requiresApproval,
       requiresSandbox: t.requiresSandbox,
-      toolSource: getToolSource(),
+      toolSource: getToolSource(entry),
       productionAdmission: admission,
       inputSchema: JSON.stringify(t.inputSchema),
     };
+    if (entry?.moduleId) {
+      props.moduleId = entry.moduleId;
+    }
     if (warnings.length > 0) {
       props.warnings = JSON.stringify(warnings);
       if (t.name === "workspace.validate") {

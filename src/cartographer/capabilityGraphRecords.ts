@@ -8,6 +8,9 @@ export const ToolProductionAdmissionSchema = z.enum([
 ]);
 export type ToolProductionAdmission = z.infer<typeof ToolProductionAdmissionSchema>;
 
+export const CapabilityRiskSchema = z.enum(["low", "medium", "high", "destructive"]);
+export type CapabilityRisk = z.infer<typeof CapabilityRiskSchema>;
+
 export const CapabilityGraphRecordSchema = z
   .object({
     id: z.string().min(1),
@@ -15,6 +18,7 @@ export const CapabilityGraphRecordSchema = z
     toolNames: z.array(z.string().min(1)),
     evalCaseIds: z.array(z.string().min(1)),
     productionAdmission: ToolProductionAdmissionSchema,
+    risk: CapabilityRiskSchema,
     source: z.enum(["phase0_eval", "tool_registry", "manual_fixture"]),
     warnings: z.array(z.string().min(1)).default([]),
   })

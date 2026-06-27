@@ -35,7 +35,13 @@ async function buildStructuralGraphWithSources() {
     getSourceText,
   });
 
-  return { repoRoot, nodes: built.nodes, edges: built.edges, snapshotId: built.snapshot.id };
+  return {
+    repoRoot,
+    nodes: built.nodes,
+    edges: built.edges,
+    snapshotId: built.snapshot.id,
+    inventoryFiles: scan.files,
+  };
 }
 
 function makeMinimalGraphWithDuplicates(): { nodes: CartographerGraphNode[]; edges: CartographerGraphEdge[] } {
@@ -187,6 +193,28 @@ describe("CartographerQueryService (Todo 22)", () => {
     expect(r2.status).toBe("invalid_input");
   });
 
+  it("getFile falls back when inventoryFileNode JSON is malformed", async () => {
+    const fileNode: CartographerGraphNode = {
+      id: "file:abc:src/broken.ts",
+      snapshotId: "s1",
+      kind: "File",
+      label: "broken.ts",
+      path: "src/broken.ts",
+      normalizedPath: "src/broken.ts",
+      fileHash: "deadbeef",
+      language: "typescript",
+      properties: { kind: "source", inventoryFileNode: "{not-json" },
+    };
+    const svc = CartographerQueryService.fromGraph({ nodes: [fileNode], edges: [] });
+    const res = await svc.getFile({ normalizedPath: "src/broken.ts" });
+    expect(res.status).toBe("ok");
+    if (res.status === "ok") {
+      expect(res.fileNode.normalizedPath).toBe("src/broken.ts");
+      expect(res.fileNode.hash).toBe("deadbeef");
+      expect(res.fileNode.sizeBytes).toBe(0);
+    }
+  });
+
   it("getFile returns not_found for missing path", async () => {
     const svc = CartographerQueryService.fromGraph({ nodes: [], edges: [] });
     const r = await svc.getFile({ normalizedPath: "src/missing.ts" });
@@ -324,14 +352,15 @@ describe("CartographerQueryService (Todo 22)", () => {
   });
 
   it("getFile on structural fixture returns file + symbols + imports when sources provided", async () => {
-    const { nodes, edges } = await buildStructuralGraphWithSources();
+    const { nodes, edges, inventoryFiles } = await buildStructuralGraphWithSources();
     const svc = CartographerQueryService.fromGraph({ nodes, edges });
-    // pick a file known to exist in fixture
+    const expected = inventoryFiles.find((f) => f.normalizedPath === "src/app.ts");
+    expect(expected).toBeDefined();
     const res = await svc.getFile({ normalizedPath: "src/app.ts" });
     expect(res.status).toBe("ok");
-    if (res.status === "ok") {
+    if (res.status === "ok" && expected) {
       expect(res.file.normalizedPath).toBe("src/app.ts");
-      // symbols may be present if extraction ran
+      expect(res.fileNode).toEqual(expected);
       expect(Array.isArray(res.symbols)).toBe(true);
       expect(Array.isArray(res.imports)).toBe(true);
     }

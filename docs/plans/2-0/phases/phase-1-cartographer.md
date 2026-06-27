@@ -1,7 +1,7 @@
 # Phase 1 — Cartographer Test, Harden, and Expand Plan
 
 **Repository:** `ArchiTecCTT/Rector`  
-**Base branch:** `main`  
+**Base branch:** `rector-0.3.0`  
 **Source state:** after merged PR #17 / merge commit `14b2aeda544f010e79b300c87d34fd16de4dea01`  
 **Status:** implementation plan  
 **Phase:** 1 — Cartographer test, harden, then expand
@@ -381,6 +381,8 @@ RunTrace
 ```
 
 Minimum edge kinds:
+
+`CALLS` is **schema-reserved** in Phase 1 (listed in `GraphEdgeKindSchema`) but **not extracted** by the deterministic Phase 1C builder; no `CALLS` edges are emitted until a later call-graph phase.
 
 ```text
 CONTAINS
