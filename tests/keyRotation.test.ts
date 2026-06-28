@@ -13,6 +13,7 @@ import {
   createLocalSecretStore,
   type SecretFs,
 } from "../src/security/secretStore";
+import { assertKeyRotationAllowed } from "../src/security/secretStoreFactory";
 
 const FILE_PATH = ".rector/secrets.enc";
 const KEY = Buffer.alloc(32, 7);
@@ -257,6 +258,15 @@ describe("secret key file format", () => {
 });
 
 // ─── RECTOR_ROTATE_KEY_ON_BOOT validation ─────────────────────────────────
+
+describe("assertKeyRotationAllowed", () => {
+  it("rejects boot rotation when secrets use Azure Key Vault", () => {
+    expect(() => assertKeyRotationAllowed({ RECTOR_SECRET_STORE: "azure-key-vault" })).toThrow(
+      /azure-key-vault/,
+    );
+    expect(() => assertKeyRotationAllowed({ RECTOR_SECRET_STORE: "local" })).not.toThrow();
+  });
+});
 
 describe("RECTOR_ROTATE_KEY_ON_BOOT", () => {
   it("env var 'true' enables rotation", () => {

@@ -65,7 +65,18 @@ export function resolveEvidenceSyncConfig(env: NodeJS.ProcessEnv = process.env):
 
 export async function collectEvidenceFiles(evidenceDir: string): Promise<EvidenceSyncFile[]> {
   const absDir = path.resolve(evidenceDir);
-  const entries = await readdir(absDir);
+  let entries: string[];
+  try {
+    entries = await readdir(absDir);
+  } catch (error) {
+    const code = typeof error === "object" && error !== null && "code" in error
+      ? (error as NodeJS.ErrnoException).code
+      : undefined;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
   const files: EvidenceSyncFile[] = [];
 
   for (const name of entries) {

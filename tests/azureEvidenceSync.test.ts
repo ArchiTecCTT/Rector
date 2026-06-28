@@ -80,6 +80,11 @@ describe("syncEvidenceToBlob", () => {
 });
 
 describe("collectEvidenceFiles", () => {
+  it("returns an empty list when the evidence directory does not exist", async () => {
+    const files = await collectEvidenceFiles(".omo/evidence-missing-for-test-ENOENT");
+    expect(files).toEqual([]);
+  });
+
   it("collects report artifacts from .omo/evidence when present", async () => {
     const files = await collectEvidenceFiles(".omo/evidence");
     const names = files.map((file) => file.blobPath);

@@ -1,5 +1,12 @@
+import { createHash } from "node:crypto";
 import type { SecretStore, SecretStoreResult } from "./secretStore";
 import { redactString } from "./redaction";
+
+/** Tag key storing the original Rector secret ref on Key Vault secrets (hashed names are not reversible). */
+export const RECTOR_SECRET_REF_TAG = "rectorSecretRef";
+
+const KEY_VAULT_SECRET_NAME_MAX_LEN = 127;
+const KEY_VAULT_SECRET_NAME_PATTERN = /^[0-9a-zA-Z-]+$/;
 
 const PROVIDER_SECRET_NAME: Record<string, string> = {
   "azure-openai": "azure-openai-api-key",
@@ -13,12 +20,32 @@ export interface AzureKeyVaultStoreOptions {
 
 type KeyVaultSecretClient = {
   getSecret(name: string): Promise<{ value?: string }>;
-  setSecret(name: string, value: string): Promise<unknown>;
-  listPropertiesOfSecrets(): AsyncIterable<{ name?: string }>;
+  setSecret(name: string, value: string, options?: { tags?: Record<string, string> }): Promise<unknown>;
+  listPropertiesOfSecrets(): AsyncIterable<{ name?: string; tags?: Record<string, string> }>;
 };
 
+/**
+ * Map a Rector secret ref (provider id, memory ref, etc.) to an Azure Key Vault secret name.
+ * Key Vault allows only alphanumerics and hyphens (1–127 chars).
+ */
+export function secretRefToKeyVaultSecretName(secretRef: string): string {
+  const mapped = PROVIDER_SECRET_NAME[secretRef];
+  if (mapped) return mapped;
+
+  const legacy = `${secretRef}-api-key`;
+  if (
+    legacy.length <= KEY_VAULT_SECRET_NAME_MAX_LEN
+    && KEY_VAULT_SECRET_NAME_PATTERN.test(legacy)
+  ) {
+    return legacy;
+  }
+
+  const digest = createHash("sha256").update(secretRef, "utf8").digest("hex");
+  return `rector-${digest}`;
+}
+
 function defaultSecretName(providerId: string): string {
-  return PROVIDER_SECRET_NAME[providerId] ?? `${providerId}-api-key`;
+  return secretRefToKeyVaultSecretName(providerId);
 }
 
 function toRedactedError(error: unknown): string {
@@ -33,11 +60,15 @@ export function createAzureKeyVaultSecretStore(options: AzureKeyVaultStoreOption
 
   async function getClient(): Promise<KeyVaultSecretClient> {
     if (!clientPromise) {
-      clientPromise = (async () => {
+      const pending = (async () => {
         const { SecretClient } = await import("@azure/keyvault-secrets");
         const { DefaultAzureCredential } = await import("@azure/identity");
         return new SecretClient(vaultUrl, new DefaultAzureCredential()) as KeyVaultSecretClient;
       })();
+      clientPromise = pending;
+      pending.catch(() => {
+        clientPromise = undefined;
+      });
     }
     return clientPromise;
   }
@@ -46,7 +77,9 @@ export function createAzureKeyVaultSecretStore(options: AzureKeyVaultStoreOption
     async setSecret(providerId: string, value: string): Promise<SecretStoreResult<void>> {
       try {
         const client = await getClient();
-        await client.setSecret(secretNameFor(providerId), value);
+        await client.setSecret(secretNameFor(providerId), value, {
+          tags: { [RECTOR_SECRET_REF_TAG]: providerId },
+        });
         return { ok: true, value: undefined };
       } catch (error) {
         return { ok: false, error: toRedactedError(error) };
@@ -77,9 +110,22 @@ export function createAzureKeyVaultSecretStore(options: AzureKeyVaultStoreOption
         const ids: string[] = [];
         for await (const props of client.listPropertiesOfSecrets()) {
           if (!props.name) continue;
-          const providerId = Object.entries(PROVIDER_SECRET_NAME).find(([, name]) => name === props.name)?.[0]
-            ?? props.name.replace(/-api-key$/, "");
-          ids.push(providerId);
+          const taggedRef = props.tags?.[RECTOR_SECRET_REF_TAG];
+          if (taggedRef) {
+            ids.push(taggedRef);
+            continue;
+          }
+          const fromMap = Object.entries(PROVIDER_SECRET_NAME).find(([, name]) => name === props.name)?.[0];
+          if (fromMap) {
+            ids.push(fromMap);
+            continue;
+          }
+          if (/^rector-[0-9a-f]{64}$/.test(props.name)) {
+            continue;
+          }
+          if (props.name.endsWith("-api-key")) {
+            ids.push(props.name.slice(0, -"-api-key".length));
+          }
         }
         return [...new Set(ids)].sort();
       } catch {

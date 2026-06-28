@@ -9,6 +9,19 @@ export function resolveSecretStoreBacking(raw: string | undefined): SecretStoreB
   return "local";
 }
 
+/**
+ * Key rotation re-encrypts secrets into the local `.rector/secrets.enc` file.
+ * Refuse when secrets are backed by Azure Key Vault so cloud-managed values are not copied to disk.
+ */
+export function assertKeyRotationAllowed(env: NodeJS.ProcessEnv = process.env): void {
+  if (resolveSecretStoreBacking(env.RECTOR_SECRET_STORE) === "azure-key-vault") {
+    throw new Error(
+      "RECTOR_ROTATE_KEY_ON_BOOT is not supported when RECTOR_SECRET_STORE=azure-key-vault: "
+      + "cloud-managed secrets must not be copied to the local .rector/secrets.enc file.",
+    );
+  }
+}
+
 export interface CreateSecretStoreFromEnvOptions {
   local: LocalSecretStoreOptions;
   env?: NodeJS.ProcessEnv;

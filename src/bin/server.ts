@@ -26,7 +26,7 @@ import {
   resolveOrchestrationConfig,
 } from "../providers/orchestrationConfig";
 import { createLocalSecretStore, type SecretStore } from "../security/secretStore";
-import { createSecretStoreFromEnv } from "../security/secretStoreFactory";
+import { assertKeyRotationAllowed, createSecretStoreFromEnv } from "../security/secretStoreFactory";
 import { createLocalProviderConfigStore } from "../providers/configStore";
 import { createLocalMemoryConfigStore } from "../providers/memoryConfigStore";
 import { createLocalMemoryAssignmentStore } from "../providers/memoryAssignmentStore";
@@ -260,6 +260,7 @@ async function performKeyRotation(
   oldKey: Buffer,
   store: SecretStore,
 ): Promise<Buffer> {
+  assertKeyRotationAllowed(process.env);
   const newKey = randomBytes(32);
   const ids = store.listSecretIds ? await store.listSecretIds() : [];
 
