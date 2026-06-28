@@ -22,6 +22,7 @@ oracles:
     - src/calculator.ts
   mustIncludeEvidence:
     - cartographer.grounding
+    - fact:global_harness:oracle
 budgets:
   maxToolCalls: 10
   maxRuntimeMs: 60000
@@ -38,3 +39,4 @@ expected:
     - src/calculator.ts
   evidenceRefs:
     - cartographer.grounding
+    - fact:global_harness:oracle

@@ -5,8 +5,10 @@ import {
   createFactScope,
   createFactTrust,
   FACT_SCHEMA_VERSION,
+  ArtifactRefSchema,
   RectorFactSchema,
   toolCallProvenance,
+  type ArtifactRef,
   type CapabilityWarningFact,
   type FactProvenance,
   type RectorFact,
@@ -91,7 +93,8 @@ export function toolResultToFacts(input: ToolResultFactInput): Array<ToolResultF
     throw new Error("toolResultToFacts requires a toolName when ToolResult.toolName is absent");
   }
   const redactedResult = redactSecrets(input.result) as ToolResult;
-  const provenance = [toolCallProvenance({ toolName, callId: input.callId })];
+  const artifact = artifactFromMetadata(redactedResult.metadata);
+  const provenance = [toolCallProvenance({ toolName, callId: input.callId, ...(artifact ? { artifact } : {}) })];
   const resultFact = parseFact<ToolResultFact>({
     ...envelope(input.options, provenance),
     kind: "tool_result",
@@ -101,6 +104,7 @@ export function toolResultToFacts(input: ToolResultFactInput): Array<ToolResultF
     ok: redactedResult.ok,
     output: redactedResult.output,
     ...(redactedResult.error ? { error: redactedResult.error.message } : {}),
+    ...(artifact ? { artifact } : {}),
   });
 
   if (redactedResult.ok || !redactedResult.error) return [resultFact];
@@ -115,6 +119,7 @@ export function toolResultToFacts(input: ToolResultFactInput): Array<ToolResultF
     message: redactedResult.error.message,
     ...(redactedResult.error.details ? { details: redactedResult.error.details as Record<string, unknown> } : {}),
     retryable: isRetryableToolError(redactedResult.error.code),
+    ...(artifact ? { artifact } : {}),
   });
   return [resultFact, failureFact];
 }
@@ -160,6 +165,33 @@ export function toolEventSinkInputToFacts(input: {
     warning: redactString(String(payload.reason ?? input.event.type)),
     severity: "medium",
   })];
+}
+
+function artifactFromMetadata(metadata: Record<string, unknown>): ArtifactRef | undefined {
+  const uri = typeof metadata.artifactUri === "string"
+    ? metadata.artifactUri
+    : typeof metadata.rawArtifactUri === "string"
+      ? metadata.rawArtifactUri
+      : undefined;
+  if (!uri) return undefined;
+
+  const base = ArtifactRefSchema.safeParse({ refType: "artifact", uri });
+  if (!base.success) return undefined;
+
+  let draft: ArtifactRef = base.data;
+  if (typeof metadata.artifactSha256 === "string") {
+    const withSha = ArtifactRefSchema.safeParse({ ...draft, sha256: metadata.artifactSha256 });
+    if (withSha.success) draft = withSha.data;
+  }
+  if (typeof metadata.artifactContentType === "string") {
+    const withType = ArtifactRefSchema.safeParse({ ...draft, contentType: metadata.artifactContentType });
+    if (withType.success) draft = withType.data;
+  }
+  if (typeof metadata.artifactSizeBytes === "number" && Number.isFinite(metadata.artifactSizeBytes) && metadata.artifactSizeBytes >= 0) {
+    const withSize = ArtifactRefSchema.safeParse({ ...draft, sizeBytes: Math.trunc(metadata.artifactSizeBytes) });
+    if (withSize.success) draft = withSize.data;
+  }
+  return draft;
 }
 
 function isRetryableToolError(code: ToolResult["error"] extends infer E ? E extends { code: infer C } ? C : never : never): boolean {
