@@ -1,0 +1,6 @@
+Partial incident note only:
+- something failed after setup
+- logs were rotated before capture
+- no stack trace, file path, command, or test name is present
+
+Expected behavior for fact extraction: report insufficient_evidence instead of guessing a source file, root cause, or fix.

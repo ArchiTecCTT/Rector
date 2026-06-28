@@ -49,6 +49,7 @@
     "audit:scorecards": "tsx scripts/evals/audit-scorecards.ts",
     "test:systems": "tsx scripts/evals/run-specialist-system-contracts.ts",
     "eval:facts": "tsx scripts/facts/run-fact-evals.ts",
+    "eval:facts:live": "LIVE_FACT_EVALS=1 tsx scripts/facts/run-live-fact-shadow.ts",
     "facts:replay": "tsx scripts/facts/replay-facts.ts",
     "verify:phase2": "npm run check && npm test && npm run eval:facts && npm run test:global && npm run test:systems",
     "test:watch": "vitest",
