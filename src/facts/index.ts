@@ -7,3 +7,8 @@ export * from "./scope";
 export * from "./ledger";
 export * from "./replay";
 export * from "./diff";
+export * from "./adapters/cartographerFacts";
+export * from "./adapters/toolFacts";
+export * from "./adapters/capabilityEvalFacts";
+export * from "./adapters/globalHarnessFacts";
+export * from "./adapters/runEventFacts";
