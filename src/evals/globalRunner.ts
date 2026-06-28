@@ -176,6 +176,7 @@ function buildProducedArtifactRecords(input: ProducedArtifactInput): readonly Pr
   }
   if (input.beforeHashes.size > 0 || input.afterHashes.size > 0) {
     records.push({ id: "cartographer.grounding", path: undefined });
+    records.push({ id: "fact:global_harness:oracle", path: undefined });
   }
   if (input.packet.systemId === "coding" && input.allowed.includes("coding") && !input.forbidden.includes("coding")) {
     records.push({ id: "delegation.coding-only", path: undefined });

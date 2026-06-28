@@ -72,7 +72,7 @@ export function capabilityEvalResultToFacts(input: {
 }): Array<CapabilityRequestFact | CapabilityEvidenceFact | CapabilityCoverageFact | CapabilityWarningFact | CapabilityFailureFact> {
   const result = redactSecrets(input.result) as CapabilityEvalResult;
   const facts: Array<CapabilityRequestFact | CapabilityEvidenceFact | CapabilityCoverageFact | CapabilityWarningFact | CapabilityFailureFact> = [];
-  const provenance = [capabilityEvalProvenance({ capabilityId: result.capabilityId, caseId: result.caseId })];
+  const provenance = [capabilityEvalProvenance({ capabilityId: result.capabilityId, caseId: result.caseId, ...(result.rawArtifactRefs[0] ? { artifact: artifactRef({ uri: result.rawArtifactRefs[0] }) } : {}) })];
 
   if (input.caseInput) facts.push(capabilityEvalCaseToRequestFact(input.caseInput, input.options));
 
@@ -124,7 +124,7 @@ export function capabilityEvalResultToFacts(input: {
 
 export function capabilityEvidencePacketToFacts(packetInput: CapabilityEvidencePacket, options: CapabilityEvalFactAdapterOptions): Array<CapabilityEvidenceFact | CapabilityCoverageFact | CapabilityWarningFact | CapabilityFailureFact> {
   const packet = redactSecrets(packetInput) as CapabilityEvidencePacket;
-  const provenance = [capabilityEvalProvenance({ capabilityId: packet.capabilityId, caseId: packet.caseId })];
+  const provenance = [capabilityEvalProvenance({ capabilityId: packet.capabilityId, caseId: packet.caseId, ...(packet.rawArtifactRefs[0] ? { artifact: artifactRef({ uri: packet.rawArtifactRefs[0] }) } : {}) })];
   const workspacePaths = packet.evidence.map((item) => item.path).filter((path): path is string => path !== undefined);
   const evidence = packet.evidence.length > 0
     ? packet.evidence.flatMap((item) => evidenceRefsFromPacketItem(item, packet.rawArtifactRefs))

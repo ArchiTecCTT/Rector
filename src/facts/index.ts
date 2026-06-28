@@ -13,3 +13,5 @@ export * from "./adapters/capabilityEvalFacts";
 export * from "./adapters/globalHarnessFacts";
 export * from "./adapters/runEventFacts";
 export * from "./validation";
+export * from "./reports/factReport";
+export * from "./reports/markdown";
