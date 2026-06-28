@@ -29,9 +29,10 @@ npm install
 ```bash
 npm test
 npm run build
+npm audit
 ```
 
-These commands use in-memory stores and `SpyLLMProvider` — no live provider keys required for the test suite.
+`npm test` uses in-memory stores and `SpyLLMProvider` — no live provider keys required for the test suite. `npm audit` must stay clean before pushing so dependency regressions are caught locally before CI.
 
 ## Run locally
 

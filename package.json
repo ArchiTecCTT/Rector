@@ -56,7 +56,10 @@
     "verify:phase0.5": "tsx scripts/evals/verify-phase0-5-complete.ts",
     "verify:foundation": "npm run verify:phase0 && npm run verify:phase0.5",
     "cartographer:self-scan": "tsx scripts/cartographer/run-self-scan.ts",
-    "cartographer:self-scan:check": "tsx scripts/cartographer/check-self-scan.ts"
+    "cartographer:self-scan:check": "tsx scripts/cartographer/check-self-scan.ts",
+    "evidence:sync": "tsx scripts/azure/sync-evidence.ts",
+    "cartographer:sync": "tsx scripts/azure/sync-cartographer.ts",
+    "azure:daily-touch": "tsx scripts/azure/daily-touch.ts"
   },
   "engines": {
     "node": ">=22.5.0"
@@ -64,7 +67,32 @@
   "overrides": {
     "esbuild": ">=0.28.1",
     "undici": ">=7.28.0",
-    "ws": ">=8.21.0"
+    "ws": ">=8.21.0",
+    "@opentelemetry/configuration": "0.219.0",
+    "@opentelemetry/core": "2.8.0",
+    "@opentelemetry/exporter-logs-otlp-grpc": "0.219.0",
+    "@opentelemetry/exporter-logs-otlp-http": "0.219.0",
+    "@opentelemetry/exporter-logs-otlp-proto": "0.219.0",
+    "@opentelemetry/exporter-metrics-otlp-grpc": "0.219.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "0.219.0",
+    "@opentelemetry/exporter-metrics-otlp-proto": "0.219.0",
+    "@opentelemetry/exporter-prometheus": "0.219.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "0.219.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.219.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "0.219.0",
+    "@opentelemetry/exporter-zipkin": "2.8.0",
+    "@opentelemetry/instrumentation-http": "0.219.0",
+    "@opentelemetry/otlp-exporter-base": "0.219.0",
+    "@opentelemetry/otlp-grpc-exporter-base": "0.219.0",
+    "@opentelemetry/otlp-transformer": "0.219.0",
+    "@opentelemetry/propagator-b3": "2.8.0",
+    "@opentelemetry/propagator-jaeger": "2.8.0",
+    "@opentelemetry/resources": "2.8.0",
+    "@opentelemetry/sdk-logs": "0.219.0",
+    "@opentelemetry/sdk-metrics": "2.8.0",
+    "@opentelemetry/sdk-node": "0.219.0",
+    "@opentelemetry/sdk-trace-base": "2.8.0",
+    "@opentelemetry/sdk-trace-node": "2.8.0"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1071.0",
@@ -72,7 +100,9 @@
     "@azure/core-auth": "^1.10.1",
     "@azure/core-rest-pipeline": "^1.24.0",
     "@azure/identity": "^4.13.1",
+    "@azure/keyvault-secrets": "^4.11.2",
     "@azure/openai": "^2.0.0",
+    "@azure/storage-blob": "^12.33.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cloudflare": "^6.4.0",
     "express": "^4.21.0",
@@ -80,7 +110,6 @@
     "ignore": "^7.0.5",
     "openai": "^6.44.0",
     "opencode-codebase-index": "^0.11.0",
-
     "yaml": "^2.9.0",
     "zod": "^3.23.8"
   },
@@ -96,6 +125,7 @@
     "wrangler": "^4.101.0"
   },
   "optionalDependencies": {
+    "applicationinsights": "^3.15.1",
     "ioredis": "^5.6.1",
     "rate-limiter-flexible": "^5.0.5"
   }

@@ -25,7 +25,8 @@ import {
   describeRequiredProviderEnvKeys,
   resolveOrchestrationConfig,
 } from "../providers/orchestrationConfig";
-import { createLocalSecretStore } from "../security/secretStore";
+import { createLocalSecretStore, type SecretStore } from "../security/secretStore";
+import { assertKeyRotationAllowed, createSecretStoreFromEnv } from "../security/secretStoreFactory";
 import { createLocalProviderConfigStore } from "../providers/configStore";
 import { createLocalMemoryConfigStore } from "../providers/memoryConfigStore";
 import { createLocalMemoryAssignmentStore } from "../providers/memoryAssignmentStore";
@@ -257,8 +258,9 @@ function shouldEnableDbEncryption(_secretKey: Buffer): boolean {
  */
 async function performKeyRotation(
   oldKey: Buffer,
-  store: ReturnType<typeof createLocalSecretStore>,
+  store: SecretStore,
 ): Promise<Buffer> {
+  assertKeyRotationAllowed(process.env);
   const newKey = randomBytes(32);
   const ids = store.listSecretIds ? await store.listSecretIds() : [];
 
@@ -292,9 +294,11 @@ async function performKeyRotation(
 // Tests do not use this entry point — they call `createApp` directly and can inject empty or
 // in-memory stores — so no real disk store is ever forced in the test suite.
 let secretEncryptionKey = resolveSecretEncryptionKey();
-let secretStore = createLocalSecretStore({
-  filePath: SECRETS_FILE,
-  encryptionKey: secretEncryptionKey,
+let secretStore = createSecretStoreFromEnv({
+  local: {
+    filePath: SECRETS_FILE,
+    encryptionKey: secretEncryptionKey,
+  },
 });
 const providerConfigStore = createLocalProviderConfigStore({ filePath: PROVIDER_CONFIG_FILE });
 
@@ -469,9 +473,11 @@ async function bootstrap(): Promise<{ app: Awaited<ReturnType<typeof createApp>>
   if (process.env.RECTOR_ROTATE_KEY_ON_BOOT?.trim() === "true") {
     try {
       secretEncryptionKey = await performKeyRotation(secretEncryptionKey, secretStore);
-      secretStore = createLocalSecretStore({
-        filePath: SECRETS_FILE,
-        encryptionKey: secretEncryptionKey,
+      secretStore = createSecretStoreFromEnv({
+        local: {
+          filePath: SECRETS_FILE,
+          encryptionKey: secretEncryptionKey,
+        },
       });
       console.log("[SECURITY] Boot-time key rotation completed.");
     } catch (error) {

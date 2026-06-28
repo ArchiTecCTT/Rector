@@ -6,7 +6,11 @@ import path from "node:path";
 
 function run(cmd: string, env?: NodeJS.ProcessEnv): { code: number } {
   try {
-    execSync(cmd, { encoding: "utf8", stdio: "pipe", env: { ...process.env, ...env } });
+    execSync(cmd, {
+      encoding: "utf8",
+      stdio: "pipe",
+      env: { ...process.env, APPLICATIONINSIGHTS_CONNECTION_STRING: "", ...env },
+    });
     return { code: 0 };
   } catch (e: any) {
     return { code: e.status ?? 1 };

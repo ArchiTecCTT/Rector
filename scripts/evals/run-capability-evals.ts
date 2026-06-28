@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createHash } from "node:crypto";
+import { emitHarnessTelemetry } from "../../src/observability";
 import { redactString } from "../../src/security/redaction";
 import {
   CAPABILITY_EVAL_METRIC_IDS,
@@ -436,19 +437,38 @@ async function runGate(results: readonly CapabilityEvalResult[], summary: Metric
 }
 
 async function main(): Promise<void> {
+  const startedAt = Date.now();
   const mode = parseMode();
   const output = await runCapabilityEvals();
   const { summary, results } = output;
   printSummary(summary, output);
 
-  if (mode === "report-only") return;
+  if (mode === "report-only") {
+    emitHarnessTelemetry({
+      harness: "capability-evals",
+      status: "pass",
+      durationMs: Date.now() - startedAt,
+    });
+    return;
+  }
 
   const failures = await runGate(results, summary);
   if (failures.length > 0) {
     process.stderr.write(`[capability-evals:gate] FAIL: ${failures.join("; ")}\n`);
     process.exitCode = 1;
+    emitHarnessTelemetry({
+      harness: "capability-evals",
+      status: "fail",
+      durationMs: Date.now() - startedAt,
+      detail: failures.join("; "),
+    });
   } else {
     process.stdout.write("[capability-evals:gate] PASS\n");
+    emitHarnessTelemetry({
+      harness: "capability-evals",
+      status: "pass",
+      durationMs: Date.now() - startedAt,
+    });
   }
 }
 

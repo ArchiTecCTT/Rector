@@ -29,9 +29,12 @@ npm install
 
 ## Verify (CI / test doubles)
 
+Run all three before pushing so local checks catch test, build, and dependency-audit failures before CI.
+
 ```bash
 npm test
 npm run build
+npm audit
 ```
 
 ## Run locally (legacy)

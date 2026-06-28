@@ -52,11 +52,15 @@ export interface ObservabilityAdapter {
 export type LlmObservabilitySpan = ObservabilitySpan;
 export type LlmObservabilityAdapter = ObservabilityAdapter;
 
-export interface NoopObservabilityAdapters {
+export interface ObservabilityAdapters {
   sentry: LlmObservabilityAdapter;
   postHog: LlmObservabilityAdapter;
   openTelemetry: LlmObservabilityAdapter;
+  appInsights: LlmObservabilityAdapter;
 }
+
+/** @deprecated Use {@link ObservabilityAdapters}. */
+export type NoopObservabilityAdapters = ObservabilityAdapters;
 
 type OpenSpan = {
   spanId: string;
@@ -166,11 +170,12 @@ export function createInMemoryObservabilityTrace(options: ObservabilityTraceOpti
   return new InMemoryObservabilityTrace(options);
 }
 
-export function createNoopObservabilityAdapters(): NoopObservabilityAdapters {
+export function createNoopObservabilityAdapters(): ObservabilityAdapters {
   return {
     sentry: createNoopAdapter("sentry"),
     postHog: createNoopAdapter("posthog"),
     openTelemetry: createNoopAdapter("opentelemetry"),
+    appInsights: createNoopAdapter("appInsights"),
   };
 }
 
@@ -189,9 +194,12 @@ export { createSentryAdapter } from "./sentryAdapter.js";
 export type { SentryAdapterOptions } from "./sentryAdapter.js";
 export { createPostHogAdapter } from "./posthogAdapter.js";
 export type { PostHogAdapterOptions } from "./posthogAdapter.js";
+export { createAppInsightsAdapter, emitHarnessTelemetry } from "./appInsightsAdapter.js";
+export type { AppInsightsAdapterOptions, HarnessTelemetryInput } from "./appInsightsAdapter.js";
 
 import { createSentryAdapter } from "./sentryAdapter.js";
 import { createPostHogAdapter } from "./posthogAdapter.js";
+import { createAppInsightsAdapter } from "./appInsightsAdapter.js";
 
 /**
  * Create observability adapters based on environment configuration.
@@ -203,12 +211,36 @@ import { createPostHogAdapter } from "./posthogAdapter.js";
  * Optional dependencies `@sentry/node` and `posthog-node` are NOT installed by
  * default — they are loaded lazily only when the corresponding env var is set.
  */
-export function createObservabilityAdapters(): NoopObservabilityAdapters {
+export function createObservabilityAdapters(): ObservabilityAdapters {
   return {
     sentry: createSentryAdapter(),
     postHog: createPostHogAdapter(),
     openTelemetry: createNoopAdapter("opentelemetry"),
+    appInsights: createAppInsightsAdapter(),
   };
+}
+
+export function observabilityForwardingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(
+    env.APPLICATIONINSIGHTS_CONNECTION_STRING?.trim()
+    || env.SENTRY_DSN?.trim()
+    || env.POSTHOG_API_KEY?.trim(),
+  );
+}
+
+export async function forwardObservabilityTrace(
+  trace: InMemoryObservabilityTrace,
+  adapters: ObservabilityAdapters = createObservabilityAdapters(),
+): Promise<void> {
+  const spans = trace.listSpans();
+  const summary = trace.getSummary();
+  const sinks = [adapters.sentry, adapters.postHog, adapters.appInsights, adapters.openTelemetry];
+  for (const adapter of sinks) {
+    for (const span of spans) {
+      await adapter.captureSpan(span);
+    }
+    await adapter.captureSummary(summary);
+  }
 }
 
 function createNoopAdapter(name: string): ObservabilityAdapter {

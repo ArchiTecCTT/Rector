@@ -40,11 +40,64 @@ Stale/quarantined docs have warning banners. If stale docs conflict with source-
 - Install: `npm install`
 - Test: `npm test`
 - Build: `npm run build`
+- Dependency audit: `npm audit`
 - Dev server: `npm run dev`
 - Capability evals (offline, no model): `npm run eval:capabilities` (and `npm run eval:capabilities:report`) — runs the committed eval corpus and writes `.omo/evidence/eval-report.{json,md}`
 - Fake-seam audit (report-only, non-blocking): `npm run audit:no-fakes`
 - Global reliability harness (offline, one scorecard per scenario): `npm run test:global` — runs the committed scenarios against the fixture workspace and writes `.omo/evidence/global-report.{json,md}`; live scenarios are SKIPPED when no credentials are present
 - Specialist contract validation: `npm run test:systems` — validates committed specialist profiles against the contract schema (no execution)
+- Azure daily ritual (dev VM, opt-in): `npm run azure:daily-touch` — Key Vault list + Blob uploads + App Insights heartbeat
+- Harness Blob sync: `npm run evidence:sync` — when `RECTOR_EVIDENCE_SYNC=azure-blob`
+- Cartographer Blob sync: `npm run cartographer:sync` — uploads `.rector/cartographer/*` after `npm run cartographer:self-scan`
+
+## Azure Daily Ritual (Grok Build + Founders Hub)
+
+**Goal:** Touch **5 Azure services** daily while developing Rector — VM, Foundry, Blob, Key Vault, App Insights — for Microsoft for Startups Founders Hub eligibility.
+
+| # | Service | Resource | Daily touch |
+|---|---|---|---|
+| 1 | VM | `ornyx-1` | Grok Build sessions (automatic) |
+| 2 | Foundry | Azure OpenAI deployments | Model calls in Grok Build (automatic) |
+| 3 | Blob Storage | `stgrectordev` | `npm run azure:daily-touch` or `npm run evidence:sync` |
+| 4 | Key Vault | `kv-rector-dev` | `npm run azure:daily-touch`; `RECTOR_SECRET_STORE=azure-key-vault` on `npm run dev` |
+| 5 | App Insights | `appi-rector-dev` | `npm run azure:daily-touch`; `npm run dev` + harness scripts |
+
+**Auth:** `az login` user credentials on the dev VM (no VM managed identity). Config lives in `.envrc` (gitignored) — see `.env.example` for variable names.
+
+### Session start (every Grok Build day)
+
+```bash
+az account show >/dev/null 2>&1 || az login
+direnv allow                    # loads .envrc Azure vars
+npm run azure:daily-touch       # KV + Blob + App Insights in one command
+```
+
+### After harness / cartographer work
+
+```bash
+npm run eval:capabilities       # optional
+npm run test:global             # optional
+npm run evidence:sync           # harness reports → harness-evidence container
+
+npm run cartographer:self-scan  # if graph stale
+npm run cartographer:sync       # cartographer container on stgrectordev
+```
+
+### Azure MCP (Grok Build)
+
+MCP server `azure` (`@azure/mcp`) is configured in `~/.grok/config.toml`. Restart Grok Build after config changes. Use namespaces: `storage`, `keyvault`, `monitor`, `foundry`.
+
+### Grok skill
+
+Load `.grok/skills/rector-azure-daily-ritual/SKILL.md` at session start when Azure usage is the goal (restart session after adding the skill).
+
+### Implemented helpers (Chunk 052+)
+
+1. **`npm run azure:daily-touch`** — one-shot morning ritual (KV list, harness Blob upload if reports exist, cartographer Blob upload if artifacts exist, App Insights `rector.azure.daily_touch` event).
+2. **`rector-azure-daily-ritual` skill** — agent checklist for session start + MCP prompts.
+3. **`npm run cartographer:sync`** — uploads `latest-snapshot.json`, `latest-files.json`, `scan-report.md` from `.rector/cartographer/`.
+
+**Not in CI:** Azure env vars unset in `npm test` / GitHub Actions — local dev VM only.
 
 Phase 0 added these measurement surfaces: `src/capabilities/eval/*` (eval schemas, 8-metric scorer, raw artifact store), `scripts/evals/*` (offline runner + report formatter), `scripts/audit/*` (fake-seam scanner), and `tests/fixtures/eval-corpus/` (committed real `rg`/`tsc`/`git` artifacts + oracles).
 
@@ -57,6 +110,7 @@ Before claiming completion, run fresh:
 ```bash
 npm test
 npm run build
+npm audit
 ```
 
 ## Implementation Workflow
@@ -66,11 +120,23 @@ npm run build
 - Commit each completed chunk separately.
 - Keep `docs/plans/concerns-and-vulnerabilities.md` updated with concerns, vulnerabilities, limitations, and deferred fixes.
 - No background/async subagents; foreground only. Background subagents caused stale-run failures.
-- Preferred model routing for this project:
-  - Implementors/workers: `azure-openai-responses/gpt-5.5`
-  - Reviewers: `vultr/zai-org/GLM-5.1-FP8-normalize:high`
-  - Debug/fix workers: `google-vertex/gemini-3.5-flash`
-- Parent orchestrator remains in charge: worker -> GLM review -> Gemini fixes if needed -> verify -> commit -> next chunk.
+- Parent orchestrator remains in charge: plan (optional) → coder → verify → librarian → commit → next chunk.
+
+### Subagent routing (do not use `general-purpose` for implementation)
+
+Spawn project agents from `.grok/agents/` — see `.grok/skills/rector-subagent-routing/SKILL.md`:
+
+| Role | `subagent_type` | Model |
+|---|---|---|
+| Low–mid implementation | `rector-generalCoder-fast` | `grok-composer-2.5-fast` |
+| Hard / cross-cutting implementation | `rector-generalCoder-deep` | `cf-glm-5-2` (Cloudflare Workers AI GLM 5.2) |
+| Post-verify doc sync | `rector-librarian` | `grok-composer-2.5-fast` |
+| Codebase map / search only | `explore` | per `config.toml` |
+| Plan before coding | `plan` | per `config.toml` |
+
+**Deep coder rate limit:** never more than **2** concurrent `rector-generalCoder-deep` subagents — Cloudflare Workers AI rate limits `cf-glm-5-2`. Queue or wait for completion before spawning a third.
+
+Coders do not edit docs (unless explicitly asked); **librarian runs after** `npm test` + `npm run build` + `npm audit` pass to sync chunk plans, concerns, and `AGENTS.md` facts.
 
 ## Rector Project Skills
 
@@ -78,12 +144,14 @@ Project-scoped OpenCode skills live under `.opencode/skills/<name>/SKILL.md`. Th
 
 Use these active Rector skills when their domain matches:
 
+- `rector-subagent-routing` — spawn routing for `rector-generalCoder-fast`, `rector-generalCoder-deep`, and `rector-librarian`; deep-coder concurrency cap (max 2).
 - `rector-configured-product-guardian` — v0.3.0 configured-product invariants, onboarding/runtime settings, single chat path, fake/spy CI-only boundaries.
 - `rector-phase-chunk-planner` — chunk planning discipline, source-of-truth reads, scope boundaries, concerns updates, and verification gates.
 - `rector-docs-replacement-surgeon` — Phase 1 documentation replacement, stale local/external/provider-free wording, README/spec/roadmap alignment.
 - `rector-cartographer-graph-builder` — Cartographer structural graph expansion beyond file inventory: symbols, imports, calls, tests, routes, skills, rules, impact edges.
 - `rector-evidence-gatekeeper` — typed evidence, grounded validation, `insufficient_evidence` instead of guessing, safe memory/skill promotion.
 - `rector-fake-purge-auditor` — fake/deterministic double containment, fake seam audits, simulator/tool fallback boundaries, `configured_spy_pipeline` naming.
+- `rector-azure-daily-ritual` — Grok Build session-start checklist for 5-service Azure daily usage (Founders Hub); `azure:daily-touch`, evidence/cartographer sync, Azure MCP.
 
 Deferred Rector skills to add when their phases become active:
 
@@ -107,7 +175,7 @@ The VM's default git identity is `Ubuntu <…@…cloudapp.net>`, which does NOT 
 
 ## Current Implemented Chunks
 
-Completed through Chunk 50 (see `docs/plans/chunks/050-cartographer-inventory-slice.md`). Foundation chunks 0–25:
+Completed through Chunk 52 (see `docs/plans/chunks/052-azure-dev-harness-stack.md`). Chunk 51 (`051-inspection-cleanup`) remains in the worktree plan queue. Foundation chunks 0–25:
 
 0. Source-of-truth docs and stale doc quarantine
 1. Open-source foundation and Apache-2.0 setup
@@ -140,7 +208,7 @@ Neuro-symbolic + cloud transition chunks (26–37) include SLM preprocessor, adv
 
 Current test baseline after Phase 0.5 (branch `rector-0.3.0`):
 
-- `npm test`: 344 files (344 passed, 1 skipped) / 2338 tests (2338 passed, 5 skipped). Skips are live-memory only (`tests/memoryLive.integration.test.ts`, offline).
+- `npm test`: 367 files (367 passed, 1 skipped) / 2539 tests (2534 passed, 5 skipped). Skips are live-memory only (`tests/memoryLive.integration.test.ts`, offline).
 - `npm run build`: passing
 - `npm audit`: 0 vulnerabilities
 

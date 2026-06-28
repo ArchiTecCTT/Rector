@@ -33,7 +33,10 @@ describe("capability eval gate command", () => {
   });
 
   it("real corpus gate exits 0 via designated-case efficiency", () => {
-    const r = execSync("npm run eval:capabilities:gate", { encoding: "utf8" });
+    const r = execSync("npm run eval:capabilities:gate", {
+      encoding: "utf8",
+      env: { ...process.env, APPLICATIONINSIGHTS_CONNECTION_STRING: "" },
+    });
     expect(r).toContain("PASS");
   });
 });
