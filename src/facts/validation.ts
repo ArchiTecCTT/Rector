@@ -7,7 +7,7 @@ import {
   RectorFactSchema,
   SafeFactPathSchema,
 } from "./schemas";
-import type { EvidenceRef, FactTrust, FactValidationError, GraphRef, RectorFact, SourceSpan } from "./types";
+import type { FactTrust, FactValidationError, GraphRef, RectorFact, SourceSpan } from "./types";
 
 export type FactValidationGate = "schema" | "provenance" | "scope" | "grounding" | "artifact_refs" | "redaction" | "trust_transition" | "batch";
 export type FactValidationStatus = "passed" | "failed" | "insufficient_evidence";
@@ -265,6 +265,7 @@ export function validateFactBatch(inputs: readonly unknown[]): FactBatchValidati
     }
 
     const fact = schema.fact;
+    const previousAccepted = priorFacts.length > 0 ? priorFacts[priorFacts.length - 1] : undefined;
     const checks = [
       schema,
       validateFactProvenance(fact),
@@ -272,7 +273,7 @@ export function validateFactBatch(inputs: readonly unknown[]): FactBatchValidati
       validateFactGrounding(fact),
       validateFactScope(fact),
       validateFactRedactionState(fact),
-      validateFactTrustTransition({ fact, supportingFacts: priorFacts }),
+      validateFactTrustTransition({ fact, previousFact: previousAccepted, supportingFacts: priorFacts }),
     ];
     const errors = checks.flatMap((check) => [...check.errors]);
     if (errors.length === 0) {

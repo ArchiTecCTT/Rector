@@ -174,4 +174,37 @@ describe("Phase 2D fact validation gates", () => {
     expect(batch.rejectedFacts).toHaveLength(1);
     expect(batch.rejectedFacts[0]?.status).toBe("failed");
   });
+
+  it("rejects invalid trust jumps during batch validation using the last accepted prior fact", () => {
+    const previous = fact({ kind: "intent", producer: "user", trust: trust("raw"), provenance: [userProvenance("msg-1")] });
+    const jumped = {
+      ...previous,
+      trust: { level: "validation_linked" as const, validationRefs: ["validation-1"] },
+      provenance: [
+        {
+          sourceType: "validation" as const,
+          validation: { refType: "validation" as const, validationId: "validation-1", validator: "unit", status: "passed" as const },
+        },
+      ],
+    };
+
+    const batch = validateFactBatch([previous, jumped]);
+
+    expect(batch.ok).toBe(false);
+    expect(batch.acceptedFacts).toHaveLength(1);
+    expect(batch.rejectedFacts).toHaveLength(1);
+    expect(batch.rejectedFacts[0]?.errors.map((entry) => entry.code)).toContain("trust_jump");
+  });
+
+  it("rejects terminal fact revival during batch validation without new supporting evidence", () => {
+    const terminal = fact({ kind: "unknown_or_ambiguity", question: "Need path", trust: trust("insufficient_evidence") });
+    const revivedSameFact = { ...terminal, trust: trust("schema_valid") };
+
+    const batch = validateFactBatch([terminal, revivedSameFact]);
+
+    expect(batch.ok).toBe(false);
+    expect(batch.acceptedFacts).toHaveLength(1);
+    expect(batch.rejectedFacts).toHaveLength(1);
+    expect(batch.rejectedFacts[0]?.errors.map((entry) => entry.code)).toContain("terminal_without_new_evidence");
+  });
 });
