@@ -175,4 +175,26 @@ describe("JsonlFactLedger", () => {
 
     await expect(ledger.append(original)).rejects.toThrow(/already contains/);
   });
+
+  it("assigns unique monotonic sequences under concurrent appends", async () => {
+    const filePath = await tempLedgerPath();
+    const ledger = new JsonlFactLedger({ filePath, now: () => APPENDED_AT });
+    const facts = Array.from({ length: 24 }, (_, index) =>
+      fact({
+        intent: `concurrent-${index}`,
+        createdAt: `2026-06-28T00:00:${String(index).padStart(2, "0")}.000Z`,
+      }),
+    );
+
+    const results = await Promise.all(facts.map((entry) => ledger.append(entry)));
+
+    const sequences = results.map((entry) => entry.sequence).sort((left, right) => left - right);
+    expect(sequences).toEqual(Array.from({ length: facts.length }, (_, index) => index));
+
+    const lines = (await readFile(filePath, "utf8")).trim().split("\n");
+    expect(lines).toHaveLength(facts.length);
+    const fileSequences = lines.map((line) => JSON.parse(line).sequence as number).sort((left, right) => left - right);
+    expect(new Set(fileSequences).size).toBe(facts.length);
+    expect(fileSequences).toEqual(sequences);
+  });
 });

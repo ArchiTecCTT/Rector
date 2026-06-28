@@ -190,6 +190,7 @@ export interface JsonlFactLedgerOptions {
 export class JsonlFactLedger implements FactLedger {
   private readonly filePath: string;
   private readonly now: () => string;
+  private writeTail: Promise<unknown> = Promise.resolve();
 
   constructor(options: JsonlFactLedgerOptions) {
     if (!options.filePath) throw new Error("JsonlFactLedger requires filePath");
@@ -197,41 +198,54 @@ export class JsonlFactLedger implements FactLedger {
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
+  private runSerializedWrite<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.writeTail.then(operation, operation);
+    this.writeTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
   async append(fact: RectorFact): Promise<AppendFactResult> {
-    const parsed = parseFactForLedger(fact);
-    const records = await readJsonlLedgerRecords(this.filePath);
-    assertJsonlCanAppend(records, parsed);
-    const appendedAt = this.now();
-    IsoDateTimeSchema.parse(appendedAt);
-    const sequence = nextSequence(records);
-    const record: FactLedgerFactRecord = { recordVersion: FACT_LEDGER_RECORD_VERSION, recordType: "fact", sequence, appendedAt, fact: parsed };
-    await appendJsonlLedgerRecord(this.filePath, record);
-    return { fact: parsed, sequence, appendedAt };
+    return this.runSerializedWrite(async () => {
+      const parsed = parseFactForLedger(fact);
+      const records = await readJsonlLedgerRecords(this.filePath);
+      assertJsonlCanAppend(records, parsed);
+      const appendedAt = this.now();
+      IsoDateTimeSchema.parse(appendedAt);
+      const sequence = nextSequence(records);
+      const record: FactLedgerFactRecord = { recordVersion: FACT_LEDGER_RECORD_VERSION, recordType: "fact", sequence, appendedAt, fact: parsed };
+      await appendJsonlLedgerRecord(this.filePath, record);
+      return { fact: parsed, sequence, appendedAt };
+    });
   }
 
   async appendMany(facts: readonly RectorFact[]): Promise<AppendFactsResult> {
-    const parsed = facts.map(parseFactForLedger);
-    const records = await readJsonlLedgerRecords(this.filePath);
-    const seen = new Set(records.filter(isFactRecord).map((record) => record.fact.factId));
-    const sealed = sealedRunIds(records);
-    for (const fact of parsed) {
-      if (sealed.has(fact.runId)) throw new Error(`Fact ledger run is sealed: ${fact.runId}`);
-      if (seen.has(fact.factId)) throw new Error(`Fact ledger already contains factId ${fact.factId}`);
-      seen.add(fact.factId);
-    }
-    const appendedAt = this.now();
-    IsoDateTimeSchema.parse(appendedAt);
-    let sequence = nextSequence(records);
-    const appendResults: AppendFactResult[] = [];
-    const newRecords: FactLedgerFactRecord[] = [];
-    for (const fact of parsed) {
-      const record = { recordVersion: FACT_LEDGER_RECORD_VERSION, recordType: "fact", sequence, appendedAt, fact } satisfies FactLedgerFactRecord;
-      newRecords.push(record);
-      appendResults.push({ fact, sequence, appendedAt });
-      sequence += 1;
-    }
-    await appendJsonlLedgerRecords(this.filePath, newRecords);
-    return { appended: appendResults, count: appendResults.length };
+    return this.runSerializedWrite(async () => {
+      const parsed = facts.map(parseFactForLedger);
+      const records = await readJsonlLedgerRecords(this.filePath);
+      const seen = new Set(records.filter(isFactRecord).map((record) => record.fact.factId));
+      const sealed = sealedRunIds(records);
+      for (const fact of parsed) {
+        if (sealed.has(fact.runId)) throw new Error(`Fact ledger run is sealed: ${fact.runId}`);
+        if (seen.has(fact.factId)) throw new Error(`Fact ledger already contains factId ${fact.factId}`);
+        seen.add(fact.factId);
+      }
+      const appendedAt = this.now();
+      IsoDateTimeSchema.parse(appendedAt);
+      let sequence = nextSequence(records);
+      const appendResults: AppendFactResult[] = [];
+      const newRecords: FactLedgerFactRecord[] = [];
+      for (const fact of parsed) {
+        const record = { recordVersion: FACT_LEDGER_RECORD_VERSION, recordType: "fact", sequence, appendedAt, fact } satisfies FactLedgerFactRecord;
+        newRecords.push(record);
+        appendResults.push({ fact, sequence, appendedAt });
+        sequence += 1;
+      }
+      await appendJsonlLedgerRecords(this.filePath, newRecords);
+      return { appended: appendResults, count: appendResults.length };
+    });
   }
 
   async get(factId: FactId | string): Promise<RectorFact | undefined> {
@@ -255,27 +269,29 @@ export class JsonlFactLedger implements FactLedger {
 
   async sealRun(runId: string): Promise<SealedFactRun> {
     if (!runId) throw new Error("runId is required");
-    const records = await readJsonlLedgerRecords(this.filePath);
-    const existingSeal = records.filter(isSealRecord).find((record) => record.runId === runId);
-    if (existingSeal) {
+    return this.runSerializedWrite(async () => {
+      const records = await readJsonlLedgerRecords(this.filePath);
+      const existingSeal = records.filter(isSealRecord).find((record) => record.runId === runId);
+      if (existingSeal) {
+        const facts = factsForRun(records, runId);
+        return { runId, sealedAt: existingSeal.appendedAt, factCount: existingSeal.factCount, sha256: existingSeal.sha256, facts };
+      }
       const facts = factsForRun(records, runId);
-      return { runId, sealedAt: existingSeal.appendedAt, factCount: existingSeal.factCount, sha256: existingSeal.sha256, facts };
-    }
-    const facts = factsForRun(records, runId);
-    const sealedAt = this.now();
-    IsoDateTimeSchema.parse(sealedAt);
-    const sealed = sealFacts(runId, facts, sealedAt);
-    const record: FactLedgerSealRecord = {
-      recordVersion: FACT_LEDGER_RECORD_VERSION,
-      recordType: "seal",
-      sequence: nextSequence(records),
-      appendedAt: sealedAt,
-      runId,
-      sha256: sealed.sha256,
-      factCount: sealed.factCount,
-    };
-    await appendJsonlLedgerRecord(this.filePath, record);
-    return sealed;
+      const sealedAt = this.now();
+      IsoDateTimeSchema.parse(sealedAt);
+      const sealed = sealFacts(runId, facts, sealedAt);
+      const record: FactLedgerSealRecord = {
+        recordVersion: FACT_LEDGER_RECORD_VERSION,
+        recordType: "seal",
+        sequence: nextSequence(records),
+        appendedAt: sealedAt,
+        runId,
+        sha256: sealed.sha256,
+        factCount: sealed.factCount,
+      };
+      await appendJsonlLedgerRecord(this.filePath, record);
+      return sealed;
+    });
   }
 }
 
