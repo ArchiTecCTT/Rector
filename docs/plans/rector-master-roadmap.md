@@ -279,6 +279,18 @@ Offline-by-default with live opt-in: live scenarios are SKIPPED when no provider
 
 **Completion gate (PASSED on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80):** Phase 0.5 is complete because all of the following passed: `npm run test:global:gate`, `npm run verify:phase0.5`, 28 offline scenarios (21 strict-pass, 8 intentional regressions), and strict scorecard semantics, with no claim of specialist execution. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
 
+## Phase 2 — Typed Fact Protocol — OFFLINE COMPLETE / LIVE UNVERIFIED — gates passed at `45768e5` (branch `rector-0.3.0`)
+
+Typed fact contracts, append-only ledger/replay/diff, adapters (Cartographer, ToolRegistry, capability evals, global harness, run events), validation gates, offline fact evals, and opt-in live shadow runner. **Status:** `phase2-offline-complete-live-unverified` — see `docs/plans/2-0/phases/phase-2-completion-report.md`.
+
+- Core + adapters: `src/facts/**`; scripts `scripts/facts/{run-fact-evals,run-live-fact-shadow,replay-facts,validate-phase2}.ts`
+- npm: `eval:facts`, `eval:facts:live` (explicit `LIVE_FACT_EVALS=1`), `facts:replay`, `verify:phase2`
+- Offline reports: `.omo/evidence/fact-report.{json,md}`; live shadow: `.omo/evidence/live-fact-shadow-report.json` (skipped on gate VM — no configured non-fake provider)
+
+**Completion gate (PASSED offline at `45768e5`):** `npm run verify:phase2` (`check`, full `npm test`, `eval:facts` 10/10, `test:global` exit 0 with mixed corpus 19/33 scenario passes, `test:systems` 1/1). Also verified: `npm run build`, `npm audit` 0 vulns, `npm run audit:no-fakes` exit 0 report-only (40 known seams). **Not claimed:** live-model fact reliability or investor/demo live verification until `phase2-complete-live-verified`.
+
+**Next neuro-symbolic phases:** 2.1 / 2.2 Memory OS, then 2.4 Capability Contract Generator and 2.5 Capability-SLM Fabric; Phase 3 rule engine consumes facts.
+
 ## Chunk 047 — Runtime Maturity (post-042a/042b)
 
 Operational seams around the symbolic brainstem. Implement after Chunk 042a and 042b hardening complete.

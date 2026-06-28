@@ -3,8 +3,8 @@
 **Repository:** `ArchiTecCTT/Rector`  
 **Target integration branch:** `rector-0.3.0` / current `main` after Phase 1 merge  
 **Plan branch:** `rector-0.3.0-phase-2-plan`  
-**Status:** implementation plan  
-**Phase:** 2 — Typed fact protocol  
+**Status:** `phase2-offline-complete-live-unverified` (gates at `45768e5`; see `phase-2-completion-report.md`)
+**Phase:** 2 — Typed fact protocol
 **North-star goal:** prove the neuro-symbolic kernel by making Rector convert messy model/tool/system output into typed, replayable, grounded, governable facts.
 
 ---
@@ -1402,3 +1402,37 @@ strict enough that later phases cannot devolve into vibes
 ```
 
 If a feature does not help Rector produce typed, grounded, replayable, governable facts, it does not belong in Phase 2.
+
+---
+
+## Deviation ledger (Phase 2G)
+
+Recorded when implementation differed materially from this plan. Full gate evidence: `docs/plans/2-0/phases/phase-2-completion-report.md`.
+
+### DEV-2G-001 — Live shadow adapter location
+
+- **Plan section:** Required source layout (`src/facts/adapters/llmShadowFacts.ts`)
+- **Observed:** Live-model ingestion lives in `scripts/facts/run-live-fact-shadow.ts` plus `tests/facts/liveShadow.contract.test.ts`; no separate `llmShadowFacts.ts` adapter module.
+- **Adjustment:** Shadow outputs are still schema-validated facts with `llm_shadow` producer semantics; offline adapters remain unchanged.
+- **Risk / rollback:** Low; add a thin adapter module later if other callers need programmatic shadow conversion.
+
+### DEV-2G-002 — Phase 2 gate script wiring
+
+- **Plan section:** `validate-phase2.ts` as completion gate helper
+- **Observed:** `npm run verify:phase2` runs `check`, `npm test`, `eval:facts`, `test:global`, and `test:systems`; `validate-phase2.ts` exists but is not invoked by that chain.
+- **Adjustment:** Treat `verify:phase2` as the authoritative offline gate; keep `validate-phase2.ts` for optional standalone validation.
+- **Risk / rollback:** Low; wire script into verify if stricter single entrypoint is desired.
+
+### DEV-2G-003 — Report and test surface additions
+
+- **Plan section:** Suggested layout under `src/facts/reports/` and `tests/facts/`
+- **Observed:** Added `src/facts/reports/safety.ts`, `tests/facts/evals.test.ts`, and `tests/facts/adapters.runEvent.test.ts` beyond the minimum list.
+- **Adjustment:** Documented in completion report; no contract changes.
+- **Risk / rollback:** None.
+
+### DEV-2G-004 — Live shadow and completion label
+
+- **Plan section:** Full completion requires captured live shadow from a real provider
+- **Observed:** `eval:facts:live` wrote `.omo/evidence/live-fact-shadow-report.json` with `skipped` — no configured non-fake live provider on the gate VM.
+- **Adjustment:** Completion label set to `phase2-offline-complete-live-unverified`; do not claim live-model reliability until `phase2-complete-live-verified`.
+- **Risk / rollback:** Re-run `LIVE_FACT_EVALS=1 npm run eval:facts:live` after UI provider setup.

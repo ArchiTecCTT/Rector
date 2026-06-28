@@ -45,6 +45,7 @@ Stale/quarantined docs have warning banners. If stale docs conflict with source-
 - Capability evals (offline, no model): `npm run eval:capabilities` (and `npm run eval:capabilities:report`) — runs the committed eval corpus and writes `.omo/evidence/eval-report.{json,md}`
 - Fake-seam audit (report-only, non-blocking): `npm run audit:no-fakes`
 - Global reliability harness (offline, one scorecard per scenario): `npm run test:global` — runs the committed scenarios against the fixture workspace and writes `.omo/evidence/global-report.{json,md}`; live scenarios are SKIPPED when no credentials are present
+- Typed fact evals (offline): `npm run eval:facts` → `.omo/evidence/fact-report.{json,md}`; opt-in live shadow: `npm run eval:facts:live` (`LIVE_FACT_EVALS=1`); Phase 2 gate: `npm run verify:phase2`
 - Specialist contract validation: `npm run test:systems` — validates committed specialist profiles against the contract schema (no execution)
 - Azure daily ritual (dev VM, opt-in): `npm run azure:daily-touch` — Key Vault list + Blob uploads + App Insights heartbeat
 - Harness Blob sync: `npm run evidence:sync` — when `RECTOR_EVIDENCE_SYNC=azure-blob`
@@ -104,6 +105,8 @@ Phase 0 added these measurement surfaces: `src/capabilities/eval/*` (eval schema
 Phase 0.5 added the Global Reliability Harness surfaces: `src/evals/*` (global scenario schema, 8-dimension scorecards, offline global runner) and `src/systems/*` (specialist contract/task/result schemas, SystemRegistry validation stub, `specialistProfiles/coding.profile.json`), plus `scripts/evals/{run-global-harness,run-specialist-system-contracts}.ts`, `tests/global/` scenarios, and the `tests/fixtures/repos/rector-mini-fix/` fixture repo. These are CONTRACTS + HARNESS only — specialist execution / routing is Phase 11/12 and not yet built.
 
 **Phase 0 / Phase 0.5 status — DONE — gates passed on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80:** All six gates passed (`eval:capabilities:gate`, `baseline:phase0`, `verify:phase0`, `test:global:gate`, `verify:phase0.5`, `verify:foundation`). 10 eval cases (2 efficiencyRelevant cases meet >=10x compression / >=0.80 raw_token_reduction; aggregate efficiency is honestly not all-green but the gate uses designated-case efficiency). Global: 28 scenarios, 21 strict-pass, 8 intentional regressions, all actual==expected. The ExecutiveRouter and real specialist execution are NOT implemented (deferred to Phase 11/12); the harness emits dry-run task packets/traces only, never specialist-driven repository mutation. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
+
+**Phase 2 typed facts — OFFLINE DONE / LIVE UNVERIFIED — `verify:phase2` passed at `45768e5`:** Fact protocol in `src/facts/**` (PRs #21–#26). Completion report: `docs/plans/2-0/phases/phase-2-completion-report.md`. Label: `phase2-offline-complete-live-unverified` — `eval:facts:live` wrote skipped live shadow report (no configured non-fake provider on gate VM); do not claim live-model fact reliability until `phase2-complete-live-verified`. Next neuro-symbolic work per roadmap: Phase 2.1 / 2.2 Memory OS, then 2.4 / 2.5.
 
 Before claiming completion, run fresh:
 
@@ -206,9 +209,9 @@ Completed through Chunk 52 (see `docs/plans/chunks/052-azure-dev-harness-stack.m
 
 Neuro-symbolic + cloud transition chunks (26–37) include SLM preprocessor, advanced memory, proactive layer, symbolic engines, MCTS, ponder swarm, task decomposition, stale-doc cleanup, pluggable memory providers (034), durable memory + neuro wiring (035), hassle-free UI + neuro observability (036), and vitest 4 + live memory tests + opt-in multi-user auth (037).
 
-Current test baseline after Phase 0.5 (branch `rector-0.3.0`):
+Current test baseline after Phase 2 offline gate (branch `rector-0.3.0`, commit `45768e5`):
 
-- `npm test`: 367 files (367 passed, 1 skipped) / 2539 tests (2534 passed, 5 skipped). Skips are live-memory only (`tests/memoryLive.integration.test.ts`, offline).
+- `npm test`: 386 files passed / 1 skipped; 2642 tests passed / 5 skipped (live-memory skips only: `tests/memoryLive.integration.test.ts`, offline).
 - `npm run build`: passing
 - `npm audit`: 0 vulnerabilities
 
@@ -230,11 +233,9 @@ Every new feature must be extensively tested. Architecture stays non-rigid and p
 
 ## Next Work
 
-Phase 1 (docs): full documentation replacement per configured-product architecture.
-
-Phase 2+ (code): implement onboarding gate, `runOrchestratedChatRun` consolidation, remove fake-chat product path, migrate benchmarks to `configured_spy_pipeline` naming.
-
-See `.kiro/specs/cloud-capable-transition/tasks.md` for detailed implementation items.
+- **Neuro-symbolic:** Phase 2.1 / 2.2 Memory OS (consume validation-linked facts); then Phase 2.4 Capability Contract Generator and Phase 2.5 Capability-SLM Fabric — see `docs/plans/2-0/phases/phase-2-completion-report.md` handoff.
+- **Configured product (v0.3.0):** onboarding gate, `runOrchestratedChatRun` consolidation, spy-only CI — `.kiro/specs/cloud-capable-transition/tasks.md`.
+- **Phase 2 follow-up:** capture live fact shadow after UI provider setup (`LIVE_FACT_EVALS=1 npm run eval:facts:live`).
 
 ## Release Path
 
