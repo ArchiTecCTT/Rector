@@ -58,6 +58,5 @@ function normalizeJsonValue(input: unknown): unknown {
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object") return false;
   const tag = Object.prototype.toString.call(value);
-  if (tag !== "[object Object]") return false;
-  return true;
+  return tag === "[object Object]";
 }

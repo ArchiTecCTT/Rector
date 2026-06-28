@@ -40,7 +40,6 @@ import type {
   RedactionStateSchema,
   RepairCandidateFactSchema,
   RiskToleranceFactSchema,
-  SafeFactPathSchema,
   SourceSpanSchema,
   SuccessCriteriaFactSchema,
   SymbolContextFactSchema,
