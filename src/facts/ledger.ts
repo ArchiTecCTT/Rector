@@ -127,7 +127,6 @@ export class InMemoryFactLedger implements FactLedger {
   }
 
   async appendMany(facts: readonly RectorFact[]): Promise<AppendFactsResult> {
-    const appended: AppendFactResult[] = [];
     const parsed = facts.map(parseFactForLedger);
     const seen = new Set(this.facts.map((entry) => entry.fact.factId));
     for (const fact of parsed) {
@@ -135,7 +134,16 @@ export class InMemoryFactLedger implements FactLedger {
       if (this.sealedRuns.has(fact.runId)) throw new Error(`Fact ledger run is sealed: ${fact.runId}`);
       seen.add(fact.factId);
     }
-    for (const fact of parsed) appended.push(await this.append(fact));
+    const appendedAt = this.now();
+    IsoDateTimeSchema.parse(appendedAt);
+    let sequence = this.facts.length;
+    const appended: AppendFactResult[] = [];
+    for (const fact of parsed) {
+      const stored = { fact, sequence, appendedAt };
+      this.facts.push(stored);
+      appended.push({ fact, sequence, appendedAt });
+      sequence += 1;
+    }
     return { appended, count: appended.length };
   }
 
@@ -378,15 +386,16 @@ function parseOneOrMany(value: unknown, parse: (item: unknown) => unknown): void
 }
 
 function matchesFactQuery(fact: RectorFact, query: FactQuery): boolean {
-  if (query.runId !== undefined && fact.runId !== query.runId) return false;
-  if (query.taskId !== undefined && fact.taskId !== query.taskId) return false;
-  if (query.kind !== undefined && !matchesOneOrMany(fact.kind, query.kind)) return false;
-  if (query.producer !== undefined && !matchesOneOrMany(fact.producer, query.producer)) return false;
-  if (query.trustLevel !== undefined && !matchesOneOrMany(fact.trust.level, query.trustLevel)) return false;
-  if (query.factIds !== undefined && !query.factIds.includes(fact.factId)) return false;
-  if (query.createdAtFrom !== undefined && fact.createdAt < query.createdAtFrom) return false;
-  if (query.createdAtTo !== undefined && fact.createdAt > query.createdAtTo) return false;
-  return true;
+  return (
+    (query.runId === undefined || fact.runId === query.runId) &&
+    (query.taskId === undefined || fact.taskId === query.taskId) &&
+    (query.kind === undefined || matchesOneOrMany(fact.kind, query.kind)) &&
+    (query.producer === undefined || matchesOneOrMany(fact.producer, query.producer)) &&
+    (query.trustLevel === undefined || matchesOneOrMany(fact.trust.level, query.trustLevel)) &&
+    (query.factIds === undefined || query.factIds.includes(fact.factId)) &&
+    (query.createdAtFrom === undefined || fact.createdAt >= query.createdAtFrom) &&
+    (query.createdAtTo === undefined || fact.createdAt <= query.createdAtTo)
+  );
 }
 
 function matchesOneOrMany<T>(value: T, candidate: T | readonly T[]): boolean {

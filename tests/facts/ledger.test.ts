@@ -67,6 +67,21 @@ describe("InMemoryFactLedger", () => {
     await expect(ledger.append(invalid)).rejects.toThrow(/provenance is required/);
   });
 
+  it("appendMany stores every fact in one batch without re-entering single-append checks", async () => {
+    const ledger = new InMemoryFactLedger({ now: () => APPENDED_AT });
+    const facts = [
+      fact({ intent: "batch-a", createdAt: "2026-06-28T00:00:01.000Z" }),
+      fact({ intent: "batch-b", createdAt: "2026-06-28T00:00:02.000Z" }),
+      fact({ intent: "batch-c", createdAt: "2026-06-28T00:00:03.000Z" }),
+    ];
+
+    const result = await ledger.appendMany(facts);
+
+    expect(result.count).toBe(3);
+    expect(result.appended.map((entry) => entry.sequence)).toEqual([0, 1, 2]);
+    await expect(ledger.listRun("run-ledger")).resolves.toEqual(facts);
+  });
+
   it("preserves append order and supports convenience APIs", async () => {
     const ledger = new InMemoryFactLedger({ now: () => APPENDED_AT });
     const first = fact({ intent: "first", createdAt: "2026-06-28T00:00:02.000Z" });
