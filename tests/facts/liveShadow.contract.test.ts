@@ -20,6 +20,7 @@ import {
   type LLMResponse,
   type LLMUsage,
 } from "../../src/providers/llm";
+import { SpyLLMProvider } from "../support/byokArbitraries";
 
 const USAGE: LLMUsage = LLMUsageSchema.parse({ inputTokens: 50, outputTokens: 25, totalTokens: 75, estimatedUsd: 0.000075, modelCalls: 1 });
 
@@ -108,6 +109,7 @@ describe("Phase 2F live fact shadow contract", () => {
 
   it("rejects FakeLLMProvider and SpyLLMProvider-shaped doubles as live evidence", async () => {
     expect(isAcceptableLiveShadowProvider(new FakeLLMProvider())).toBe(false);
+    expect(isAcceptableLiveShadowProvider(new SpyLLMProvider())).toBe(false);
     expect(isAcceptableLiveShadowProvider(new SpyNamedProvider())).toBe(false);
 
     const outputDir = await tempDir();
@@ -120,6 +122,22 @@ describe("Phase 2F live fact shadow contract", () => {
       });
       expect(report.status).toBe("skipped");
       expect(report.skippedReason).toContain("No configured non-fake live provider");
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("never labels dependency-injected discovery as live_provider even if liveEvidence is true", async () => {
+    const outputDir = await tempDir();
+    const provider = new ContractLiveProvider();
+    try {
+      const report = await runLiveFactShadow({
+        outputDir,
+        env: { LIVE_FACT_EVALS: "1" },
+        now: fixedNow,
+        providerDiscovery: () => [{ provider, route: "fast", modelId: "contract-live-model", liveEvidence: true, discoveryLabel: "mislabeled injection" }],
+      });
+      expect(report.liveEvidenceStatus).toBe("test_only_injected");
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

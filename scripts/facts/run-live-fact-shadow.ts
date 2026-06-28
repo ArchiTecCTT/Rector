@@ -258,6 +258,7 @@ export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {
     return writeReport(skippedReport(generatedAt, "LIVE_FACT_EVALS must equal 1; live fact shadow is opt-in."), { outputDir, write, mkdir, writeFile });
   }
 
+  const discoveryWasInjected = options.providerDiscovery !== undefined;
   const discovery = options.providerDiscovery ?? discoverLiveFactProviders;
   const discovered = (await discovery(env)).filter((candidate) => isAcceptableLiveShadowProvider(candidate.provider));
   const selected = discovered[0];
@@ -280,7 +281,7 @@ export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {
     schemaVersion: LIVE_FACT_SHADOW_REPORT_SCHEMA_VERSION,
     generatedAt,
     status: "completed",
-    liveEvidenceStatus: selected.liveEvidence ? "live_provider" : "test_only_injected",
+    liveEvidenceStatus: discoveryWasInjected || !selected.liveEvidence ? "test_only_injected" : "live_provider",
     providerId,
     modelId,
     route,
@@ -291,9 +292,9 @@ export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {
     cases,
     notes: [
       "Phase 2F live shadow is opt-in, non-mutating, and writes only .omo/evidence report artifacts.",
-      selected.liveEvidence
-        ? "Provider was discovered through explicit live environment/configuration and is not a fake/spy/deterministic double."
-        : "Provider was dependency-injected for deterministic contract tests and must not be counted as live verification.",
+      discoveryWasInjected || !selected.liveEvidence
+        ? "Provider was dependency-injected for deterministic contract tests and must not be counted as live verification."
+        : "Provider was discovered through explicit live environment/configuration and is not a fake/spy/deterministic double.",
       "Model claims remain shadow evidence only; schema/provenance/grounding checks decide case results.",
     ],
   });
@@ -625,10 +626,10 @@ export function renderLiveFactShadowMarkdown(report: LiveFactShadowReport): stri
   lines.push("", "## Safety Notes", "");
   for (const note of report.notes) lines.push(`> ${safeMarkdown(note)}`);
   lines.push("", "## Cases", "");
-  lines.push("| case | status | schema valid | provenance complete | hallucinated refs | insufficient evidence correct | tokens | cost usd | latency ms | raw artifact refs |");
-  lines.push("| --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | --- |");
+  lines.push("| case | status | provider | model | route | schema valid | provenance complete | hallucinated refs | insufficient evidence correct | tokens | cost usd | latency ms | raw artifact refs |");
+  lines.push("| --- | --- | --- | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | --- |");
   for (const caseReport of report.cases) {
-    lines.push(`| \`${safeMarkdown(caseReport.caseId)}\` | ${caseReport.status} | ${caseReport.schemaValidity} | ${caseReport.provenanceCompleteness} | ${caseReport.hallucinatedRefs.length} | ${String(caseReport.insufficientEvidenceCorrect)} | ${caseReport.tokenUsage.totalTokens} | ${caseReport.estimatedCostUsd.toFixed(6)} | ${caseReport.latencyMs} | ${safeMarkdown(caseReport.rawArtifactRefs.join(", ") || "n/a")} |`);
+    lines.push(`| \`${safeMarkdown(caseReport.caseId)}\` | ${caseReport.status} | ${safeMarkdown(caseReport.providerId ?? "n/a")} | ${safeMarkdown(caseReport.modelId ?? "n/a")} | ${safeMarkdown(caseReport.route)} | ${caseReport.schemaValidity} | ${caseReport.provenanceCompleteness} | ${caseReport.hallucinatedRefs.length} | ${String(caseReport.insufficientEvidenceCorrect)} | ${caseReport.tokenUsage.totalTokens} | ${caseReport.estimatedCostUsd.toFixed(6)} | ${caseReport.latencyMs} | ${safeMarkdown(caseReport.rawArtifactRefs.join(", ") || "n/a")} |`);
   }
   lines.push("", "## Failures", "");
   const failures = report.cases.filter((caseReport) => caseReport.failureReasons.length > 0);
