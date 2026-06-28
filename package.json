@@ -59,7 +59,9 @@
     "cartographer:self-scan:check": "tsx scripts/cartographer/check-self-scan.ts",
     "evidence:sync": "tsx scripts/azure/sync-evidence.ts",
     "cartographer:sync": "tsx scripts/azure/sync-cartographer.ts",
-    "azure:daily-touch": "tsx scripts/azure/daily-touch.ts"
+    "azure:daily-touch": "tsx scripts/azure/daily-touch.ts",
+    "codegraph:worktree": "bash scripts/dev/init-worktree-codegraph.sh",
+    "codegraph:worktrees:all": "bash scripts/dev/init-worktree-codegraph.sh --all"
   },
   "engines": {
     "node": ">=22.5.0"

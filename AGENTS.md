@@ -79,6 +79,28 @@ plan (optional) → rector-generalCoder-fast | rector-generalCoder-deep → veri
 - Parent orchestrator owns decomposition, worktree assignment, merge order, verification, and final synthesis.
 - For phases with many independent features, create one short-lived worktree/branch per feature, merge into a phase integration branch in dependency order, run full gates there, then fix integration fallout before merging onward.
 - Use stacked PRs/branches when features depend on each other; parallelize only low-overlap tickets.
+
+### Worktrees and CodeGraph
+
+Rector worktrees live under `.worktrees/` inside the main checkout. The CodeGraph MCP server resolves indexes by walking up to the nearest `.codegraph/` directory. **Each worktree needs its own index** — otherwise queries silently borrow the main-repo index (wrong branch, missing worktree-only symbols). Grok does not auto-init on session start.
+
+**After `git worktree add` (required once per worktree):**
+
+```bash
+npm run codegraph:worktree -- .worktrees/<branch-name>
+# or, from inside the worktree:
+npm run codegraph:worktree
+```
+
+**Catch up all existing worktrees (one-time or after many adds):**
+
+```bash
+npm run codegraph:worktrees:all
+```
+
+**Refresh an existing index after large edits:** `npm run codegraph:worktree -- --sync .worktrees/<name>`
+
+Orchestrators: include CodeGraph init in worktree assignment instructions for every spawned subagent. Subagents should use `codegraph_*` MCP tools only after the worktree-local index exists; if a tool result warns about a "different git worktree", run the init command above before relying on symbol/caller data.
 - **Foreground subagents only** unless the user explicitly requests safe background work.
 - Coders avoid doc edits unless asked; **librarian** syncs phase docs, concerns, and minimal `AGENTS.md` facts after verify.
 - Update `docs/plans/concerns-and-vulnerabilities.md` when discovering risks.
