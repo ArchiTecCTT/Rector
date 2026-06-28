@@ -423,7 +423,7 @@ function visitValue(value: unknown, path: (string | number)[], visitor: (value: 
 }
 
 const SAFE_REDACTION_MARKER_PATTERNS: readonly RegExp[] = [
-  /\[redacted\]/gi,
+  /\[redacted]/gi,
   /<redacted>/gi,
   /\*\*\*redacted\*\*\*/gi,
 ];
