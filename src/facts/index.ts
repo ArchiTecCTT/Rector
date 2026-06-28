@@ -12,3 +12,4 @@ export * from "./adapters/toolFacts";
 export * from "./adapters/capabilityEvalFacts";
 export * from "./adapters/globalHarnessFacts";
 export * from "./adapters/runEventFacts";
+export * from "./validation";
