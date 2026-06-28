@@ -68,6 +68,18 @@ describe("Phase 2D fact security gates", () => {
     expect(redaction.errors.map((entry) => entry.code)).toContain("raw_secret_value");
   });
 
+  it("rejects strings that mix safe redaction markers with remaining raw secret-like material", () => {
+    const mixed = fact({
+      output: "api_key=[REDACTED] backup=sk_test_1234567890abcdef1234567890abcdef",
+      redactionState: "redacted",
+    });
+
+    const redaction = validateFactRedactionState(mixed);
+
+    expect(redaction.ok).toBe(false);
+    expect(redaction.errors.map((entry) => entry.code)).toContain("raw_secret_value");
+  });
+
   it("allows redacted markers and contains_sensitive raw artifact refs without embedding raw secret text", () => {
     const redacted = fact({ output: "provider returned api_key=[REDACTED]", redactionState: "redacted" });
     const sensitiveArtifact = fact({

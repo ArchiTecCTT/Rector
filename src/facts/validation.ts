@@ -422,19 +422,26 @@ function visitValue(value: unknown, path: (string | number)[], visitor: (value: 
   for (const [key, nested] of Object.entries(value)) visitValue(nested, [...path, key], visitor);
 }
 
+const SAFE_REDACTION_MARKER_PATTERNS: readonly RegExp[] = [
+  /\[redacted\]/gi,
+  /<redacted>/gi,
+  /\*\*\*redacted\*\*\*/gi,
+];
+
 function findSecretLikeValues(fact: RectorFact): { path: (string | number)[] }[] {
   const findings: { path: (string | number)[] }[] = [];
   visitValue(fact, [], (value, path) => {
     if (typeof value !== "string") return;
-    if (isSafeRedactionMarker(value)) return;
-    if (SECRET_VALUE_PATTERNS.some((pattern) => pattern.test(value))) findings.push({ path });
+    const scrubbed = stripSafeRedactionMarkers(value);
+    if (SECRET_VALUE_PATTERNS.some((pattern) => pattern.test(scrubbed))) findings.push({ path });
   });
   return findings;
 }
 
-function isSafeRedactionMarker(value: string): boolean {
-  const normalized = value.toLowerCase();
-  return normalized.includes("[redacted]") || normalized.includes("<redacted>") || normalized.includes("***redacted***");
+function stripSafeRedactionMarkers(value: string): string {
+  let scrubbed = value;
+  for (const pattern of SAFE_REDACTION_MARKER_PATTERNS) scrubbed = scrubbed.replace(pattern, "");
+  return scrubbed;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
