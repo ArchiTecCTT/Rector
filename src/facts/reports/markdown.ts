@@ -73,9 +73,10 @@ function caseRow(caseReport: FactEvalCaseReport): string {
 
 function formatCaseSourceRefs(caseReport: FactEvalCaseReport): string {
   const refs = caseReport.factRefs.flatMap((factRef) => factRef.sourceRefs.map((ref) => `${ref.refType}:${ref.ref}`));
-  const deduped = [...new Set(refs)].slice(0, MAX_REFS_PER_CASE);
-  const suffix = refs.length > deduped.length ? ` (+${refs.length - deduped.length} more)` : "";
-  return `${deduped.join(", ")}${suffix}` || "n/a";
+  const uniqueRefs = [...new Set(refs)];
+  const displayed = uniqueRefs.slice(0, MAX_REFS_PER_CASE);
+  const suffix = uniqueRefs.length > displayed.length ? ` (+${uniqueRefs.length - displayed.length} more)` : "";
+  return `${displayed.join(", ")}${suffix}` || "n/a";
 }
 
 function formatSourceRefs(refs: FactEvalCaseReport["factRefs"][number]["sourceRefs"]): string {

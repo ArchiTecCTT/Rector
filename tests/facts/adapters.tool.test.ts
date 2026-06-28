@@ -43,6 +43,28 @@ describe("ToolRegistry fact adapter", () => {
     expect(fact.redactionState).toBe("redacted");
   });
 
+  it("keeps tool result facts when optional artifactSha256 metadata is invalid", () => {
+    const facts = toolResultToFacts({
+      callId: "call-bad-sha",
+      result: toolSuccess("rg.search", { matches: 1 }, {
+        artifactUri: "artifact://call-bad-sha/rg.txt",
+        artifactSha256: "not-a-valid-sha256",
+      }),
+      options: OPTIONS,
+    });
+
+    expectValidFacts(facts);
+    expect(facts).toHaveLength(1);
+    expect(facts[0]?.kind).toBe("tool_result");
+    expect(facts[0]?.provenance[0]).toMatchObject({
+      sourceType: "tool_call",
+      artifact: { refType: "artifact", uri: "artifact://call-bad-sha/rg.txt" },
+    });
+    if (facts[0]?.provenance[0]?.sourceType === "tool_call") {
+      expect(facts[0].provenance[0].artifact?.sha256).toBeUndefined();
+    }
+  });
+
   it("distinguishes handler failure from successful tool result", () => {
     const successFacts = toolResultToFacts({ callId: "call-ok", result: toolSuccess("rg.search", { matches: 2 }), options: OPTIONS });
     const failureFacts = toolResultToFacts({

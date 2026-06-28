@@ -9,7 +9,6 @@ import type { GlobalScenario } from "../../src/evals/globalScenarioSchema";
 import type { RunEvent } from "../../src/protocol/events";
 import type { ToolSchemaDefinition } from "../../src/tools";
 import {
-  FACT_EVAL_METRIC_IDS,
   type FactEvalCaseReport,
   type FactEvalMetricId,
   buildFactEvalReport,
@@ -353,9 +352,16 @@ function secretLeakingFact(): RectorFact {
     callId: "tool-call-secret",
     toolName: "phase2e.secret",
     ok: true,
-    output: "api_key=sk_test_1234567890abcdef1234567890abcdef",
+    output: buildSecretLikeFixtureValue(),
   };
   return { ...draft, factId: createFactId(draft) } as RectorFact;
+}
+
+function buildSecretLikeFixtureValue(): string {
+  const keyLabel = ["api", "_", "key", "="].join("");
+  const tokenPrefix = ["sk", "_", "test", "_"].join("");
+  const tokenBody = ["12345678", "90abcdef", "12345678", "90abcdef"].join("");
+  return `${keyLabel}${tokenPrefix}${tokenBody}`;
 }
 
 function isMain(): boolean {

@@ -26,6 +26,7 @@ import {
   type RegressionArtifact,
 } from "./regressionArtifactSchema";
 import { buildTaskPacket, buildRunTrace } from "./runTrace";
+import { globalHarnessResultToFacts } from "../facts/adapters/globalHarnessFacts";
 import { RunEventSchema } from "../protocol/events";
 import { RunPhaseSchema } from "../protocol/phases";
 import { SpecialistTaskPacketSchema } from "../systems/contracts";
@@ -164,6 +165,7 @@ type ProducedArtifactInput = {
   readonly allowed: readonly string[];
   readonly forbidden: readonly string[];
   readonly fakePathStatus: FakePathStatus;
+  readonly harnessFactCount: number;
 };
 
 function buildProducedArtifactRecords(input: ProducedArtifactInput): readonly ProducedArtifactRecord[] {
@@ -176,6 +178,8 @@ function buildProducedArtifactRecords(input: ProducedArtifactInput): readonly Pr
   }
   if (input.beforeHashes.size > 0 || input.afterHashes.size > 0) {
     records.push({ id: "cartographer.grounding", path: undefined });
+  }
+  if (input.harnessFactCount > 0) {
     records.push({ id: "fact:global_harness:oracle", path: undefined });
   }
   if (input.packet.systemId === "coding" && input.allowed.includes("coding") && !input.forbidden.includes("coding")) {
@@ -814,6 +818,12 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
       );
     }
 
+    const harnessFacts = globalHarnessResultToFacts({
+      scenario,
+      trace: runEvents,
+      options: { runId: `run-${scenario.id}` },
+    });
+
     const realScorecard = await buildScorecard({
       scenario,
       repoRoot: effectiveWorkspace,
@@ -834,6 +844,7 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
         allowed,
         forbidden,
         fakePathStatus,
+        harnessFactCount: harnessFacts.length,
       }),
       packet,
       allowed,

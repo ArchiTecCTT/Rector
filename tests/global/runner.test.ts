@@ -320,6 +320,15 @@ describe("global reliability harness runner", () => {
     expect(sc?.dimensions.accuracy.score).toBe(1);
   });
 
+  it("evidence_quality resolves fact:global_harness:oracle when harness fact adapter produced facts", async () => {
+    const result = await runGlobalHarness({ write: false, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
+    const outcome = result.report.outcomes.find((entry) => entry.scenarioId === "evidence-artifact-ref-resolves");
+    expect(outcome).toBeDefined();
+    expect(outcome?.actualStatus).toBe("passed");
+    const scorecard = result.scorecards.find((entry) => entry.scenarioId === "evidence-artifact-ref-resolves");
+    expect(scorecard?.dimensions.evidence_quality.score).toBe(1);
+  });
+
   it("evidence_quality anti-cheat: declared mustIncludeEvidence with no real backing artifact scores 0", async () => {
     // Direct test of computeEvidenceQuality with fabricated ref (no auto-injection).
     const { computeEvidenceQuality } = await import("../../src/evals/scoreDimensions");

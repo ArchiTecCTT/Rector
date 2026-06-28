@@ -94,4 +94,39 @@ describe("Phase 2E fact eval runner", () => {
     expect(markdown).toContain("oracle failed with secret");
     expect(markdown).not.toContain(RAW_SECRET);
   });
+
+  it("dedupes duplicate source refs when rendering case source ref suffixes", () => {
+    const duplicateRef = { refType: "artifact" as const, ref: "artifact://phase-2e/dup.txt" };
+    const caseReport: FactEvalCaseReport = {
+      id: "duplicate_source_refs",
+      title: "Duplicate source refs",
+      passed: true,
+      acceptedFactCount: 2,
+      rejectedInputCount: 0,
+      failureReasons: [],
+      metrics: {
+        schema_valid_rate: 1,
+        provenance_complete_rate: 1,
+        grounding_success_rate: 1,
+        insufficient_evidence_correctness: 1,
+        hallucinated_reference_count: 0,
+        secret_leak_count: 0,
+        replay_success_rate: 1,
+        fact_diff_accuracy: 1,
+        raw_artifact_ref_coverage: 1,
+        trust_transition_violation_count: 0,
+      },
+      factRefs: [
+        { factId: "fact-a", kind: "tool_result", trustLevel: "provenance_attached", sourceRefs: [duplicateRef, duplicateRef] },
+        { factId: "fact-b", kind: "tool_result", trustLevel: "provenance_attached", sourceRefs: [duplicateRef] },
+      ],
+      validationErrors: [],
+    };
+
+    const markdown = renderFactEvalMarkdown(buildFactEvalReport({ generatedAt: "2026-06-28T00:00:00.000Z", cases: [caseReport] }));
+
+    expect(markdown).toContain("artifact:artifact://phase-2e/dup.txt");
+    expect(markdown).not.toContain("(+2 more)");
+    expect(markdown).not.toContain("(+1 more)");
+  });
 });

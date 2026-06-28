@@ -6,6 +6,7 @@ import {
   createFactScope,
   createFactTrust,
   FACT_SCHEMA_VERSION,
+  ArtifactRefSchema,
   RectorFactSchema,
   toolCallProvenance,
   type ArtifactRef,
@@ -174,12 +175,24 @@ function artifactFromMetadata(metadata: Record<string, unknown>): ArtifactRef | 
       ? metadata.rawArtifactUri
       : undefined;
   if (!uri) return undefined;
-  return artifactRef({
-    uri,
-    ...(typeof metadata.artifactSha256 === "string" ? { sha256: metadata.artifactSha256 } : {}),
-    ...(typeof metadata.artifactContentType === "string" ? { contentType: metadata.artifactContentType } : {}),
-    ...(typeof metadata.artifactSizeBytes === "number" && Number.isFinite(metadata.artifactSizeBytes) && metadata.artifactSizeBytes >= 0 ? { sizeBytes: Math.trunc(metadata.artifactSizeBytes) } : {}),
-  });
+
+  const base = ArtifactRefSchema.safeParse({ refType: "artifact", uri });
+  if (!base.success) return undefined;
+
+  let draft: ArtifactRef = base.data;
+  if (typeof metadata.artifactSha256 === "string") {
+    const withSha = ArtifactRefSchema.safeParse({ ...draft, sha256: metadata.artifactSha256 });
+    if (withSha.success) draft = withSha.data;
+  }
+  if (typeof metadata.artifactContentType === "string") {
+    const withType = ArtifactRefSchema.safeParse({ ...draft, contentType: metadata.artifactContentType });
+    if (withType.success) draft = withType.data;
+  }
+  if (typeof metadata.artifactSizeBytes === "number" && Number.isFinite(metadata.artifactSizeBytes) && metadata.artifactSizeBytes >= 0) {
+    const withSize = ArtifactRefSchema.safeParse({ ...draft, sizeBytes: Math.trunc(metadata.artifactSizeBytes) });
+    if (withSize.success) draft = withSize.data;
+  }
+  return draft;
 }
 
 function isRetryableToolError(code: ToolResult["error"] extends infer E ? E extends { code: infer C } ? C : never : never): boolean {
