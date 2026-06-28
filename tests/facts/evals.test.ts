@@ -88,6 +88,8 @@ describe("Phase 2E fact eval runner", () => {
 
     expect(report.failedCount).toBe(1);
     expect(report.cases[0]?.failureReasons).toHaveLength(1);
+    expect(report.cases[0]?.failureReasons[0]).toContain("oracle failed with secret");
+    expect(report.cases[0]?.failureReasons[0]).not.toContain(RAW_SECRET);
     expect(markdown).toContain("intentional_failed_case");
     expect(markdown).toContain("oracle failed with secret");
     expect(markdown).not.toContain(RAW_SECRET);

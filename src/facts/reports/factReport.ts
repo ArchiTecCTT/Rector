@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { RectorFactSchema } from "../schemas";
+import { safeReportText } from "./safety";
 import type { FactValidationError, RectorFact } from "../types";
 
 export const FACT_EVAL_REPORT_SCHEMA_VERSION = "rector.fact-eval-report.v1";
@@ -100,11 +101,22 @@ const REPORT_NOTES = [
   "Negative cases pass only when malformed, fake-provenance, or secret-like inputs are rejected or represented as insufficient evidence.",
 ] as const;
 
+function sanitizeCaseForReport(caseReport: FactEvalCaseReport): FactEvalCaseReport {
+  return {
+    ...caseReport,
+    failureReasons: caseReport.failureReasons.map((reason) => safeReportText(reason)),
+    validationErrors: caseReport.validationErrors.map((entry) => ({
+      ...entry,
+      message: safeReportText(entry.message),
+    })),
+  };
+}
+
 export function buildFactEvalReport(input: {
   readonly generatedAt: string;
   readonly cases: readonly FactEvalCaseReport[];
 }): FactEvalReport {
-  const caseReports = input.cases.map((caseReport) => FactEvalCaseReportSchema.parse(caseReport));
+  const caseReports = input.cases.map((caseReport) => FactEvalCaseReportSchema.parse(sanitizeCaseForReport(caseReport)));
   const metrics = FACT_EVAL_METRIC_IDS.map((id) => {
     const values: number[] = caseReports.map((caseReport) => Number(caseReport.metrics[id] ?? 0));
     const value = values.length === 0 ? 0 : values.reduce((sum, metric) => sum + metric, 0) / values.length;

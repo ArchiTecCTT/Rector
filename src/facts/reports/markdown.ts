@@ -1,15 +1,9 @@
-import { redactString } from "../../security/redaction";
 import { FACT_EVAL_METRIC_IDS, type FactEvalCaseReport, type FactEvalMetricReport, type FactEvalReport } from "./factReport";
+import { safeReportText } from "./safety";
 
 const MAX_CELL_LENGTH = 180;
 const MAX_REASON_LENGTH = 280;
 const MAX_REFS_PER_CASE = 12;
-const SECRET_MARKER_PATTERNS: readonly RegExp[] = [
-  /\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g,
-  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
-  /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g,
-  /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b/gi,
-];
 
 export function renderFactEvalMarkdown(report: FactEvalReport): string {
   const lines: string[] = [];
@@ -92,14 +86,7 @@ function formatSourceRefs(refs: FactEvalCaseReport["factRefs"][number]["sourceRe
 }
 
 function safeInline(value: string, maxLength = MAX_CELL_LENGTH): string {
-  const redacted = scrubKnownSecrets(redactString(value)).replace(/[\r\n|]/g, " ");
-  return redacted.length > maxLength ? `${redacted.slice(0, Math.max(0, maxLength - 3))}...` : redacted;
-}
-
-function scrubKnownSecrets(value: string): string {
-  let output = value;
-  for (const pattern of SECRET_MARKER_PATTERNS) output = output.replace(pattern, "[REDACTED]");
-  return output;
+  return safeReportText(value, maxLength);
 }
 
 function formatNumber(value: number): string {
