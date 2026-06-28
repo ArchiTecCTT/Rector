@@ -26,7 +26,7 @@ import {
   type RegressionArtifact,
 } from "./regressionArtifactSchema";
 import { buildTaskPacket, buildRunTrace } from "./runTrace";
-import { globalHarnessResultToFacts } from "../facts/adapters/globalHarnessFacts";
+import { globalHarnessResultToFacts } from "../facts";
 import { RunEventSchema } from "../protocol/events";
 import { RunPhaseSchema } from "../protocol/phases";
 import { SpecialistTaskPacketSchema } from "../systems/contracts";

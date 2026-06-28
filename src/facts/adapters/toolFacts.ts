@@ -1,7 +1,6 @@
 import { redactSecrets, redactString } from "../../security/redaction";
 import type { ToolEventSinkInput, ToolResult, ToolSchemaDefinition } from "../../tools";
 import {
-  artifactRef,
   createFactId,
   createFactScope,
   createFactTrust,

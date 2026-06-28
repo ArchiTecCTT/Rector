@@ -38,6 +38,26 @@ function liveScenario(): GlobalScenario {
   });
 }
 
+function factEvidenceScenario(): GlobalScenario {
+  return GlobalScenarioSchema.parse({
+    id: "evidence-artifact-ref-resolves",
+    title: "Evidence artifact references resolve",
+    type: "evidence",
+    workspace: "tests/fixtures/repos/rector-mini-fix",
+    userGoal: "Verify fact references are represented as typed evidence obligations.",
+    allowedSystems: ["coding"],
+    forbiddenSystems: ["memory-writer"],
+    expectedSpecialist: "coding",
+    successCriteria: ["fact refs resolve", "validator trace is retained"],
+    validators: [{ id: "fixture-integrity-verifier", cmd: "node", args: ["-e", "process.exit(0)"], cwd: ".", timeoutMs: 10000, expectedExitCode: 0 }],
+    oracles: { mustChange: [], mustNotChange: ["src/calculator.ts"], mustIncludeEvidence: ["cartographer.grounding", "fact:global_harness:oracle"] },
+    budgets: { maxToolCalls: 10, maxRuntimeMs: 60000, maxMainModelRawToolTokens: 100 },
+    setup: { copyWorkspaceToTemp: false, fixtures: [] },
+    operation: { kind: "validator_only" },
+    expected: { status: "passed", changedPaths: [], unchangedPaths: ["src/calculator.ts"], evidenceRefs: ["cartographer.grounding", "fact:global_harness:oracle"] },
+  });
+}
+
 describe("global reliability harness runner", () => {
   it(
     "produces one scorecard per committed scenario with all eight dimensions plus fake-path",
@@ -321,7 +341,7 @@ describe("global reliability harness runner", () => {
   });
 
   it("evidence_quality resolves fact:global_harness:oracle when harness fact adapter produced facts", async () => {
-    const result = await runGlobalHarness({ write: false, now: FIXED_NOW, fakePathAuditor: cleanAuditor });
+    const result = await runGlobalHarness({ write: false, now: FIXED_NOW, scenarios: [factEvidenceScenario()], fakePathAuditor: cleanAuditor });
     const outcome = result.report.outcomes.find((entry) => entry.scenarioId === "evidence-artifact-ref-resolves");
     expect(outcome).toBeDefined();
     expect(outcome?.actualStatus).toBe("passed");
