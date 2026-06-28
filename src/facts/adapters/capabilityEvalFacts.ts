@@ -1,19 +1,25 @@
 import type { CapabilityEvidencePacket } from "../../capabilities/eval/evidencePacket";
 import type { CapabilityEvalCase, CapabilityEvalResult } from "../../capabilities/eval/schemas";
 import { redactSecrets, redactString } from "../../security/redaction";
-import { artifactRef, capabilityEvalProvenance, createFactId, createFactScope, createFactTrust, insufficientEvidence, isSafeFactPath } from "..";
-import { FACT_SCHEMA_VERSION, RectorFactSchema } from "../schemas";
-import type {
-  CapabilityCoverageFact,
-  CapabilityEvidenceFact,
-  CapabilityFailureFact,
-  CapabilityRequestFact,
-  CapabilityWarningFact,
-  EvidenceRef,
-  FactProvenance,
-  FactSchemaValidationFact,
-  RectorFact,
-} from "../types";
+import {
+  artifactRef,
+  capabilityEvalProvenance,
+  createFactId,
+  createFactScope,
+  createFactTrust,
+  FACT_SCHEMA_VERSION,
+  insufficientEvidence,
+  isSafeFactPath,
+  RectorFactSchema,
+  type CapabilityCoverageFact,
+  type CapabilityEvidenceFact,
+  type CapabilityFailureFact,
+  type CapabilityRequestFact,
+  type CapabilityWarningFact,
+  type EvidenceRef,
+  type FactProvenance,
+  type RectorFact,
+} from "..";
 
 export interface CapabilityEvalFactAdapterOptions {
   readonly runId: string;
@@ -63,13 +69,12 @@ export function capabilityEvalResultToFacts(input: {
   readonly caseInput?: CapabilityEvalCase;
   readonly result: CapabilityEvalResult;
   readonly options: CapabilityEvalFactAdapterOptions;
-}): Array<CapabilityRequestFact | CapabilityEvidenceFact | CapabilityCoverageFact | CapabilityWarningFact | CapabilityFailureFact | FactSchemaValidationFact> {
+}): Array<CapabilityRequestFact | CapabilityEvidenceFact | CapabilityCoverageFact | CapabilityWarningFact | CapabilityFailureFact> {
   const result = redactSecrets(input.result) as CapabilityEvalResult;
-  const facts: Array<CapabilityRequestFact | CapabilityEvidenceFact | CapabilityCoverageFact | CapabilityWarningFact | CapabilityFailureFact | FactSchemaValidationFact> = [];
+  const facts: Array<CapabilityRequestFact | CapabilityEvidenceFact | CapabilityCoverageFact | CapabilityWarningFact | CapabilityFailureFact> = [];
   const provenance = [capabilityEvalProvenance({ capabilityId: result.capabilityId, caseId: result.caseId })];
 
   if (input.caseInput) facts.push(capabilityEvalCaseToRequestFact(input.caseInput, input.options));
-  const targetFactId = facts[0]?.factId ?? createFactId({ kind: "capability_eval_result", caseId: result.caseId, capabilityId: result.capabilityId });
 
   facts.push(parseFact<CapabilityEvidenceFact>({
     ...envelope(input.options, provenance, input.caseInput?.request.scope ?? []),
@@ -113,15 +118,6 @@ export function capabilityEvalResultToFacts(input: {
       evidence: evidenceRefsFromRawArtifacts(result.rawArtifactRefs, `failure ${result.caseId} had no artifact refs`),
     }));
   }
-
-  facts.push(parseFact<FactSchemaValidationFact>({
-    ...envelope(input.options, provenance, input.caseInput?.request.scope ?? []),
-    kind: "fact_schema_validation",
-    trust: createFactTrust("provenance_attached", "Capability eval metrics are validation measurements, not final truth"),
-    targetFactId,
-    valid: result.passed,
-    errors: result.passed ? [] : [{ code: "CAPABILITY_EVAL_FAILED", message: redactString(result.failureReason ?? "capability eval failed"), path: ["metricScores"], severity: "error" }],
-  }));
 
   return facts;
 }

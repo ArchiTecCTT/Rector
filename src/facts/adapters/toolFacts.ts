@@ -1,8 +1,20 @@
 import { redactSecrets, redactString } from "../../security/redaction";
-import type { ToolEventSinkInput, ToolResult, ToolSchemaDefinition } from "../../tools/types";
-import { createFactId, createFactScope, createFactTrust, toolCallProvenance } from "..";
-import { FACT_SCHEMA_VERSION, RectorFactSchema } from "../schemas";
-import type { CapabilityWarningFact, FactProvenance, RectorFact, ToolCallFact, ToolDefinitionFact, ToolFailureFact, ToolResultFact } from "../types";
+import type { ToolEventSinkInput, ToolResult, ToolSchemaDefinition } from "../../tools";
+import {
+  createFactId,
+  createFactScope,
+  createFactTrust,
+  FACT_SCHEMA_VERSION,
+  RectorFactSchema,
+  toolCallProvenance,
+  type CapabilityWarningFact,
+  type FactProvenance,
+  type RectorFact,
+  type ToolCallFact,
+  type ToolDefinitionFact,
+  type ToolFailureFact,
+  type ToolResultFact,
+} from "..";
 
 export interface ToolFactAdapterOptions {
   readonly runId: string;

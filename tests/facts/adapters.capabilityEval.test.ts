@@ -52,6 +52,7 @@ describe("capability eval fact adapter", () => {
     if (evidence?.kind === "capability_evidence") expect(evidence.evidence[0]).toMatchObject({ refType: "artifact", uri: "artifact://case-search-1/rg.json" });
     expect(facts.some((fact) => fact.kind === "capability_warning" && fact.warning.includes("missing line span"))).toBe(true);
     expect(facts.some((fact) => fact.kind === "capability_failure" && fact.trust.level === "rejected")).toBe(true);
+    expect(facts.some((fact) => fact.kind === "fact_schema_validation")).toBe(false);
   });
 
   it("emits insufficient_evidence when eval result has no raw artifact refs", () => {

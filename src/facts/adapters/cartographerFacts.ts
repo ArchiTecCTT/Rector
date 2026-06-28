@@ -9,23 +9,29 @@ import type {
   GetRelevantContextResult,
   GetSymbolGraphQueryResult,
   GraphSnapshot,
-} from "../../cartographer/graphSchemas";
-import { createFactId, createFactScope, createFactTrust, graphProvenance, graphRef, isSafeFactPath } from "..";
-import { FACT_SCHEMA_VERSION, RectorFactSchema } from "../schemas";
-import type {
-  CapabilityGraphContextFact,
-  CartographerSnapshotFact,
-  ContextSliceFact,
-  FactProvenance,
-  FileContextFact,
-  GraphEdgeFactRef,
-  GraphNodeFactRef,
-  GraphRef,
-  ImpactContextFact,
-  RectorFact,
-  SymbolContextFact,
-  TestLinkContextFact,
-} from "../types";
+} from "../../cartographer";
+import {
+  createFactId,
+  createFactScope,
+  createFactTrust,
+  FACT_SCHEMA_VERSION,
+  graphProvenance,
+  graphRef,
+  isSafeFactPath,
+  RectorFactSchema,
+  type CapabilityGraphContextFact,
+  type CartographerSnapshotFact,
+  type ContextSliceFact,
+  type FactProvenance,
+  type FileContextFact,
+  type GraphEdgeFactRef,
+  type GraphNodeFactRef,
+  type GraphRef,
+  type ImpactContextFact,
+  type RectorFact,
+  type SymbolContextFact,
+  type TestLinkContextFact,
+} from "..";
 
 export interface CartographerFactAdapterOptions {
   readonly runId: string;
@@ -160,22 +166,7 @@ export function fileQueryResultToFacts(input: {
   ];
 
   for (const symbol of result.symbols) {
-    const ref = nodeGraphRef(symbol, "ok");
-    facts.push(parseFact<SymbolContextFact>({
-      schemaVersion: FACT_SCHEMA_VERSION,
-      kind: "symbol_context",
-      runId: options.runId,
-      ...(options.taskId ? { taskId: options.taskId } : {}),
-      createdAt: createdAt(options),
-      producer: "cartographer",
-      provenance: [graphProvenance(ref)],
-      trust: createFactTrust("graph_grounded", "Symbol context is backed by a Cartographer symbol node"),
-      scope: graphScope([ref], symbol.normalizedPath ? [symbol.normalizedPath] : []),
-      redactionState: "none",
-      symbolName: symbol.symbolName ?? symbol.label,
-      graph: ref,
-      summary: `Cartographer symbol node ${symbol.id}`,
-    }));
+    facts.push(symbolContextToFact(symbol, options, "ok"));
     facts.push(graphNodeToFact(symbol, options));
   }
   for (const edge of result.imports) facts.push(graphEdgeToFact(edge, options));
@@ -198,22 +189,7 @@ export function symbolQueryResultToFacts(input: {
     contextSliceFact({ snapshotId, query, status, refs, summary: `symbol query matched ${result.symbols.length} node(s)`, options }),
   ];
   for (const symbol of result.symbols) {
-    const ref = nodeGraphRef(symbol, status);
-    facts.push(parseFact<SymbolContextFact>({
-      schemaVersion: FACT_SCHEMA_VERSION,
-      kind: "symbol_context",
-      runId: options.runId,
-      ...(options.taskId ? { taskId: options.taskId } : {}),
-      createdAt: createdAt(options),
-      producer: "cartographer",
-      provenance: [graphProvenance(ref)],
-      trust: createFactTrust("graph_grounded", "Symbol context is backed by a Cartographer symbol node"),
-      scope: graphScope([ref], symbol.normalizedPath ? [symbol.normalizedPath] : []),
-      redactionState: "none",
-      symbolName: symbol.symbolName ?? symbol.label,
-      graph: ref,
-      summary: `Cartographer symbol node ${symbol.id}`,
-    }));
+    facts.push(symbolContextToFact(symbol, options, status));
     facts.push(graphNodeToFact(symbol, options));
   }
   return facts;
@@ -321,6 +297,29 @@ export function capabilityQueryResultToFact(input: {
     capabilityId,
     graphRefs: refs,
     status: result.status,
+  });
+}
+
+function symbolContextToFact(
+  symbol: CartographerGraphNode,
+  options: CartographerFactAdapterOptions,
+  status: CartographerQueryStatus,
+): SymbolContextFact {
+  const ref = nodeGraphRef(symbol, status);
+  return parseFact<SymbolContextFact>({
+    schemaVersion: FACT_SCHEMA_VERSION,
+    kind: "symbol_context",
+    runId: options.runId,
+    ...(options.taskId ? { taskId: options.taskId } : {}),
+    createdAt: createdAt(options),
+    producer: "cartographer",
+    provenance: [graphProvenance(ref)],
+    trust: createFactTrust("graph_grounded", "Symbol context is backed by a Cartographer symbol node"),
+    scope: graphScope([ref], symbol.normalizedPath ? [symbol.normalizedPath] : []),
+    redactionState: "none",
+    symbolName: symbol.symbolName ?? symbol.label,
+    graph: ref,
+    summary: `Cartographer symbol node ${symbol.id}`,
   });
 }
 
