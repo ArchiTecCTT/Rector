@@ -92,12 +92,10 @@ Do not use `general-purpose` for Rector implementation.
 | Role | `subagent_type` | Model |
 |---|---|---|
 | Low–mid implementation | `rector-generalCoder-fast` | `grok-composer-2.5-fast` |
-| Hard / cross-cutting | `rector-generalCoder-deep` | `cf-glm-5-2` |
+| Hard / cross-cutting | `rector-generalCoder-deep` | `azure-gpt-5-5` |
 | Post-verify doc sync | `rector-librarian` | `grok-composer-2.5-fast` |
 | Codebase map only | `explore` | per `config.toml` |
 | Plan before coding | `plan` | per `config.toml` |
-
-**Max 2 concurrent** `rector-generalCoder-deep` (Cloudflare rate limits).
 
 ## Project skills
 

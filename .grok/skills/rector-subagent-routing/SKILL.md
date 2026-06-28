@@ -1,6 +1,6 @@
 ---
 name: rector-subagent-routing
-description: "MUST USE when spawning subagents in the Rector repo. Routes implementation to rector-generalCoder-fast or rector-generalCoder-deep instead of general-purpose; runs rector-librarian after verified implementation. Enforces max 2 concurrent deep coders (Cloudflare GLM rate limits). Triggers: spawn subagent, implement, fix, phase work, delegate coding."
+description: "MUST USE when spawning subagents in the Rector repo. Routes implementation to rector-generalCoder-fast or rector-generalCoder-deep instead of general-purpose; runs rector-librarian after verified implementation. Triggers: spawn subagent, implement, fix, phase work, delegate coding."
 metadata:
   project: rector
   workflow: subagent-routing
@@ -15,7 +15,7 @@ The parent orchestrator **must not** spawn `general-purpose` for Rector implemen
 | Task difficulty | `subagent_type` | Default model |
 |---|---|---|
 | Low–mid: single/few files, clear scope, straightforward fix or test | `rector-generalCoder-fast` | `grok-composer-2.5-fast` |
-| Hard: cross-cutting, orchestration, multi-module, subtle bugs, high blast radius | `rector-generalCoder-deep` | `cf-glm-5-2` |
+| Hard: cross-cutting, orchestration, multi-module, subtle bugs, high blast radius | `rector-generalCoder-deep` | `azure-gpt-5-5` |
 
 ### Fast coder signals
 
@@ -31,10 +31,6 @@ The parent orchestrator **must not** spawn `general-purpose` for Rector implemen
 - Review-fix after architectural findings
 
 When unsure, start **fast**; escalate to **deep** if blockers are cross-cutting.
-
-## Deep coder concurrency (mandatory)
-
-**Never more than 2** concurrent `rector-generalCoder-deep` spawns. Queue, wait, or downgrade to fast.
 
 ## Non-implementation agents
 

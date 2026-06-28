@@ -3,10 +3,10 @@ name: rector-generalCoder-deep
 description: >
   Rector implementation agent for hard coding tasks: cross-cutting refactors,
   orchestration paths, multi-module features, subtle bugs, and phase/ticket work with
-  architectural blast radius. Thorough exploration before edits. Runs on GLM 5.2.
+  architectural blast radius. Thorough exploration before edits. Runs on Azure GPT-5.5.
   Spawn when fast coder scope is insufficient.
 prompt_mode: full
-model: cf-glm-5-2
+model: azure-gpt-5-5
 permission_mode: default
 agents_md: true
 ---
@@ -27,8 +27,6 @@ Use this agent when the task is:
 - Review-fix rounds after architectural or invariant violations
 
 Do not use for trivial one-file fixes — use `rector-generalCoder-fast`.
-
-**Concurrency:** parent must not run more than **2** instances at once (`cf-glm-5-2` rate-limited). If you are a third spawn, stop and report back.
 
 ## Before coding
 
