@@ -35,7 +35,7 @@ describe("global harness fact adapter", () => {
 
     expectValidFacts(facts);
     expect(facts.some((fact) => fact.kind === "capability_request" && fact.requestId === "scenario-live-skip")).toBe(true);
-    expect(facts.some((fact) => fact.kind === "validation_obligation" && fact.obligationId === "validator-vitest" && fact.validator === "npm")).toBe(true);
+    expect(facts.some((fact) => fact.kind === "validation_obligation" && fact.obligationId === "validator-vitest" && fact.validator === "npm" && fact.requiredEvidence.includes("arg0:test"))).toBe(true);
     expect(facts.some((fact) => fact.kind === "capability_call" && fact.callId === "scenario-live-skip:expected:skipped" && fact.status === "skipped")).toBe(true);
     expect(facts.some((fact) => fact.kind === "task_constraint" && fact.constraint.includes("expected.changedPaths:src/calculator.ts"))).toBe(true);
   });
@@ -72,5 +72,42 @@ describe("global harness fact adapter", () => {
     expect(facts.some((fact) => fact.kind === "capability_call" && fact.callId === "scenario-live-skip:actual:failed" && fact.status === "failed")).toBe(true);
     expect(facts.some((fact) => fact.kind === "capability_failure" && fact.capabilityId === "global_scorecard:scenario-live-skip")).toBe(true);
     expect(facts.every((fact) => fact.trust.level !== "validation_linked")).toBe(true);
+  });
+
+  it("attaches regression artifact refs to failed scorecard failure evidence", () => {
+    const scorecard: Scorecard = {
+      schemaVersion: "rector.global-scorecard.v1",
+      scenarioId: scenario.id,
+      dimensions: {
+        reliability: { score: 0 },
+        accuracy: { score: 0 },
+        safety: { score: 1 },
+        cost_efficiency: { score: 1 },
+        memory_correctness: { score: 1 },
+        delegation_quality: { score: 1 },
+        evidence_quality: { score: 0 },
+        simplicity: { score: 1 },
+      },
+      fakePathStatus: "clean",
+      passed: false,
+    };
+    const artifactUri = ".omo/evidence/regression/scenario-live-skip.json";
+
+    const facts = globalHarnessResultToFacts({
+      scenario,
+      scorecard,
+      actualStatus: "failed",
+      regressionArtifactRefs: [artifactUri],
+      options: OPTIONS,
+    });
+
+    expectValidFacts(facts);
+    expect(facts.some((fact) =>
+      fact.kind === "capability_failure"
+      && fact.capabilityId === "global_scorecard:scenario-live-skip"
+      && fact.evidence.length === 1
+      && fact.evidence[0]?.refType === "artifact"
+      && fact.evidence[0].uri === artifactUri,
+    )).toBe(true);
   });
 });

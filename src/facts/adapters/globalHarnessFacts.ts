@@ -1,6 +1,6 @@
 import type { RunEvent } from "../../protocol/events";
 import { redactSecrets, redactString } from "../../security/redaction";
-import type { GlobalScenario } from "../../evals/globalScenarioSchema";
+import type { GlobalScenario, GlobalValidator } from "../../evals/globalScenarioSchema";
 import type { Scorecard } from "../../evals/scorecards";
 import { createFactId, createFactScope, createFactTrust } from "..";
 import { FACT_SCHEMA_VERSION, RectorFactSchema } from "../schemas";
@@ -11,6 +11,7 @@ import type {
   CapabilityFailureFact,
   CapabilityRequestFact,
   CapabilityWarningFact,
+  EvidenceRef,
   FactGroundingValidationFact,
   FactProvenance,
   IntentFact,
@@ -108,7 +109,7 @@ export function globalScenarioToFacts(scenarioInput: GlobalScenario, options: Gl
       obligationId: validator.id,
       validator: validator.cmd,
       targetFactIds: [],
-      requiredEvidence: [`cmd:${validator.cmd}`, `cwd:${validator.cwd}`, `expectedExitCode:${validator.expectedExitCode}`],
+      requiredEvidence: validatorRequiredEvidence(validator),
     }));
   }
 
@@ -160,7 +161,7 @@ export function globalHarnessResultToFacts(input: GlobalHarnessResultInput): Rec
         capabilityId: `global_scorecard:${scorecard.scenarioId}`,
         reason: `global scorecard failed for ${scorecard.scenarioId}`,
         retryable: false,
-        evidence: [{ refType: "insufficient_evidence", reason: "scorecard failure has no regression artifact refs in adapter input", missing: ["regressionArtifactRefs"], searched: [scorecard.scenarioId] }],
+        evidence: scorecardFailureEvidence(input.regressionArtifactRefs, scorecard.scenarioId),
       }));
     }
   }
@@ -217,4 +218,27 @@ function mapScenarioStatus(status: "passed" | "failed" | "skipped"): CapabilityC
   if (status === "passed") return "completed";
   if (status === "failed") return "failed";
   return "skipped";
+}
+
+function validatorRequiredEvidence(validator: GlobalValidator): string[] {
+  return [
+    `cmd:${validator.cmd}`,
+    ...validator.args.map((arg, index) => `arg${index}:${arg}`),
+    `cwd:${validator.cwd}`,
+    `timeoutMs:${validator.timeoutMs}`,
+    `expectedExitCode:${validator.expectedExitCode}`,
+  ];
+}
+
+function scorecardFailureEvidence(regressionArtifactRefs: readonly string[] | undefined, scenarioId: string): EvidenceRef[] {
+  const refs = regressionArtifactRefs ?? [];
+  if (refs.length > 0) {
+    return refs.map((uri) => ({ refType: "artifact" as const, uri }));
+  }
+  return [{
+    refType: "insufficient_evidence",
+    reason: "scorecard failure has no regression artifact refs in adapter input",
+    missing: ["regressionArtifactRefs"],
+    searched: [scenarioId],
+  }];
 }
