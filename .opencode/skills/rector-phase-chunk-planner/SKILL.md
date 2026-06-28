@@ -1,73 +1,88 @@
 ---
 name: rector-phase-chunk-planner
-description: "MUST USE before planning or implementing a Rector chunk, especially Phase 1 docs and v0.3.0 configured-product work. Enforces source-of-truth reading, one-chunk scope, docs/plans/chunks plan files, concerns tracking, verification gates, and no broad refactor drift. Triggers: 'chunk', 'phase', 'plan', 'roadmap', 'start work', 'implement next'."
+description: "MUST USE before planning or implementing Rector work: Rector 2.0 phases, tickets, or legacy chunks. Enforces source-of-truth reading, bounded scope, phase plans under docs/plans/2-0/phases/, concerns tracking, and verification gates. Triggers: 'phase', 'chunk', 'plan', 'roadmap', 'start work', 'implement next', 'typed facts'."
 compatibility: opencode
 metadata:
   project: rector
-  workflow: chunk-discipline
+  workflow: phase-discipline
 ---
 
 # rector-phase-chunk-planner
 
-Use this skill to keep Rector implementation work bounded, evidence-backed, and aligned with the roadmap.
+Keeps Rector work bounded, evidence-backed, and aligned with the **Rector 2.0** production map — not ad-hoc refactors.
 
 ## Load when
 
-- Starting a new Rector phase/chunk.
-- Translating roadmap/spec items into implementation work.
-- Updating `docs/plans/chunks/*.md`.
-- A task risks spanning docs, UI, orchestration, providers, tests, and migration at once.
+- Starting or continuing a **phase slice** (primary) or **ticket**
+- Translating production-plan items into implementation
+- Updating `docs/plans/2-0/phases/*.md` or legacy `docs/plans/chunks/*.md`
+- A task spans docs, UI, orchestration, providers, and tests at once
 
 ## Required source reads
 
-Read these before writing a chunk plan:
+Read before writing or executing a plan:
 
 1. `docs/architecture/configured-product-architecture.md`
-2. `.kiro/specs/cloud-capable-transition/requirements.md`
-3. `.kiro/specs/cloud-capable-transition/design.md`
-4. `.kiro/specs/cloud-capable-transition/tasks.md`
-5. `docs/plans/rector-master-roadmap.md`
-6. Latest relevant `docs/plans/chunks/*.md`
-7. `docs/plans/concerns-and-vulnerabilities.md`
+2. `docs/plans/2-0/rector_capability_slm_fabric_production_plan_package/rector_capability_slm_fabric_production_plan.md` — phase map and boundaries
+3. **Active phase plan:** `docs/plans/2-0/phases/<phase>.md` (e.g. `phase-2-typed-facts.md` for current substrate work)
+4. `docs/plans/concerns-and-vulnerabilities.md`
+5. `docs/plans/rector-master-roadmap.md` — when aligning milestones
+6. `docs/plans/chunks/*.md` — **only** when the task explicitly references a chunk id
+7. `.kiro/specs/cloud-capable-transition/*` — **only if present** in the current branch/worktree
 
-Read `docs/plans/chunks/002-migration-map.md` before touching old task-MVP modules.
+Before touching old task-MVP modules: `docs/plans/chunks/002-migration-map.md`.
 
-## Chunk plan shape
+## Plan shape (phase-first)
 
-Each new chunk plan under `docs/plans/chunks/` should state:
+Phase plans under `docs/plans/2-0/phases/` are authoritative for Rector 2.0. When adding a **legacy chunk** plan under `docs/plans/chunks/`, include:
 
-- chunk number and title;
-- source-of-truth docs consulted;
-- scope and non-goals;
-- affected files/modules;
-- implementation steps;
-- tests and manual QA surface;
-- risks, deferred work, and concerns-doc updates;
-- completion evidence expected before commit.
+- chunk number/title and **which phase** it supports (if any)
+- source-of-truth docs consulted
+- scope and non-goals
+- affected modules
+- steps, tests, QA
+- risks → concerns register
+- completion evidence (commands + pass/fail)
 
-## Scope discipline
+## Worktree / ticket discipline
 
-- Work one chunk at a time.
-- Prefer one coherent vertical slice over scattered cleanup.
-- Do not refactor unrelated legacy modules while implementing a chunk.
-- If a risk or stale architecture issue is discovered, either fix it in-scope or record it in `docs/plans/concerns-and-vulnerabilities.md`.
+- One coherent slice per commit series (phase sub-slice A–G, ticket, or legacy chunk).
+- For multi-feature phases, decompose into a dependency graph and assign one short-lived branch/worktree per low-overlap ticket.
+- Use a phase integration branch as the convergence point; merge feature PRs in dependency order, then run full gates and fix integration fallout before merging onward.
+- Use stacked branches/PRs for dependent tickets instead of parallel edits to the same files.
+- Record worktree or branch in the plan when not on `main`.
+- Do not broaden into unrelated legacy cleanup.
+- Discoveries → fix in-scope or log in `docs/plans/concerns-and-vulnerabilities.md`.
 
 ## Verification contract
 
-Before claiming a chunk complete:
+Before claiming a slice complete:
 
 ```bash
 npm test
 npm run build
+npm audit
 ```
 
-Also run any targeted test/eval/audit directly tied to the chunk, such as:
+Run **phase-documented gates** when they prove the slice, for example:
 
 ```bash
-npm run audit:no-fakes
-npm run eval:capabilities
-npm run test:global
+npm run verify:foundation
+npm run eval:capabilities:gate
+npm run test:global:gate
 npm run test:systems
+npm run audit:no-fakes
+npm run cartographer:self-scan:check
 ```
 
-Use targeted gates when they prove the chunk's surface; do not claim full project completion from targeted gates alone.
+Targeted gates do not imply unrelated phases are complete.
+
+## Complementary skills
+
+Load when the slice touches:
+
+- `rector-configured-product-guardian` — product/chat/runtime settings
+- `rector-cartographer-graph-builder` — Cartographer phases
+- `rector-evidence-gatekeeper` — evals, validators, typed facts
+- `rector-fake-purge-auditor` — spy/fake boundaries
+- `rector-docs-replacement-surgeon` — user-facing doc edits in the same slice

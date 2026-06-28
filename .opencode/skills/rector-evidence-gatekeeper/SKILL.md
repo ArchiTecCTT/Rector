@@ -11,6 +11,8 @@ metadata:
 
 Use this skill whenever Rector turns raw output, model text, tool logs, or eval results into facts or decisions.
 
+**Phase 2 alignment:** `docs/plans/2-0/phases/phase-2-typed-facts.md` defines the typed fact protocol (envelopes, ledger, adapters, validation gates). Until Phase 2 lands, apply the trust ladder below; do not treat natural-language summaries as durable facts. Prefer `insufficient_evidence` over inventing fact records.
+
 ## Trust ladder
 
 Do not trust prose directly. Trust increases only through gates:
