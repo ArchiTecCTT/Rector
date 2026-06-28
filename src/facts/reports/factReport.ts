@@ -39,6 +39,15 @@ export const FactEvalFactRefSchema = z
   })
   .strict();
 
+export const FactValidationErrorReportSchema = z
+  .object({
+    code: z.string().min(1),
+    message: z.string().min(1),
+    path: z.array(z.union([z.string(), z.number()])).default([]),
+    severity: z.enum(["info", "warning", "error"]).default("error"),
+  })
+  .strict();
+
 export const FactEvalMetricReportSchema = z
   .object({
     id: FactEvalMetricIdSchema,
@@ -59,7 +68,7 @@ export const FactEvalCaseReportSchema = z
     failureReasons: z.array(z.string().min(1)),
     metrics: z.record(FactEvalMetricIdSchema, z.number().finite()),
     factRefs: z.array(FactEvalFactRefSchema),
-    validationErrors: z.array(z.object({ code: z.string().min(1), message: z.string().min(1), path: z.array(z.union([z.string(), z.number()])).default([]), severity: z.enum(["info", "warning", "error"]).default("error") }).strict()),
+    validationErrors: z.array(FactValidationErrorReportSchema),
   })
   .strict();
 

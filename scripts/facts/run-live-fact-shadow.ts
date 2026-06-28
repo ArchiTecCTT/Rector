@@ -17,6 +17,7 @@ import {
   validateFactSchema,
   validateFactScope,
   validateFactTrustTransition,
+  FactValidationErrorReportSchema,
   validationErrorsForReport,
   type ArtifactRef,
   type FactValidationError,
@@ -33,7 +34,7 @@ import {
   type LLMResponse,
   type LLMUsage,
   type ModelRoute,
-} from "../../src/providers/llm";
+} from "../../src/providers";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -72,7 +73,7 @@ const LiveFactShadowCaseReportSchema = z
     latencyMs: z.number().int().nonnegative(),
     rawArtifactRefs: z.array(z.string().min(1)),
     factRefs: z.array(z.object({ factId: z.string().min(1), kind: z.string().min(1), trustLevel: z.string().min(1) }).strict()),
-    validationErrors: z.array(z.object({ code: z.string().min(1), message: z.string().min(1), path: z.array(z.union([z.string(), z.number()])).default([]), severity: z.enum(["info", "warning", "error"]).default("error") }).strict()),
+    validationErrors: z.array(FactValidationErrorReportSchema),
     failureReasons: z.array(z.string().min(1)),
   })
   .strict();
@@ -198,24 +199,58 @@ export function liveFactShadowScenarios(): readonly LiveScenario[] {
   ];
 }
 
+function envString(env: Record<string, string | undefined>, key: string): string {
+  return env[key] ?? "";
+}
+
 export async function discoverLiveFactProviders(env: Record<string, string | undefined> = process.env): Promise<DiscoveredLiveFactProvider[]> {
   const providers: DiscoveredLiveFactProvider[] = [];
   const candidates: Array<{ provider: LLMProvider; route: ModelRoute; label: string }> = [
-    { provider: new TogetherAIProvider({ apiKey: env.TOGETHER_API_KEY, baseUrl: env.TOGETHER_BASE_URL, enableNetwork: true }), route: "fast", label: "TOGETHER_API_KEY" },
-    { provider: new AzureOpenAIProvider({
-      apiKey: env.AZURE_OPENAI_API_KEY,
-      endpoint: env.AZURE_OPENAI_ENDPOINT,
-      apiVersion: env.AZURE_OPENAI_API_VERSION,
-      deployments: {
-        cheap: env.AZURE_OPENAI_CHEAP_DEPLOYMENT,
-        fast: env.AZURE_OPENAI_FAST_DEPLOYMENT ?? env.AZURE_OPENAI_DEPLOYMENT,
-        flagship: env.AZURE_OPENAI_FLAGSHIP_DEPLOYMENT ?? env.AZURE_OPENAI_DEPLOYMENT,
-        research: env.AZURE_OPENAI_RESEARCH_DEPLOYMENT,
-      },
-      enableNetwork: true,
-    }), route: "fast", label: "AZURE_OPENAI_*" },
-    { provider: new CloudflareWorkersAIProvider({ accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.CLOUDFLARE_API_TOKEN, baseUrl: env.CLOUDFLARE_BASE_URL, enableNetwork: true }), route: "fast", label: "CLOUDFLARE_*" },
-    { provider: new OpenAICompatibleProvider({ apiKey: env.OPENAI_COMPATIBLE_API_KEY, baseUrl: env.OPENAI_COMPATIBLE_BASE_URL, model: env.OPENAI_COMPATIBLE_MODEL, enableNetwork: true }), route: "fast", label: "OPENAI_COMPATIBLE_*" },
+    {
+      provider: new TogetherAIProvider({
+        apiKey: envString(env, "TOGETHER_API_KEY"),
+        baseUrl: envString(env, "TOGETHER_BASE_URL"),
+        enableNetwork: true,
+      }),
+      route: "fast",
+      label: "TOGETHER_API_KEY",
+    },
+    {
+      provider: new AzureOpenAIProvider({
+        apiKey: envString(env, "AZURE_OPENAI_API_KEY"),
+        endpoint: envString(env, "AZURE_OPENAI_ENDPOINT"),
+        apiVersion: envString(env, "AZURE_OPENAI_API_VERSION"),
+        deployments: {
+          cheap: envString(env, "AZURE_OPENAI_CHEAP_DEPLOYMENT"),
+          fast: envString(env, "AZURE_OPENAI_FAST_DEPLOYMENT") || envString(env, "AZURE_OPENAI_DEPLOYMENT"),
+          flagship: envString(env, "AZURE_OPENAI_FLAGSHIP_DEPLOYMENT") || envString(env, "AZURE_OPENAI_DEPLOYMENT"),
+          research: envString(env, "AZURE_OPENAI_RESEARCH_DEPLOYMENT"),
+        },
+        enableNetwork: true,
+      }),
+      route: "fast",
+      label: "AZURE_OPENAI_*",
+    },
+    {
+      provider: new CloudflareWorkersAIProvider({
+        accountId: envString(env, "CLOUDFLARE_ACCOUNT_ID"),
+        apiToken: envString(env, "CLOUDFLARE_API_TOKEN"),
+        baseUrl: envString(env, "CLOUDFLARE_BASE_URL"),
+        enableNetwork: true,
+      }),
+      route: "fast",
+      label: "CLOUDFLARE_*",
+    },
+    {
+      provider: new OpenAICompatibleProvider({
+        apiKey: envString(env, "OPENAI_COMPATIBLE_API_KEY"),
+        baseUrl: envString(env, "OPENAI_COMPATIBLE_BASE_URL"),
+        model: envString(env, "OPENAI_COMPATIBLE_MODEL"),
+        enableNetwork: true,
+      }),
+      route: "fast",
+      label: "OPENAI_COMPATIBLE_*",
+    },
   ];
 
   for (const candidate of candidates) {
@@ -242,7 +277,7 @@ export function isAcceptableLiveShadowProvider(provider: LLMProvider): boolean {
   const id = provider.metadata.id.toLowerCase();
   const label = `${provider.metadata.displayName} ${provider.constructor.name}`.toLowerCase();
   if (["fake", "deterministic", "spy"].includes(id)) return false;
-  return !/(?:fake|deterministic|spy|mock|fixture|scripted|test-double)/i.test(`${id} ${label}`);
+  return !/fake|deterministic|spy|mock|fixture|scripted|test-double/i.test(`${id} ${label}`);
 }
 
 export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {}): Promise<LiveFactShadowReport> {
@@ -632,7 +667,7 @@ export function renderLiveFactShadowMarkdown(report: LiveFactShadowReport): stri
     lines.push(`| \`${safeMarkdown(caseReport.caseId)}\` | ${caseReport.status} | ${safeMarkdown(caseReport.providerId ?? "n/a")} | ${safeMarkdown(caseReport.modelId ?? "n/a")} | ${safeMarkdown(caseReport.route)} | ${caseReport.schemaValidity} | ${caseReport.provenanceCompleteness} | ${caseReport.hallucinatedRefs.length} | ${String(caseReport.insufficientEvidenceCorrect)} | ${caseReport.tokenUsage.totalTokens} | ${caseReport.estimatedCostUsd.toFixed(6)} | ${caseReport.latencyMs} | ${safeMarkdown(caseReport.rawArtifactRefs.join(", ") || "n/a")} |`);
   }
   lines.push("", "## Failures", "");
-  const failures = report.cases.filter((caseReport) => caseReport.failureReasons.length > 0);
+  const failures = report.cases.filter((caseReport) => caseReport.status === "failed" && caseReport.failureReasons.length > 0);
   if (failures.length === 0) lines.push("No case failures recorded.");
   for (const failure of failures) {
     lines.push(`- \`${safeMarkdown(failure.caseId)}\``);

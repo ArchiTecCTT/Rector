@@ -102,6 +102,8 @@ describe("Phase 2F live fact shadow contract", () => {
       expect(report.skippedReason).toContain("No configured non-fake live provider");
       expect(report.failedCount).toBe(0);
       expect(report.cases.every((caseReport) => caseReport.status === "skipped")).toBe(true);
+      const markdown = await readFile(path.join(outputDir, "live-fact-shadow-report.md"), "utf8");
+      expect(markdown).toContain("No case failures recorded.");
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
