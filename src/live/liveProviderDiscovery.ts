@@ -110,11 +110,20 @@ export async function discoverLiveProvider(
     return { selected: undefined, rejections: [] };
   }
 
+  if (hasUsableZaiEnvConfiguration(env)) {
+    return discoverZaiFromEnv(env, options);
+  }
+
+  const configuredResult = await discoverZaiFromConfiguredProduct(options);
+  if (configuredResult.selected) {
+    return configuredResult;
+  }
+
   if (hasAnyZaiEnvCoordinate(env)) {
     return discoverZaiFromEnv(env, options);
   }
 
-  return discoverZaiFromConfiguredProduct(options);
+  return configuredResult;
 }
 
 function discoverZaiFromEnv(
@@ -273,6 +282,14 @@ function selectZaiRecord(
     if (candidate) return candidate;
   }
   return candidates[0];
+}
+
+function hasUsableZaiEnvConfiguration(env: Record<string, string | undefined>): boolean {
+  const apiKey = env.OPENAI_COMPATIBLE_API_KEY?.trim() ?? "";
+  const baseUrl = env.OPENAI_COMPATIBLE_BASE_URL?.trim() ?? "";
+  const model = env.OPENAI_COMPATIBLE_MODEL?.trim() ?? "";
+  const host = hostFromUrl(baseUrl);
+  return Boolean(apiKey && model && host && isZaiCompatibleHost(host));
 }
 
 function hasAnyZaiEnvCoordinate(env: Record<string, string | undefined>): boolean {

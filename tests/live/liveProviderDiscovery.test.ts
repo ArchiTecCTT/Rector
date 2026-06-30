@@ -173,6 +173,60 @@ describe("live provider discovery", () => {
     });
   });
 
+  it("falls back to configured-product Z.ai when env coordinates are partial", async () => {
+    const state: ProviderConfigState = {
+      version: PROVIDER_CONFIG_VERSION,
+      activeRoutes: { slm: "openai-compatible:zai" },
+      providers: [
+        {
+          id: "openai-compatible:zai",
+          kind: "openai-compatible",
+          label: "Z.ai",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          model: "glm-4.5",
+          secretRef: "secret:zai",
+          createdAt: GENERATED_AT,
+          updatedAt: GENERATED_AT,
+        },
+      ],
+    };
+    const runtimeSettingsStore = createInMemoryRuntimeSettingsStore({
+      ...defaultRuntimeSettings(GENERATED_AT),
+      orchestrationProfile: "configured",
+      updatedAt: GENERATED_AT,
+    });
+    const secretStore: SecretStore = {
+      async setSecret() {
+        return { ok: true, value: undefined };
+      },
+      async getSecret(secretRef: string) {
+        return secretRef === "secret:zai"
+          ? { ok: true, value: SECRET }
+          : { ok: false, error: "missing" };
+      },
+      async hasSecret(secretRef: string) {
+        return secretRef === "secret:zai";
+      },
+    };
+
+    const result = await discoverLiveProvider({
+      env: {
+        RECTOR_LIVE_PROVIDER: "zai",
+        OPENAI_COMPATIBLE_API_KEY: SECRET,
+      },
+      runtimeSettingsStore,
+      providerConfigStore: createInMemoryProviderConfigStore(state),
+      secretStore,
+    });
+
+    expect(result.selected).toMatchObject({
+      providerId: "openai-compatible:zai",
+      source: "runtime-settings",
+      host: "api.z.ai",
+      liveEvidence: true,
+    });
+  });
+
   it("rejects fake, deterministic, spy, mock, fixture, scripted, and test-double provider identities", () => {
     expect(isAcceptableLiveEvidenceProvider({ provider: new FakeLLMProvider() })).toBe(false);
     expect(isAcceptableLiveEvidenceProvider({ provider: new SpyLLMProvider() })).toBe(false);
