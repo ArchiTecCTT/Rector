@@ -5,6 +5,15 @@
 
 ## Open
 
+### Z.ai live verification gate — offline complete / live unverified (Ticket 6)
+
+- **Source:** `zai-live-gate-docs` worktree; `scripts/live/gate-zai-live-evidence.ts`, `npm run evidence:zai-live:gate`, `npm run verify:zai-live`.
+- **Severity:** Low (measurement / operator workflow; not a product fake-chat regression).
+- **Status:** Open until a real non-fake Z.ai provider campaign passes the gate on operator hardware with credentials and budget.
+- **Observed:** Gate and offline fixture tests enforce `live_provider`, artifact completeness, mutation checks, token budget, and secret scanning. No committed proof that `verify:zai-live` has passed against live Z.ai on this VM without test injection.
+- **Plan:** Configure Z.ai via UI or env, run `npm run verify:zai-live`, retain sanitized evidence under `.rector/evidence`, then document pass date in operator notes only after gate PASS. Do not relabel Phase 2 or harness milestones as live-verified before that.
+- **Boundaries:** `test_only_injected` and spy doubles remain test-only; gate rejects them for live-verified claims.
+
 ### Phase 2 — live fact shadow skipped (offline-complete only)
 
 - **Source:** Phase 2G gate run on worktree at `45768e5`; `npm run eval:facts:live` with `LIVE_FACT_EVALS=1`.
