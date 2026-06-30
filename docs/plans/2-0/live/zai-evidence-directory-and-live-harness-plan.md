@@ -1,6 +1,6 @@
 # Rector Evidence Directory Overhaul + Z.ai GLM Live Verification Plan
 
-**Status:** **Implementation complete (Tickets 1–6)** on branch `zai-evidence-live-integration` (integration HEAD `9321116`). Offline gates passed (`npm test`, `npm run build`). **Live Z.ai verification remains unverified** — no operator campaign has produced gate PASS with `liveEvidenceStatus: live_provider` from real credentials on this VM.  
+**Status:** **Implementation complete (Tickets 1–6 + opt-in multi-model matrix)** on branch `zai-evidence-live-integration` (integration HEAD `26abc22`; matrix orchestration `src/live/zaiModelMatrix.ts`, `tests/live/zaiModelMatrix.test.ts`). Offline gates passed (`npm test`, `npm run build`, `npm run verify:phase2`, `npm run check`, `npm run evidence:verify-paths`, `npm run audit:no-fakes` with 0 unallowed findings). **Live Z.ai verification remains unverified** — no operator campaign has produced gate PASS with `liveEvidenceStatus: live_provider` from real credentials on this VM.  
 **Target branch:** `rector-0.3.0` (merge target)  
 **Operator runbook:** `docs/operations/zai-live-verification.md`  
 **Primary branch under test:** `rector-0.3.0` after Phase 2A through Phase 2F implementation.
@@ -400,13 +400,21 @@ to `OPENAI_COMPATIBLE_BASE_URL`.
 
 Therefore configure the base URL as the API base, not the full chat-completions URL.
 
-Expected environment shape:
+Expected environment shape (set `RECTOR_LIVE_PROVIDER=zai` for live scripts):
 
 ```bash
+# Recommended — shell-safe names (do not use Z.AI_API_KEY; the dot breaks POSIX export)
+export ZAI_API_KEY="<zai-api-key>"
+export ZAI_BASE_URL="https://api.z.ai/api/paas/v4"
+export ZAI_MODEL="<chosen-glm-model>"
+
+# Compatibility — per-field fallback when ZAI_* is unset; ZAI_* wins when both are set
 export OPENAI_COMPATIBLE_API_KEY="<zai-api-key>"
 export OPENAI_COMPATIBLE_BASE_URL="https://api.z.ai/api/paas/v4"
 export OPENAI_COMPATIBLE_MODEL="<chosen-glm-model>"
 ```
+
+UI `runtime-settings.json` OpenAI-compatible provider setup remains the configured-product path; env vars are operator/CI fallback for `npm run verify:zai-live`.
 
 The exact model should be chosen from the Z.ai account/model list. Use small/fast GLM models first. Use stronger models only for comparison or failure triage.
 
@@ -475,7 +483,7 @@ phase2-live-shadow-verified-with-zai
 ### 8.2 Command
 
 ```bash
-LIVE_FACT_EVALS=1 npm run eval:facts:live
+RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live
 ```
 
 After evidence path migration, output should go to:
@@ -604,12 +612,15 @@ Add:
     "test:live:zai:provider": "RECTOR_LIVE_PROVIDER=zai RECTOR_ZAI_PROVIDER_SMOKE=1 tsx scripts/live/run-zai-provider-smoke.ts",
     "test:live:zai:harness": "RECTOR_LIVE_PROVIDER=zai LIVE_HARNESS_EVALS=1 tsx scripts/live/run-zai-harness-smoke.ts",
     "evidence:zai-live:gate": "tsx scripts/live/gate-zai-live-evidence.ts",
-    "verify:zai-live": "npm run verify:phase2 && RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live && npm run test:live:zai:provider && npm run test:live:zai:harness && npm run evidence:zai-live:gate"
+    "verify:zai-live": "npm run verify:phase2 && RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live && npm run test:live:zai:provider && npm run test:live:zai:harness && npm run evidence:zai-live:gate",
+    "verify:zai-live:matrix": "tsx scripts/live/run-zai-model-matrix.ts"
   }
 }
 ```
 
 `verify:zai-live` is mandatory for live-verified claims, but it must not replace ordinary offline `npm test`.
+
+`verify:zai-live:matrix` (implemented in `src/live/zaiModelMatrix.ts`, CLI `scripts/live/run-zai-model-matrix.ts`) runs the same live chain once per entry in `ZAI_MODELS` (or a single `ZAI_MODEL`), optionally preceded by offline `verify:phase2`, and writes `.rector/evidence/live/zai/matrix/matrix-summary.{json,md}` with per-model grades. Operator runbook: `docs/operations/zai-live-verification.md` (matrix section). Unit tests inject command runners; no live network in `npm test`.
 
 ### 9.4 Why not put this into default `npm test`?
 
@@ -635,7 +646,10 @@ npm run verify:phase2
   proves offline typed-fact substrate.
 
 npm run verify:zai-live
-  proves live Z.ai model + current harness behavior under evidence gates.
+  proves live Z.ai model + current harness behavior under evidence gates (manifest update on PASS).
+
+npm run verify:zai-live:matrix
+  opt-in per-model comparison; writes matrix-summary only; reuses shared latest rollups (last model wins — deferred hardening).
 ```
 
 ---
@@ -1126,7 +1140,7 @@ Exit gate:
 npm run test:live:zai:provider
 ```
 
-`test:live:zai:provider` sets `RECTOR_LIVE_PROVIDER=zai` and `RECTOR_ZAI_PROVIDER_SMOKE=1` before invoking the repo-root provider-smoke writer.
+`test:live:zai:provider` sets `RECTOR_LIVE_PROVIDER=zai` and `RECTOR_ZAI_PROVIDER_SMOKE=1` before invoking the repo-root provider-smoke writer; it exits nonzero unless the run records `live_provider` + `passed`.
 
 ### PR / commit 5 — Z.ai harness smoke runner
 
@@ -1147,7 +1161,7 @@ Exit gate:
 npm run test:live:zai:harness
 ```
 
-`test:live:zai:harness` sets `RECTOR_LIVE_PROVIDER=zai` and `LIVE_HARNESS_EVALS=1` before invoking the repo-root harness writer.
+`test:live:zai:harness` sets `RECTOR_LIVE_PROVIDER=zai` and `LIVE_HARNESS_EVALS=1` before invoking the repo-root harness writer; it exits nonzero unless the run records `live_provider` + `passed`.
 
 ### PR / commit 6 — Live evidence gate and docs
 
@@ -1179,7 +1193,7 @@ npm run verify:phase2
 Live fact shadow:
 
 ```bash
-LIVE_FACT_EVALS=1 npm run eval:facts:live
+RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live
 ```
 
 Live harness smoke:

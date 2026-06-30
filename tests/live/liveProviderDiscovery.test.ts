@@ -19,6 +19,7 @@ import {
   discoverLiveProvider,
   isAcceptableLiveEvidenceProvider,
   isZaiCompatibleHost,
+  resolveZaiLiveEnvCoordinates,
 } from "../../src/live/liveProviderDiscovery";
 import { SpyLLMProvider } from "../support/byokArbitraries";
 
@@ -91,10 +92,54 @@ describe("live provider discovery", () => {
       host: "api.z.ai",
       source: "env",
       liveEvidence: true,
+      discoveryLabel: "RECTOR_LIVE_PROVIDER=zai OPENAI_COMPATIBLE_*",
     });
     expect(result.selected?.provider.metadata.id).toBe("openai-compatible");
     expect(JSON.stringify({ host: result.selected?.host })).not.toContain("/api/paas/v4");
     expect(JSON.stringify({ host: result.selected?.host })).not.toContain(SECRET);
+  });
+
+  it("prefers ZAI_* env aliases per field and falls back to OPENAI_COMPATIBLE_*", async () => {
+    expect(
+      resolveZaiLiveEnvCoordinates({
+        ZAI_API_KEY: "zai-key",
+        OPENAI_COMPATIBLE_BASE_URL: "https://api.z.ai/v1",
+        OPENAI_COMPATIBLE_MODEL: "compat-model",
+      }),
+    ).toEqual({
+      apiKey: "zai-key",
+      baseUrl: "https://api.z.ai/v1",
+      model: "compat-model",
+      envSourceLabel: "ZAI_*",
+    });
+
+    const result = await discoverLiveProvider({
+      env: {
+        RECTOR_LIVE_PROVIDER: "zai",
+        ZAI_API_KEY: SECRET,
+        ZAI_BASE_URL: "https://api.z.ai/api/paas/v4",
+        ZAI_MODEL: "glm-4.7",
+        OPENAI_COMPATIBLE_API_KEY: "ignored-key",
+        OPENAI_COMPATIBLE_BASE_URL: "https://example.com/v1",
+        OPENAI_COMPATIBLE_MODEL: "ignored-model",
+      },
+    });
+
+    expect(result.selected).toMatchObject({
+      modelId: "glm-4.7",
+      host: "api.z.ai",
+      discoveryLabel: "RECTOR_LIVE_PROVIDER=zai ZAI_*",
+    });
+    expect(JSON.stringify(result.selected)).not.toContain("ignored-key");
+    expect(JSON.stringify(result.selected)).not.toContain("ignored-model");
+  });
+
+  it("uses OPENAI_COMPATIBLE_* when ZAI_* is absent (backward compatibility)", async () => {
+    expect(resolveZaiLiveEnvCoordinates({
+      OPENAI_COMPATIBLE_API_KEY: "k",
+      OPENAI_COMPATIBLE_BASE_URL: "https://api.z.ai/v1",
+      OPENAI_COMPATIBLE_MODEL: "m",
+    })).toMatchObject({ envSourceLabel: "OPENAI_COMPATIBLE_*", apiKey: "k", model: "m" });
   });
 
   it("rejects Z.ai claims whose OpenAI-compatible base URL is not a Z.ai host without echoing secrets or URL paths", async () => {

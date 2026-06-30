@@ -190,6 +190,23 @@ describe("gateZaiLiveEvidence", () => {
     }
   });
 
+  it("rejects phase2 summary that disagrees with the shadow report", async () => {
+    const repoRoot = await makeRepo();
+    try {
+      await writePassingCampaignFixture(repoRoot);
+      const summaryPath = path.join(repoRoot, ".rector", "evidence", "phase2", "live-fact-shadow-summary.json");
+      const summary = JSON.parse(await readFile(summaryPath, "utf8")) as Record<string, unknown>;
+      summary.liveEvidenceStatus = "skipped";
+      summary.status = "skipped";
+      await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+      const result = await gateZaiLiveEvidence({ repoRoot, updateManifestOnPass: false });
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.includes("live-fact-shadow-summary"))).toBe(true);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects failed harness status and scorecard", async () => {
     const repoRoot = await makeRepo();
     try {
@@ -198,6 +215,22 @@ describe("gateZaiLiveEvidence", () => {
       expect(result.ok).toBe(false);
       expect(result.violations.some((v) => v.includes("harness status"))).toBe(true);
       expect(result.violations.some((v) => v.includes("scorecard.passed"))).toBe(true);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects harness runId values that escape the runs directory", async () => {
+    const repoRoot = await makeRepo();
+    try {
+      await writePassingCampaignFixture(repoRoot);
+      const latestPath = path.join(repoRoot, ".rector", "evidence", "live", "zai", "latest.json");
+      const latest = JSON.parse(await readFile(latestPath, "utf8")) as { runId: string };
+      latest.runId = "/etc/passwd";
+      await writeFile(latestPath, `${JSON.stringify(latest, null, 2)}\n`, "utf8");
+      const result = await gateZaiLiveEvidence({ repoRoot, updateManifestOnPass: false });
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.includes("runId"))).toBe(true);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }

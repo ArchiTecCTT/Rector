@@ -4,7 +4,7 @@ import http from "node:http";
 
 import { createApp } from "../src/api/server";
 import { TaskManager } from "../src/thalamus/router";
-import { createDefaultToolRegistry } from "../src/tools";
+import { createDefaultToolRegistry, toolSuccess } from "../src/tools";
 
 describe("Tools API", () => {
   let app: express.Application;
@@ -24,7 +24,7 @@ describe("Tools API", () => {
       },
       source: "module",
       moduleId: "module-test",
-      handler: async () => ({ ok: true, toolName: "module.hidden", output: {} }),
+      handler: async () => toolSuccess("module.hidden"),
     });
     app = createApp(new TaskManager(), { toolRegistry: registry });
     await new Promise<void>((resolve) => {
@@ -50,7 +50,6 @@ describe("Tools API", () => {
     expect(response.status).toBe(200);
     expect(data.tools.map((tool: { name: string }) => tool.name)).toEqual([
       "sandbox.execute",
-      "simulator.echo",
       "workspace.apply_patch",
       "workspace.list_dir",
       "workspace.read_file",

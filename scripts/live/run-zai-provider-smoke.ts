@@ -12,7 +12,7 @@ runZaiProviderSmoke()
       errorKind: report.error?.kind,
       reportPath: path.join(getZaiLiveEvidenceDir(), "provider-smoke.json"),
     }));
-    if (report.status === "failed") process.exitCode = 1;
+    if (report.status !== "passed" || report.liveEvidenceStatus !== "live_provider") process.exitCode = 1;
   })
   .catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));

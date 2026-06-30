@@ -555,6 +555,8 @@ export interface LivePlannerDeps {
   abortSignal?: AbortSignal;
   buildPrompt?: typeof buildPlannerPrompt;
   buildRepairPrompt?: typeof buildPlannerRepairPrompt;
+  /** Test-only compatibility hook for callers that explicitly want a deterministic fallback plan on blockers. */
+  includeDeterministicFallback?: boolean;
 }
 
 const ZERO_USAGE: LLMUsage = LLMUsageSchema.parse({
@@ -615,8 +617,10 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
         provider,
         model,
         attempt - 1,
-        "budget preflight denied live planner; deterministic fallback plan attached",
-        createFakePlan(parsedInput)
+        deps.includeDeterministicFallback
+          ? "budget preflight denied live planner; deterministic fallback plan attached"
+          : "budget preflight denied live planner; no deterministic fallback attached",
+        deps.includeDeterministicFallback ? createFakePlan(parsedInput) : undefined,
       );
     }
 
@@ -633,8 +637,10 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
         provider,
         model,
         attempt,
-        "provider error during live planner; deterministic fallback plan attached",
-        createFakePlan(parsedInput)
+        deps.includeDeterministicFallback
+          ? "provider error during live planner; deterministic fallback plan attached"
+          : "provider error during live planner; no deterministic fallback attached",
+        deps.includeDeterministicFallback ? createFakePlan(parsedInput) : undefined,
       );
     }
 
@@ -669,8 +675,10 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
     provider,
     model,
     2,
-    "live planner invalid after one repair; deterministic fallback plan attached",
-    createFakePlan(parsedInput)
+    deps.includeDeterministicFallback
+      ? "live planner invalid after one repair; deterministic fallback plan attached"
+      : "live planner invalid after one repair; no deterministic fallback attached",
+    deps.includeDeterministicFallback ? createFakePlan(parsedInput) : undefined,
   );
 }
 

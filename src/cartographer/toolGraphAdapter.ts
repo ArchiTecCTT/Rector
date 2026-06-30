@@ -45,12 +45,7 @@ function getToolSource(entry?: ToolRegistryEntry): string {
   return entry?.source ?? "builtin";
 }
 
-function getWarningsForTool(name: string): readonly string[] {
-  if (name === "workspace.validate") {
-    return [
-      "fake-validation: current implementation may return synthetic passed without executing real validators; quarantined until fake-purge",
-    ];
-  }
+function getWarningsForTool(_name: string): readonly string[] {
   return [];
 }
 
@@ -74,9 +69,7 @@ export function buildToolGraph(input: BuildToolGraphInput): BuildToolGraphResult
     }
     if (warnings.length > 0) {
       props.warnings = JSON.stringify(warnings);
-      if (t.name === "workspace.validate") {
-        props.fakeValidationWarning = warnings[0];
-      }
+
     }
     const node: CartographerGraphNode = {
       id: makeToolId(t.name),

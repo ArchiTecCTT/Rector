@@ -266,6 +266,16 @@ function validateManifestPointers(
         continue;
       }
 
+      if (hasTraversalSegment(value)) {
+        failures.push({
+          code: "manifest_pointer_invalid",
+          track,
+          pointer: field,
+          message: `Manifest pointer ${track}.${field} must not contain path traversal segments.`,
+        });
+        continue;
+      }
+
       const resolved = resolvePointerPath(value, repoRoot);
       if (!isPathInside(evidenceRoot, resolved)) {
         failures.push({
@@ -278,6 +288,10 @@ function validateManifestPointers(
       }
     }
   }
+}
+
+function hasTraversalSegment(pointer: string): boolean {
+  return pointer.split(/[\\/]+/).includes("..");
 }
 
 function resolvePointerPath(pointer: string, repoRoot: string): string {

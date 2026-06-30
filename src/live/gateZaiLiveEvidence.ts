@@ -10,6 +10,7 @@ import {
   getEvidenceRoot,
   getEvidenceTrackDir,
   getZaiLiveEvidenceDir,
+  getZaiLiveRunEvidenceDir,
   type CampaignBudgetUsage,
 } from "../evidence";
 import { ZAI_HARNESS_FAILURE_KINDS, ZAI_HARNESS_SCORECARD_SCHEMA_VERSION } from "./harnessScorecard";
@@ -155,12 +156,13 @@ export async function gateZaiLiveEvidence(
 
   if (latest) {
     validateHarnessReport(latest, violations);
-    await validateRunArtifacts(zaiDir, latest, violations, scannedBodies);
+    await validateRunArtifacts(repoRoot, zaiDir, latest, violations, scannedBodies);
   }
 
   if (requireCampaignTracks) {
     validateProviderSmokeTrack(providerSmoke, violations);
     validatePhase2Track(phase2Report, violations);
+    validatePhase2SummaryTrack(phase2Report, phase2Summary, violations);
     validateCampaignTrackFreshness(
       {
         harnessGeneratedAt: latest?.generatedAt,
@@ -301,12 +303,24 @@ function validateHarnessReport(report: ZaiHarnessReport, violations: string[]): 
 }
 
 async function validateRunArtifacts(
+  repoRoot: string,
   zaiDir: string,
   report: ZaiHarnessReport,
   violations: string[],
   scannedBodies: unknown[],
 ): Promise<void> {
-  const runDir = path.join(zaiDir, "runs", report.runId);
+  let runDir: string;
+  try {
+    runDir = getZaiLiveRunEvidenceDir(report.runId, repoRoot);
+  } catch (error) {
+    violations.push(`invalid harness runId: ${errorMessage(error)}`);
+    return;
+  }
+  const zaiRoot = path.resolve(zaiDir);
+  if (!isResolvedPathInsideDirectory(runDir, zaiRoot)) {
+    violations.push("harness runId resolves outside live/zai evidence directory");
+    return;
+  }
   for (const name of ZAI_LIVE_RUN_ARTIFACT_FILES) {
     const filePath = path.join(runDir, name);
     try {
@@ -345,7 +359,6 @@ async function validateRunArtifacts(
     // missing file already recorded
   }
 
-  const zaiRoot = path.resolve(zaiDir);
   for (const [key, relative] of Object.entries(report.artifacts)) {
     const resolved = path.resolve(zaiDir, relative);
     if (!isResolvedPathInsideDirectory(resolved, zaiRoot)) {
@@ -446,6 +459,40 @@ function validatePhase2Track(
         violations.push(`phase2 case has unclassified failure: ${reason}`);
       }
     }
+  }
+}
+
+function validatePhase2SummaryTrack(
+  report: z.infer<typeof LiveFactShadowGateSchema> | undefined,
+  summary: z.infer<typeof LiveFactShadowSummarySchema> | undefined,
+  violations: string[],
+): void {
+  if (!report || !summary) return;
+  if (summary.liveEvidenceStatus !== "live_provider") {
+    violations.push(
+      `phase2 live-fact-shadow-summary liveEvidenceStatus must be live_provider (got ${summary.liveEvidenceStatus})`,
+    );
+  }
+  if (summary.status !== "completed") {
+    violations.push(`phase2 live-fact-shadow-summary status must be completed (got ${summary.status})`);
+  }
+  if (summary.failedCount > 0) {
+    violations.push(`phase2 live-fact-shadow-summary failedCount must be 0 (got ${summary.failedCount})`);
+  }
+  if (summary.liveEvidenceStatus !== report.liveEvidenceStatus) {
+    violations.push("phase2 live-fact-shadow-summary liveEvidenceStatus does not match live-fact-shadow-report.json");
+  }
+  if (summary.status !== report.status) {
+    violations.push("phase2 live-fact-shadow-summary status does not match live-fact-shadow-report.json");
+  }
+  if (summary.failedCount !== report.failedCount) {
+    violations.push("phase2 live-fact-shadow-summary failedCount does not match live-fact-shadow-report.json");
+  }
+  if (summary.generatedAt !== report.generatedAt) {
+    violations.push("phase2 live-fact-shadow-summary generatedAt does not match live-fact-shadow-report.json");
+  }
+  if (summary.totalTokenUsage.modelCalls <= 0) {
+    violations.push("phase2 live-fact-shadow-summary modelCalls must be greater than zero");
   }
 }
 

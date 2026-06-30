@@ -16,21 +16,17 @@ describe("toolGraphAdapter", () => {
     const res = buildToolGraph(input);
     expect(res.nodes.length).toBeGreaterThan(0);
     const echo = res.nodes.find((n) => n.label === "simulator.echo");
-    expect(echo).toBeDefined();
-    expect(echo?.kind).toBe("Tool");
-    expect(echo?.properties.productionAdmission).toBe("test_only");
-    expect(echo?.properties.toolSource).toBe("builtin");
+    expect(echo).toBeUndefined();
     const validate = res.nodes.find((n) => n.label === "workspace.validate");
     expect(validate).toBeDefined();
     expect(validate?.properties.productionAdmission).toBe("production");
-    expect(String(validate?.properties.fakeValidationWarning ?? "")).toContain("fake-validation");
+    expect(validate?.properties.fakeValidationWarning).toBeUndefined();
     // No edges from tool definitions alone
     expect(res.edges.length).toBe(0);
   });
 
   it("never marks simulator.echo as production", () => {
-    const registry = createDefaultToolRegistry();
-    const res = buildToolGraph({ snapshotId: "s", toolEntries: registry.snapshot() });
+    const res = buildToolGraph({ snapshotId: "s", toolEntries: [simulatorEchoEntry()] });
     const echo = res.nodes.find((n) => n.label === "simulator.echo");
     expect(echo?.properties.productionAdmission).not.toBe("production");
   });
@@ -63,3 +59,18 @@ describe("toolGraphAdapter", () => {
     expect(res.nodes.every((n) => n.properties.toolSource === "builtin")).toBe(true);
   });
 });
+
+function simulatorEchoEntry(): ToolRegistryEntry {
+  return {
+    definition: {
+      name: "simulator.echo",
+      description: "Deterministic simulator-only echo tool used by graph-adapter tests.",
+      inputSchema: { type: "object", additionalProperties: true },
+      risk: "low",
+      requiresApproval: false,
+      requiresSandbox: false,
+    },
+    source: "builtin",
+    handler: async () => toolSuccess("simulator.echo"),
+  };
+}

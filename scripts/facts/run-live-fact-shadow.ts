@@ -834,6 +834,7 @@ function severityField(value: unknown): "low" | "medium" | "high" {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runLiveFactShadow().then((report) => {
     console.log(JSON.stringify({ status: report.status, liveEvidenceStatus: report.liveEvidenceStatus, skippedReason: report.skippedReason, reportPath: path.join(DEFAULT_OUTPUT_DIR, REPORT_JSON) }));
+    if (report.status !== "completed" || report.liveEvidenceStatus !== "live_provider" || report.failedCount > 0) process.exitCode = 1;
   }).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

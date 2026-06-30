@@ -32,6 +32,7 @@ describe("no-production-fakes audit", () => {
     // Then: all six detector families are reported and the report remains non-blocking.
     expect(report.exitCode).toBe(0);
     expect(report.findingCount).toBeGreaterThanOrEqual(7);
+    expect(report.unallowedFindingCount).toBe(report.findingCount);
     expect(countByRule(report.findings)).toEqual({
       executor_simulator_import: 1,
       fake_chat_or_tests_support_import: 2,
@@ -53,22 +54,23 @@ describe("no-production-fakes audit", () => {
     const report = await auditNoProductionFakes({ repoRoot: rootDir });
 
     // Then: only src is considered and no findings are reported.
-    expect(report).toMatchObject({ exitCode: 0, findingCount: 0, scannedFileCount: 1 });
+    expect(report).toMatchObject({ exitCode: 0, findingCount: 0, unallowedFindingCount: 0, scannedFileCount: 1 });
     expect(report.findings).toEqual([]);
   });
 
-  it("formats the current repo findings as report-only output", async () => {
-    // Given: the current Rector source tree still contains known fake-system seams.
+  it("formats the current repo findings with zero unallowed fake seams", async () => {
+    // Given: remaining Rector fake-system seams are either test-only or explicitly allowlisted.
     const report = await auditNoProductionFakes({ repoRoot: process.cwd() });
 
     // When: the report is formatted for CLI output.
     const output = formatAuditReport(report);
 
-    // Then: the known seams are visible and the output states the non-blocking policy.
+    // Then: the known seams stay visible, but no unallowlisted product fake seam remains.
     expect(report.exitCode).toBe(0);
     expect(report.findings.length).toBeGreaterThan(0);
+    expect(report.unallowedFindingCount).toBe(0);
     expect(output).toContain("Rector no-production-fakes audit (report-only)");
-    expect(output).toContain("nonzero exits are reserved for internal audit errors");
+    expect(output).toContain("Unallowed findings: 0");
     expect(output).toContain("fake_llm_provider");
     expect(output).toContain("workspace_validate_passed_true");
   });
@@ -89,6 +91,7 @@ describe("no-production-fakes audit", () => {
     // Then: output includes findings and the subprocess did not throw from a nonzero exit.
     expect(output).toContain("Rector no-production-fakes audit (report-only)");
     expect(output).toContain("Findings:");
+    expect(output).toContain("Unallowed findings: 0");
   });
 
   it("throws for a nonexistent scan root through the programmatic API", async () => {

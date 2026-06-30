@@ -1,0 +1,503 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import { getZaiLiveEvidenceDir, SAFE_EVIDENCE_RUN_ID_PATTERN } from "../evidence";
+import { sanitizeEvidenceStringLeaves } from "../evidence/sanitize";
+import {
+  gateZaiLiveEvidence,
+  type GateZaiLiveEvidenceResult,
+  type GateZaiLiveEvidenceSummary,
+} from "./gateZaiLiveEvidence";
+import { sanitizeHarnessEvidenceValue, secretLeakFindings } from "./harnessEvidence";
+import { ZaiHarnessReportSchema } from "./zaiHarnessReport";
+
+export const ZAI_MATRIX_SUMMARY_SCHEMA_VERSION = "rector.zai-live-matrix-summary.v1";
+
+export const ZAI_MATRIX_SENSITIVE_ENV_KEYS = new Set([
+  "ZAI_API_KEY",
+  "OPENAI_COMPATIBLE_API_KEY",
+  "Authorization",
+]);
+
+export type ZaiMatrixGrade = "A" | "B" | "C" | "D" | "F";
+
+export interface ZaiMatrixCommandInvocation {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly env: Record<string, string>;
+}
+
+export interface ZaiMatrixCommandResult {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly durationMs: number;
+}
+
+export type ZaiMatrixCommandRunner = (input: ZaiMatrixCommandInvocation) => Promise<ZaiMatrixCommandResult>;
+
+export interface ZaiMatrixStepDefinition {
+  readonly id: string;
+  readonly npmScript: string;
+  readonly npmArgs?: readonly string[];
+}
+
+export const ZAI_MATRIX_OFFLINE_STEP: ZaiMatrixStepDefinition = {
+  id: "verify:phase2",
+  npmScript: "verify:phase2",
+};
+
+export const ZAI_MATRIX_LIVE_CAMPAIGN_STEPS: readonly ZaiMatrixStepDefinition[] = [
+  { id: "eval:facts:live", npmScript: "eval:facts:live" },
+  { id: "test:live:zai:provider", npmScript: "test:live:zai:provider" },
+  { id: "test:live:zai:harness", npmScript: "test:live:zai:harness" },
+  {
+    id: "evidence:zai-live:gate",
+    npmScript: "evidence:zai-live:gate",
+    npmArgs: ["--no-manifest-update"],
+  },
+];
+
+export interface ZaiMatrixConfig {
+  readonly runsPerModel: number;
+  readonly maxModels?: number;
+  readonly skipOffline: boolean;
+  readonly continueOnFailure: boolean;
+}
+
+export interface ZaiMatrixStepLogEntry {
+  readonly stepId: string;
+  readonly command: string;
+  readonly envKeys: readonly string[];
+  readonly exitCode: number;
+  readonly durationMs: number;
+  readonly stderrTail?: string;
+}
+
+export interface ZaiMatrixCampaignResult {
+  readonly modelId: string;
+  readonly safeModelId: string;
+  readonly runIndex: number;
+  readonly status: "pass" | "fail";
+  readonly durationMs: number;
+  readonly steps: readonly ZaiMatrixStepLogEntry[];
+  readonly gate?: GateZaiLiveEvidenceSummary;
+  readonly gateViolations?: readonly string[];
+  readonly grade: ZaiMatrixGrade;
+  readonly rating: string;
+  readonly reportPointers: {
+    readonly latestJson: string;
+    readonly latestMd: string;
+    readonly providerSmokeJson: string;
+    readonly phase2ShadowJson: string;
+  };
+}
+
+export interface ZaiMatrixSummary {
+  readonly schemaVersion: typeof ZAI_MATRIX_SUMMARY_SCHEMA_VERSION;
+  readonly generatedAt: string;
+  readonly repoRoot: string;
+  readonly modelSource: "ZAI_MODELS" | "ZAI_MODEL";
+  readonly config: ZaiMatrixConfig;
+  readonly modelsRequested: readonly string[];
+  readonly modelsExecuted: readonly string[];
+  readonly campaigns: readonly ZaiMatrixCampaignResult[];
+  readonly overallStatus: "pass" | "fail" | "partial";
+  readonly passedCount: number;
+  readonly failedCount: number;
+}
+
+export function getZaiLiveMatrixEvidenceDir(repoRoot?: string): string {
+  return path.join(getZaiLiveEvidenceDir(repoRoot), "matrix");
+}
+
+export function parseZaiModelsList(raw: string | undefined): string[] {
+  if (!raw?.trim()) return [];
+  return raw
+    .split(/[\s,]+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+export function dedupeZaiModelsPreserveOrder(models: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const model of models) {
+    const key = model.trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(key);
+  }
+  return output;
+}
+
+export function toSafeModelEvidenceId(modelId: string): string {
+  const trimmed = modelId.trim();
+  if (!trimmed) {
+    throw new Error("Z.ai matrix model id must not be empty.");
+  }
+  let sanitized = trimmed.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!sanitized || sanitized === "." || sanitized === "..") {
+    throw new Error(`Z.ai matrix model id cannot be converted to a safe evidence segment: ${modelId}`);
+  }
+  if (!/^[A-Za-z0-9]/.test(sanitized)) {
+    sanitized = `m_${sanitized}`;
+  }
+  if (!SAFE_EVIDENCE_RUN_ID_PATTERN.test(sanitized)) {
+    throw new Error(`Z.ai matrix model id is not a safe evidence segment after sanitization: ${modelId}`);
+  }
+  return sanitized;
+}
+
+export function resolveZaiMatrixConfig(env: Record<string, string | undefined> = process.env): ZaiMatrixConfig {
+  const runsPerModel = positiveInt(env.ZAI_MATRIX_RUNS_PER_MODEL, 1);
+  const maxModelsRaw = env.ZAI_MATRIX_MAX_MODELS?.trim();
+  const maxModels = maxModelsRaw ? positiveInt(maxModelsRaw, 0) : undefined;
+  const skipOffline = truthyEnv(env.ZAI_MATRIX_SKIP_OFFLINE);
+  const continueOnFailure = env.ZAI_MATRIX_CONTINUE_ON_FAILURE === undefined
+    ? true
+    : truthyEnv(env.ZAI_MATRIX_CONTINUE_ON_FAILURE);
+  return {
+    runsPerModel: Math.max(1, runsPerModel),
+    ...(maxModels !== undefined && maxModels > 0 ? { maxModels } : {}),
+    skipOffline,
+    continueOnFailure,
+  };
+}
+
+export function resolveZaiMatrixModels(env: Record<string, string | undefined> = process.env): {
+  readonly models: readonly string[];
+  readonly source: "ZAI_MODELS" | "ZAI_MODEL" | "empty";
+} {
+  const fromList = dedupeZaiModelsPreserveOrder(parseZaiModelsList(env.ZAI_MODELS));
+  if (fromList.length > 0) {
+    return { models: applyMaxModelsCap(fromList, env), source: "ZAI_MODELS" };
+  }
+  const single = env.ZAI_MODEL?.trim();
+  if (single) {
+    return { models: [single], source: "ZAI_MODEL" };
+  }
+  return { models: [], source: "empty" };
+}
+
+export function buildIsolatedCampaignEnv(
+  baseEnv: Record<string, string | undefined>,
+  modelId: string,
+): Record<string, string> {
+  const output: Record<string, string> = {};
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (value === undefined) continue;
+    output[key] = value;
+  }
+  output.ZAI_MODEL = modelId;
+  output.RECTOR_LIVE_PROVIDER = "zai";
+  return output;
+}
+
+export function buildStepCommandLog(
+  step: ZaiMatrixStepDefinition,
+  result: ZaiMatrixCommandResult,
+  env: Record<string, string>,
+): ZaiMatrixStepLogEntry {
+  const args = step.npmArgs?.length ? ["--", ...step.npmArgs] : [];
+  const command = `npm run ${step.npmScript}${args.length ? ` ${args.join(" ")}` : ""}`;
+  return sanitizeEvidenceStringLeaves({
+    stepId: step.id,
+    command,
+    envKeys: Object.keys(env).filter((key) => !ZAI_MATRIX_SENSITIVE_ENV_KEYS.has(key)).sort(),
+    exitCode: result.exitCode,
+    durationMs: result.durationMs,
+    ...(result.stderr.trim()
+      ? { stderrTail: truncateRedactedTail(result.stderr) }
+      : {}),
+  });
+}
+
+export function deriveZaiModelCampaignRating(input: {
+  readonly gateOk: boolean;
+  readonly gateSummary?: GateZaiLiveEvidenceSummary;
+  readonly scorecardPassed?: boolean;
+}): { readonly grade: ZaiMatrixGrade; readonly rating: string } {
+  if (!input.gateOk) {
+    return { grade: "F", rating: "gate_fail" };
+  }
+  if (input.scorecardPassed === false) {
+    return { grade: "C", rating: "gate_pass_scorecard_fail" };
+  }
+  const total = input.gateSummary?.scenariosTotal ?? 0;
+  const passed = input.gateSummary?.scenariosPassed ?? 0;
+  if (total > 0 && passed === total) {
+    return { grade: "A", rating: "verified_pass" };
+  }
+  if (total > 0 && passed / total >= 0.8) {
+    return { grade: "B", rating: "partial_scenarios" };
+  }
+  if (input.gateOk) {
+    return { grade: "D", rating: "gate_pass_weak_harness" };
+  }
+  return { grade: "F", rating: "fail" };
+}
+
+export function assertMatrixArtifactHasNoSecrets(value: unknown): void {
+  const findings = secretLeakFindings(value);
+  if (findings.length > 0) {
+    throw new Error(`Z.ai matrix artifact contains secret-like content: ${findings.join(", ")}`);
+  }
+  const serialized = JSON.stringify(value);
+  for (const key of ZAI_MATRIX_SENSITIVE_ENV_KEYS) {
+    const pattern = new RegExp(`${key}\\s*[:=]\\s*["']?[^\\s"']{8,}`, "i");
+    if (pattern.test(serialized)) {
+      throw new Error(`Z.ai matrix artifact must not embed ${key} values.`);
+    }
+  }
+}
+
+export async function runZaiModelMatrix(options: {
+  readonly repoRoot: string;
+  readonly env?: Record<string, string | undefined>;
+  readonly config?: ZaiMatrixConfig;
+  readonly models?: readonly string[];
+  readonly modelSource?: "ZAI_MODELS" | "ZAI_MODEL";
+  readonly runCommand: ZaiMatrixCommandRunner;
+  readonly now?: () => Date;
+  readonly gateEvaluator?: (input: { repoRoot: string }) => Promise<GateZaiLiveEvidenceResult>;
+}): Promise<ZaiMatrixSummary> {
+  const repoRoot = path.resolve(options.repoRoot);
+  const env = options.env ?? process.env;
+  const config = options.config ?? resolveZaiMatrixConfig(env);
+  const resolved = options.models
+    ? {
+        models: [...options.models],
+        source: options.modelSource ?? ("ZAI_MODELS" as const),
+      }
+    : resolveZaiMatrixModels(env);
+  if (resolved.models.length === 0 || resolved.source === "empty") {
+    throw new Error("Z.ai matrix requires ZAI_MODELS or ZAI_MODEL to be set.");
+  }
+
+  const gateEvaluator = options.gateEvaluator ?? ((input) =>
+    gateZaiLiveEvidence({
+      repoRoot: input.repoRoot,
+      updateManifestOnPass: false,
+      requireCampaignTracks: true,
+    }));
+
+  const generatedAt = (options.now?.() ?? new Date()).toISOString();
+  const campaigns: ZaiMatrixCampaignResult[] = [];
+  let offlineFailed = false;
+
+  if (!config.skipOffline) {
+    const offlineResult = await options.runCommand({
+      command: "npm",
+      args: ["run", ZAI_MATRIX_OFFLINE_STEP.npmScript],
+      cwd: repoRoot,
+      env: stringifyEnv(env),
+    });
+    if (offlineResult.exitCode !== 0) {
+      offlineFailed = true;
+      if (!config.continueOnFailure) {
+        throw new Error(
+          `Z.ai matrix offline step ${ZAI_MATRIX_OFFLINE_STEP.id} failed with exit ${offlineResult.exitCode}.`,
+        );
+      }
+    }
+  }
+
+  modelLoop: for (const modelId of resolved.models) {
+    const safeModelId = toSafeModelEvidenceId(modelId);
+    for (let runIndex = 0; runIndex < config.runsPerModel; runIndex += 1) {
+      const campaignStart = Date.now();
+      const campaignEnv = buildIsolatedCampaignEnv(env, modelId);
+      const steps: ZaiMatrixStepLogEntry[] = [];
+      let campaignFailed = offlineFailed;
+
+      for (const step of ZAI_MATRIX_LIVE_CAMPAIGN_STEPS) {
+        const args = ["run", step.npmScript, ...(step.npmArgs?.length ? ["--", ...step.npmArgs] : [])];
+        const stepStart = Date.now();
+        const result = await options.runCommand({
+          command: "npm",
+          args,
+          cwd: repoRoot,
+          env: campaignEnv,
+        });
+        steps.push(
+          buildStepCommandLog(step, { ...result, durationMs: Date.now() - stepStart }, campaignEnv),
+        );
+        if (result.exitCode !== 0) {
+          campaignFailed = true;
+          break;
+        }
+      }
+
+      let gateResult: GateZaiLiveEvidenceResult | undefined;
+      let scorecardPassed: boolean | undefined;
+      if (!campaignFailed) {
+        gateResult = await gateEvaluator({ repoRoot });
+        scorecardPassed = await readHarnessScorecardPassed(repoRoot);
+        if (!gateResult.ok) {
+          campaignFailed = true;
+        }
+      }
+
+      const { grade, rating } = deriveZaiModelCampaignRating({
+        gateOk: gateResult?.ok ?? false,
+        gateSummary: gateResult?.summary,
+        scorecardPassed,
+      });
+
+      campaigns.push({
+        modelId,
+        safeModelId,
+        runIndex,
+        status: campaignFailed ? "fail" : "pass",
+        durationMs: Date.now() - campaignStart,
+        steps,
+        ...(gateResult?.summary ? { gate: gateResult.summary } : {}),
+        ...(gateResult && !gateResult.ok ? { gateViolations: gateResult.violations } : {}),
+        grade,
+        rating,
+        reportPointers: defaultReportPointers(),
+      });
+
+      if (campaignFailed && !config.continueOnFailure) {
+        break modelLoop;
+      }
+    }
+  }
+
+  const passedCount = campaigns.filter((c) => c.status === "pass").length;
+  const failedCount = campaigns.filter((c) => c.status === "fail").length;
+  const overallStatus: ZaiMatrixSummary["overallStatus"] = failedCount === 0
+    ? "pass"
+    : passedCount === 0
+      ? "fail"
+      : "partial";
+
+  const summary: ZaiMatrixSummary = {
+    schemaVersion: ZAI_MATRIX_SUMMARY_SCHEMA_VERSION,
+    generatedAt,
+    repoRoot: ".",
+    modelSource: resolved.source,
+    config,
+    modelsRequested: [...resolved.models],
+    modelsExecuted: dedupeZaiModelsPreserveOrder(campaigns.map((c) => c.modelId)),
+    campaigns,
+    overallStatus,
+    passedCount,
+    failedCount,
+  };
+
+  assertMatrixArtifactHasNoSecrets(summary);
+  return summary;
+}
+
+export async function writeZaiMatrixSummary(
+  summary: ZaiMatrixSummary,
+  options: { readonly repoRoot: string },
+): Promise<{ readonly jsonPath: string; readonly markdownPath: string }> {
+  const sanitized = sanitizeEvidenceStringLeaves(summary);
+  assertMatrixArtifactHasNoSecrets(sanitized);
+  const matrixDir = getZaiLiveMatrixEvidenceDir(options.repoRoot);
+  await fs.mkdir(matrixDir, { recursive: true });
+  const jsonPath = path.join(matrixDir, "matrix-summary.json");
+  const markdownPath = path.join(matrixDir, "matrix-summary.md");
+  await fs.writeFile(jsonPath, `${JSON.stringify(sanitized, null, 2)}\n`, "utf8");
+  await fs.writeFile(markdownPath, formatZaiMatrixSummaryMarkdown(sanitized), "utf8");
+  return { jsonPath, markdownPath };
+}
+
+export function formatZaiMatrixSummaryMarkdown(summary: ZaiMatrixSummary): string {
+  const lines: string[] = [];
+  lines.push("# Z.ai live model matrix summary");
+  lines.push("");
+  lines.push(`Generated: ${summary.generatedAt}`);
+  lines.push(`Schema: ${summary.schemaVersion}`);
+  lines.push(`Overall: **${summary.overallStatus}** (${summary.passedCount} pass / ${summary.failedCount} fail)`);
+  lines.push(`Model source: ${summary.modelSource}`);
+  lines.push(`Runs per model: ${summary.config.runsPerModel}`);
+  lines.push("");
+  lines.push("## Models");
+  lines.push("");
+  for (const model of summary.modelsRequested) {
+    lines.push(`- ${model}`);
+  }
+  lines.push("");
+  lines.push("## Campaigns");
+  lines.push("");
+  lines.push("| Model | Run | Status | Grade | Rating | Duration (ms) | Scenarios | Tokens |");
+  lines.push("| --- | ---: | --- | --- | --- | ---: | --- | ---: |");
+  for (const campaign of summary.campaigns) {
+    const scenarios = campaign.gate
+      ? `${campaign.gate.scenariosPassed}/${campaign.gate.scenariosTotal}`
+      : "n/a";
+    const tokens = campaign.gate?.campaignTokens?.toLocaleString() ?? "n/a";
+    lines.push(
+      `| ${campaign.modelId} | ${campaign.runIndex + 1} | ${campaign.status} | ${campaign.grade} | ${campaign.rating} | ${campaign.durationMs} | ${scenarios} | ${tokens} |`,
+    );
+  }
+  lines.push("");
+  lines.push("## Report pointers");
+  lines.push("");
+  lines.push("- `.rector/evidence/live/zai/latest.json` (last campaign overwrote harness rollup)");
+  lines.push("- `.rector/evidence/live/zai/matrix/matrix-summary.json`");
+  lines.push("");
+  lines.push(
+    "> Live verification remains **unverified** until a real non-fake provider passes `evidence:zai-live:gate` with `live_provider` evidence. This matrix report is for operator comparison only.",
+  );
+  lines.push("");
+  return `${lines.join("\n")}\n`;
+}
+
+function defaultReportPointers(): ZaiMatrixCampaignResult["reportPointers"] {
+  return {
+    latestJson: ".rector/evidence/live/zai/latest.json",
+    latestMd: ".rector/evidence/live/zai/latest.md",
+    providerSmokeJson: ".rector/evidence/live/zai/provider-smoke.json",
+    phase2ShadowJson: ".rector/evidence/phase2/live-fact-shadow-report.json",
+  };
+}
+
+async function readHarnessScorecardPassed(repoRoot: string): Promise<boolean | undefined> {
+  try {
+    const raw = await fs.readFile(path.join(getZaiLiveEvidenceDir(repoRoot), "latest.json"), "utf8");
+    const report = ZaiHarnessReportSchema.parse(JSON.parse(raw));
+    return report.scorecard.passed;
+  } catch {
+    return undefined;
+  }
+}
+
+function applyMaxModelsCap(models: readonly string[], env: Record<string, string | undefined>): string[] {
+  const cap = env.ZAI_MATRIX_MAX_MODELS?.trim();
+  if (!cap) return [...models];
+  const max = positiveInt(cap, 0);
+  if (max <= 0) return [...models];
+  return models.slice(0, max);
+}
+
+function stringifyEnv(env: Record<string, string | undefined>): Record<string, string> {
+  const output: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) output[key] = value;
+  }
+  return output;
+}
+
+function positiveInt(raw: string | undefined, fallback: number): number {
+  if (!raw?.trim()) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function truthyEnv(raw: string | undefined): boolean {
+  if (!raw?.trim()) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function truncateRedactedTail(stderr: string, maxLen = 400): string {
+  const redacted = String(sanitizeHarnessEvidenceValue(stderr));
+  if (redacted.length <= maxLen) return redacted;
+  return `${redacted.slice(0, maxLen)}…`;
+}

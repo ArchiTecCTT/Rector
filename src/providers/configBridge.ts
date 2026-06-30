@@ -2,7 +2,6 @@ import type { SecretStore } from "../security/secretStore";
 import {
   AzureOpenAIProvider,
   CloudflareWorkersAIProvider,
-  FakeLLMProvider,
   OpenAICompatibleProvider,
   TogetherAIProvider,
   buildModelRouter,
@@ -297,9 +296,6 @@ function selectionFor(provider: LLMProvider, route: ModelRoute, role: ProviderMo
  * - One {@link OpenAICompatibleProvider} is constructed per configured
  *   `openai-compatible` record, each with its own injected secret/headers, since
  *   multiple such deployments can be configured.
- * - The {@link FakeLLMProvider} is always present as the Local_Mode and
- *   budget/no-provider fallback.
- *
  * Selection honors the persisted Active_Route_Map (Requirement 14.3): when a
  * provider is designated for the selected route's role (`flagship`/`slm`) and
  * that provider is configured, valid, and supports the route, it is chosen;
@@ -324,7 +320,6 @@ export async function buildConfiguredRouter(options: BuildConfiguredRouterOption
   const effectiveEnv = await resolveProviderEnv(store, secrets, baseEnv);
   const state = await store.getState();
 
-  const fake = new FakeLLMProvider();
   const cloudflare = new CloudflareWorkersAIProvider({
     accountId: effectiveEnv.CLOUDFLARE_ACCOUNT_ID,
     apiToken: effectiveEnv.CLOUDFLARE_API_TOKEN,
@@ -352,7 +347,7 @@ export async function buildConfiguredRouter(options: BuildConfiguredRouterOption
     fetchImpl: resolveOptions.fetchImpl,
   });
 
-  const providers: LLMProvider[] = [fake, cloudflare, azure, together];
+  const providers: LLMProvider[] = [cloudflare, azure, together];
 
   // Map each persisted record id to the provider instance it controls, so the
   // Active_Route_Map (which addresses providers by record id) can resolve a
@@ -373,7 +368,7 @@ export async function buildConfiguredRouter(options: BuildConfiguredRouterOption
     }
   }
 
-  const inner = buildModelRouter({ mode, providers, env: effectiveEnv });
+  const inner = buildModelRouter({ mode, providers, env: effectiveEnv, allowFakeFallback: mode === "local" });
   const activeRoutes = state.activeRoutes;
 
   return {

@@ -38,6 +38,7 @@ const SECRET_LEAK_PATTERNS = [
   /\bsk-[A-Za-z0-9_-]{8,}\b/i,
   /\b(api[_-]?key|token|secret|password)=((?!\[REDACTED])[^"\s,;&]+)/i,
   /\bOPENAI_COMPATIBLE_API_KEY\b/i,
+  /\bZAI_API_KEY\b/i,
   /\bAuthorization\b/i,
 ];
 
@@ -184,6 +185,7 @@ function hardenStringLeaves(value: unknown): unknown {
       .replace(/\bBearer\s+(?!\[REDACTED])[^"\s,;]+/gi, "Bearer [REDACTED]")
       .replace(/\bBasic\s+(?!\[REDACTED])[^"\s,;]+/gi, "Basic [REDACTED]")
       .replace(/\bOPENAI_COMPATIBLE_API_KEY\b/g, "[REDACTED_KEY_NAME]")
+      .replace(/\bZAI_API_KEY\b/g, "[REDACTED_KEY_NAME]")
       .replace(/\bAuthorization\b/g, "[REDACTED_HEADER_NAME]");
   }
   if (value === null || typeof value !== "object") return value;

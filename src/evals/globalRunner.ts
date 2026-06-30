@@ -211,6 +211,7 @@ export type GlobalHarnessReport = {
 
 export type FakePathAudit = {
   readonly findingCount: number;
+  readonly unallowedFindingCount?: number;
 };
 
 export type FakePathAuditor = () => Promise<FakePathAudit>;
@@ -600,7 +601,7 @@ function renderHarnessMarkdown(report: GlobalHarnessReport, scorecards: readonly
   lines.push(`- Generated: ${report.generatedAt}`);
   lines.push(`- Scenarios: ${report.scenarioCount} (executed ${report.executedCount}, skipped ${report.skippedCount})`);
   lines.push(`- Passed scenarios: ${report.passedCount}/${report.executedCount}`);
-  lines.push(`- Fake-path status: ${report.fakePathStatus} (${report.fakeFindingCount} findings, report-only)`);
+  lines.push(`- Fake-path status: ${report.fakePathStatus} (${report.fakeFindingCount} unallowed findings, report-only)`);
   lines.push("");
   lines.push("> Offline harness: it runs each scenario's REAL validator command against its fixture and");
   lines.push("> evaluates oracles deterministically. No specialist mutates files offline, so a `mustChange`");
@@ -658,9 +659,10 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
     : await loadScenarioFileMap(scenariosDir);
 
   const audit = options.fakePathAuditor ? await options.fakePathAuditor() : undefined;
+  const actionableFakeFindingCount = audit ? audit.unallowedFindingCount ?? audit.findingCount : 0;
   const fakePathStatus: FakePathStatus =
-    audit === undefined ? "audit_not_present" : audit.findingCount > 0 ? "fakes_present" : "clean";
-  const fakeFindingCount = audit?.findingCount ?? 0;
+    audit === undefined ? "audit_not_present" : actionableFakeFindingCount > 0 ? "fakes_present" : "clean";
+  const fakeFindingCount = actionableFakeFindingCount;
 
   const outcomes: GlobalScenarioOutcome[] = [];
   const skipped: SkippedScenario[] = [];

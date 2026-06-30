@@ -12,7 +12,7 @@ runZaiHarnessSmoke()
       failedCount: report.failedCount,
       reportPath: path.join(getZaiLiveRunEvidenceDir(report.runId), "harness-report.json"),
     }));
-    if (report.status === "failed") process.exitCode = 1;
+    if (report.status !== "passed" || report.liveEvidenceStatus !== "live_provider") process.exitCode = 1;
   })
   .catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));

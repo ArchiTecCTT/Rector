@@ -10,6 +10,7 @@ Rector separates **offline** gates from **live** Z.ai verification. Offline infr
 - Per-run artifacts: `.rector/evidence/live/zai/runs/<run-id>/`
 - Provider smoke: `.rector/evidence/live/zai/provider-smoke.json`
 - Phase 2F live fact shadow: `.rector/evidence/phase2/live-fact-shadow-report.json`
+- Multi-model matrix rollup (opt-in): `.rector/evidence/live/zai/matrix/matrix-summary.json` and `matrix-summary.md`
 
 ## Offline vs live
 
@@ -18,6 +19,7 @@ Rector separates **offline** gates from **live** Z.ai verification. Offline infr
 | `npm test` | No | Deterministic unit/integration tests |
 | `npm run verify:phase2` | No | Typed-fact substrate offline |
 | `npm run verify:zai-live` | Yes (when configured) | Live Z.ai provider + harness + evidence gate |
+| `npm run verify:zai-live:matrix` | Yes (when configured) | Same live chain **per model** from `ZAI_MODELS` (or single `ZAI_MODEL`); writes matrix summary only |
 
 Do **not** claim `zai-live-verified` or update phase labels to live-verified unless `npm run evidence:zai-live:gate` passes against evidence with `liveEvidenceStatus: live_provider` from a real configured provider (not spy/fake/test injection).
 
@@ -25,13 +27,80 @@ Do **not** claim `zai-live-verified` or update phase labels to live-verified unl
 
 1. Configure Z.ai OpenAI-compatible credentials (UI `runtime-settings.json` or env):
    - `RECTOR_LIVE_PROVIDER=zai`
-   - `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_BASE_URL` (Z.ai host, e.g. `api.z.ai`), `OPENAI_COMPATIBLE_MODEL`
+   - **Recommended (Z.ai-specific, shell-safe):** `ZAI_API_KEY`, `ZAI_BASE_URL` (Z.ai host, e.g. `https://api.z.ai/api/paas/v4`), `ZAI_MODEL`
+   - **Compatibility / generic OpenAI-compatible adapter:** `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_MODEL` — used when `ZAI_*` values are absent; per-field `ZAI_*` wins when set
+   - **Do not** use `Z.AI_API_KEY` (dot in the name) in shell `export` lines; POSIX shells treat it as invalid. Use `ZAI_API_KEY` or configure via the web UI / `runtime-settings.json`.
 2. Optional path check: `npm run evidence:verify-paths`
-3. Provider smoke (repo-root writer): `npm run test:live:zai:provider` — sets `RECTOR_LIVE_PROVIDER=zai` and `RECTOR_ZAI_PROVIDER_SMOKE=1`, runs `scripts/live/run-zai-provider-smoke.ts` into `.rector/evidence/live/zai/`
-4. Phase 2F shadow: `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live`
-5. Harness smoke (repo-root writer): `npm run test:live:zai:harness` — sets `RECTOR_LIVE_PROVIDER=zai` and `LIVE_HARNESS_EVALS=1`, runs `scripts/live/run-zai-harness-smoke.ts`
+3. Provider smoke (repo-root writer): `npm run test:live:zai:provider` — sets `RECTOR_LIVE_PROVIDER=zai` and `RECTOR_ZAI_PROVIDER_SMOKE=1`, writes `.rector/evidence/live/zai/`, and exits nonzero unless it records `live_provider` + `passed`.
+4. Phase 2F shadow: `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live` — exits nonzero unless it records `live_provider` + `completed` with zero failed cases.
+5. Harness smoke (repo-root writer): `npm run test:live:zai:harness` — sets `RECTOR_LIVE_PROVIDER=zai` and `LIVE_HARNESS_EVALS=1`, writes harness artifacts, and exits nonzero unless it records `live_provider` + `passed`.
 6. Gate: `npm run evidence:zai-live:gate`
 7. Full chain: `npm run verify:zai-live`
+
+## Multi-model matrix (opt-in, reporting)
+
+Use when comparing several Z.ai GLM models for an external report. **Not** part of default `npm test` or CI. Matrix runs **do not** update `.rector/evidence/manifest.json` and **do not** by themselves satisfy live-verified labels—even if every model grades **A**, run `verify:zai-live` once on the chosen finalist for manifest-backed live claims.
+
+```bash
+export ZAI_API_KEY="..."
+export ZAI_BASE_URL="https://api.z.ai/api/paas/v4"
+export ZAI_MODELS="glm-small,glm-mid,glm-large"   # comma / space / newline separated
+npm run verify:zai-live:matrix
+```
+
+If `ZAI_MODELS` is unset, the matrix falls back to a **single** campaign using `ZAI_MODEL` (same steps as `verify:zai-live`, minus manifest updates on intermediate gate runs).
+
+### Matrix env knobs
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ZAI_MATRIX_RUNS_PER_MODEL` | `1` | Repeat full live chain per model (use `3`–`5` only for finalist models, not every candidate) |
+| `ZAI_MATRIX_MAX_MODELS` | unset | Safety cap on parsed `ZAI_MODELS` length |
+| `ZAI_MATRIX_SKIP_OFFLINE` | unset | Set `1` to skip one-shot `npm run verify:phase2` before live campaigns |
+| `ZAI_MATRIX_CONTINUE_ON_FAILURE` | `1` | Set `0` to stop after the first failing model campaign |
+
+Each model campaign sets `ZAI_MODEL=<model>` and runs, in order:
+
+1. `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live`
+2. `npm run test:live:zai:provider`
+3. `npm run test:live:zai:harness`
+4. `npm run evidence:zai-live:gate -- --no-manifest-update`
+
+Matrix gate runs disable manifest updates so comparing models does not thrash `.rector/evidence/manifest.json`. Run plain `npm run verify:zai-live` once on the chosen finalist to update the manifest after review.
+
+**Shared rollup overwrite:** each model campaign writes the same canonical paths (`.rector/evidence/live/zai/latest.json`, provider smoke, Phase 2 shadow). The **last** model in the run wins those files; use `matrix-summary.json` for per-model results until per-model subdirectories are implemented (deferred — see concerns register).
+
+### How tests relate to live verification
+
+- **Unit/integration (`npm test`)** — matrix parsing, env isolation, secret redaction, and orchestration use **injected command runners**; no network, no real API keys, no live gate pass claims.
+- **Live scripts** (`test:live:zai:*`, `eval:facts:live`) — opt-in; exit nonzero unless evidence records `live_provider` with passing tracks.
+- **Gate** (`evidence:zai-live:gate`) — rejects spy/fake providers and `test_only_injected` evidence; fake doubles cannot satisfy live verification.
+
+### Rating criteria (matrix summary)
+
+Per-model **grade** / **rating** in `matrix-summary.json` are derived from gate outcome plus harness evidence when present:
+
+| Grade | Meaning |
+| --- | --- |
+| **A** | Gate pass, scorecard pass, all harness scenarios passed |
+| **B** | Gate pass, ≥80% scenarios passed |
+| **C** | Gate pass but harness scorecard failed |
+| **D** | Gate pass with weak scenario coverage |
+| **F** | Gate fail or campaign step failure |
+
+Grades support operator comparison; they do **not** replace `live_provider` gate PASS for live-verified labels.
+
+### Recommended run counts and budget
+
+Per **single** live campaign (one model), plan limits apply: **≤100,000 tokens** total and **≤20 model calls** across provider smoke, Phase 2F shadow, and harness smoke.
+
+Recommended matrix workflow:
+
+1. **Discovery:** `ZAI_MATRIX_RUNS_PER_MODEL=1` across a short `ZAI_MODELS` list (3–6 candidates).
+2. **Finalists:** repeat `3`–`5` campaigns only for 1–2 models that graded **A** or **B**.
+3. Avoid `50`–`100` repeats per model until budget and stability are proven.
+
+Hardening ideas (deferred): per-model evidence subdirectories so `latest.json` is not overwritten, pinned campaign correlation ids, and automatic finalist promotion into `verify:zai-live` manifest update.
 
 ## Gate behavior
 

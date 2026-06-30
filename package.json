@@ -47,6 +47,8 @@
     "test:live:zai:harness": "RECTOR_LIVE_PROVIDER=zai LIVE_HARNESS_EVALS=1 tsx scripts/live/run-zai-harness-smoke.ts",
     "evidence:zai-live:gate": "tsx scripts/live/gate-zai-live-evidence.ts",
     "verify:zai-live": "npm run verify:phase2 && RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live && npm run test:live:zai:provider && npm run test:live:zai:harness && npm run evidence:zai-live:gate",
+    "verify:zai-live:matrix": "tsx scripts/live/run-zai-model-matrix.ts",
+    "probe:zai-models": "tsx scripts/live/probe-zai-models-callability.ts",
     "baseline:phase0": "tsx scripts/evals/run-phase0-baseline.ts",
     "test": "vitest run",
     "test:global": "tsx scripts/evals/run-global-harness.ts",

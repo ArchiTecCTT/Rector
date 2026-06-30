@@ -86,7 +86,7 @@ describe("planner hardening", () => {
     });
     const run = makeExternalRun(generousBudget());
 
-    const result = await runLivePlanner(input, { provider, run });
+    const result = await runLivePlanner(input, { provider, run, includeDeterministicFallback: true });
 
     expect(result.status).toBe("blocked");
     expect(result.blocker?.code).toBe("PROVIDER_ERROR");

@@ -23,14 +23,25 @@ export type NoProductionFakeFinding = {
   readonly column: number;
   readonly evidence: string;
   readonly message: string;
+  readonly allowed: boolean;
+  readonly allowlistReason?: string;
+};
+
+type NoProductionFakeAllowlistEntry = {
+  readonly ruleId: NoProductionFakeRuleId;
+  readonly path: string;
+  readonly reason: string;
 };
 
 export type NoProductionFakesAuditReport = {
   readonly scanRoot: string;
   readonly scannedFileCount: number;
   readonly findingCount: number;
+  readonly allowedFindingCount: number;
+  readonly unallowedFindingCount: number;
   readonly exitCode: 0;
   readonly findings: readonly NoProductionFakeFinding[];
+  readonly unallowedFindings: readonly NoProductionFakeFinding[];
 };
 
 export type NoProductionFakesAuditOptions = {
@@ -59,6 +70,20 @@ type AuditRule = {
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(SCRIPT_PATH), "../..");
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"] as const;
+
+const NO_PRODUCTION_FAKE_ALLOWLIST: readonly NoProductionFakeAllowlistEntry[] = [
+  { ruleId: "fake_llm_provider", path: "src/providers/llm.ts", reason: "Test/development provider class and local-mode compatibility only; configured routers no longer register it as fallback." },
+  { ruleId: "fake_llm_provider", path: "src/bin/server.ts", reason: "Documentation-only reference in boot comments; not runtime selection." },
+  { ruleId: "fake_planner_output", path: "src/orchestration/planner.ts", reason: "Deterministic planner helper retained for tests and explicit compatibility flag; product blockers no longer attach it by default." },
+  { ruleId: "executor_simulator_import", path: "src/api/server.ts", reason: "Legacy simulator type seam; configured chat uses sandbox execution path." },
+  { ruleId: "executor_simulator_import", path: "src/orchestration/chatRunner.ts", reason: "Legacy simulator type seam; configured chat uses sandbox execution path." },
+  { ruleId: "executor_simulator_import", path: "src/orchestration/index.ts", reason: "Legacy export retained for tests and compatibility until executor-simulator extraction." },
+  { ruleId: "executor_simulator_import", path: "src/orchestration/sandboxExecutor.ts", reason: "Shared execution-result type import; not simulator execution selection." },
+  { ruleId: "executor_simulator_import", path: "src/orchestration/synthesizer.ts", reason: "Shared execution-result type import; not simulator execution selection." },
+  { ruleId: "executor_simulator_import", path: "src/orchestration/validationHealing.ts", reason: "Legacy default simulation seam; configured external execution injects the sandbox executor." },
+  { ruleId: "workspace_validate_passed_true", path: "src/orchestration/executorSimulator.ts", reason: "Simulator-only validation output; product tool registry no longer returns synthetic validation pass." },
+  { ruleId: "simulator_echo_registration", path: "src/orchestration/executorSimulator.ts", reason: "Simulator-only fallback tool name; simulator.echo is no longer in the product default registry." },
+];
 
 const AUDIT_RULES: readonly AuditRule[] = [
   {
@@ -100,12 +125,16 @@ export async function auditNoProductionFakes(options: NoProductionFakesAuditOpti
     : path.resolve(repoRoot, options.sourceDir ?? "src");
   const files = await readSourceFiles(repoRoot, sourceDir);
   const findings = files.flatMap(scanFile).sort(compareFindings);
+  const unallowedFindings = findings.filter((finding) => !finding.allowed);
   return {
     scanRoot: normalizePath(path.relative(repoRoot, sourceDir) || "."),
     scannedFileCount: files.length,
     findingCount: findings.length,
+    allowedFindingCount: findings.length - unallowedFindings.length,
+    unallowedFindingCount: unallowedFindings.length,
     exitCode: 0,
     findings,
+    unallowedFindings,
   };
 }
 
@@ -115,11 +144,15 @@ export function formatAuditReport(report: NoProductionFakesAuditReport): string 
     `Scan root: ${report.scanRoot}`,
     `Scanned files: ${report.scannedFileCount}`,
     `Findings: ${report.findingCount}`,
-    "Policy: exits 0 even when fake-system seams are found; nonzero exits are reserved for internal audit errors.",
+    `Allowed findings: ${report.allowedFindingCount}`,
+    `Unallowed findings: ${report.unallowedFindingCount}`,
+    "Policy: exits 0 while fake-system seams are report-only; unallowed findings are actionable and must be fixed or explicitly justified.",
   ];
   for (const finding of report.findings) {
+    const status = finding.allowed ? "allowed" : "unallowed";
+    const reason = finding.allowlistReason ? ` — allowlist: ${finding.allowlistReason}` : "";
     lines.push(
-      `- ${finding.ruleId} ${finding.path}:${finding.line}:${finding.column} — ${finding.message} — ${finding.evidence}`,
+      `- ${status} ${finding.ruleId} ${finding.path}:${finding.line}:${finding.column} — ${finding.message} — ${finding.evidence}${reason}`,
     );
   }
   return `${lines.join("\n")}\n`;
@@ -169,17 +202,27 @@ function scanFile(file: SourceFile): readonly NoProductionFakeFinding[] {
   return AUDIT_RULES.flatMap((rule) =>
     rule.detector(file.content).map((match) => {
       const location = locationForIndex(file.content, match.index);
-      return {
+      const baseFinding = {
         ruleId: rule.id,
-        severity: "report_only",
+        severity: "report_only" as const,
         path: file.relativePath,
         line: location.line,
         column: location.column,
         evidence: compactEvidence(match.evidence),
         message: rule.message,
+      };
+      const allowlist = allowlistEntryFor(baseFinding);
+      return {
+        ...baseFinding,
+        allowed: allowlist !== undefined,
+        ...(allowlist ? { allowlistReason: allowlist.reason } : {}),
       } satisfies NoProductionFakeFinding;
     }),
   );
+}
+
+function allowlistEntryFor(finding: Pick<NoProductionFakeFinding, "ruleId" | "path">): NoProductionFakeAllowlistEntry | undefined {
+  return NO_PRODUCTION_FAKE_ALLOWLIST.find((entry) => entry.ruleId === finding.ruleId && entry.path === finding.path);
 }
 
 function locationForIndex(content: string, index: number): { readonly line: number; readonly column: number } {

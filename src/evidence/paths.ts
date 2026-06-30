@@ -22,7 +22,8 @@ const TRACK_SEGMENTS: Record<EvidenceTrack, readonly string[]> = {
   capabilities: ["capabilities"],
 };
 
-const SAFE_RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** Single-segment run id safe for evidence directory layout (exported for gate/schema alignment). */
+export const SAFE_EVIDENCE_RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export function getRectorLocalDir(repoRoot?: string): string {
   return path.join(resolveRepoRoot(repoRoot), RECTOR_LOCAL_DIR);
@@ -87,10 +88,14 @@ function resolveEvidenceConfiguredPath(
   return resolved;
 }
 
-function assertSafeRunId(runId: string): void {
-  if (!SAFE_RUN_ID_PATTERN.test(runId) || runId === "." || runId === "..") {
+export function assertSafeEvidenceRunId(runId: string): void {
+  if (!SAFE_EVIDENCE_RUN_ID_PATTERN.test(runId) || runId === "." || runId === "..") {
     throw new Error("Z.ai evidence run id must be a single safe path segment.");
   }
+}
+
+function assertSafeRunId(runId: string): void {
+  assertSafeEvidenceRunId(runId);
 }
 
 function assertUsablePathText(value: string, label: string): void {

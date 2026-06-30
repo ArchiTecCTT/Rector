@@ -80,7 +80,7 @@ describe("deep planner hardening", () => {
     expect(first.traces.find((trace) => trace.selected)?.source).toBe("risk-minimized");
   });
 
-  it("returns deterministic fallback plan when provider planning fails", async () => {
+  it("propagates a live planner blocker when provider planning fails", async () => {
     const input = makeInput("Explain Rector");
     const provider = new SpyLLMProvider({
       estimate: DEFAULT_SPY_USAGE,
@@ -92,15 +92,19 @@ describe("deep planner hardening", () => {
       { provider, run: makeExternalRun(generousBudget()) },
     );
 
-    expect(result.status).toBe("ok");
+    expect(result.status).toBe("blocked");
     expect(provider.invokeCount).toBe(1);
-    expect(result.plan).toEqual(createFakePlan(input));
-    expect(result.pathsExplored?.join("\n")).toContain("fallback-local");
+    expect(result.plan).toBeUndefined();
+    expect(result.blocker?.code).toBe("PROVIDER_ERROR");
+    expect(result.fallbackPlan).toBeUndefined();
   });
 
-  it("keeps deep planning off path provider-free", async () => {
+  it("delegates deep-planning-off path to the live planner", async () => {
     const input = makeInput("What is Rector?");
-    const provider = new SpyLLMProvider({ estimate: DEFAULT_SPY_USAGE });
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [{ content: planToJson(oneTaskPlan({ goal: "Answer Rector question" })) }],
+    });
 
     const result = await runDeepPlanner(
       { ...input, deepPlanning: false },
@@ -108,20 +112,20 @@ describe("deep planner hardening", () => {
     );
 
     expect(result.status).toBe("ok");
-    expect(result.attempts).toBe(0);
-    expect(provider.invokeCount).toBe(0);
-    expect(result.plan).toEqual(createFakePlan(input));
+    expect(result.attempts).toBe(1);
+    expect(provider.invokeCount).toBe(1);
+    expect(result.plan?.goal).toBe("Answer Rector question");
   });
 
-  it("selects a deterministic fallback instead of a rejected candidate when all candidates fail", () => {
+  it("returns the live base plan instead of manufacturing a deterministic fallback when all candidates fail", () => {
     const input = makeInput("Update package.json safely and run tests");
     const basePlan = oneTaskPlan();
     const planner = createMultiCandidatePlanner({ maxEstimatedRuntimeMs: 1 });
 
     const result = planner.plan(input, basePlan);
 
-    expect(result.selectedSource).toBe("fallback-local");
-    expect(result.selectedPlan).toEqual(createFakePlan(input));
+    expect(result.selectedSource).toBe("base-live");
+    expect(result.selectedPlan).toEqual(basePlan);
     expect(result.traces.filter((trace) => trace.selected)).toHaveLength(1);
     expect(result.traces.find((trace) => trace.selected)?.rejected).toBe(false);
     expect(result.traces.some((trace) => trace.rejected)).toBe(true);

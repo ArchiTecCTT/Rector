@@ -54,10 +54,11 @@ describe("verify-evidence-paths script", () => {
     const evidenceRoot = path.join(repoRoot, ".rector", "evidence");
     await makeAllTrackDirs(repoRoot);
     const manifestPath = path.join(evidenceRoot, "evidence-manifest.json");
+    const outsideDir = path.join(repoRoot, "outside-phase2");
     const manifest = buildEvidenceManifest({
       tracks: {
         phase2: {
-          directory: "../outside/phase2",
+          directory: outsideDir,
           latestJson: ".rector/evidence/phase2/fact-report.json",
         },
       },
@@ -78,6 +79,36 @@ describe("verify-evidence-paths script", () => {
           code: "manifest_pointer_outside_root",
           track: "phase2",
           pointer: "directory",
+        }),
+      ]),
+    );
+  });
+
+  it("fails when manifest pointers contain traversal segments", async () => {
+    const repoRoot = await makeRepo();
+    const evidenceRoot = path.join(repoRoot, ".rector", "evidence");
+    await makeAllTrackDirs(repoRoot);
+    const manifestPath = path.join(evidenceRoot, "evidence-manifest.json");
+    const manifest = buildEvidenceManifest({
+      tracks: {
+        phase2: {
+          directory: ".rector/evidence/phase2",
+          latestJson: ".rector/evidence/phase2/../outside/fact-report.json",
+        },
+      },
+      now: () => new Date("2026-06-30T00:00:00.000Z"),
+    });
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+
+    const result = await verifyEvidencePaths({ repoRoot, manifestPath });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "manifest_pointer_invalid",
+          track: "phase2",
+          pointer: "latestJson",
         }),
       ]),
     );

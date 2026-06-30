@@ -66,11 +66,38 @@ export interface LiveEvidenceProviderIdentity {
   readonly reportMetadata?: unknown;
 }
 
-const ZAI_ENV_KEYS = [
+export const ZAI_LIVE_ENV_KEYS = ["ZAI_API_KEY", "ZAI_BASE_URL", "ZAI_MODEL"] as const;
+export const OPENAI_COMPATIBLE_LIVE_ENV_KEYS = [
   "OPENAI_COMPATIBLE_API_KEY",
   "OPENAI_COMPATIBLE_BASE_URL",
   "OPENAI_COMPATIBLE_MODEL",
 ] as const;
+
+const ZAI_ENV_COORDINATE_KEYS = [...ZAI_LIVE_ENV_KEYS, ...OPENAI_COMPATIBLE_LIVE_ENV_KEYS] as const;
+
+export type ZaiLiveEnvSourceLabel = "ZAI_*" | "OPENAI_COMPATIBLE_*";
+
+export interface ResolvedZaiLiveEnvCoordinates {
+  readonly apiKey: string;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly envSourceLabel: ZaiLiveEnvSourceLabel;
+}
+
+export function resolveZaiLiveEnvCoordinates(
+  env: Record<string, string | undefined>,
+): ResolvedZaiLiveEnvCoordinates {
+  const apiKey = (env.ZAI_API_KEY?.trim() || env.OPENAI_COMPATIBLE_API_KEY?.trim()) ?? "";
+  const baseUrl = (env.ZAI_BASE_URL?.trim() || env.OPENAI_COMPATIBLE_BASE_URL?.trim()) ?? "";
+  const model = (env.ZAI_MODEL?.trim() || env.OPENAI_COMPATIBLE_MODEL?.trim()) ?? "";
+  const usesZaiAlias = ZAI_LIVE_ENV_KEYS.some((key) => (env[key]?.trim() ?? "").length > 0);
+  return {
+    apiKey,
+    baseUrl,
+    model,
+    envSourceLabel: usesZaiAlias ? "ZAI_*" : "OPENAI_COMPATIBLE_*",
+  };
+}
 
 const TEST_DOUBLE_PATTERN = /fake|deterministic|spy|mock|fixture|scripted|test[-_\s]?double/i;
 
@@ -130,9 +157,7 @@ function discoverZaiFromEnv(
   env: Record<string, string | undefined>,
   options: LiveProviderDiscoveryOptions,
 ): LiveProviderDiscoveryResult {
-  const apiKey = env.OPENAI_COMPATIBLE_API_KEY?.trim() ?? "";
-  const baseUrl = env.OPENAI_COMPATIBLE_BASE_URL?.trim() ?? "";
-  const model = env.OPENAI_COMPATIBLE_MODEL?.trim() ?? "";
+  const { apiKey, baseUrl, model, envSourceLabel } = resolveZaiLiveEnvCoordinates(env);
   if (!apiKey || !baseUrl || !model) {
     return { selected: undefined, rejections: [rejection("env", "missing_env")] };
   }
@@ -158,7 +183,7 @@ function discoverZaiFromEnv(
     modelId: model,
     host,
     source: "env",
-    discoveryLabel: "RECTOR_LIVE_PROVIDER=zai OPENAI_COMPATIBLE_*",
+    discoveryLabel: `RECTOR_LIVE_PROVIDER=zai ${envSourceLabel}`,
   });
 }
 
@@ -285,15 +310,13 @@ function selectZaiRecord(
 }
 
 function hasUsableZaiEnvConfiguration(env: Record<string, string | undefined>): boolean {
-  const apiKey = env.OPENAI_COMPATIBLE_API_KEY?.trim() ?? "";
-  const baseUrl = env.OPENAI_COMPATIBLE_BASE_URL?.trim() ?? "";
-  const model = env.OPENAI_COMPATIBLE_MODEL?.trim() ?? "";
+  const { apiKey, baseUrl, model } = resolveZaiLiveEnvCoordinates(env);
   const host = hostFromUrl(baseUrl);
   return Boolean(apiKey && model && host && isZaiCompatibleHost(host));
 }
 
 function hasAnyZaiEnvCoordinate(env: Record<string, string | undefined>): boolean {
-  return ZAI_ENV_KEYS.some((key) => (env[key]?.trim() ?? "").length > 0);
+  return ZAI_ENV_COORDINATE_KEYS.some((key) => (env[key]?.trim() ?? "").length > 0);
 }
 
 function hostFromUrl(value: string): string | undefined {

@@ -240,15 +240,15 @@ describe("Config_Bridge — Active_Route_Map honoring + fallback (Req 14.3, 14.4
     expect(selection.model).toBe("model-one");
   });
 
-  it("returns the fake provider (no override) when no configured provider is valid", async () => {
+  it("returns the unavailable provider when no configured provider is valid", async () => {
     const store = await seedStore([oc1], { flagship: oc1.id });
-    // No secret for oc1: it is invalid, so the router yields the fake fallback.
+    // No secret for oc1: it is invalid, so the configured router yields a non-live unavailable fallback.
     const secrets = createFakeSecretStore({});
     const router = await buildConfiguredRouter({ store, secrets, baseEnv: {}, enableNetwork: false });
 
     const selection = router.select({ capability: "flagship" });
 
-    expect(selection.provider.metadata.id).toBe("fake");
+    expect(selection.provider.metadata.id).toBe("unavailable");
     expect(selection.reason).not.toContain("active route");
   });
 });

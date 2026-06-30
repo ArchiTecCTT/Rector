@@ -1,6 +1,6 @@
 import type { PlannerInput, PlannerOutput, LivePlannerResult, PlannerRiskLevel } from "./planner";
-import { createFakePlan, validatePlannerOutput } from "./planner";
-import type { LLMProvider, LLMUsage } from "../providers/llm";
+import { validatePlannerOutput } from "./planner";
+import type { LLMProvider } from "../providers/llm";
 import type { Run } from "../store";
 import { DEFAULT_PREPROCESSOR_RULES } from "../symbolic/defaultRules";
 import { getSymbolicEngine } from "../symbolic";
@@ -65,9 +65,9 @@ interface ScoredCandidate extends DeepPlanCandidate {
 /**
  * Opt-in bounded multi-candidate planner (Chunk 042c).
  *
- * Local/provider-free behavior is preserved by the `deepPlanning=false` branch:
- * it returns the deterministic fake plan and performs zero provider calls. When
- * enabled, the live planner is invoked once, deterministic variants are scored,
+ * When deep planning is disabled, this delegates to the live planner rather than
+ * manufacturing a deterministic product plan. When enabled, the live planner is
+ * invoked once, bounded variants are scored,
  * unsafe candidates are symbolically rejected, and the best surviving candidate
  * is selected with a traceable score/rejection summary.
  */
@@ -75,38 +75,15 @@ export async function runDeepPlanner(
   input: PlannerInput & { deepPlanning?: boolean },
   deps: { provider: LLMProvider; run: Run; model?: string; abortSignal?: AbortSignal }
 ): Promise<LivePlannerResult> {
-  const { createFakePlan, runLivePlanner } = await import("./planner");
+  const { runLivePlanner } = await import("./planner");
 
   if (!input.deepPlanning) {
-    const fallback = createFakePlan(input);
-    return {
-      status: "ok",
-      plan: fallback,
-      usage: zeroUsage(),
-      provider: deps.provider.metadata.id,
-      model: deps.model ?? deps.provider.metadata.models.flagship,
-      attempts: 0,
-    };
+    return runLivePlanner(input, deps);
   }
 
   const base = await runLivePlanner(input, deps);
   if (base.status === "blocked" || !base.plan) {
-    if (base.blocker?.code === "BUDGET_DENIED") {
-      return base;
-    }
-
-    const fallback = createFakePlan(input);
-    const trace = fallbackTrace(fallback, base.blocker?.message ?? "Live planner unavailable");
-    return {
-      status: "ok",
-      plan: fallback,
-      usage: base.usage,
-      provider: base.provider,
-      model: base.model,
-      attempts: base.attempts,
-      pathsExplored: trace.map(formatTraceLine),
-      deepPlanningTrace: trace,
-    };
+    return base;
   }
 
   const planner = createMultiCandidatePlanner({
@@ -136,11 +113,10 @@ export function createMultiCandidatePlanner(config: MultiCandidatePlannerConfig 
     plan(input: PlannerInput, basePlan: PlannerOutput): MultiCandidatePlannerResult {
       const candidates = generateCandidates(input, basePlan).slice(0, config.maxCandidates ?? DEEP_PLANNER_MAX_CANDIDATES);
       const scored = candidates.map((candidate) => scoreCandidate(candidate, config));
-      const selected = selectBestCandidate(scored, input, basePlan);
-      const traces = scored.map((candidate) => ({
-        ...candidate.trace,
-        selected: candidate.id === selected.id,
-      }));
+      const selected = selectBestCandidate(scored, basePlan);
+      const traces = scored.map((candidate) => candidate.id === selected.id
+        ? { ...selected.trace, selected: true }
+        : { ...candidate.trace, selected: false });
       if (!traces.some((trace) => trace.selected)) {
         traces.push({ ...selected.trace, selected: true });
       }
@@ -347,22 +323,26 @@ function scoreCandidate(candidate: DeepPlanCandidate, config: MultiCandidatePlan
   };
 }
 
-function selectBestCandidate(scored: ScoredCandidate[], input: PlannerInput, _basePlan: PlannerOutput): ScoredCandidate {
+function selectBestCandidate(scored: ScoredCandidate[], basePlan: PlannerOutput): ScoredCandidate {
   const eligible = scored.filter((candidate) => !candidate.trace.rejected);
   if (eligible.length === 0) {
-    const fallbackPlan = createFakePlan(input);
-    const fallbackTrace = scoreDeepPlanCandidate({ source: "fallback-local", plan: fallbackPlan });
-    return {
-      id: "fallback-local-1",
-      source: "fallback-local",
-      plan: fallbackPlan,
+    const baseCandidate = scored.find((candidate) => candidate.source === "base-live") ?? {
+      id: "base-live-rejected-1",
+      source: "base-live" as const,
+      plan: basePlan,
       order: scored.length,
+      trace: scoreDeepPlanCandidate({ source: "base-live", plan: basePlan }),
+    };
+    return {
+      ...baseCandidate,
       trace: {
-        ...fallbackTrace,
-        id: "fallback-local-1",
+        ...baseCandidate.trace,
         rejected: false,
         selected: true,
-        rejectionReasons: ["all live deep-planner candidates were rejected; selected deterministic local fallback"],
+        rejectionReasons: [
+          ...baseCandidate.trace.rejectionReasons,
+          "all deep-planner candidates were rejected; returning the live base plan for downstream blocker review",
+        ],
       },
     };
   }
@@ -495,16 +475,6 @@ function sanitizeUnsafeWritePathMentions(text: string): string {
   );
 }
 
-function fallbackTrace(plan: PlannerOutput, reason: string): DeepPlannerCandidateTrace[] {
-  const trace = scoreDeepPlanCandidate({ source: "fallback-local", plan });
-  return [
-    {
-      ...trace,
-      selected: true,
-      rejectionReasons: [`live planner fallback: ${redactString(reason)}`],
-    },
-  ];
-}
 
 function formatTraceLine(trace: DeepPlannerCandidateTrace): string {
   const status = trace.selected ? "selected" : trace.rejected ? "rejected" : "accepted";
@@ -542,14 +512,4 @@ function positiveNumber(value: unknown, fallback: number): number {
 
 function roundScore(value: number): number {
   return Math.round(value * 10) / 10;
-}
-
-function zeroUsage(): LLMUsage {
-  return {
-    inputTokens: 0,
-    outputTokens: 0,
-    totalTokens: 0,
-    estimatedUsd: 0,
-    modelCalls: 0,
-  };
 }

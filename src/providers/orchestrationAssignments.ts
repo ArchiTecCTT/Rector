@@ -7,7 +7,7 @@ import { redactString } from "../security/redaction";
 import { ensureRestrictedDir } from "../security/filePermissions";
 import type { AuthorizationSubject } from "../security/rbac.js";
 import { can } from "../security/rbac.js";
-import { FakeLLMProvider, type LLMProvider, type ModelRoute, type ModelRouter, type ModelRouterInput, type ModelSelection } from "./llm";
+import { UnavailableLLMProvider, type LLMProvider, type ModelRoute, type ModelRouter, type ModelRouterInput, type ModelSelection } from "./llm";
 import type { ProviderConfigRecord, ProviderConfigState } from "./config";
 import type { ProviderConfigStore } from "./configStore";
 import { resolveTestProvider, type ProbeTarget } from "./configBridge";
@@ -1046,13 +1046,13 @@ function providerModelForRoute(provider: LLMProvider, route: ModelRoute, preferr
   return preferredModel ?? provider.metadata.models[route] ?? Object.values(provider.metadata.models)[0] ?? provider.metadata.id;
 }
 
-function fakeSelection(role: OrchestrationRole, effective: EffectiveModelRoute, provider: LLMProvider): ModelSelection {
+function unavailableAssignmentSelection(role: OrchestrationRole, effective: EffectiveModelRoute, provider: LLMProvider): ModelSelection {
   return {
     provider,
     providerId: effective.providerId,
-    modelRoute: "fake",
-    model: effective.modelId ?? provider.metadata.models.fake,
-    reason: `orchestration assignment ${role} uses ${effective.providerId}`,
+    modelRoute: effective.modelRoute,
+    model: effective.modelId ?? provider.metadata.models[effective.modelRoute] ?? Object.values(provider.metadata.models)[0] ?? provider.metadata.id,
+    reason: `orchestration assignment ${role} is ${effective.providerId}; no live provider selected`,
   };
 }
 
@@ -1091,7 +1091,8 @@ function fallbackProviderSelection(role: OrchestrationRole, effective: Effective
 }
 
 export function buildAssignmentAwareModelRouter(input: BuildAssignmentAwareRouterInput): ModelRouter {
-  const fakeProvider = input.fakeProvider ?? new FakeLLMProvider();
+  const unavailableProvider = new UnavailableLLMProvider();
+  const deterministicProvider = input.fakeProvider ?? unavailableProvider;
 
   return {
     select(routerInput: ModelRouterInput = {}): ModelSelection {
@@ -1101,12 +1102,12 @@ export function buildAssignmentAwareModelRouter(input: BuildAssignmentAwareRoute
       if (!selected) return input.baseRouter.select(routerInput);
       const effective = resolveAssignmentRecord(selected.assignment, selected.source, input.providerState);
       if (!effective.enabled || effective.providerId === "disabled" || effective.providerId === "deterministic") {
-        return fakeSelection(role, effective, fakeProvider);
+        return unavailableAssignmentSelection(role, effective, deterministicProvider);
       }
       const assignedProvider = input.providersByRole?.[role];
       if (assignedProvider) {
         const fallbackProvider = input.fallbackProvidersByRole?.[role]
-          ?? (effective.fallbackProviderId === "deterministic" ? fakeProvider : undefined);
+          ?? (effective.fallbackProviderId === "deterministic" ? deterministicProvider : undefined);
         return assignedProviderSelection(role, effective, assignedProvider, fallbackProvider);
       }
       const fallbackProvider = input.fallbackProvidersByRole?.[role];

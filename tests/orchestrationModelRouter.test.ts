@@ -128,7 +128,7 @@ describe("OrchestrationModelRouter", () => {
     expect(effective.warnings.some((warning) => warning.code === "deterministic_fallback")).toBe(true);
   });
 
-  it("maps disabled assignments to the fake local provider without calling the base router", () => {
+  it("maps disabled assignments to an unavailable provider without calling the base router", () => {
     let baseCalls = 0;
     const baseProvider = new SpyLLMProvider({ id: "base", model: "base-model" });
     const baseRouter: ModelRouter = {
@@ -145,8 +145,8 @@ describe("OrchestrationModelRouter", () => {
     });
 
     const selection = router.select({ capability: "cheap", task: "ponder" });
-    expect(selection.provider.metadata.id).toBe("fake");
-    expect(selection.modelRoute).toBe("fake");
+    expect(selection.provider.metadata.id).toBe("unavailable");
+    expect(selection.modelRoute).toBe("cheap");
     expect(baseCalls).toBe(0);
   });
 
@@ -183,8 +183,8 @@ describe("OrchestrationModelRouter", () => {
     expect(plannerSelection.reason).toContain("fallback -> openai-compatible:planner");
 
     const ponderSelection = router.select({ capability: "cheap", task: "ponder" });
-    expect(ponderSelection.provider.metadata.id).toBe("fake");
-    expect(ponderSelection.modelRoute).toBe("fake");
+    expect(ponderSelection.provider.metadata.id).toBe("unavailable");
+    expect(ponderSelection.modelRoute).toBe("cheap");
     expect(baseCalls).toBe(0);
   });
 });

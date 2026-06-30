@@ -130,6 +130,7 @@ describe("Z.ai harness smoke runner", () => {
       expect(serializedRunDir).not.toContain("Authorization");
       expect(serializedRunDir).not.toContain("Bearer ");
       expect(serializedRunDir).not.toContain("OPENAI_COMPATIBLE_API_KEY");
+      expect(serializedRunDir).not.toContain("ZAI_API_KEY");
       const parsed = ZaiHarnessReportSchema.parse(JSON.parse(serializedRunDir));
       expect(parsed.scorecard.passed).toBe(true);
       expect(parsed.tokenUsage.total.totalTokens).toBeGreaterThanOrEqual(0);

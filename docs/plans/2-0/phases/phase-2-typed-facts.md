@@ -928,7 +928,7 @@ The script runs only when:
 LIVE_FACT_EVALS=1
 ```
 
-and when at least one configured live provider is available through existing provider abstractions. If credentials are missing, the script exits with `skipped` and writes an honest skipped report.
+and when at least one configured live provider is available through existing provider abstractions. If credentials are missing, the script writes an honest skipped report and exits nonzero so live verification chains cannot look green before the gate.
 
 ## Live tests must never
 
@@ -1254,10 +1254,10 @@ Exit gate:
 
 ```text
 npm run eval:facts
-LIVE_FACT_EVALS=1 npm run eval:facts:live
+RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live
 ```
 
-If no live provider is available, mark the PR as offline-complete only and record that status honestly.
+If no live provider is available, mark the PR as offline-complete only, keep the skipped report as evidence, and expect the live script to exit nonzero in live-verification chains.
 
 ### PR 8 — Phase 2 completion report and docs sync
 
@@ -1435,4 +1435,4 @@ Recorded when implementation differed materially from this plan. Full gate evide
 - **Plan section:** Full completion requires captured live shadow from a real provider
 - **Observed:** `eval:facts:live` wrote `.omo/evidence/live-fact-shadow-report.json` with `skipped` — no configured non-fake live provider on the gate VM.
 - **Adjustment:** Completion label set to `phase2-offline-complete-live-unverified`; do not claim live-model reliability until `phase2-complete-live-verified`.
-- **Risk / rollback:** Re-run `LIVE_FACT_EVALS=1 npm run eval:facts:live` after UI provider setup.
+- **Risk / rollback:** Re-run `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live` after UI provider setup.

@@ -383,7 +383,9 @@ function tokenUsage(usage: LLMUsage): z.infer<typeof SmokeTokenUsageSchema> {
 function messageForRejection(rejection: LiveProviderRejection): string {
   if (rejection.message) return redactString(rejection.message);
   if (rejection.reason === "zai_host_required") return "Z.ai live provider requires a Z.ai-compatible base URL host.";
-  if (rejection.reason === "missing_env") return "Z.ai live provider requires OPENAI_COMPATIBLE_API_KEY, OPENAI_COMPATIBLE_BASE_URL, and OPENAI_COMPATIBLE_MODEL.";
+  if (rejection.reason === "missing_env") {
+    return "Z.ai live provider requires ZAI_API_KEY, ZAI_BASE_URL, and ZAI_MODEL (or OPENAI_COMPATIBLE_* equivalents).";
+  }
   if (rejection.reason === "runtime_not_configured") return "Runtime settings are not configured.";
   if (rejection.reason === "no_configured_zai_provider") return "No configured Z.ai OpenAI-compatible provider was found.";
   return `Z.ai live provider discovery failed: ${rejection.reason}`;

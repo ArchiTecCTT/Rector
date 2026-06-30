@@ -11,7 +11,7 @@
 
 ## Summary
 
-Phase 2 delivered the typed fact protocol substrate: strict Zod fact contracts, append-only ledgers with replay/diff, adapters from Cartographer / ToolRegistry / capability evals / global harness / run events, structural validation gates, offline fact evals with JSON/Markdown reports, and an opt-in live shadow runner with honest skip reporting.
+Phase 2 delivered the typed fact protocol substrate: strict Zod fact contracts, append-only ledgers with replay/diff, adapters from Cartographer / ToolRegistry / capability evals / global harness / run events, structural validation gates, offline fact evals with JSON/Markdown reports, and an opt-in live shadow runner with honest skipped evidence plus nonzero live-verification exit behavior when no live provider is available.
 
 **Offline CI gates passed** on this worktree at `45768e5`. **Live-model shadow capture did not run** — no configured non-fake live provider was available on the dev VM. Do **not** use this completion state for investor/demo claims about live-model fact reliability; use `phase2-complete-live-verified` only after a real-provider shadow report is captured.
 
@@ -92,10 +92,10 @@ Plan reference: `docs/plans/2-0/phases/phase-2-typed-facts.md`.
 | `npm run eval:facts` | Pass | 10/10 cases, all metrics passed |
 | `npm run test:global` | Pass (exit 0) | 33 scenarios executed; 19/33 passed per scenario expectation in report; mixed corpus by design |
 | `npm run test:systems` | Pass | 1/1 specialist profiles valid |
-| `npm run eval:facts:live` | Pass (honest skip) | No live provider; see live section below |
+| `npm run eval:facts:live` | Historical skipped evidence; current live script exits nonzero without a live provider | No live provider; see live section below |
 | `npm run build` | Pass | |
 | `npm audit` | Pass | 0 vulnerabilities |
-| `npm run audit:no-fakes` | Exit 0, report-only | 40 existing fake/simulator seams (policy deferral, not Phase 2 regression) |
+| `npm run audit:no-fakes` | Exit 0, report-only | 22 remaining allowlisted fake/simulator seams, 0 unallowed findings after Z.ai hardening |
 
 Primary Phase 2 gate for ongoing CI: `npm run verify:phase2`.
 
@@ -116,13 +116,13 @@ Legacy flat paths under `.omo/evidence/` remain for historical gate runs; new ou
 
 ### Live shadow skip (explicit)
 
-`npm run eval:facts:live` completed successfully but recorded:
+The historical `npm run eval:facts:live` run recorded skipped live evidence:
 
 - **status:** `skipped`
 - **liveEvidenceStatus:** `skipped`
 - **skippedReason:** `No configured non-fake live provider was available; wrote skipped report instead.`
 
-Follow-up: configure a non-fake provider via the web UI (`runtime-settings.json`), set `LIVE_FACT_EVALS=1`, re-run `npm run eval:facts:live`, and only then promote completion label to `phase2-complete-live-verified`.
+Follow-up: configure a non-fake provider via the web UI (`runtime-settings.json`) or env (`ZAI_*` preferred; `OPENAI_COMPATIBLE_*` fallback), run `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live` (or full `npm run verify:zai-live`), and only then promote completion label to `phase2-complete-live-verified`. Current live-verification behavior exits nonzero on skipped evidence so no skipped run can look green.
 
 ---
 
@@ -130,7 +130,7 @@ Follow-up: configure a non-fake provider via the web UI (`runtime-settings.json`
 
 1. **Live unverified** — No real-model shadow cases executed on this VM; schema/provenance stress under live LLM output is not evidenced here.
 2. **Global harness mixed corpus** — `test:global` exits 0 while reporting 19/33 scenario passes; intentional regressions and fake-path rows remain in the committed scenario set.
-3. **Fake seams unchanged** — `audit:no-fakes` still reports 40 findings; report-only until Phase 3 / Phase 13 fake-purge policy.
+3. **Fake seams partially hardened** — `audit:no-fakes` reports 22 remaining allowlisted findings and 0 unallowed findings; full extraction of test doubles/simulator compatibility remains Phase 3 / Phase 13 fake-purge policy.
 4. **No product wiring** — Facts are not yet consumed by chat orchestration, Memory OS, rules, or DAG execution; adapters ingest existing surfaces only.
 5. **`validate-phase2.ts`** — Exists as a helper script; the documented gate is `verify:phase2` (does not invoke `validate-phase2.ts` as a separate step).
 
@@ -202,6 +202,6 @@ Material differences from the written plan are recorded in **Deviation ledger** 
 [x] Validation gates and security tests
 [x] Offline fact eval reports (JSON + Markdown)
 [x] verify:phase2 passes
-[x] Live shadow runner with honest skip when no provider
+[x] Live shadow runner with honest skipped evidence and nonzero live-verification exit when no provider
 [ ] phase2-complete-live-verified (requires real-provider shadow capture)
 ```
