@@ -552,12 +552,13 @@ async function tryUpdateManifest(
   }
 
   const generatedAt = (input.now?.() ?? new Date()).toISOString();
+  const existingRepoRef = existing?.repoRef;
   const manifest = buildEvidenceManifest({
     generatedAt,
     liveEvidenceStatus: input.liveEvidenceStatus,
     secretScanPassedAt: generatedAt,
     campaignBudget: input.campaignRollup,
-    ...(existing?.repoRef && typeof existing.repoRef === "string" ? { repoRef: existing.repoRef } : {}),
+    ...(typeof existingRepoRef === "string" ? { repoRef: existingRepoRef } : {}),
   });
 
   await fs.mkdir(evidenceRoot, { recursive: true });

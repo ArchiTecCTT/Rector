@@ -1,13 +1,13 @@
 import { defaultRuntimeSettings, type RuntimeSettingsStore } from "../config/runtimeSettings";
-import { resolveTestProvider } from "../providers/configBridge";
-import type { ProviderConfigRecord } from "../providers/config";
-import type { ProviderConfigStore } from "../providers/configStore";
 import {
   OpenAICompatibleProvider,
   isLiveLLMProvider,
+  resolveTestProvider,
   type LLMProvider,
   type ModelRoute,
-} from "../providers/llm";
+  type ProviderConfigRecord,
+  type ProviderConfigStore,
+} from "../providers";
 import { redactString } from "../security/redaction";
 import type { SecretStore } from "../security/secretStore";
 

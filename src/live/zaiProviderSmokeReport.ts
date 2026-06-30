@@ -8,7 +8,7 @@ import {
   type LLMRequest,
   type LLMResponse,
   type LLMUsage,
-} from "../providers/llm";
+} from "../providers";
 import { redactString } from "../security/redaction";
 import {
   isAcceptableLiveEvidenceProvider,

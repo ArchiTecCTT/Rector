@@ -9,15 +9,19 @@ import {
   getZaiLiveEvidenceDir,
   getZaiLiveRunEvidenceDir,
 } from "../evidence";
-import { runEventToFacts } from "../facts/adapters/runEventFacts";
+import { runEventToFacts } from "../facts";
 import { createInMemoryObservabilityTrace } from "../observability";
-import { buildContextPack, createContextMaterial, type ContextMaterial } from "../orchestration/contextBuilder";
+import {
+  buildContextPack,
+  createContextMaterial,
+  triageUserMessage,
+  type ContextMaterial,
+} from "../orchestration";
 import {
   runOrchestratedChatRun,
   type ChatRunArgs,
   type ChatRunResult,
 } from "../orchestration/chatRunner";
-import { triageUserMessage } from "../orchestration/triage";
 import {
   LLMUsageSchema,
   ProviderError,
@@ -28,7 +32,7 @@ import {
   type LLMUsage,
   type ModelRoute,
   type ModelRouter,
-} from "../providers/llm";
+} from "../providers";
 import { redactString } from "../security/redaction";
 import { createRectorStore, type RectorStore } from "../store";
 import type { RunEvent } from "../store/schemas";
@@ -911,32 +915,12 @@ function skippedReport(input: {
   readonly reason: string;
   readonly campaignTokenLimit: number;
 }): ZaiHarnessReport {
-  const scenarioReports = input.scenarios.map((scenario) => skippedScenarioReport(scenario, input.generatedAt));
-  const tokenUsage = emptyTokenUsage(input.generatedAt, input.campaignTokenLimit);
-  const costReport = aggregateCampaignBudget([], { generatedAt: input.generatedAt, limits: { maxTotalTokens: input.campaignTokenLimit } });
-  const scorecard = buildZaiHarnessScorecard({
-    generatedAt: input.generatedAt,
-    scenarios: scenarioReports.map((scenario) => ({
-      scenarioId: scenario.scenarioId,
-      status: scenario.status,
-      failures: scenario.failures,
-      mutationDetected: false,
-      runEventCount: 0,
-      factCount: 0,
-    })),
-    secretLeakCount: 0,
-    withinTokenBudget: true,
-  });
-  return buildReport({
+  return harnessReportBeforeExecution({
     generatedAt: input.generatedAt,
     runId: input.runId,
-    liveEvidenceStatus: "skipped",
-    selected: undefined,
+    scenarios: input.scenarios,
+    campaignTokenLimit: input.campaignTokenLimit,
     skippedReason: input.reason,
-    scenarioReports,
-    tokenUsage,
-    costReport,
-    scorecard,
     failures: [],
   });
 }
@@ -949,9 +933,30 @@ function failedBeforeScenarios(input: {
   readonly failure: ZaiHarnessFailure;
   readonly skippedReason?: string;
 }): ZaiHarnessReport {
+  return harnessReportBeforeExecution({
+    generatedAt: input.generatedAt,
+    runId: input.runId,
+    scenarios: input.scenarios,
+    campaignTokenLimit: input.campaignTokenLimit,
+    skippedReason: input.skippedReason,
+    failures: [input.failure],
+  });
+}
+
+function harnessReportBeforeExecution(input: {
+  readonly generatedAt: string;
+  readonly runId: string;
+  readonly scenarios: readonly ZaiHarnessScenario[];
+  readonly campaignTokenLimit: number;
+  readonly skippedReason?: string;
+  readonly failures: readonly ZaiHarnessFailure[];
+}): ZaiHarnessReport {
   const scenarioReports = input.scenarios.map((scenario) => skippedScenarioReport(scenario, input.generatedAt));
   const tokenUsage = emptyTokenUsage(input.generatedAt, input.campaignTokenLimit);
-  const costReport = aggregateCampaignBudget([], { generatedAt: input.generatedAt, limits: { maxTotalTokens: input.campaignTokenLimit } });
+  const costReport = aggregateCampaignBudget([], {
+    generatedAt: input.generatedAt,
+    limits: { maxTotalTokens: input.campaignTokenLimit },
+  });
   const scorecard = buildZaiHarnessScorecard({
     generatedAt: input.generatedAt,
     scenarios: scenarioReports.map((scenario) => ({
@@ -975,7 +980,7 @@ function failedBeforeScenarios(input: {
     tokenUsage,
     costReport,
     scorecard,
-    failures: [input.failure],
+    failures: [...input.failures],
   });
 }
 
