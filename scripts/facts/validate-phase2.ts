@@ -43,7 +43,7 @@ if (isMain()) {
       return;
     }
     process.stdout.write("[verify:phase2] fact eval validation PASS\n");
-    process.stdout.write("[verify:phase2] wrote .omo/evidence/fact-report.json and .omo/evidence/fact-report.md\n");
+    process.stdout.write("[verify:phase2] wrote .rector/evidence/phase2/fact-report.json and .rector/evidence/phase2/fact-report.md\n");
   }).catch((error: unknown) => {
     process.stderr.write(`[verify:phase2] FAILED: ${String(error)}\n`);
     process.stderr.write(`repo: ${REPO_ROOT}\n`);

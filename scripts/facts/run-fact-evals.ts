@@ -8,6 +8,7 @@ import type { CapabilityEvalResult } from "../../src/capabilities/eval/schemas";
 import type { GlobalScenario } from "../../src/evals/globalScenarioSchema";
 import type { RunEvent } from "../../src/protocol/events";
 import type { ToolSchemaDefinition } from "../../src/tools";
+import { getEvidenceTrackDir } from "../../src/evidence";
 import {
   type FactEvalCaseReport,
   type FactEvalMetricId,
@@ -44,7 +45,7 @@ import {
 } from "../../src/facts";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const DEFAULT_OUTPUT_DIR = path.join(REPO_ROOT, ".omo", "evidence");
+const DEFAULT_OUTPUT_DIR = getEvidenceTrackDir("phase2", REPO_ROOT);
 const CREATED_AT = "2026-06-28T00:00:00.000Z";
 
 export interface RunFactEvalsOptions {

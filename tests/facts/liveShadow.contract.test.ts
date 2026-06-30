@@ -176,6 +176,69 @@ describe("Phase 2F live fact shadow contract", () => {
       const markdown = await readFile(path.join(outputDir, "live-fact-shadow-report.md"), "utf8");
       expect(markdown).toContain("test_only_injected");
       expect(markdown).not.toContain("Partial incident note only");
+      const summary = JSON.parse(await readFile(path.join(outputDir, "live-fact-shadow-summary.json"), "utf8"));
+      expect(summary.reportJson).toBe("live-fact-shadow-report.json");
+      expect(summary.totalTokenUsage.totalTokens).toBe(375);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts response content before writing raw shadow artifacts", async () => {
+    const outputDir = await tempDir();
+
+    class SecretEchoProvider extends ContractLiveProvider {
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.requests.push(request);
+        return LLMResponseSchema.parse({
+          provider: this.metadata.id,
+          model: request.model ?? this.metadata.models.fast,
+          content: JSON.stringify({
+            facts: [
+              {
+                kind: "capability_failure",
+                capabilityId: "live_shadow.secret",
+                reason: "api_key=sk-test-secret1234567890 leaked by model",
+                retryable: false,
+                evidence: [
+                  {
+                    refType: "insufficient_evidence",
+                    reason: "api_key=sk-test-secret1234567890",
+                    missing: ["safe artifact"],
+                    searched: [],
+                  },
+                ],
+              },
+            ],
+          }),
+          finishReason: "stop",
+          usage: USAGE,
+        });
+      }
+    }
+
+    try {
+      await runLiveFactShadow({
+        outputDir,
+        env: { LIVE_FACT_EVALS: "1" },
+        now: fixedNow,
+        providerDiscovery: () => [
+          {
+            provider: new SecretEchoProvider(),
+            route: "fast",
+            modelId: "contract-live-model",
+            liveEvidence: false,
+            discoveryLabel: "contract test injection",
+          },
+        ],
+      });
+
+      const artifact = await readFile(
+        path.join(outputDir, "live-fact-shadow-artifacts", "intent_extraction_stress.json"),
+        "utf8",
+      );
+      expect(artifact).not.toContain("sk-test-secret1234567890");
+      expect(artifact).toContain("[REDACTED]");
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

@@ -16,11 +16,13 @@ import {
   CapabilityEvidencePacketSchema,
 } from "../../src/capabilities/eval/evidencePacket";
 import { CapabilityEvalResultSchema } from "../../src/capabilities/eval/schemas";
+import { getEvidenceTrackDir, getLegacyEvidenceRoot } from "../../src/evidence";
 const PHASE_0_BASELINE_SCHEMA_VERSION = "rector.phase0-baseline.v1";
 
 const REPO_ROOT = path.dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 const CORPUS_ROOT = process.env.VERIFY_CORPUS_ROOT || path.join(REPO_ROOT, "tests/fixtures/eval-corpus");
-const EVIDENCE_DIR = path.join(REPO_ROOT, ".omo/evidence");
+const EVIDENCE_DIR = getEvidenceTrackDir("phase0", REPO_ROOT);
+const LEGACY_EVIDENCE_DIR = getLegacyEvidenceRoot(REPO_ROOT);
 
 function fail(msg: string): never {
   console.error(`[verify:phase0] FAIL: ${msg}`);
@@ -96,17 +98,26 @@ async function verifyGate(): Promise<void> {
 }
 
 async function verifyBaseline(): Promise<void> {
-  const baselinePath = path.join(EVIDENCE_DIR, "phase0-baseline.json");
+  let baselinePath = resolveBaselinePath();
   if (!existsSync(baselinePath)) {
     if (process.env.RECTOR_BASELINE_ACTIVE === "1") {
       fail("REENTRANCY GUARD: baseline missing while RECTOR_BASELINE_ACTIVE=1; refusing recursive generation");
     }
     const gen = run("npm run baseline:phase0");
     if (gen.code !== 0) fail(`baseline:phase0 exited ${gen.code} (expected 0)`);
+    baselinePath = resolveBaselinePath();
   }
   if (!existsSync(baselinePath)) fail("phase0-baseline.json missing after generation attempt");
   const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
   if (baseline.schemaVersion !== PHASE_0_BASELINE_SCHEMA_VERSION) fail("baseline schemaVersion mismatch");
+}
+
+function resolveBaselinePath(): string {
+  const primaryPath = path.join(EVIDENCE_DIR, "phase0-baseline.json");
+  if (existsSync(primaryPath)) return primaryPath;
+  const legacyPath = path.join(LEGACY_EVIDENCE_DIR, "phase0-baseline.json");
+  if (existsSync(legacyPath)) return legacyPath;
+  return primaryPath;
 }
 
 async function main() {

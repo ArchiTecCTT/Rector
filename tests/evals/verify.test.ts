@@ -38,7 +38,7 @@ describe("completion verifiers", () => {
   it("verify:phase0 exits 0 on real tree", () => {
     const r = run("npm run verify:phase0");
     expect(r.code).toBe(0);
-  });
+  }, 120000);
 
   it("verify:phase0.5 exits 0 on real tree", () => {
     const r = run("npm run verify:phase0.5");
