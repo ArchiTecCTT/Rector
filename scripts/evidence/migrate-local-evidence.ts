@@ -20,9 +20,9 @@ const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 const RESIDUAL_SECRET_PATTERNS = [
-  /\bBearer\s+(?!\[REDACTED\])[^ \t\r\n,;]+/i,
-  /\bBasic\s+(?!\[REDACTED\])[^ \t\r\n,;]+/i,
-  /\b(api[_-]?key|token|secret|password)=((?!\[REDACTED\])[^ \t\r\n,;&]+)/i,
+  /\bBearer\s+(?!\[REDACTED])[^ \t\r\n,;]+/i,
+  /\bBasic\s+(?!\[REDACTED])[^ \t\r\n,;]+/i,
+  /\b(api[_-]?key|token|secret|password)=((?!\[REDACTED])[^ \t\r\n,;&]+)/i,
   /\b[a-z][a-z0-9+.-]*:\/\/[^ \t\r\n/@]+:[^ \t\r\n/@]+@/i,
 ] as const;
 

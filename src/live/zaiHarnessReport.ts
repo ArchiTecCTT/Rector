@@ -16,7 +16,6 @@ import {
   runOrchestratedChatRun,
   type ChatRunArgs,
   type ChatRunResult,
-  type ChatRunnerDeps,
 } from "../orchestration/chatRunner";
 import { triageUserMessage } from "../orchestration/triage";
 import {
@@ -32,7 +31,7 @@ import {
 } from "../providers/llm";
 import { redactString } from "../security/redaction";
 import { createRectorStore, type RectorStore } from "../store";
-import type { Run, RunEvent } from "../store/schemas";
+import type { RunEvent } from "../store/schemas";
 import {
   isAcceptableLiveEvidenceProvider,
   isZaiCompatibleHost,
@@ -912,7 +911,7 @@ function skippedReport(input: {
   readonly reason: string;
   readonly campaignTokenLimit: number;
 }): ZaiHarnessReport {
-  const scenarioReports = input.scenarios.map((scenario) => skippedScenarioReport(scenario, input.generatedAt, input.reason));
+  const scenarioReports = input.scenarios.map((scenario) => skippedScenarioReport(scenario, input.generatedAt));
   const tokenUsage = emptyTokenUsage(input.generatedAt, input.campaignTokenLimit);
   const costReport = aggregateCampaignBudget([], { generatedAt: input.generatedAt, limits: { maxTotalTokens: input.campaignTokenLimit } });
   const scorecard = buildZaiHarnessScorecard({
@@ -950,7 +949,7 @@ function failedBeforeScenarios(input: {
   readonly failure: ZaiHarnessFailure;
   readonly skippedReason?: string;
 }): ZaiHarnessReport {
-  const scenarioReports = input.scenarios.map((scenario) => skippedScenarioReport(scenario, input.generatedAt, input.failure.message));
+  const scenarioReports = input.scenarios.map((scenario) => skippedScenarioReport(scenario, input.generatedAt));
   const tokenUsage = emptyTokenUsage(input.generatedAt, input.campaignTokenLimit);
   const costReport = aggregateCampaignBudget([], { generatedAt: input.generatedAt, limits: { maxTotalTokens: input.campaignTokenLimit } });
   const scorecard = buildZaiHarnessScorecard({
@@ -1149,7 +1148,7 @@ export function renderZaiHarnessMarkdown(report: ZaiHarnessReport): string {
   return `${lines.join("\n")}\n`;
 }
 
-function skippedScenarioReport(scenario: ZaiHarnessScenario, generatedAt: string, reason: string): ZaiHarnessScenarioReport {
+function skippedScenarioReport(scenario: ZaiHarnessScenario, generatedAt: string): ZaiHarnessScenarioReport {
   return ScenarioReportSchema.parse({
     scenarioId: scenario.id,
     title: scenario.title,

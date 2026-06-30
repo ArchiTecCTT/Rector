@@ -58,7 +58,7 @@ export function buildEvidenceManifest(options: BuildEvidenceManifestOptions = {}
     ...defaultEvidenceTrackPointers(),
     ...options.tracks,
   };
-  const manifest: EvidenceManifest = {
+  return {
     schemaVersion: EVIDENCE_MANIFEST_SCHEMA_VERSION,
     generatedAt: timestamp(options.generatedAt, options.now),
     ...(options.repoRef !== undefined ? { repoRef: sanitizeString(options.repoRef) } : {}),
@@ -71,8 +71,6 @@ export function buildEvidenceManifest(options: BuildEvidenceManifestOptions = {}
       ? { campaignBudget: sanitizeCampaignBudget(options.campaignBudget) }
       : {}),
   };
-
-  return manifest;
 }
 
 function sanitizeCampaignBudget(rollup: CampaignBudgetRollup): CampaignBudgetRollup {

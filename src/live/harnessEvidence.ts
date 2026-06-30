@@ -33,10 +33,10 @@ const EXCLUDED_FILE_NAMES = new Set([
 ]);
 
 const SECRET_LEAK_PATTERNS = [
-  /\bBearer\s+(?!\[REDACTED\])[^"\s,;]+/i,
-  /\bBasic\s+(?!\[REDACTED\])[^"\s,;]+/i,
+  /\bBearer\s+(?!\[REDACTED])[^"\s,;]+/i,
+  /\bBasic\s+(?!\[REDACTED])[^"\s,;]+/i,
   /\bsk-[A-Za-z0-9_-]{8,}\b/i,
-  /\b(api[_-]?key|token|secret|password)=((?!\[REDACTED\])[^"\s,;&]+)/i,
+  /\b(api[_-]?key|token|secret|password)=((?!\[REDACTED])[^"\s,;&]+)/i,
   /\bOPENAI_COMPATIBLE_API_KEY\b/i,
   /\bAuthorization\b/i,
 ];
@@ -181,8 +181,8 @@ function hardenStringLeaves(value: unknown): unknown {
   if (typeof value === "string") {
     return value
       .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[REDACTED]")
-      .replace(/\bBearer\s+(?!\[REDACTED\])[^"\s,;]+/gi, "Bearer [REDACTED]")
-      .replace(/\bBasic\s+(?!\[REDACTED\])[^"\s,;]+/gi, "Basic [REDACTED]")
+      .replace(/\bBearer\s+(?!\[REDACTED])[^"\s,;]+/gi, "Bearer [REDACTED]")
+      .replace(/\bBasic\s+(?!\[REDACTED])[^"\s,;]+/gi, "Basic [REDACTED]")
       .replace(/\bOPENAI_COMPATIBLE_API_KEY\b/g, "[REDACTED_KEY_NAME]")
       .replace(/\bAuthorization\b/g, "[REDACTED_HEADER_NAME]");
   }

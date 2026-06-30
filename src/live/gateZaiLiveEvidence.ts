@@ -545,7 +545,8 @@ async function tryUpdateManifest(
   const manifestPath = path.join(evidenceRoot, MANIFEST_JSON);
   let existing: Record<string, unknown> | undefined;
   try {
-    existing = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    existing = isPlainObjectRecord(parsed) ? parsed : undefined;
   } catch {
     existing = undefined;
   }
@@ -575,6 +576,10 @@ async function fileExists(filePath: string): Promise<boolean> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isPlainObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function isResolvedPathInsideDirectory(candidatePath: string, directoryPath: string): boolean {

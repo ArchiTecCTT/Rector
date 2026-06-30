@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { createLocalRuntimeSettingsStore } from "../config/runtimeSettings";
 import { createLocalProviderConfigStore } from "../providers/configStore";
-import { getRectorLocalDir } from "../evidence/paths";
+import { getRectorLocalDir } from "../evidence";
 import { createSecretStoreFromEnv } from "../security/secretStoreFactory";
 import {
   discoverLiveProvider,
