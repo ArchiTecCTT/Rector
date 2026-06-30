@@ -30,6 +30,7 @@ import { globalHarnessResultToFacts } from "../facts";
 import { RunEventSchema } from "../protocol/events";
 import { RunPhaseSchema } from "../protocol/phases";
 import { SpecialistTaskPacketSchema } from "../systems/contracts";
+import { getEvidenceTrackDir } from "../evidence";
 import {
   computeReliability as computeReliabilityReal,
   computeAccuracy as computeAccuracyReal,
@@ -46,11 +47,11 @@ import {
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const DEFAULT_SCENARIOS_DIR = path.join(REPO_ROOT, "tests", "global", "scenarios");
-const DEFAULT_OUTPUT_DIR = path.join(REPO_ROOT, ".omo", "evidence");
+const DEFAULT_OUTPUT_DIR = getEvidenceTrackDir("global", REPO_ROOT);
 const VALIDATOR_TIMEOUT_CEILING_MS = 120000;
 
 // Directories excluded from the full workspace hash manifest (per plan requirement).
-const MANIFEST_EXCLUDE_DIRS = new Set([".git", "node_modules", ".omo", "tmp", "temp", ".cache", "dist", "build"]);
+const MANIFEST_EXCLUDE_DIRS = new Set([".git", "node_modules", ".omo", ".rector", "tmp", "temp", ".cache", "dist", "build"]);
 
 /** Compute SHA-256 hex of a file's contents. */
 async function sha256File(absolutePath: string): Promise<string> {

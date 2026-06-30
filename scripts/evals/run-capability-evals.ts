@@ -32,10 +32,11 @@ import {
   type CapabilityEvidencePacket,
   type CapabilityCoverage,
 } from "../../src/capabilities/eval/evidencePacket";
+import { getEvidenceTrackDir } from "../../src/evidence";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const DEFAULT_CORPUS_ROOT = path.join(REPO_ROOT, "tests", "fixtures", "eval-corpus");
-const DEFAULT_OUTPUT_DIR = path.join(REPO_ROOT, ".omo", "evidence");
+const DEFAULT_OUTPUT_DIR = getEvidenceTrackDir("capabilities", REPO_ROOT);
 const CAPABILITY_ID = "cartographer.grounding";
 
 export type OracleOverride = (caseId: string, oracle: EvalCorpusOracle) => EvalCorpusOracle;

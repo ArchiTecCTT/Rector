@@ -35,17 +35,20 @@ import {
   type LLMUsage,
   type ModelRoute,
 } from "../../src/providers";
+import { getEvidenceTrackDir, sanitizeEvidencePayload, sanitizeEvidenceStringLeaves } from "../../src/evidence";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const DEFAULT_OUTPUT_DIR = path.join(REPO_ROOT, ".omo", "evidence");
+const DEFAULT_OUTPUT_DIR = getEvidenceTrackDir("phase2", REPO_ROOT);
 const REPORT_JSON = "live-fact-shadow-report.json";
 const REPORT_MD = "live-fact-shadow-report.md";
+const SUMMARY_JSON = "live-fact-shadow-summary.json";
 const RAW_MODEL_OUTPUT_DIR = "live-fact-shadow-artifacts";
 const CREATED_BY = "Phase 2F live fact shadow runner";
 
 export const LIVE_FACT_SHADOW_REPORT_SCHEMA_VERSION = "rector.live-fact-shadow-report.v1";
+const LIVE_FACT_SHADOW_SUMMARY_SCHEMA_VERSION = "rector.live-fact-shadow-summary.v1";
 
 const LiveFactShadowTokenUsageSchema = z
   .object({
@@ -94,6 +97,23 @@ export const LiveFactShadowReportSchema = z
     skippedCount: z.number().int().nonnegative(),
     cases: z.array(LiveFactShadowCaseReportSchema),
     notes: z.array(z.string().min(1)),
+  })
+  .strict();
+
+const LiveFactShadowSummarySchema = z
+  .object({
+    schemaVersion: z.literal(LIVE_FACT_SHADOW_SUMMARY_SCHEMA_VERSION),
+    generatedAt: z.string().datetime(),
+    status: z.enum(["completed", "skipped"]),
+    liveEvidenceStatus: z.enum(["live_provider", "test_only_injected", "skipped"]),
+    caseCount: z.number().int().nonnegative(),
+    passedCount: z.number().int().nonnegative(),
+    failedCount: z.number().int().nonnegative(),
+    skippedCount: z.number().int().nonnegative(),
+    totalTokenUsage: LiveFactShadowTokenUsageSchema,
+    totalEstimatedCostUsd: z.number().nonnegative(),
+    reportJson: z.literal(REPORT_JSON),
+    reportMarkdown: z.literal(REPORT_MD),
   })
   .strict();
 
@@ -326,7 +346,7 @@ export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {
     skippedCount,
     cases,
     notes: [
-      "Phase 2F live shadow is opt-in, non-mutating, and writes only .omo/evidence report artifacts.",
+      "Phase 2F live shadow is opt-in, non-mutating, and writes only .rector/evidence/phase2 report artifacts.",
       discoveryWasInjected || !selected.liveEvidence
         ? "Provider was dependency-injected for deterministic contract tests and must not be counted as live verification."
         : "Provider was discovered through explicit live environment/configuration and is not a fake/spy/deterministic double.",
@@ -369,7 +389,12 @@ async function runScenario(
   if (context.write) {
     const rawDir = path.join(context.outputDir, RAW_MODEL_OUTPUT_DIR);
     await context.mkdir(rawDir, { recursive: true });
-    await context.writeFile(path.join(rawDir, `${scenario.id}.json`), `${JSON.stringify({ caseId: scenario.id, response: response ? sanitizeResponse(response) : null, failureReasons }, null, 2)}\n`, "utf8");
+    const artifactPayload = sanitizeEvidencePayload({
+      caseId: scenario.id,
+      response: response ? sanitizeResponse(response) : null,
+      failureReasons,
+    });
+    await context.writeFile(path.join(rawDir, `${scenario.id}.json`), `${JSON.stringify(artifactPayload, null, 2)}\n`, "utf8");
   }
 
   const evaluation = response
@@ -634,16 +659,49 @@ function skippedReport(generatedAt: string, skippedReason: string): LiveFactShad
     notes: [
       "Live fact shadow did not run model calls; this is an honest skipped report.",
       "Set LIVE_FACT_EVALS=1 and configure a non-fake live provider to run the shadow suite.",
+      "Reports are written under .rector/evidence/phase2 by default.",
     ],
   });
 }
 
 async function writeReport(report: LiveFactShadowReport, io: { readonly outputDir: string; readonly write: boolean; readonly mkdir: typeof fs.mkdir; readonly writeFile: typeof fs.writeFile }): Promise<LiveFactShadowReport> {
-  if (!io.write) return report;
+  const safeReport = LiveFactShadowReportSchema.parse(sanitizeEvidenceStringLeaves(report));
+  if (!io.write) return safeReport;
   await io.mkdir(io.outputDir, { recursive: true });
-  await io.writeFile(path.join(io.outputDir, REPORT_JSON), `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  await io.writeFile(path.join(io.outputDir, REPORT_MD), renderLiveFactShadowMarkdown(report), "utf8");
-  return report;
+  await io.writeFile(path.join(io.outputDir, REPORT_JSON), `${JSON.stringify(safeReport, null, 2)}\n`, "utf8");
+  await io.writeFile(path.join(io.outputDir, REPORT_MD), renderLiveFactShadowMarkdown(safeReport), "utf8");
+  await io.writeFile(path.join(io.outputDir, SUMMARY_JSON), `${JSON.stringify(buildLiveFactShadowSummary(safeReport), null, 2)}\n`, "utf8");
+  return safeReport;
+}
+
+function buildLiveFactShadowSummary(report: LiveFactShadowReport): z.infer<typeof LiveFactShadowSummarySchema> {
+  const totalTokenUsage = report.cases.reduce(
+    (total, caseReport) => ({
+      inputTokens: total.inputTokens + caseReport.tokenUsage.inputTokens,
+      outputTokens: total.outputTokens + caseReport.tokenUsage.outputTokens,
+      totalTokens: total.totalTokens + caseReport.tokenUsage.totalTokens,
+      modelCalls: total.modelCalls + caseReport.tokenUsage.modelCalls,
+    }),
+    { inputTokens: 0, outputTokens: 0, totalTokens: 0, modelCalls: 0 },
+  );
+  const totalEstimatedCostUsd = report.cases.reduce(
+    (total, caseReport) => total + caseReport.estimatedCostUsd,
+    0,
+  );
+  return LiveFactShadowSummarySchema.parse({
+    schemaVersion: LIVE_FACT_SHADOW_SUMMARY_SCHEMA_VERSION,
+    generatedAt: report.generatedAt,
+    status: report.status,
+    liveEvidenceStatus: report.liveEvidenceStatus,
+    caseCount: report.caseCount,
+    passedCount: report.passedCount,
+    failedCount: report.failedCount,
+    skippedCount: report.skippedCount,
+    totalTokenUsage,
+    totalEstimatedCostUsd: Math.round(totalEstimatedCostUsd * 1_000_000) / 1_000_000,
+    reportJson: REPORT_JSON,
+    reportMarkdown: REPORT_MD,
+  });
 }
 
 export function renderLiveFactShadowMarkdown(report: LiveFactShadowReport): string {
@@ -714,7 +772,13 @@ function modelForRoute(provider: LLMProvider, route: ModelRoute): string {
 }
 
 function sanitizeResponse(response: LLMResponse): Record<string, unknown> {
-  return { provider: response.provider, model: response.model, finishReason: response.finishReason, usage: response.usage, content: response.content.slice(0, 20_000) };
+  return sanitizeEvidencePayload({
+    provider: response.provider,
+    model: response.model,
+    finishReason: response.finishReason,
+    usage: response.usage,
+    content: response.content.slice(0, 20_000),
+  });
 }
 
 function safeMarkdown(value: string): string {

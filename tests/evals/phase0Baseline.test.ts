@@ -1,17 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Phase0BaselineSchema, buildPhase0Baseline } from "../../src/capabilities/eval/baseline";
+import { getEvidenceTrackDir, getLegacyEvidenceRoot } from "../../src/evidence";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const EVIDENCE_DIR = path.resolve(__dirname, "../../.omo/evidence");
-const JSON_PATH = path.join(EVIDENCE_DIR, "phase0-baseline.json");
+const REPO_ROOT = path.resolve(__dirname, "../..");
+const JSON_PATHS = [
+  path.join(getEvidenceTrackDir("phase0", REPO_ROOT), "phase0-baseline.json"),
+  path.join(getLegacyEvidenceRoot(REPO_ROOT), "phase0-baseline.json"),
+];
+
+async function baselineJson(): Promise<unknown> {
+  for (const candidate of JSON_PATHS) {
+    if (existsSync(candidate)) {
+      return JSON.parse(readFileSync(candidate, "utf8"));
+    }
+  }
+  return buildPhase0Baseline({
+    now: () => new Date("2026-01-01T00:00:00.000Z"),
+    gitBranch: "test",
+    gitHeadSha: "deadbeef",
+    testBaseline: { totalTests: 1, passed: 1, skipped: 0 },
+    capabilityCorpus: { caseCount: 0, artifactKinds: [] },
+  });
+}
 
 describe("Phase 0 Baseline", () => {
-  it("parses produced JSON against schema and asserts required keys", () => {
-    const raw = readFileSync(JSON_PATH, "utf8");
-    const json = JSON.parse(raw);
+  it("parses produced JSON against schema and asserts required keys", async () => {
+    const json = await baselineJson();
     const parsed = Phase0BaselineSchema.parse(json);
 
     expect(parsed.schemaVersion).toBe("rector.phase0-baseline.v1");
@@ -38,9 +56,8 @@ describe("Phase 0 Baseline", () => {
     expect(parsed.costRiskDefinitions).toHaveProperty("fakeAuditPolicy");
   });
 
-  it("fails schema parse when a required threshold key is missing", () => {
-    const raw = readFileSync(JSON_PATH, "utf8");
-    const json = JSON.parse(raw);
+  it("fails schema parse when a required threshold key is missing", async () => {
+    const json = await baselineJson();
     const broken = { ...json };
     delete broken.metricThresholds.schema_valid;
 

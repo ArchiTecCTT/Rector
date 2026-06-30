@@ -9,10 +9,11 @@ import {
   buildPhase0Baseline,
   type Phase0Baseline,
 } from "../../src/capabilities/eval/baseline";
+import { getEvidenceTrackDir } from "../../src/evidence";
 import { EvalCorpusManifestSchema } from "../../tests/fixtures/eval-corpus/manifest.schema";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const OUTPUT_DIR = path.join(REPO_ROOT, ".omo", "evidence");
+const OUTPUT_DIR = getEvidenceTrackDir("phase0", REPO_ROOT);
 
 function getGitInfo(): { branch: string; headSha: string } {
   const branch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim();

@@ -78,7 +78,7 @@ describe("global harness gate (task 18)", () => {
         return;
       }
       await runGlobalHarness({ scenariosDir: cloneDir, outputDir: undefined, write: false, fakePathAuditor: async () => ({ findingCount: 0 }) });
-      const out = path.resolve(".omo/evidence/regressions");
+      const out = path.resolve(".rector/evidence/global/regressions");
       const files = await readdir(out).catch(() => []);
       const artifact = files.find((f) => f.endsWith(".json"));
       if (artifact) await import("node:fs/promises").then((m) => m.rm(path.join(out, artifact)));
