@@ -324,18 +324,33 @@ async function validateRunArtifacts(
 }
 
 function validateProviderIdentity(
-  identity: { providerId?: string; adapterId?: string; host?: string },
+  identity: { providerId?: string | null; adapterId?: string | null; host?: string | null },
   violations: string[],
   label: string,
+  options: { requireOpenAiAdapterAndZaiHost?: boolean } = {},
 ): void {
-  if (!isAcceptableLiveEvidenceProvider({ providerId: identity.providerId })) {
+  const requireAdapterAndHost = options.requireOpenAiAdapterAndZaiHost ?? true;
+  const providerId = identity.providerId?.trim();
+  if (!providerId) {
+    violations.push(`${label} providerId is required for live evidence`);
+  } else if (!isAcceptableLiveEvidenceProvider({ providerId })) {
     violations.push(`${label} provider is fake/deterministic/spy/mock/fixture/scripted/test-double`);
   }
-  if (identity.adapterId && identity.adapterId !== "openai-compatible") {
-    violations.push(`${label} adapter must be openai-compatible for Z.ai live evidence (got ${identity.adapterId})`);
+
+  if (!requireAdapterAndHost) return;
+
+  const adapterId = identity.adapterId?.trim();
+  if (!adapterId) {
+    violations.push(`${label} adapterId is required for live evidence`);
+  } else if (adapterId !== "openai-compatible") {
+    violations.push(`${label} adapter must be openai-compatible for Z.ai live evidence (got ${adapterId})`);
   }
-  if (identity.host && !isZaiCompatibleHost(identity.host)) {
-    violations.push(`${label} host is not an intended Z.ai OpenAI-compatible route (${identity.host})`);
+
+  const host = identity.host?.trim();
+  if (!host) {
+    violations.push(`${label} host is required for live evidence`);
+  } else if (!isZaiCompatibleHost(host)) {
+    violations.push(`${label} host is not an intended Z.ai OpenAI-compatible route (${host})`);
   }
 }
 
@@ -381,7 +396,12 @@ function validatePhase2Track(
   if (report.failedCount > 0) {
     violations.push(`phase2 live fact shadow failedCount must be 0 (got ${report.failedCount})`);
   }
-  validateProviderIdentity({ providerId: report.providerId ?? undefined }, violations, "phase2f");
+  validateProviderIdentity(
+    { providerId: report.providerId },
+    violations,
+    "phase2f",
+    { requireOpenAiAdapterAndZaiHost: false },
+  );
   for (const caseReport of report.cases) {
     if (caseReport.status === "failed") {
       violations.push("phase2 live fact shadow includes failed case while report claims success");

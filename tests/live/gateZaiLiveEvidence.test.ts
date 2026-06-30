@@ -126,6 +126,103 @@ describe("gateZaiLiveEvidence", () => {
       await rm(repoRoot, { recursive: true, force: true });
     }
   });
+
+  it("rejects missing host and adapter on harness and provider-smoke tracks", async () => {
+    const repoRoot = await makeRepo();
+    try {
+      await writePassingCampaignFixture(repoRoot, { host: null, adapterId: null });
+      const result = await gateZaiLiveEvidence({ repoRoot, updateManifestOnPass: false });
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.includes("host is required"))).toBe(true);
+      expect(result.violations.some((v) => v.includes("adapterId is required"))).toBe(true);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects non-Z.ai host", async () => {
+    const repoRoot = await makeRepo();
+    try {
+      await writePassingCampaignFixture(repoRoot, { host: "api.openai.com" });
+      const result = await gateZaiLiveEvidence({ repoRoot, updateManifestOnPass: false });
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.includes("not an intended Z.ai"))).toBe(true);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects test_only_injected provider-smoke track", async () => {
+    const repoRoot = await makeRepo();
+    try {
+      await writePassingCampaignFixture(repoRoot, { providerSmokeLiveEvidenceStatus: "test_only_injected" });
+      const result = await gateZaiLiveEvidence({ repoRoot, updateManifestOnPass: false });
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.includes("provider-smoke liveEvidenceStatus"))).toBe(true);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects skipped provider-smoke status", async () => {
+    const repoRoot = await makeRepo();
+    try {
+      await writePassingCampaignFixture(repoRoot, { providerSmokeStatus: "skipped" });
+      const result = await gateZaiLiveEvidence({ repoRoot, updateManifestOnPass: false });
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.includes("provider-smoke status"))).toBe(true);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects test_only_injected phase2 track", async () => {
+    const repoRoot = await makeRepo();
+    try {
+      await writePassingCampaignFixture(repoRoot, { phase2LiveEvidenceStatus: "test_only_injected" });
+      const result = await gateZaiLiveEvidence({ repoRoot, updateManifestOnPass: false });
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.includes("phase2 live fact shadow liveEvidenceStatus"))).toBe(true);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects failed harness status and scorecard", async () => {
+    const repoRoot = await makeRepo();
+    try {
+      await writePassingCampaignFixture(repoRoot, { harnessStatus: "failed", scorecardPassed: false });
+      const result = await gateZaiLiveEvidence({ repoRoot, updateManifestOnPass: false });
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.includes("harness status"))).toBe(true);
+      expect(result.violations.some((v) => v.includes("scorecard.passed"))).toBe(true);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not update manifest when the gate fails", async () => {
+    const repoRoot = await makeRepo();
+    const manifestPath = path.join(repoRoot, ".rector", "evidence", "manifest.json");
+    try {
+      await mkdir(path.dirname(manifestPath), { recursive: true });
+      await writeFile(
+        manifestPath,
+        `${JSON.stringify({ liveEvidenceStatus: "unknown", marker: "keep" }, null, 2)}\n`,
+        "utf8",
+      );
+      await writePassingCampaignFixture(repoRoot, { liveEvidenceStatus: "test_only_injected" });
+      const result = await gateZaiLiveEvidence({ repoRoot, now: () => new Date(GENERATED_AT) });
+      expect(result.ok).toBe(false);
+      expect(result.summary.manifestUpdated).toBe(false);
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      expect(manifest.liveEvidenceStatus).toBe("unknown");
+      expect(manifest.marker).toBe("keep");
+      expect(manifest.secretScanPassedAt).toBeUndefined();
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 async function makeRepo(): Promise<string> {
@@ -139,7 +236,14 @@ async function writePassingCampaignFixture(
   repoRoot: string,
   options: {
     liveEvidenceStatus?: "live_provider" | "test_only_injected";
+    providerSmokeLiveEvidenceStatus?: "live_provider" | "test_only_injected" | "skipped";
+    phase2LiveEvidenceStatus?: "live_provider" | "test_only_injected" | "skipped";
+    providerSmokeStatus?: "passed" | "failed" | "skipped";
     providerId?: string;
+    adapterId?: string | null;
+    host?: string | null;
+    harnessStatus?: "passed" | "failed";
+    scorecardPassed?: boolean;
     omitRunArtifacts?: boolean;
     harnessTotalTokens?: number;
     phase2TotalTokens?: number;
@@ -152,6 +256,12 @@ async function writePassingCampaignFixture(
   const runDir = path.join(zaiDir, "runs", RUN_ID);
   const providerId = options.providerId ?? "zai:env";
   const liveEvidenceStatus = options.liveEvidenceStatus ?? "live_provider";
+  const providerSmokeLiveEvidenceStatus = options.providerSmokeLiveEvidenceStatus ?? liveEvidenceStatus;
+  const phase2LiveEvidenceStatus = options.phase2LiveEvidenceStatus ?? liveEvidenceStatus;
+  const harnessStatus = options.harnessStatus ?? "passed";
+  const scorecardPassed = options.scorecardPassed ?? true;
+  const adapterId = options.adapterId === undefined ? "openai-compatible" : options.adapterId;
+  const host = options.host === undefined ? "api.z.ai" : options.host;
   const harnessTokens = options.harnessTotalTokens ?? 1_200;
   const modelCalls = options.zeroModelCalls ? 0 : 3;
 
@@ -179,7 +289,7 @@ async function writePassingCampaignFixture(
   const scorecard = {
     schemaVersion: ZAI_HARNESS_SCORECARD_SCHEMA_VERSION,
     generatedAt: GENERATED_AT,
-    passed: true,
+    passed: scorecardPassed,
     scenarioCount: 3,
     passedCount: 3,
     failedCount: 0,
@@ -212,12 +322,12 @@ async function writePassingCampaignFixture(
     schemaVersion: ZAI_HARNESS_REPORT_SCHEMA_VERSION,
     generatedAt: GENERATED_AT,
     runId: RUN_ID,
-    status: "passed",
+    status: harnessStatus,
     liveEvidenceStatus,
     providerId,
-    adapterId: "openai-compatible",
+    adapterId,
     modelId: "glm-4.5-air",
-    host: "api.z.ai",
+    host,
     scenarioCount: 3,
     passedCount: 3,
     failedCount: 0,
@@ -271,15 +381,17 @@ async function writePassingCampaignFixture(
     }
   }
 
+  const providerSmokeStatus = options.providerSmokeStatus ?? "passed";
   const providerSmoke = ZaiProviderSmokeReportSchema.parse({
     schemaVersion: ZAI_PROVIDER_SMOKE_REPORT_SCHEMA_VERSION,
     generatedAt: GENERATED_AT,
-    status: "passed",
-    liveEvidenceStatus,
+    status: providerSmokeStatus,
+    liveEvidenceStatus: providerSmokeLiveEvidenceStatus,
     providerId,
-    adapterId: "openai-compatible",
+    adapterId,
     modelId: "glm-4.5-air",
-    host: "api.z.ai",
+    host,
+    ...(providerSmokeStatus === "skipped" ? { skippedReason: "fixture skip" } : {}),
     tokenUsage: {
       inputTokens: 10,
       outputTokens: 5,
@@ -295,8 +407,8 @@ async function writePassingCampaignFixture(
   const phase2Dir = path.join(repoRoot, ".rector", "evidence", "phase2");
   const phase2Tokens = options.phase2TotalTokens ?? 500;
   const phase2Report = {
-    status: "completed",
-    liveEvidenceStatus,
+    status: phase2LiveEvidenceStatus === "skipped" ? "skipped" : "completed",
+    liveEvidenceStatus: phase2LiveEvidenceStatus,
     providerId,
     failedCount: 0,
     cases: [{ status: "passed", failureReasons: [] }],
@@ -308,8 +420,8 @@ async function writePassingCampaignFixture(
       outputTokens: 0,
       totalTokens: phase2Tokens,
     },
-    liveEvidenceStatus,
-    status: "completed",
+    liveEvidenceStatus: phase2LiveEvidenceStatus,
+    status: phase2LiveEvidenceStatus === "skipped" ? "skipped" : "completed",
     failedCount: 0,
   };
   await writeFile(path.join(phase2Dir, "live-fact-shadow-report.json"), `${JSON.stringify(phase2Report, null, 2)}\n`, "utf8");

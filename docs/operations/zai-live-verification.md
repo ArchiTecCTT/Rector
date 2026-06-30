@@ -27,9 +27,9 @@ Do **not** claim `zai-live-verified` or update phase labels to live-verified unl
    - `RECTOR_LIVE_PROVIDER=zai`
    - `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_BASE_URL` (Z.ai host, e.g. `api.z.ai`), `OPENAI_COMPATIBLE_MODEL`
 2. Optional path check: `npm run evidence:verify-paths`
-3. Provider smoke: `RECTOR_ZAI_PROVIDER_SMOKE=1 npm run test:live:zai:provider` (or `tsx scripts/live/run-zai-provider-smoke.ts`)
-4. Phase 2F shadow: `npm run eval:facts:live`
-5. Harness smoke (orchestrated chat): `LIVE_HARNESS_EVALS=1 npm run test:live:zai:harness` (or `tsx scripts/live/run-zai-harness-smoke.ts`)
+3. Provider smoke (repo-root writer): `npm run test:live:zai:provider` — sets `RECTOR_LIVE_PROVIDER=zai` and `RECTOR_ZAI_PROVIDER_SMOKE=1`, runs `scripts/live/run-zai-provider-smoke.ts` into `.rector/evidence/live/zai/`
+4. Phase 2F shadow: `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live`
+5. Harness smoke (repo-root writer): `npm run test:live:zai:harness` — sets `RECTOR_LIVE_PROVIDER=zai` and `LIVE_HARNESS_EVALS=1`, runs `scripts/live/run-zai-harness-smoke.ts`
 6. Gate: `npm run evidence:zai-live:gate`
 7. Full chain: `npm run verify:zai-live`
 
@@ -39,6 +39,7 @@ Do **not** claim `zai-live-verified` or update phase labels to live-verified unl
 
 - `liveEvidenceStatus !== live_provider`
 - Provider is fake/deterministic/spy/mock/fixture/scripted/test-double
+- `providerId`, `adapterId`, or Z.ai-compatible `host` missing on harness/provider-smoke tracks
 - Host is not Z.ai-compatible or adapter is not `openai-compatible`
 - Required files or redacted prompts/outputs are missing
 - Campaign tokens exceed **100,000** or model calls are zero
