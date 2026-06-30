@@ -37,6 +37,10 @@ export interface CampaignBudgetRollup {
   total: CampaignBudgetTotals;
   withinTokenBudget: boolean;
   overTokenBudgetBy: number;
+  withinModelCallBudget: boolean;
+  overModelCallBudgetBy: number;
+  withinEstimatedUsdBudget: boolean;
+  overEstimatedUsdBudgetBy: number;
   status: CampaignBudgetStatus;
 }
 
@@ -55,6 +59,15 @@ export function aggregateCampaignBudget(
     ...options.limits,
   };
   assertNonNegativeFinite(limits.maxTotalTokens, "limits.maxTotalTokens");
+  if (limits.maxModelCalls !== undefined) {
+    assertNonNegativeFinite(limits.maxModelCalls, "limits.maxModelCalls");
+    if (!Number.isInteger(limits.maxModelCalls)) {
+      throw new Error("limits.maxModelCalls must be an integer.");
+    }
+  }
+  if (limits.maxEstimatedUsd !== undefined) {
+    assertNonNegativeFinite(limits.maxEstimatedUsd, "limits.maxEstimatedUsd");
+  }
 
   const sources = emptySourceTotals();
   for (const entry of usageEntries) {
@@ -70,6 +83,16 @@ export function aggregateCampaignBudget(
   const overTokenBudgetBy = Math.max(0, total.totalTokens - limits.maxTotalTokens);
   const withinTokenBudget = overTokenBudgetBy === 0;
 
+  const overModelCallBudgetBy =
+    limits.maxModelCalls === undefined ? 0 : Math.max(0, total.modelCalls - limits.maxModelCalls);
+  const withinModelCallBudget = overModelCallBudgetBy === 0;
+
+  const overEstimatedUsdBudgetBy =
+    limits.maxEstimatedUsd === undefined ? 0 : Math.max(0, roundUsd(total.estimatedCostUsd - limits.maxEstimatedUsd));
+  const withinEstimatedUsdBudget = overEstimatedUsdBudgetBy === 0;
+
+  const withinBudget = withinTokenBudget && withinModelCallBudget && withinEstimatedUsdBudget;
+
   return {
     schemaVersion: CAMPAIGN_BUDGET_SCHEMA_VERSION,
     generatedAt: timestamp(options),
@@ -78,7 +101,11 @@ export function aggregateCampaignBudget(
     total,
     withinTokenBudget,
     overTokenBudgetBy,
-    status: withinTokenBudget ? "within_budget" : "over_budget",
+    withinModelCallBudget,
+    overModelCallBudgetBy,
+    withinEstimatedUsdBudget,
+    overEstimatedUsdBudgetBy,
+    status: withinBudget ? "within_budget" : "over_budget",
   };
 }
 
@@ -98,7 +125,16 @@ function normalizeUsage(entry: CampaignBudgetUsage): CampaignBudgetTotals {
   const modelCalls = nonNegativeInteger(entry.modelCalls ?? 0, `${entry.source}.modelCalls`);
   const inputTokens = nonNegativeInteger(entry.inputTokens ?? 0, `${entry.source}.inputTokens`);
   const outputTokens = nonNegativeInteger(entry.outputTokens ?? 0, `${entry.source}.outputTokens`);
-  const totalTokens = nonNegativeInteger(entry.totalTokens ?? inputTokens + outputTokens, `${entry.source}.totalTokens`);
+  const reportedInputOutput = entry.inputTokens !== undefined || entry.outputTokens !== undefined;
+  const totalTokens = nonNegativeInteger(
+    entry.totalTokens ?? inputTokens + outputTokens,
+    `${entry.source}.totalTokens`,
+  );
+  if (entry.totalTokens !== undefined && reportedInputOutput && totalTokens < inputTokens + outputTokens) {
+    throw new Error(
+      `${entry.source}.totalTokens must be at least inputTokens + outputTokens when token breakdown is reported.`,
+    );
+  }
   const estimatedCostUsd = nonNegativeNumber(entry.estimatedCostUsd ?? 0, `${entry.source}.estimatedCostUsd`);
 
   return { modelCalls, inputTokens, outputTokens, totalTokens, estimatedCostUsd };

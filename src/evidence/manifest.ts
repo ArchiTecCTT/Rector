@@ -1,6 +1,6 @@
 import type { CampaignBudgetRollup } from "./campaignBudget";
 import { RECTOR_EVIDENCE_DIR, type EvidenceTrack } from "./paths";
-import { sanitizeEvidencePayload } from "./sanitize";
+import { sanitizeEvidencePayload, sanitizeEvidenceStringLeaves } from "./sanitize";
 
 export const EVIDENCE_MANIFEST_SCHEMA_VERSION = "rector.evidence-manifest.v1";
 
@@ -67,10 +67,16 @@ export function buildEvidenceManifest(options: BuildEvidenceManifestOptions = {}
     ...(options.secretScanPassedAt !== undefined
       ? { secretScanPassedAt: sanitizeString(timestamp(options.secretScanPassedAt)) }
       : {}),
-    ...(options.campaignBudget !== undefined ? { campaignBudget: options.campaignBudget } : {}),
+    ...(options.campaignBudget !== undefined
+      ? { campaignBudget: sanitizeCampaignBudget(options.campaignBudget) }
+      : {}),
   };
 
   return manifest;
+}
+
+function sanitizeCampaignBudget(rollup: CampaignBudgetRollup): CampaignBudgetRollup {
+  return sanitizeEvidenceStringLeaves(rollup);
 }
 
 function reportPointers(evidenceDir: string, track: string, basename: string): EvidenceTrackPointer {

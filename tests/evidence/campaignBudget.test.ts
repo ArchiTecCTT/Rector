@@ -24,7 +24,60 @@ describe("campaign budget aggregation", () => {
     expect(rollup.total.estimatedCostUsd).toBeCloseTo(0.31);
     expect(rollup.withinTokenBudget).toBe(true);
     expect(rollup.overTokenBudgetBy).toBe(0);
+    expect(rollup.withinModelCallBudget).toBe(true);
+    expect(rollup.overModelCallBudgetBy).toBe(0);
+    expect(rollup.withinEstimatedUsdBudget).toBe(true);
+    expect(rollup.overEstimatedUsdBudgetBy).toBe(0);
     expect(rollup.status).toBe("within_budget");
+  });
+
+  it("sums multiple usage rows for the same campaign source", () => {
+    const rollup = aggregateCampaignBudget(
+      [
+        { source: "provider_smoke", modelCalls: 1, totalTokens: 100 },
+        { source: "provider_smoke", modelCalls: 2, totalTokens: 50 },
+      ],
+      { now: () => NOW },
+    );
+
+    expect(rollup.sources.provider_smoke).toMatchObject({ modelCalls: 3, totalTokens: 150 });
+    expect(rollup.total.modelCalls).toBe(3);
+    expect(rollup.total.totalTokens).toBe(150);
+  });
+
+  it("marks over budget when model calls or estimated USD exceed configured limits", () => {
+    const byCalls = aggregateCampaignBudget([{ source: "provider_smoke", modelCalls: 5, totalTokens: 10 }], {
+      now: () => NOW,
+      limits: { maxTotalTokens: 100_000, maxModelCalls: 3 },
+    });
+    expect(byCalls.withinTokenBudget).toBe(true);
+    expect(byCalls.withinModelCallBudget).toBe(false);
+    expect(byCalls.overModelCallBudgetBy).toBe(2);
+    expect(byCalls.status).toBe("over_budget");
+
+    const byCost = aggregateCampaignBudget(
+      [{ source: "harness_smoke", modelCalls: 1, totalTokens: 10, estimatedCostUsd: 1.5 }],
+      { now: () => NOW, limits: { maxTotalTokens: 100_000, maxEstimatedUsd: 1.25 } },
+    );
+    expect(byCost.withinEstimatedUsdBudget).toBe(false);
+    expect(byCost.overEstimatedUsdBudgetBy).toBeCloseTo(0.25);
+    expect(byCost.status).toBe("over_budget");
+  });
+
+  it("rejects inconsistent totalTokens when input and output breakdown is reported", () => {
+    expect(() =>
+      aggregateCampaignBudget(
+        [{ source: "provider_smoke", inputTokens: 100, outputTokens: 25, totalTokens: 50 }],
+        { now: () => NOW },
+      ),
+    ).toThrow(/totalTokens must be at least inputTokens \+ outputTokens/i);
+  });
+
+  it("allows totalTokens-only usage without input or output breakdown", () => {
+    const rollup = aggregateCampaignBudget([{ source: "harness_smoke", totalTokens: 2_750 }], { now: () => NOW });
+    expect(rollup.sources.harness_smoke.totalTokens).toBe(2_750);
+    expect(rollup.sources.harness_smoke.inputTokens).toBe(0);
+    expect(rollup.sources.harness_smoke.outputTokens).toBe(0);
   });
 
   it("marks the campaign over budget when total tokens exceed the configured limit", () => {

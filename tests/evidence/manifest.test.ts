@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  aggregateCampaignBudget,
   buildEvidenceManifest,
   defaultEvidenceTrackPointers,
+  type CampaignBudgetRollup,
   type EvidenceManifest,
 } from "../../src/evidence";
 
@@ -22,6 +24,10 @@ describe("evidence manifest helpers", () => {
       total: { modelCalls: 9, inputTokens: 3_100, outputTokens: 1_275, totalTokens: 4_375, estimatedCostUsd: 0.31 },
       withinTokenBudget: true,
       overTokenBudgetBy: 0,
+      withinModelCallBudget: true,
+      overModelCallBudgetBy: 0,
+      withinEstimatedUsdBudget: true,
+      overEstimatedUsdBudgetBy: 0,
       status: "within_budget" as const,
     };
 
@@ -44,6 +50,21 @@ describe("evidence manifest helpers", () => {
     });
     expect(manifest.tracks.phase2.latestJson).toBe(".rector/evidence/phase2/fact-report.json");
     expect(manifest.tracks["live/zai"].latestMarkdown).toBe(".rector/evidence/live/zai/latest.md");
+  });
+
+  it("sanitizes embedded campaign budget strings before returning the manifest", () => {
+    const rollup = aggregateCampaignBudget([{ source: "provider_smoke", totalTokens: 10 }], { now: () => NOW });
+    const secret = "tok_manifest_budget_secret";
+    const tampered = {
+      ...rollup,
+      generatedAt: `2026-06-30T00:00:00.000Z Bearer ${secret}`,
+    } as CampaignBudgetRollup;
+
+    const manifest = buildEvidenceManifest({ now: () => NOW, campaignBudget: tampered });
+
+    expect(JSON.stringify(manifest.campaignBudget)).not.toContain(secret);
+    expect(manifest.campaignBudget?.generatedAt).toContain("Bearer [REDACTED]");
+    expect(manifest.campaignBudget?.total.totalTokens).toBe(10);
   });
 
   it("omits optional live fields until live evidence exists", () => {
