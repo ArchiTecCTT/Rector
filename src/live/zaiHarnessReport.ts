@@ -1164,7 +1164,7 @@ function skippedScenarioReport(scenario: ZaiHarnessScenario, generatedAt: string
     evidence: { runEventCount: 0, factCount: 0 },
     tokenUsage: ZERO_USAGE,
     estimatedCostUsd: 0,
-    failures: [failure("missing_evidence", reason)],
+    failures: [],
   });
 }
 

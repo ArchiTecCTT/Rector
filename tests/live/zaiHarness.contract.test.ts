@@ -24,6 +24,7 @@ import {
   runZaiHarnessSmoke,
 } from "../../src/live/zaiHarnessReport";
 import { zaiHarnessScenarios } from "../../src/live/harnessScenarios";
+import { computeSourceWorkspaceManifest, diffWorkspaceManifests } from "../../src/live/harnessEvidence";
 
 const GENERATED_AT = "2026-06-30T00:00:00.000Z";
 const RUN_ID = "zai-harness-contract";
@@ -63,6 +64,8 @@ describe("Z.ai harness smoke runner", () => {
       expect(discoveryCalls).toBe(0);
       expect(runnerCalls).toBe(0);
       expect(provider.requests).toHaveLength(0);
+      expect(report.scenarios.every((scenario) => scenario.failures.length === 0)).toBe(true);
+      expect(report.failures).toHaveLength(0);
       expect(await readJson(workspace, "latest.json")).toMatchObject({
         schemaVersion: ZAI_HARNESS_REPORT_SCHEMA_VERSION,
         status: "skipped",
@@ -195,6 +198,33 @@ describe("Z.ai harness smoke runner", () => {
       expect(report.scenarios[0].failures).toContainEqual(expect.objectContaining({ kind: "token_budget" }));
       expect(report.tokenUsage.limits.maxTotalTokens).toBe(10);
       expect(report.tokenUsage.limits.maxTotalTokens).toBeLessThan(DEFAULT_ZAI_CAMPAIGN_TOKEN_LIMIT);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes runtime and dependency directories from source workspace mutation manifests", async () => {
+    const workspace = await tempWorkspace();
+    try {
+      const before = await computeSourceWorkspaceManifest(workspace, { generatedAt: GENERATED_AT });
+      await writeFile(path.join(workspace, ".rector", "ignored", "runtime.json"), "changed\n", "utf8");
+      await writeFile(path.join(workspace, "node_modules", "ignored", "dep.js"), "changed\n", "utf8");
+      await mkdir(path.join(workspace, ".omo", "evidence"), { recursive: true });
+      await writeFile(path.join(workspace, ".omo", "evidence", "legacy.json"), "changed\n", "utf8");
+      await mkdir(path.join(workspace, "dist"), { recursive: true });
+      await writeFile(path.join(workspace, "dist", "bundle.js"), "changed\n", "utf8");
+      await mkdir(path.join(workspace, "tmp"), { recursive: true });
+      await writeFile(path.join(workspace, "tmp", "scratch.txt"), "changed\n", "utf8");
+
+      const afterIgnored = await computeSourceWorkspaceManifest(workspace, { generatedAt: GENERATED_AT });
+      expect(diffWorkspaceManifests(before, afterIgnored).mutationDetected).toBe(false);
+
+      await writeFile(path.join(workspace, "src", "index.ts"), "export const changed = true;\n", "utf8");
+      const afterSourceChange = await computeSourceWorkspaceManifest(workspace, { generatedAt: GENERATED_AT });
+      expect(diffWorkspaceManifests(before, afterSourceChange)).toMatchObject({
+        mutationDetected: true,
+        changed: ["src/index.ts"],
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
