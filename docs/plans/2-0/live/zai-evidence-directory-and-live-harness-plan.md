@@ -1123,8 +1123,10 @@ tests/live/zaiProviderSmoke.contract.test.ts
 Exit gate:
 
 ```bash
-LIVE_ZAI_SMOKE=1 npm run test:live:zai:provider
+npm run test:live:zai:provider
 ```
+
+`test:live:zai:provider` sets `RECTOR_LIVE_PROVIDER=zai` and `RECTOR_ZAI_PROVIDER_SMOKE=1` before invoking the repo-root provider-smoke writer.
 
 ### PR / commit 5 — Z.ai harness smoke runner
 
@@ -1142,8 +1144,10 @@ tests/live/zaiHarness.live.test.ts
 Exit gate:
 
 ```bash
-LIVE_HARNESS_EVALS=1 npm run test:live:zai:harness
+npm run test:live:zai:harness
 ```
+
+`test:live:zai:harness` sets `RECTOR_LIVE_PROVIDER=zai` and `LIVE_HARNESS_EVALS=1` before invoking the repo-root harness writer.
 
 ### PR / commit 6 — Live evidence gate and docs
 
@@ -1181,7 +1185,7 @@ LIVE_FACT_EVALS=1 npm run eval:facts:live
 Live harness smoke:
 
 ```bash
-LIVE_HARNESS_EVALS=1 npm run test:live:zai:harness
+npm run test:live:zai:harness
 ```
 
 Full live verification:
