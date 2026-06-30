@@ -180,6 +180,11 @@ Proposal fact kinds (`PlanCandidateFact`, `MemoryPatchCandidateFact`, etc.) may 
 
 - Continue v0.3.0 onboarding gate, `runOrchestratedChatRun` consolidation, and spy-only CI per `docs/architecture/configured-product-architecture.md`.
 
+### Z.ai live evidence harness (parallel track, branch `zai-evidence-live-integration`)
+
+- `.rector/evidence` path module, Z.ai provider/harness smoke writers, and `evidence:zai-live:gate` are implemented (plan: `docs/plans/2-0/live/zai-evidence-directory-and-live-harness-plan.md`; operator steps: `docs/operations/zai-live-verification.md`).
+- **Does not change this report’s label:** completion remains `phase2-offline-complete-live-unverified` until Phase 2F live shadow and `verify:zai-live` pass with real non-fake provider evidence.
+
 ---
 
 ## Plan deviations

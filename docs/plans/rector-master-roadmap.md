@@ -289,6 +289,8 @@ Typed fact contracts, append-only ledger/replay/diff, adapters (Cartographer, To
 
 **Completion gate (PASSED offline at `45768e5`):** `npm run verify:phase2` (`check`, full `npm test`, `eval:facts` 10/10, `test:global` exit 0 with mixed corpus 19/33 scenario passes, `test:systems` 1/1). Also verified: `npm run build`, `npm audit` 0 vulns, `npm run audit:no-fakes` exit 0 report-only (40 known seams). **Not claimed:** live-model fact reliability or investor/demo live verification until `phase2-complete-live-verified`.
 
+**Z.ai live evidence track (offline implementation done / live unverified):** Evidence directory migration, Z.ai smoke + harness + gate (`npm run verify:zai-live`) on branch `zai-evidence-live-integration` — see `docs/plans/2-0/live/zai-evidence-directory-and-live-harness-plan.md` and `docs/operations/zai-live-verification.md`. Live PASS not recorded on the dev VM; do not relabel Phase 2 or harness milestones until operator gate PASS.
+
 **Next neuro-symbolic phases:** 2.1 / 2.2 Memory OS, then 2.4 Capability Contract Generator and 2.5 Capability-SLM Fabric; Phase 3 rule engine consumes facts.
 
 ## Chunk 047 — Runtime Maturity (post-042a/042b)

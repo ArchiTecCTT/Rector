@@ -46,6 +46,8 @@ Stale/quarantined docs have warning banners. If stale docs conflict with source-
 - Fake-seam audit (report-only, non-blocking): `npm run audit:no-fakes`
 - Global reliability harness (offline, one scorecard per scenario): `npm run test:global` — runs the committed scenarios against the fixture workspace and writes `.rector/evidence/global/global-report.{json,md}`; live scenarios are SKIPPED when no credentials are present
 - Typed fact evals (offline): `npm run eval:facts` → `.rector/evidence/phase2/fact-report.{json,md}`; opt-in live shadow: `npm run eval:facts:live` (`LIVE_FACT_EVALS=1`) → `.rector/evidence/phase2/live-fact-shadow-*`; Phase 2 gate: `npm run verify:phase2`
+- Evidence paths: `npm run evidence:verify-paths`, optional `npm run evidence:migrate-local` (legacy `.omo/evidence` → `.rector/evidence`)
+- Z.ai live verification (opt-in, credentials, not default CI): `npm run verify:zai-live` chains `verify:phase2`, live fact shadow, `test:live:zai:provider`, `test:live:zai:harness`, `evidence:zai-live:gate` — see `docs/operations/zai-live-verification.md`; do **not** claim live-verified until gate PASS with `live_provider` evidence
 - Specialist contract validation: `npm run test:systems` — validates committed specialist profiles against the contract schema (no execution)
 - Azure daily ritual (dev VM, opt-in): `npm run azure:daily-touch` — Key Vault list + Blob uploads + App Insights heartbeat
 - Harness Blob sync: `npm run evidence:sync` — when `RECTOR_EVIDENCE_SYNC=azure-blob`
@@ -235,7 +237,7 @@ Every new feature must be extensively tested. Architecture stays non-rigid and p
 
 - **Neuro-symbolic:** Phase 2.1 / 2.2 Memory OS (consume validation-linked facts); then Phase 2.4 Capability Contract Generator and Phase 2.5 Capability-SLM Fabric — see `docs/plans/2-0/phases/phase-2-completion-report.md` handoff.
 - **Configured product (v0.3.0):** onboarding gate, `runOrchestratedChatRun` consolidation, spy-only CI — `.kiro/specs/cloud-capable-transition/tasks.md`.
-- **Phase 2 follow-up:** capture live fact shadow after UI provider setup (`LIVE_FACT_EVALS=1 npm run eval:facts:live`).
+- **Phase 2 / Z.ai follow-up:** after UI or env Z.ai setup, run `npm run verify:zai-live` (or steps in `docs/operations/zai-live-verification.md`); update labels only after gate PASS — live status remains unverified until then.
 
 ## Release Path
 

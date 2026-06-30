@@ -1,8 +1,9 @@
 # Rector Evidence Directory Overhaul + Z.ai GLM Live Verification Plan
 
-**Status:** Approved plan, pending implementation.  
-**Target branch:** `rector-0.3.0`  
-**Primary branch under test:** `rector-0.3.0` after Phase 2A through Phase 2F implementation.  
+**Status:** **Implementation complete (Tickets 1–6)** on branch `zai-evidence-live-integration` (integration HEAD `9321116`). Offline gates passed (`npm test`, `npm run build`). **Live Z.ai verification remains unverified** — no operator campaign has produced gate PASS with `liveEvidenceStatus: live_provider` from real credentials on this VM.  
+**Target branch:** `rector-0.3.0` (merge target)  
+**Operator runbook:** `docs/operations/zai-live-verification.md`  
+**Primary branch under test:** `rector-0.3.0` after Phase 2A through Phase 2F implementation.
 **Provider:** Z.ai API through Rector's OpenAI-compatible provider.  
 **Primary models:** small / fast GLM models first; stronger GLM model only as fallback or comparison.  
 **Hard first-pass live-test budget:** less than **100,000 total model tokens** unless manually approved.  
@@ -600,9 +601,10 @@ Add:
 ```json
 {
   "scripts": {
-    "test:live:zai:harness": "LIVE_HARNESS_EVALS=1 vitest run tests/live/zaiHarness.live.test.ts --testTimeout=600000",
+    "test:live:zai:provider": "RECTOR_LIVE_PROVIDER=zai RECTOR_ZAI_PROVIDER_SMOKE=1 tsx scripts/live/run-zai-provider-smoke.ts",
+    "test:live:zai:harness": "RECTOR_LIVE_PROVIDER=zai LIVE_HARNESS_EVALS=1 tsx scripts/live/run-zai-harness-smoke.ts",
     "evidence:zai-live:gate": "tsx scripts/live/gate-zai-live-evidence.ts",
-    "verify:zai-live": "npm run verify:phase2 && npm run eval:facts:live && npm run test:live:zai:harness && npm run evidence:zai-live:gate"
+    "verify:zai-live": "npm run verify:phase2 && RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live && npm run test:live:zai:provider && npm run test:live:zai:harness && npm run evidence:zai-live:gate"
   }
 }
 ```
@@ -1198,7 +1200,13 @@ npm run verify:zai-live
 
 ## 18. Acceptance criteria for this milestone
 
-This milestone is complete only when:
+### 18.1 Offline implementation (met at `9321116`)
+
+Tickets 1–6 landed: `src/evidence/**`, migrated eval/fact writers, `scripts/evidence/*`, Z.ai provider smoke + harness smoke + `gate-zai-live-evidence`, configured-product live provider discovery, campaign freshness/path containment, and operator docs. Default CI remains `npm test` / `verify:phase2` (no live provider spend).
+
+### 18.2 Live proof campaign (not met — do not claim live-verified)
+
+This milestone’s **live** acceptance is complete only when:
 
 ```text
 .rector/evidence is the default evidence directory for new outputs
