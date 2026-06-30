@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   LIVE_FACT_SHADOW_REPORT_SCHEMA_VERSION,
   LiveFactShadowReportSchema,
+  discoverLiveFactProviders,
   isAcceptableLiveShadowProvider,
   runLiveFactShadow,
 } from "../../scripts/facts/run-live-fact-shadow";
@@ -107,6 +108,34 @@ describe("Phase 2F live fact shadow contract", () => {
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
+  });
+
+  it("uses shared Z.ai live discovery when RECTOR_LIVE_PROVIDER requests Z.ai", async () => {
+    const discovered = await discoverLiveFactProviders({
+      RECTOR_LIVE_PROVIDER: "zai",
+      OPENAI_COMPATIBLE_API_KEY: "sk-zai-secret-1234567890",
+      OPENAI_COMPATIBLE_BASE_URL: "https://api.z.ai/api/paas/v4",
+      OPENAI_COMPATIBLE_MODEL: "glm-4.5",
+    });
+
+    expect(discovered).toHaveLength(1);
+    expect(discovered[0]).toMatchObject({
+      providerId: "zai:env",
+      modelId: "glm-4.5",
+      route: "cheap",
+      liveEvidence: true,
+    });
+  });
+
+  it("rejects a requested Z.ai live shadow provider when the OpenAI-compatible host is not Z.ai", async () => {
+    const discovered = await discoverLiveFactProviders({
+      RECTOR_LIVE_PROVIDER: "zai",
+      OPENAI_COMPATIBLE_API_KEY: "sk-zai-secret-1234567890",
+      OPENAI_COMPATIBLE_BASE_URL: "https://example.com/v1/private",
+      OPENAI_COMPATIBLE_MODEL: "glm-4.5",
+    });
+
+    expect(discovered).toEqual([]);
   });
 
   it("rejects FakeLLMProvider and SpyLLMProvider-shaped doubles as live evidence", async () => {

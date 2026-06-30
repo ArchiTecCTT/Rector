@@ -28,7 +28,6 @@ import {
   CloudflareWorkersAIProvider,
   OpenAICompatibleProvider,
   TogetherAIProvider,
-  isLiveLLMProvider,
   type LLMProvider,
   type LLMRequest,
   type LLMResponse,
@@ -36,6 +35,11 @@ import {
   type ModelRoute,
 } from "../../src/providers";
 import { getEvidenceTrackDir, sanitizeEvidencePayload, sanitizeEvidenceStringLeaves } from "../../src/evidence";
+import {
+  discoverLiveProvider,
+  isAcceptableLiveEvidenceProvider,
+  normalizeRequestedLiveProvider,
+} from "../../src/live/liveProviderDiscovery";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -224,6 +228,19 @@ function envString(env: Record<string, string | undefined>, key: string): string
 }
 
 export async function discoverLiveFactProviders(env: Record<string, string | undefined> = process.env): Promise<DiscoveredLiveFactProvider[]> {
+  if (normalizeRequestedLiveProvider(env.RECTOR_LIVE_PROVIDER) === "zai") {
+    const result = await discoverLiveProvider({ env });
+    if (!result.selected) return [];
+    return [{
+      provider: result.selected.provider,
+      route: result.selected.route,
+      modelId: result.selected.modelId,
+      providerId: result.selected.providerId,
+      liveEvidence: result.selected.liveEvidence,
+      discoveryLabel: result.selected.discoveryLabel,
+    }];
+  }
+
   const providers: DiscoveredLiveFactProvider[] = [];
   const candidates: Array<{ provider: LLMProvider; route: ModelRoute; label: string }> = [
     {
@@ -293,11 +310,7 @@ export async function discoverLiveFactProviders(env: Record<string, string | und
 }
 
 export function isAcceptableLiveShadowProvider(provider: LLMProvider): boolean {
-  if (!isLiveLLMProvider(provider)) return false;
-  const id = provider.metadata.id.toLowerCase();
-  const label = `${provider.metadata.displayName} ${provider.constructor.name}`.toLowerCase();
-  if (["fake", "deterministic", "spy"].includes(id)) return false;
-  return !/fake|deterministic|spy|mock|fixture|scripted|test-double/i.test(`${id} ${label}`);
+  return isAcceptableLiveEvidenceProvider({ provider });
 }
 
 export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {}): Promise<LiveFactShadowReport> {
