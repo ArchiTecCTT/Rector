@@ -15,6 +15,8 @@ import {
 } from "../../src/live/zaiProviderSmokeReport";
 import {
   gateZaiLiveEvidence,
+  isResolvedPathInsideDirectory,
+  resolveGateZaiLiveEvidenceInvocation,
   ZAI_LIVE_RUN_ARTIFACT_FILES,
 } from "../../src/live/gateZaiLiveEvidence";
 
@@ -201,6 +203,49 @@ describe("gateZaiLiveEvidence", () => {
     }
   });
 
+  it("rejects artifact pointers that escape via sibling-prefix paths", async () => {
+    const repoRoot = await makeRepo();
+    try {
+      await writePassingCampaignFixture(repoRoot, {
+        artifactPointerEscape: "../zai_evil/harness-report.json",
+      });
+      const result = await gateZaiLiveEvidence({ repoRoot, updateManifestOnPass: false });
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.includes("escapes live/zai"))).toBe(true);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when campaign track timestamps are too far apart", async () => {
+    const repoRoot = await makeRepo();
+    try {
+      await writePassingCampaignFixture(repoRoot, {
+        providerSmokeGeneratedAt: "2026-06-30T10:00:00.000Z",
+        phase2GeneratedAt: "2026-06-30T12:00:00.000Z",
+      });
+      const result = await gateZaiLiveEvidence({ repoRoot, updateManifestOnPass: false });
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.includes("campaign evidence timestamps span"))).toBe(true);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveGateZaiLiveEvidenceInvocation disables manifest update for harness-only", () => {
+    expect(resolveGateZaiLiveEvidenceInvocation({ harnessOnly: true })).toEqual({
+      requireCampaignTracks: false,
+      updateManifestOnPass: false,
+      harnessOnlyDiagnostic: true,
+    });
+  });
+
+  it("isResolvedPathInsideDirectory rejects sibling-prefix escapes", () => {
+    const zaiDir = path.join("/tmp", "evidence", "live", "zai");
+    const evil = path.resolve(zaiDir, "../zai_evil/file.json");
+    expect(isResolvedPathInsideDirectory(evil, zaiDir)).toBe(false);
+  });
+
   it("does not update manifest when the gate fails", async () => {
     const repoRoot = await makeRepo();
     const manifestPath = path.join(repoRoot, ".rector", "evidence", "manifest.json");
@@ -250,6 +295,9 @@ async function writePassingCampaignFixture(
     zeroModelCalls?: boolean;
     mutateScenarioId?: string;
     secretLeak?: string;
+    artifactPointerEscape?: string;
+    providerSmokeGeneratedAt?: string;
+    phase2GeneratedAt?: string;
   } = {},
 ): Promise<void> {
   const zaiDir = path.join(repoRoot, ".rector", "evidence", "live", "zai");
@@ -337,7 +385,7 @@ async function writePassingCampaignFixture(
     costReport: { status: "within_budget" },
     scorecard,
     artifacts: {
-      harnessReportJson: `runs/${RUN_ID}/harness-report.json`,
+      harnessReportJson: options.artifactPointerEscape ?? `runs/${RUN_ID}/harness-report.json`,
       harnessReportMarkdown: `runs/${RUN_ID}/harness-report.md`,
       runEventsJsonl: `runs/${RUN_ID}/run-events.jsonl`,
       factLedgerJsonl: `runs/${RUN_ID}/fact-ledger.jsonl`,
@@ -382,9 +430,12 @@ async function writePassingCampaignFixture(
   }
 
   const providerSmokeStatus = options.providerSmokeStatus ?? "passed";
+  const providerSmokeGeneratedAt = options.providerSmokeGeneratedAt ?? GENERATED_AT;
+  const phase2GeneratedAt = options.phase2GeneratedAt ?? GENERATED_AT;
+
   const providerSmoke = ZaiProviderSmokeReportSchema.parse({
     schemaVersion: ZAI_PROVIDER_SMOKE_REPORT_SCHEMA_VERSION,
-    generatedAt: GENERATED_AT,
+    generatedAt: providerSmokeGeneratedAt,
     status: providerSmokeStatus,
     liveEvidenceStatus: providerSmokeLiveEvidenceStatus,
     providerId,
@@ -407,6 +458,7 @@ async function writePassingCampaignFixture(
   const phase2Dir = path.join(repoRoot, ".rector", "evidence", "phase2");
   const phase2Tokens = options.phase2TotalTokens ?? 500;
   const phase2Report = {
+    generatedAt: phase2GeneratedAt,
     status: phase2LiveEvidenceStatus === "skipped" ? "skipped" : "completed",
     liveEvidenceStatus: phase2LiveEvidenceStatus,
     providerId,
@@ -414,6 +466,7 @@ async function writePassingCampaignFixture(
     cases: [{ status: "passed", failureReasons: [] }],
   };
   const phase2Summary = {
+    generatedAt: phase2GeneratedAt,
     totalTokenUsage: {
       modelCalls: options.zeroModelCalls ? 0 : 2,
       inputTokens: 0,

@@ -255,7 +255,7 @@ Offline-only measurement scaffolding for the capability/SLM-fabric workstream. S
 
 - Capability eval schemas + 8-metric scorer + raw artifact store: `src/capabilities/eval/{schemas,metrics,artifactStore}.ts`
 - Committed offline eval corpus (real `rg`/`tsc`/`git` artifacts + deterministic oracles): `tests/fixtures/eval-corpus/`
-- Offline model-free eval runner + report formatter: `scripts/evals/{run-capability-evals,score-capability-results}.ts` (writes `.omo/evidence/eval-report.{json,md}`); npm `eval:capabilities` / `eval:capabilities:report`
+- Offline model-free eval runner + report formatter: `scripts/evals/{run-capability-evals,score-capability-results}.ts` (writes `.rector/evidence/capabilities/eval-report.{json,md}`; legacy `.omo/evidence` is compatibility/history only); npm `eval:capabilities` / `eval:capabilities:report`
 - Report-only fake-seam audit: `scripts/audit/no-production-fakes.ts`; npm `audit:no-fakes` (non-blocking, measures only)
 
 By design, the tiny offline fixtures do NOT meet the live efficiency thresholds (compression ≥10×, raw-token-reduction ≥0.80); the runner reports the real aggregate honestly (aggregate `passed: false`) while every committed case passes its oracle. Live efficiency-threshold attainment is Phase 2.5 work.
@@ -268,7 +268,7 @@ Offline-by-default reliability harness and specialist-system CONTRACTS proving t
 
 - Global scenario schema + YAML/JSON loading: `src/evals/globalScenarioSchema.ts`
 - 8-dimension scorecards (+ fake-path status) with JSON/Markdown reporters: `src/evals/scorecards.ts`
-- Offline global runner (one scorecard per scenario, deterministic oracles, report-only fake-path via injected auditor): `src/evals/globalRunner.ts` + `scripts/evals/run-global-harness.ts`; npm `test:global` (writes `.omo/evidence/global-report.{json,md}`)
+- Offline global runner (one scorecard per scenario, deterministic oracles, report-only fake-path via injected auditor): `src/evals/globalRunner.ts` + `scripts/evals/run-global-harness.ts`; npm `test:global` (writes `.rector/evidence/global/global-report.{json,md}`)
 - Specialist contract/task/result schemas + validator: `src/systems/contracts.ts`
 - SystemRegistry validation stub (validates + stores contracts, rejects duplicate systemIds — NO execution): `src/systems/registry.ts` + `scripts/evals/run-specialist-system-contracts.ts`; npm `test:systems`; first committed profile `src/systems/specialistProfiles/coding.profile.json`
 - 4 real-fixture global scenarios (coding-basic-fix, memory-boundary, fake-purge, delegation-routing) + the `tests/fixtures/repos/rector-mini-fix/` fixture repo: `tests/global/`
@@ -285,7 +285,7 @@ Typed fact contracts, append-only ledger/replay/diff, adapters (Cartographer, To
 
 - Core + adapters: `src/facts/**`; scripts `scripts/facts/{run-fact-evals,run-live-fact-shadow,replay-facts,validate-phase2}.ts`
 - npm: `eval:facts`, `eval:facts:live` (explicit `LIVE_FACT_EVALS=1`), `facts:replay`, `verify:phase2`
-- Offline reports: `.omo/evidence/fact-report.{json,md}`; live shadow: `.omo/evidence/live-fact-shadow-report.json` (skipped on gate VM — no configured non-fake provider)
+- Offline reports: `.rector/evidence/phase2/fact-report.{json,md}`; live shadow: `.rector/evidence/phase2/live-fact-shadow-report.json` (skipped on gate VM — live unverified; no configured non-fake provider)
 
 **Completion gate (PASSED offline at `45768e5`):** `npm run verify:phase2` (`check`, full `npm test`, `eval:facts` 10/10, `test:global` exit 0 with mixed corpus 19/33 scenario passes, `test:systems` 1/1). Also verified: `npm run build`, `npm audit` 0 vulns, `npm run audit:no-fakes` exit 0 report-only (40 known seams). **Not claimed:** live-model fact reliability or investor/demo live verification until `phase2-complete-live-verified`.
 

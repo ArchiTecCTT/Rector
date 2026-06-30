@@ -25,6 +25,9 @@ const PHASE2_SHADOW_JSON = "live-fact-shadow-report.json";
 const PHASE2_SHADOW_SUMMARY_JSON = "live-fact-shadow-summary.json";
 const MANIFEST_JSON = "manifest.json";
 
+/** Maximum spread between campaign track timestamps for a correlated live verification run. */
+export const DEFAULT_ZAI_CAMPAIGN_FRESHNESS_WINDOW_MS = 30 * 60 * 1000;
+
 const REDACTED_PROMPTS_SCHEMA_VERSION = "rector.zai-harness-redacted-prompts.v1";
 const REDACTED_OUTPUTS_SCHEMA_VERSION = "rector.zai-harness-redacted-model-outputs.v1";
 
@@ -46,6 +49,7 @@ export const ZAI_LIVE_RUN_ARTIFACT_FILES = [
 
 const LiveFactShadowSummarySchema = z
   .object({
+    generatedAt: z.string().datetime(),
     totalTokenUsage: z.object({
       modelCalls: z.number().int().nonnegative(),
       totalTokens: z.number().int().nonnegative(),
@@ -58,6 +62,7 @@ const LiveFactShadowSummarySchema = z
 
 const LiveFactShadowGateSchema = z
   .object({
+    generatedAt: z.string().datetime(),
     status: z.enum(["completed", "skipped"]),
     liveEvidenceStatus: z.enum(["live_provider", "test_only_injected", "skipped"]),
     providerId: z.string().nullable(),
@@ -75,7 +80,26 @@ export interface GateZaiLiveEvidenceOptions {
   readonly repoRoot?: string;
   readonly requireCampaignTracks?: boolean;
   readonly updateManifestOnPass?: boolean;
+  readonly campaignFreshnessWindowMs?: number;
   readonly now?: () => Date;
+}
+
+export interface GateZaiLiveEvidenceInvocation {
+  readonly requireCampaignTracks: boolean;
+  readonly updateManifestOnPass: boolean;
+  readonly harnessOnlyDiagnostic: boolean;
+}
+
+export function resolveGateZaiLiveEvidenceInvocation(options: {
+  readonly harnessOnly?: boolean;
+  readonly noManifestUpdate?: boolean;
+} = {}): GateZaiLiveEvidenceInvocation {
+  const harnessOnly = options.harnessOnly ?? false;
+  return {
+    requireCampaignTracks: !harnessOnly,
+    updateManifestOnPass: !harnessOnly && !(options.noManifestUpdate ?? false),
+    harnessOnlyDiagnostic: harnessOnly,
+  };
 }
 
 export interface GateZaiLiveEvidenceResult {
@@ -137,6 +161,16 @@ export async function gateZaiLiveEvidence(
   if (requireCampaignTracks) {
     validateProviderSmokeTrack(providerSmoke, violations);
     validatePhase2Track(phase2Report, violations);
+    validateCampaignTrackFreshness(
+      {
+        harnessGeneratedAt: latest?.generatedAt,
+        providerSmokeGeneratedAt: providerSmoke?.generatedAt,
+        phase2ReportGeneratedAt: phase2Report?.generatedAt,
+        phase2SummaryGeneratedAt: phase2Summary?.generatedAt,
+      },
+      options.campaignFreshnessWindowMs ?? DEFAULT_ZAI_CAMPAIGN_FRESHNESS_WINDOW_MS,
+      violations,
+    );
   }
 
   const campaignUsage = buildCampaignUsage(latest, providerSmoke, phase2Summary);
@@ -311,9 +345,10 @@ async function validateRunArtifacts(
     // missing file already recorded
   }
 
+  const zaiRoot = path.resolve(zaiDir);
   for (const [key, relative] of Object.entries(report.artifacts)) {
     const resolved = path.resolve(zaiDir, relative);
-    if (!resolved.startsWith(path.resolve(zaiDir))) {
+    if (!isResolvedPathInsideDirectory(resolved, zaiRoot)) {
       violations.push(`artifact pointer ${key} escapes live/zai evidence directory`);
       continue;
     }
@@ -540,6 +575,57 @@ async function fileExists(filePath: string): Promise<boolean> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function isResolvedPathInsideDirectory(candidatePath: string, directoryPath: string): boolean {
+  const resolvedDir = path.resolve(directoryPath);
+  const resolvedCandidate = path.resolve(candidatePath);
+  const relative = path.relative(resolvedDir, resolvedCandidate);
+  if (relative === "") return true;
+  return !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function validateCampaignTrackFreshness(
+  timestamps: {
+    readonly harnessGeneratedAt?: string;
+    readonly providerSmokeGeneratedAt?: string;
+    readonly phase2ReportGeneratedAt?: string;
+    readonly phase2SummaryGeneratedAt?: string;
+  },
+  windowMs: number,
+  violations: string[],
+): void {
+  const entries: Array<{ label: string; raw: string | undefined }> = [
+    { label: "harness latest.json", raw: timestamps.harnessGeneratedAt },
+    { label: "provider-smoke.json", raw: timestamps.providerSmokeGeneratedAt },
+    { label: "phase2 live-fact-shadow-report.json", raw: timestamps.phase2ReportGeneratedAt },
+    { label: "phase2 live-fact-shadow-summary.json", raw: timestamps.phase2SummaryGeneratedAt },
+  ];
+
+  const parsed: Array<{ label: string; ms: number }> = [];
+  for (const entry of entries) {
+    if (!entry.raw?.trim()) {
+      violations.push(`campaign track ${entry.label} is missing generatedAt`);
+      continue;
+    }
+    const ms = Date.parse(entry.raw);
+    if (!Number.isFinite(ms)) {
+      violations.push(`campaign track ${entry.label} has unparseable generatedAt`);
+      continue;
+    }
+    parsed.push({ label: entry.label, ms });
+  }
+
+  if (parsed.length < entries.length) return;
+
+  const minMs = Math.min(...parsed.map((entry) => entry.ms));
+  const maxMs = Math.max(...parsed.map((entry) => entry.ms));
+  const spreadMs = maxMs - minMs;
+  if (spreadMs > windowMs) {
+    violations.push(
+      `campaign evidence timestamps span ${Math.round(spreadMs / 1000)}s (max ${Math.round(windowMs / 1000)}s); tracks may be from different runs`,
+    );
+  }
 }
 
 export const GATE_FAILURE_KINDS = ZAI_HARNESS_FAILURE_KINDS;

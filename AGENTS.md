@@ -42,10 +42,10 @@ Stale/quarantined docs have warning banners. If stale docs conflict with source-
 - Build: `npm run build`
 - Dependency audit: `npm audit`
 - Dev server: `npm run dev`
-- Capability evals (offline, no model): `npm run eval:capabilities` (and `npm run eval:capabilities:report`) — runs the committed eval corpus and writes `.omo/evidence/eval-report.{json,md}`
+- Capability evals (offline, no model): `npm run eval:capabilities` (and `npm run eval:capabilities:report`) — runs the committed eval corpus and writes `.rector/evidence/capabilities/eval-report.{json,md}` (legacy `.omo/evidence` is read/migrated for compatibility only)
 - Fake-seam audit (report-only, non-blocking): `npm run audit:no-fakes`
-- Global reliability harness (offline, one scorecard per scenario): `npm run test:global` — runs the committed scenarios against the fixture workspace and writes `.omo/evidence/global-report.{json,md}`; live scenarios are SKIPPED when no credentials are present
-- Typed fact evals (offline): `npm run eval:facts` → `.omo/evidence/fact-report.{json,md}`; opt-in live shadow: `npm run eval:facts:live` (`LIVE_FACT_EVALS=1`); Phase 2 gate: `npm run verify:phase2`
+- Global reliability harness (offline, one scorecard per scenario): `npm run test:global` — runs the committed scenarios against the fixture workspace and writes `.rector/evidence/global/global-report.{json,md}`; live scenarios are SKIPPED when no credentials are present
+- Typed fact evals (offline): `npm run eval:facts` → `.rector/evidence/phase2/fact-report.{json,md}`; opt-in live shadow: `npm run eval:facts:live` (`LIVE_FACT_EVALS=1`) → `.rector/evidence/phase2/live-fact-shadow-*`; Phase 2 gate: `npm run verify:phase2`
 - Specialist contract validation: `npm run test:systems` — validates committed specialist profiles against the contract schema (no execution)
 - Azure daily ritual (dev VM, opt-in): `npm run azure:daily-touch` — Key Vault list + Blob uploads + App Insights heartbeat
 - Harness Blob sync: `npm run evidence:sync` — when `RECTOR_EVIDENCE_SYNC=azure-blob`

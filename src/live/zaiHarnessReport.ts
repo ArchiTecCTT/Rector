@@ -34,7 +34,6 @@ import { redactString } from "../security/redaction";
 import { createRectorStore, type RectorStore } from "../store";
 import type { Run, RunEvent } from "../store/schemas";
 import {
-  discoverLiveProvider,
   isAcceptableLiveEvidenceProvider,
   isZaiCompatibleHost,
   normalizeRequestedLiveProvider,
@@ -42,6 +41,7 @@ import {
   type LiveProviderDiscoveryResult,
   type LiveProviderRejection,
 } from "./liveProviderDiscovery";
+import { discoverLiveProviderFromRepo } from "./repoLiveProviderDiscovery";
 import {
   buildWorkspaceManifestSeries,
   computeSourceWorkspaceManifest,
@@ -302,7 +302,9 @@ export async function runZaiHarnessSmoke(options: ZaiHarnessSmokeOptions = {}): 
   }
 
   const discoveryWasInjected = options.providerDiscovery !== undefined;
-  const discovery = options.providerDiscovery ?? ((currentEnv: Record<string, string | undefined>) => discoverLiveProvider({ env: currentEnv }));
+  const discovery =
+    options.providerDiscovery
+    ?? ((currentEnv: Record<string, string | undefined>) => discoverLiveProviderFromRepo(repoRoot, currentEnv));
   const discovered = await discovery(env);
   const selected = discovered.selected;
   if (!selected) {

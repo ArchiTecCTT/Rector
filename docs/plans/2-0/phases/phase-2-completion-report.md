@@ -85,7 +85,7 @@ Plan reference: `docs/plans/2-0/phases/phase-2-typed-facts.md`.
 
 | Command | Result | Notes |
 |---------|--------|-------|
-| `npm run baseline:phase0` | Pass | Wrote `.omo/evidence/phase0-baseline.json`, `.omo/evidence/phase0-baseline.md` |
+| `npm run baseline:phase0` | Pass | Wrote `.rector/evidence/phase0/phase0-baseline.json`, `.rector/evidence/phase0/phase0-baseline.md` (legacy `.omo/evidence` retained for history) |
 | `npm run verify:phase2` | Pass | `check` + full `npm test` + `eval:facts` + `test:global` + `test:systems` |
 | `npm run check` | Pass | Part of `verify:phase2` |
 | `npm test` | Pass | 386 files passed / 1 skipped; 2642 tests passed / 5 skipped |
@@ -105,12 +105,14 @@ Primary Phase 2 gate for ongoing CI: `npm run verify:phase2`.
 
 | Artifact | Path | Status |
 |----------|------|--------|
-| Offline fact eval (JSON) | `.omo/evidence/fact-report.json` | Written by `npm run eval:facts` |
-| Offline fact eval (Markdown) | `.omo/evidence/fact-report.md` | Written by `npm run eval:facts` |
-| Live shadow (JSON) | `.omo/evidence/live-fact-shadow-report.json` | Written with **skipped** status |
-| Live shadow (Markdown) | `.omo/evidence/live-fact-shadow-report.md` | May be absent when skipped; JSON is authoritative |
-| Phase 0 baseline | `.omo/evidence/phase0-baseline.json` / `.md` | Refreshed during gate run |
-| Global harness | `.omo/evidence/global-report.json` / `.md` | Refreshed during `verify:phase2` |
+| Offline fact eval (JSON) | `.rector/evidence/phase2/fact-report.json` | Written by `npm run eval:facts` |
+| Offline fact eval (Markdown) | `.rector/evidence/phase2/fact-report.md` | Written by `npm run eval:facts` |
+| Live shadow (JSON) | `.rector/evidence/phase2/live-fact-shadow-report.json` | Written with **skipped** status (live unverified) |
+| Live shadow (Markdown) | `.rector/evidence/phase2/live-fact-shadow-report.md` | May be absent when skipped; JSON is authoritative |
+| Phase 0 baseline | `.rector/evidence/phase0/phase0-baseline.json` / `.md` | Refreshed during gate run |
+| Global harness | `.rector/evidence/global/global-report.json` / `.md` | Refreshed during `verify:phase2` |
+
+Legacy flat paths under `.omo/evidence/` remain for historical gate runs; new output uses `.rector/evidence` per track layout.
 
 ### Live shadow skip (explicit)
 

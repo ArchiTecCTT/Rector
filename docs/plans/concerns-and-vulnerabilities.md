@@ -19,7 +19,7 @@
 - **Source:** Phase 2G gate run on worktree at `45768e5`; `npm run eval:facts:live` with `LIVE_FACT_EVALS=1`.
 - **Severity:** Low (measurement gap, not a product regression).
 - **Status:** Open until a configured non-fake live provider is available and shadow cases are captured.
-- **Observed:** `.omo/evidence/live-fact-shadow-report.json` records `status: skipped`, `liveEvidenceStatus: skipped`, reason: no configured non-fake live provider on the gate VM.
+- **Observed:** `.rector/evidence/phase2/live-fact-shadow-report.json` (legacy copy may exist under `.omo/evidence/`) records `status: skipped`, `liveEvidenceStatus: skipped`, reason: no configured non-fake live provider on the gate VM.
 - **Plan:** Complete UI provider setup (`runtime-settings.json`), re-run `LIVE_FACT_EVALS=1 npm run eval:facts:live`, then update completion label to `phase2-complete-live-verified` in `phase-2-completion-report.md`. Do not claim live-model fact reliability before that.
 - **Boundaries:** `FakeLLMProvider` and spy doubles remain test/CI-only; offline `verify:phase2` remains the default CI gate.
 

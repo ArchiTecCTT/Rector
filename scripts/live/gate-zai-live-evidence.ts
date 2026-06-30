@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   formatGateZaiLiveEvidenceResult,
   gateZaiLiveEvidence,
+  resolveGateZaiLiveEvidenceInvocation,
 } from "../../src/live/gateZaiLiveEvidence";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -28,6 +29,7 @@ function parseArgs(argv: readonly string[]): { repoRoot?: string; noManifestUpda
           "Usage: tsx scripts/live/gate-zai-live-evidence.ts [--repo-root <path>] [--no-manifest-update] [--harness-only]",
           "",
           "Validates .rector/evidence/live/zai latest harness evidence for live Z.ai verification.",
+          "--harness-only skips provider-smoke and phase2 tracks and disables manifest update (diagnostic only).",
         ].join("\n") + "\n",
       );
       process.exit(0);
@@ -40,10 +42,19 @@ function parseArgs(argv: readonly string[]): { repoRoot?: string; noManifestUpda
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  const invocation = resolveGateZaiLiveEvidenceInvocation({
+    harnessOnly: args.harnessOnly,
+    noManifestUpdate: args.noManifestUpdate,
+  });
+  if (invocation.harnessOnlyDiagnostic) {
+    process.stderr.write(
+      "[evidence:zai-live:gate] harness-only: campaign tracks skipped; manifest update disabled (diagnostic only)\n",
+    );
+  }
   const result = await gateZaiLiveEvidence({
     repoRoot: args.repoRoot ?? REPO_ROOT,
-    requireCampaignTracks: !args.harnessOnly,
-    updateManifestOnPass: !args.noManifestUpdate,
+    requireCampaignTracks: invocation.requireCampaignTracks,
+    updateManifestOnPass: invocation.updateManifestOnPass,
   });
   const channel = result.ok ? process.stdout : process.stderr;
   channel.write(formatGateZaiLiveEvidenceResult(result));

@@ -11,13 +11,13 @@ import {
 } from "../providers/llm";
 import { redactString } from "../security/redaction";
 import {
-  discoverLiveProvider,
   isAcceptableLiveEvidenceProvider,
   isZaiCompatibleHost,
   type DiscoveredLiveProvider,
   type LiveProviderDiscoveryResult,
   type LiveProviderRejection,
 } from "./liveProviderDiscovery";
+import { discoverLiveProviderFromRepo } from "./repoLiveProviderDiscovery";
 
 export const ZAI_PROVIDER_SMOKE_REPORT_SCHEMA_VERSION = "rector.zai-provider-smoke.v1";
 
@@ -95,7 +95,9 @@ export async function runZaiProviderSmoke(options: ZaiProviderSmokeOptions = {})
   }
 
   const discoveryWasInjected = options.providerDiscovery !== undefined;
-  const discovery = options.providerDiscovery ?? ((currentEnv: Record<string, string | undefined>) => discoverLiveProvider({ env: currentEnv }));
+  const discovery =
+    options.providerDiscovery
+    ?? ((currentEnv: Record<string, string | undefined>) => discoverLiveProviderFromRepo(options.repoRoot, currentEnv));
   const discovered = await discovery(env);
   const selected = discovered.selected;
   if (!selected) {

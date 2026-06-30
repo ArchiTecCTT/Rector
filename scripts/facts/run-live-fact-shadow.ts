@@ -36,10 +36,10 @@ import {
 } from "../../src/providers";
 import { getEvidenceTrackDir, sanitizeEvidencePayload, sanitizeEvidenceStringLeaves } from "../../src/evidence";
 import {
-  discoverLiveProvider,
   isAcceptableLiveEvidenceProvider,
   normalizeRequestedLiveProvider,
 } from "../../src/live/liveProviderDiscovery";
+import { discoverLiveProviderFromRepo } from "../../src/live/repoLiveProviderDiscovery";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -136,6 +136,7 @@ export interface DiscoveredLiveFactProvider {
 
 export interface LiveFactShadowRunnerOptions {
   readonly outputDir?: string;
+  readonly repoRoot?: string;
   readonly write?: boolean;
   readonly env?: Record<string, string | undefined>;
   readonly now?: () => Date;
@@ -227,9 +228,12 @@ function envString(env: Record<string, string | undefined>, key: string): string
   return env[key] ?? "";
 }
 
-export async function discoverLiveFactProviders(env: Record<string, string | undefined> = process.env): Promise<DiscoveredLiveFactProvider[]> {
+export async function discoverLiveFactProviders(
+  env: Record<string, string | undefined> = process.env,
+  repoRoot?: string,
+): Promise<DiscoveredLiveFactProvider[]> {
   if (normalizeRequestedLiveProvider(env.RECTOR_LIVE_PROVIDER) === "zai") {
-    const result = await discoverLiveProvider({ env });
+    const result = await discoverLiveProviderFromRepo(repoRoot, env);
     if (!result.selected) return [];
     return [{
       provider: result.selected.provider,
@@ -326,8 +330,9 @@ export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {
     return writeReport(skippedReport(generatedAt, "LIVE_FACT_EVALS must equal 1; live fact shadow is opt-in."), { outputDir, write, mkdir, writeFile });
   }
 
+  const repoRoot = options.repoRoot ?? REPO_ROOT;
   const discoveryWasInjected = options.providerDiscovery !== undefined;
-  const discovery = options.providerDiscovery ?? discoverLiveFactProviders;
+  const discovery = options.providerDiscovery ?? ((currentEnv: Record<string, string | undefined>) => discoverLiveFactProviders(currentEnv, repoRoot));
   const discovered = (await discovery(env)).filter((candidate) => isAcceptableLiveShadowProvider(candidate.provider));
   const selected = discovered[0];
   if (!selected) {
