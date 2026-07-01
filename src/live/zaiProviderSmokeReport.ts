@@ -9,6 +9,21 @@ import {
   type LLMResponse,
   type LLMUsage,
 } from "../providers";
+import {
+  renderStrictJsonRepairCards,
+  STRICT_JSON_REPAIR_OUTPUT_RULES,
+} from "../orchestration/strictJsonRepairCards";
+import {
+  runBoundedStrictJsonRepairLoop,
+  type StrictJsonAttemptReport,
+  type StrictJsonEvidenceStatus,
+  type StrictJsonPassClassification,
+} from "../orchestration/strictJsonRepairLoop";
+import {
+  createStrictOutputDiagnostic,
+  projectSafeStrictOutputDiagnostics,
+  type StrictOutputRuntimeMetadata,
+} from "../orchestration/strictOutputDiagnostics";
 import { redactString } from "../security/redaction";
 import {
   isAcceptableLiveEvidenceProvider,
@@ -58,6 +73,40 @@ const SmokeErrorSchema = z
   })
   .strict();
 
+export const ZAI_PROVIDER_SMOKE_PASS_CLASSIFICATIONS = [
+  "first_pass",
+  "repair_pass",
+  "failed_after_repair",
+] as const;
+
+const ZaiProviderSmokeSafeDiagnosticSchema = z
+  .object({
+    kind: z.enum([
+      "json_syntax",
+      "schema",
+      "semantic_invariant",
+      "provenance",
+      "grounding",
+      "scope",
+      "redaction",
+      "truncation",
+      "provider_runtime",
+    ]),
+    code: z.string().min(1),
+    path: z.string().min(1),
+    severity: z.enum(["error", "warning", "info"]),
+  })
+  .strict();
+
+const ZaiProviderSmokeAttemptSummarySchema = z
+  .object({
+    attemptNumber: z.union([z.literal(1), z.literal(2)]),
+    attemptKind: z.enum(["first", "repair"]),
+    jsonParsed: z.boolean(),
+    safeDiagnostics: z.array(ZaiProviderSmokeSafeDiagnosticSchema),
+  })
+  .strict();
+
 export const ZaiProviderSmokeReportSchema = z
   .object({
     schemaVersion: z.literal(ZAI_PROVIDER_SMOKE_REPORT_SCHEMA_VERSION),
@@ -73,6 +122,8 @@ export const ZaiProviderSmokeReportSchema = z
     estimatedCostUsd: z.number().nonnegative(),
     latencyMs: z.number().int().nonnegative(),
     error: SmokeErrorSchema.optional(),
+    passClassification: z.enum(ZAI_PROVIDER_SMOKE_PASS_CLASSIFICATIONS).optional(),
+    attempts: z.array(ZaiProviderSmokeAttemptSummarySchema).optional(),
     diagnostics: ZaiLiveDiagnosticsSchema,
     notes: z.array(z.string().min(1)),
   })
@@ -141,33 +192,80 @@ export async function runZaiProviderSmoke(options: ZaiProviderSmokeOptions = {})
   }
 
   const started = Date.now();
-  let response: LLMResponse | undefined;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const strictEvidenceStatus: StrictJsonEvidenceStatus = liveEvidenceStatus;
+  let aggregatedUsage = ZERO_USAGE;
+
+  let loopResult: Awaited<ReturnType<typeof runBoundedStrictJsonRepairLoop<Record<string, unknown>>>>;
   try {
-    response = await invokeWithTimeout(selected, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    loopResult = await runBoundedStrictJsonRepairLoop<Record<string, unknown>>({
+      operation: "zai-provider-smoke",
+      maxAttempts: 2,
+      catchAttemptErrors: false,
+      call: async (attemptContext) => {
+        const repairAppendix =
+          attemptContext.attemptKind === "repair"
+            ? `\n\n${STRICT_JSON_REPAIR_OUTPUT_RULES}\n\n${renderStrictJsonRepairCards(attemptContext.priorDiagnostics)}`
+            : "";
+        const response = await invokeWithTimeout(
+          selected,
+          timeoutMs,
+          buildSmokeRequest(selected, repairAppendix),
+        );
+        aggregatedUsage = sumTokenUsage(aggregatedUsage, response.usage);
+        const metadata: StrictOutputRuntimeMetadata = {
+          provider: response.provider,
+          model: response.model,
+          finishReason: response.finishReason,
+          outputChars: response.content.length,
+          maxOutputTokens: 64,
+        };
+        return {
+          content: response.content,
+          metadata,
+          evidenceStatus: strictEvidenceStatus,
+        };
+      },
+      validate: (value) => validateSmokeJsonObject(value),
+    });
   } catch (error) {
     const latencyMs = Math.max(0, Date.now() - started);
     return writeReport(
-      baseReport(generatedAt, "failed", liveEvidenceStatus, selected, ZERO_USAGE, latencyMs, classifyProviderError(error, selected.host)),
+      baseReport(generatedAt, "failed", liveEvidenceStatus, selected, aggregatedUsage, latencyMs, classifyProviderError(error, selected.host)),
       { outputDir, write, mkdir, writeFile },
     );
   }
 
   const latencyMs = Math.max(0, Date.now() - started);
-  const jsonError = validateJsonContent(response.content, selected.host);
-  if (jsonError) {
+  const passClassification = loopResult.classification;
+  const attempts = attemptSummariesFromStrictJsonAttempts(loopResult.attempts);
+
+  if (loopResult.status === "passed") {
     return writeReport(
-      baseReport(generatedAt, "failed", liveEvidenceStatus, selected, response.usage, latencyMs, jsonError),
+      baseReport(generatedAt, "passed", liveEvidenceStatus, selected, aggregatedUsage, latencyMs, undefined, {
+        passClassification,
+        attempts,
+      }),
       { outputDir, write, mkdir, writeFile },
     );
   }
 
   return writeReport(
-    baseReport(generatedAt, "passed", liveEvidenceStatus, selected, response.usage, latencyMs),
+    baseReport(
+      generatedAt,
+      "failed",
+      liveEvidenceStatus,
+      selected,
+      aggregatedUsage,
+      latencyMs,
+      smokeJsonErrorFromLoop(loopResult, selected.host),
+      { passClassification, attempts },
+    ),
     { outputDir, write, mkdir, writeFile },
   );
 }
 
-function buildSmokeRequest(selected: DiscoveredLiveProvider): LLMRequest {
+function buildSmokeRequest(selected: DiscoveredLiveProvider, repairAppendix = ""): LLMRequest {
   return {
     task: "zai-provider-smoke",
     route: "PROVIDER_SMOKE",
@@ -179,17 +277,24 @@ function buildSmokeRequest(selected: DiscoveredLiveProvider): LLMRequest {
     metadata: { nonMutating: true, createdBy: "zai-provider-smoke" },
     messages: [
       { role: "system", content: "Return only a compact JSON object. Do not use Markdown." },
-      { role: "user", content: "Return {\"ok\":true,\"provider\":\"zai\"}." },
+      {
+        role: "user",
+        content: `Return {"ok":true,"provider":"zai"}.${repairAppendix}`,
+      },
     ],
   };
 }
 
-async function invokeWithTimeout(selected: DiscoveredLiveProvider, timeoutMs: number): Promise<LLMResponse> {
+async function invokeWithTimeout(
+  selected: DiscoveredLiveProvider,
+  timeoutMs: number,
+  request: LLMRequest,
+): Promise<LLMResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
   try {
-    return await selected.provider.invoke(buildSmokeRequest(selected), { abortSignal: controller.signal });
+    return await selected.provider.invoke(request, { abortSignal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
@@ -284,16 +389,62 @@ function taxonomyToSmokeErrorKind(taxonomy: ZaiLiveProviderFailureTaxonomy): z.i
   }
 }
 
-function validateJsonContent(content: string, host: string): z.infer<typeof SmokeErrorSchema> | undefined {
-  try {
-    const parsed = JSON.parse(content);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { kind: "provider_json", message: "Provider smoke response was JSON but not an object.", host };
-    }
-    return undefined;
-  } catch {
-    return { kind: "provider_json", message: "Provider smoke response was not parseable JSON.", host };
+function validateSmokeJsonObject(value: unknown):
+  | Readonly<{ ok: true; value: Record<string, unknown> }>
+  | Readonly<{ ok: false; diagnostics: ReturnType<typeof createStrictOutputDiagnostic>[] }> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      ok: false,
+      diagnostics: [
+        createStrictOutputDiagnostic({
+          kind: "schema",
+          code: "smoke_json_not_object",
+          path: [],
+          message: "Provider smoke response was JSON but not an object.",
+        }),
+      ],
+    };
   }
+  return { ok: true, value: value as Record<string, unknown> };
+}
+
+function smokeJsonErrorFromLoop(
+  loopResult: Readonly<{ classification: StrictJsonPassClassification; attempts: readonly StrictJsonAttemptReport[] }>,
+  host: string,
+): z.infer<typeof SmokeErrorSchema> {
+  const lastAttempt = loopResult.attempts[loopResult.attempts.length - 1];
+  const notObject = lastAttempt?.diagnostics.some((diagnostic) => diagnostic.code === "smoke_json_not_object");
+  return {
+    kind: "provider_json",
+    message: notObject
+      ? "Provider smoke response was JSON but not an object."
+      : loopResult.classification === "failed_after_repair"
+        ? "Provider smoke response was not parseable JSON after bounded repair."
+        : "Provider smoke response was not parseable JSON.",
+    host,
+    taxonomy: "provider_json",
+  };
+}
+
+function attemptSummariesFromStrictJsonAttempts(
+  attempts: readonly StrictJsonAttemptReport[],
+): z.infer<typeof ZaiProviderSmokeAttemptSummarySchema>[] {
+  return attempts.map((attempt) => ({
+    attemptNumber: attempt.attemptNumber === 2 ? 2 : 1,
+    attemptKind: attempt.attemptKind,
+    jsonParsed: attempt.jsonParsed,
+    safeDiagnostics: [...projectSafeStrictOutputDiagnostics(attempt.diagnostics)],
+  }));
+}
+
+function sumTokenUsage(left: LLMUsage, right: LLMUsage): LLMUsage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+    estimatedUsd: left.estimatedUsd + right.estimatedUsd,
+    modelCalls: left.modelCalls + right.modelCalls,
+  };
 }
 
 function failedReportFromRejection(generatedAt: string, rejection: LiveProviderRejection): ZaiProviderSmokeReport {
@@ -352,7 +503,12 @@ function baseReport(
   usage: LLMUsage,
   latencyMs: number,
   error?: z.infer<typeof SmokeErrorSchema>,
+  strictJson?: Readonly<{
+    passClassification: StrictJsonPassClassification;
+    attempts: z.infer<typeof ZaiProviderSmokeAttemptSummarySchema>[];
+  }>,
 ): ZaiProviderSmokeReport {
+  const attemptCount = strictJson?.attempts.length ?? (usage.modelCalls > 0 ? 1 : 0);
   return ZaiProviderSmokeReportSchema.parse({
     schemaVersion: ZAI_PROVIDER_SMOKE_REPORT_SCHEMA_VERSION,
     generatedAt,
@@ -367,8 +523,12 @@ function baseReport(
     latencyMs,
     diagnostics: buildProviderSmokeDiagnostics(usage, latencyMs, error),
     ...(error ? { error } : {}),
+    ...(strictJson?.passClassification ? { passClassification: strictJson.passClassification } : {}),
+    ...(strictJson?.attempts ? { attempts: strictJson.attempts } : {}),
     notes: [
-      "Z.ai smoke performs one non-mutating JSON-only chat completion.",
+      attemptCount <= 1
+        ? "Z.ai smoke performs one non-mutating JSON-only chat completion with bounded strict JSON repair on failure."
+        : `Z.ai smoke performed ${attemptCount} non-mutating JSON-only chat completion attempts (bounded strict JSON repair).`,
       liveEvidenceStatus === "live_provider"
         ? "Provider was discovered from explicit live configuration and passed the test-double predicate."
         : "Provider was dependency-injected for contract tests and must not be counted as live verification.",
@@ -404,6 +564,10 @@ export function renderZaiProviderSmokeMarkdown(report: ZaiProviderSmokeReport): 
   lines.push(`- Tokens: ${report.tokenUsage.totalTokens}`);
   lines.push(`- Cost USD: ${report.estimatedCostUsd.toFixed(6)}`);
   lines.push(`- Latency ms: ${report.latencyMs}`);
+  if (report.passClassification) lines.push(`- Pass classification: ${report.passClassification}`);
+  if (report.attempts && report.attempts.length > 0) {
+    lines.push(`- Attempts: ${report.attempts.length}`);
+  }
   lines.push(renderZaiLiveDiagnosticsMarkdown(report.diagnostics).trimEnd());
   if (report.error) {
     lines.push("", "## Error", "");

@@ -126,6 +126,7 @@ describe("Z.ai provider smoke report", () => {
       });
       expect(report).toMatchObject({
         status: "passed",
+        passClassification: "first_pass",
         liveEvidenceStatus: "test_only_injected",
         providerId: "zai:contract",
         adapterId: "openai-compatible",
@@ -134,6 +135,7 @@ describe("Z.ai provider smoke report", () => {
         tokenUsage: { totalTokens: 20, modelCalls: 1 },
         estimatedCostUsd: 0.00002,
       });
+      expect(report.attempts).toHaveLength(1);
       expect(report.latencyMs).toBeGreaterThanOrEqual(0);
       const written = await readFile(path.join(outputDir, "provider-smoke.json"), "utf8");
       expect(written).not.toContain("Authorization");
@@ -254,7 +256,7 @@ describe("Z.ai provider smoke report", () => {
     }
   });
 
-  it("classifies non-JSON model content as a JSON error", async () => {
+  it("classifies non-JSON model content as a JSON error after bounded repair", async () => {
     class BadJsonProvider extends SmokeProvider {
       override async invoke(request: LLMRequest): Promise<LLMResponse> {
         this.requests.push(request);
@@ -269,16 +271,68 @@ describe("Z.ai provider smoke report", () => {
     }
 
     const outputDir = await tempDir();
+    const provider = new BadJsonProvider();
     try {
       const report = await runZaiProviderSmoke({
         outputDir,
         env: { RECTOR_LIVE_PROVIDER: "zai", RECTOR_ZAI_PROVIDER_SMOKE: "1" },
         now: fixedNow,
-        providerDiscovery: async () => ({ selected: discovered(new BadJsonProvider()), rejections: [] }),
+        providerDiscovery: async () => ({ selected: discovered(provider), rejections: [] }),
       });
 
+      expect(provider.requests).toHaveLength(2);
       expect(report.status).toBe("failed");
+      expect(report.passClassification).toBe("failed_after_repair");
+      expect(report.attempts).toHaveLength(2);
       expect(report.error?.kind).toBe("provider_json");
+      expect(report.liveEvidenceStatus).toBe("test_only_injected");
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes with repair_pass when the first attempt is malformed JSON and the repair attempt is valid", async () => {
+    class RepairOnSecondAttemptProvider extends SmokeProvider {
+      private calls = 0;
+
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.calls += 1;
+        this.requests.push(request);
+        if (this.calls === 1) {
+          return {
+            provider: this.metadata.id,
+            model: request.model ?? this.metadata.models.cheap,
+            content: "not-json",
+            finishReason: "stop",
+            usage: USAGE,
+          };
+        }
+        return {
+          provider: this.metadata.id,
+          model: request.model ?? this.metadata.models.cheap,
+          content: "{\"ok\":true,\"provider\":\"zai\"}",
+          finishReason: "stop",
+          usage: USAGE,
+        };
+      }
+    }
+
+    const outputDir = await tempDir();
+    const provider = new RepairOnSecondAttemptProvider();
+    try {
+      const report = await runZaiProviderSmoke({
+        outputDir,
+        env: { RECTOR_LIVE_PROVIDER: "zai", RECTOR_ZAI_PROVIDER_SMOKE: "1" },
+        now: fixedNow,
+        providerDiscovery: async () => ({ selected: discovered(provider), rejections: [] }),
+      });
+
+      expect(provider.requests).toHaveLength(2);
+      expect(report.status).toBe("passed");
+      expect(report.passClassification).toBe("repair_pass");
+      expect(report.attempts).toHaveLength(2);
+      expect(report.liveEvidenceStatus).toBe("test_only_injected");
+      expect(report.tokenUsage.modelCalls).toBe(2);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
