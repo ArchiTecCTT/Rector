@@ -23,9 +23,25 @@ Rector’s **first** live Z.ai **matrix** discovery campaign on branch `zai-evid
 
 **Official finalist verification (harness hardening, 2026-07-01):** After live-harness optimization commits `4438205`–`75f4233` (structured-role output caps, strict JSON prompt cards + provider-gated no-thinking, diagnostics/bottleneck taxonomy, bounded product `maxRuntimeMs`, harness repair preflight), **`RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=glm-4-32b-0414-128k npm run verify:zai-live`** **passed** the strict gate: harness **3/3** scenarios, **46,695** / 100,000 tokens, **$0.0441** estimated cost, `live_provider` evidence, manifest updated. Report: `.rector/evidence/live/zai/latest.md`. **Only this single-model gate PASS** supports `zai-live-verified` / `phase2-complete-live-verified-zai-finalist` labels. Matrix discovery and partial fact-shadow reruns do **not** update the manifest or substitute for per-model `verify:zai-live`.
 
-### Typed-fact live shadow reruns (operator, first-pass only)
+### Strict JSON diagnostics and bounded repair (offline verified @ `a282128`)
 
-Follow-up **first-pass** `eval:facts:live` reruns (same strict wrapper as the official matrix chain; **no** bounded repair loop in the shadow runner yet) summarized approximate pass rates on **5** shadow cases per model:
+Orchestration and the Phase 2F live shadow runner now share a **strict output diagnostic** core (`src/orchestration/strictOutputDiagnostics.ts`) and a **bounded strict JSON repair loop** (`src/orchestration/strictJsonRepairLoop.ts`, max two attempts). Validators were **not** relaxed — repair improves convergence and reporting only.
+
+| Surface | Behavior |
+| --- | --- |
+| Diagnostic kinds | JSON syntax, Zod schema, semantic invariant, provenance / grounding / scope / redaction hooks, truncation, provider runtime |
+| Pass classification | `first_pass`, `repair_pass`, `failed_after_repair` |
+| Evidence status | `live_provider` vs `test_only_injected` vs `deterministic_fallback` — deterministic fallback cannot count as a live strict JSON pass |
+| Planner | Top-level `strictJsonEvidenceStatus`; `PLANNER_INVALID` blocker `details` use **safe diagnostic projection** (`kind` / `code` / `path` / `severity` only — no model-derived persisted messages) |
+| Repair cards | Compiler-style strict JSON repair cards (`strictJsonRepairCards.ts`) feed planner repair prompts; harness live smoke may use the same loop where wired |
+
+**Live fact-shadow report v2** (`rector.live-fact-shadow-report.v2` / summary v2): adds `firstPassCases`, `repairPassCases`, `failedAfterRepairCases`, `failureCategoryCounts`, per-case `passClassification`, and safe per-attempt summaries. `scripts/facts/run-live-fact-shadow.ts` runs bounded repair with repair cards. Z.ai/Regolo live gates still enforce `live_provider`, zero `failedCount`, and related summary fields; gate parsers use **passthrough** on report JSON so v2 fields do not break older gate checks. **Pre-v2 artifacts on disk do not include classification rollups** — regenerate with opt-in `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live` before triaging repair-pass rates.
+
+**Offline verification (2026-07-01, no new live gate rerun):** `npm run check`, targeted strict-json / planner / live-shadow tests, `npm run eval:facts` (10/10), `npm run build`, `npm run audit:no-fakes:check` (0 unallowed), `npm audit` (0 vulnerabilities), full `npm test` (415 files passed / 1 skipped; 2858 tests passed / 5 skipped), `npm run evidence:verify-paths`. **Next operator step:** opt-in v2 live shadow + harness reruns on finalists/non-finalists; do not relabel manifest live-verified until a fresh `verify:zai-live` PASS.
+
+### Typed-fact live shadow reruns (operator, pre–repair-loop baselines)
+
+Historical **first-pass-only** `eval:facts:live` reruns (before bounded repair in the shadow runner) summarized approximate pass rates on **5** shadow cases per model:
 
 | Model | First-pass shadow (approx.) | Common failure modes |
 | --- | --- | --- |
@@ -33,7 +49,7 @@ Follow-up **first-pass** `eval:facts:live` reruns (same strict wrapper as the of
 | `glm-4.6v-flashx`, `glm-5v-turbo` | ~2/5 | Same JSON/schema classes + vision-turbo variability |
 | `glm-4.7-flash`, `glm-4.7-flashx`, `glm-4.6v-flash` | Poor / rate-limited | HTTP 429 / overload, `model_json_invalid`, `tsc_diagnostic_grouping` |
 
-**Interpretation:** These scores describe **raw first-pass** output against strict validators — not final model capability after repair. Planned mitigation (product/harness): **strict checker/linter + bounded repair loops**; evidence should report **first-pass** vs **repair-pass** vs **failed-after-repair** instead of a single global pass/fail for operator triage. **Do not** relax validators to improve matrix grades.
+**Interpretation:** These scores describe **raw first-pass** output against strict validators on the **old** shadow path. The repair loop and v2 report taxonomy are implemented offline (see § Strict JSON diagnostics and bounded repair); rerun `eval:facts:live` to measure **repair-pass** uplift. **Do not** relax validators to improve matrix grades.
 
 ### Live harness smoke integrity (fixed `d86d679`)
 

@@ -23,6 +23,8 @@ Rector's **first** live Regolo foundation discovery campaign on branch `zai-evid
 
 **Post–Z.ai-parity harness hardening focused rerun (2026-07-01, branch @ `75f4233`):** After the same structured-role caps, strict JSON cards, and diagnostics landed for Regolo harness writers, focused **`gemma4-31b`** reruns: **provider smoke passed**; **harness smoke failed** B1/B2/B3. Diagnostics showed **300000ms** harness runtime (`RECTOR_LIVE_HARNESS_MAX_RUNTIME_MS` override), **three** provider/orchestration **timeouts**, **one planner call per scenario**, **0** usage tokens — bottleneck is **provider/orchestration timeout classification**, not a proof of schema/cap truncation failure. **No** `npm run verify:regolo-live` gate PASS; Regolo remains live-unverified. Do not infer Regolo quality from this single finalist smoke.
 
+**Strict JSON repair + live shadow v2 (shared with Z.ai, offline @ `a282128`):** Phase 2F `run-live-fact-shadow.ts` uses the same bounded repair loop and `rector.live-fact-shadow-report.v2` classification fields as the Z.ai track. Validators unchanged; deterministic fallback cannot satisfy live pass. **No** post-`a282128` Regolo live campaign has been rerun — discovery matrix grades and pre-v2 shadow artifacts remain authoritative until operators regenerate evidence locally (gitignored; not committed).
+
 **Harness smoke integrity (shared with Z.ai, `d86d679`):** Regolo harness reports use the same `liveHarnessIntegrity` reconciliation — smoke must not show pass when provider calls failed without recorded usage (`missing_live_usage`). Pre-fix artifacts may overstate success; post-fix fails closed.
 
 **Artifact pointers (local, gitignored — do not commit):**

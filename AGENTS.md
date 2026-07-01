@@ -45,7 +45,7 @@ Stale/quarantined docs have warning banners. If stale docs conflict with source-
 - Capability evals (offline, no model): `npm run eval:capabilities` (and `npm run eval:capabilities:report`) — runs the committed eval corpus and writes `.rector/evidence/capabilities/eval-report.{json,md}` (legacy `.omo/evidence` is read/migrated for compatibility only)
 - Fake-seam audit: `npm run audit:no-fakes` (report-only, non-blocking) and `npm run audit:no-fakes:check` (strict, fails on unallowed seams); Z.ai hardening targets 0 unallowed (20 allowlisted compatibility seams until Phase 3/13 purge)
 - Global reliability harness (offline, one scorecard per scenario): `npm run test:global` — runs the committed scenarios against the fixture workspace and writes `.rector/evidence/global/global-report.{json,md}`; live scenarios are SKIPPED when no credentials are present
-- Typed fact evals (offline): `npm run eval:facts` → `.rector/evidence/phase2/fact-report.{json,md}`; opt-in live shadow: `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live` (`LIVE_FACT_EVALS=1`) → `.rector/evidence/phase2/live-fact-shadow-*` (exits nonzero without a live provider); Phase 2 gate: `npm run verify:phase2`
+- Typed fact evals (offline): `npm run eval:facts` → `.rector/evidence/phase2/fact-report.{json,md}`; opt-in live shadow: `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live` (`LIVE_FACT_EVALS=1`) → `.rector/evidence/phase2/live-fact-shadow-*` with v2 report (`first_pass` / `repair_pass` / `failed_after_repair` rollups; bounded strict JSON repair; exits nonzero without a live provider); Phase 2 gate: `npm run verify:phase2`
 - Evidence paths: `npm run evidence:verify-paths`, optional `npm run evidence:migrate-local` (legacy `.omo/evidence` → `.rector/evidence`)
 - Z.ai live verification (opt-in, credentials, not default CI): **single-model** `npm run verify:zai-live` chains `verify:phase2`, live fact shadow, `test:live:zai:provider`, `test:live:zai:harness`, `evidence:zai-live:gate` (may update manifest on PASS); **multi-model compare** `npm run verify:zai-live:matrix` repeats the live chain per `ZAI_MODELS` entry, writes `matrix-summary.*` only, gate uses `--no-manifest-update` — see `docs/operations/zai-live-verification.md`; env prefers `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` (shell-safe) with `OPENAI_COMPATIBLE_*` fallback — do **not** use `Z.AI_API_KEY` in shell exports; do **not** export `RECTOR_LIVE_HARNESS_*_MAX_OUTPUT_TOKENS` in the verify shell (pollutes `verify:phase2` unit tests); finalist `glm-4-32b-0414-128k` gate PASS documented — other models still need single-model gate PASS for live claims
 - Specialist contract validation: `npm run test:systems` — validates committed specialist profiles against the contract schema (no execution)
@@ -212,9 +212,9 @@ Completed through Chunk 52 (see `docs/plans/chunks/052-azure-dev-harness-stack.m
 
 Neuro-symbolic + cloud transition chunks (26–37) include SLM preprocessor, advanced memory, proactive layer, symbolic engines, MCTS, ponder swarm, task decomposition, stale-doc cleanup, pluggable memory providers (034), durable memory + neuro wiring (035), hassle-free UI + neuro observability (036), and vitest 4 + live memory tests + opt-in multi-user auth (037).
 
-Current test baseline after Phase 2 offline gate (branch `rector-0.3.0`, commit `45768e5`):
+Current test baseline after strict-json repair slice (worktree `zai-evidence-live-integration`, post `a282128`):
 
-- `npm test`: 410 files passed / 1 skipped; 2829 tests passed / 5 skipped (live-memory skips only: `tests/memoryLive.integration.test.ts`, offline; post harness hardening @ `75f4233`).
+- `npm test`: 415 files passed / 1 skipped; 2858 tests passed / 5 skipped (live-memory skips only: `tests/memoryLive.integration.test.ts`, offline).
 - `npm run build`: passing
 - `npm audit`: 0 vulnerabilities
 
