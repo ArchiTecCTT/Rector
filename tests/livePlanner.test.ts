@@ -406,10 +406,11 @@ describe("runLivePlanner unit tests (concrete examples)", () => {
     // The rejected reply is replayed back to the model verbatim.
     expect(secondMessages[2]).toEqual({ role: "assistant", content: malformedFirst });
 
-    // The final repair instruction carries the rejection notice + error summary.
+    // The final repair instruction carries the rejection notice + structured repair card.
     const repairInstruction = secondMessages[secondMessages.length - 1].content;
     expect(repairInstruction).toContain("Your previous response was rejected by the validator.");
-    expect(repairInstruction).toContain("Validation error:");
+    expect(repairInstruction).toContain("Strict JSON repair cards");
+    expect(repairInstruction).toContain("kind/code: json_syntax / json_syntax_error");
     expect(secondMessages).not.toEqual(firstMessages);
   });
 
