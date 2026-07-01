@@ -6,6 +6,11 @@ import {
   type ChatRunnerDeps,
 } from "../src/orchestration/chatRunner";
 import { InMemoryRectorStore } from "../src/store/inMemoryRectorStore";
+import {
+  MAX_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS,
+  MIN_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS,
+  normalizeProductOrchestrationMaxRuntimeMs,
+} from "../src/config/orchestrationMaxRuntime";
 import { RuntimeSettingsSchema } from "../src/config/runtimeSettings";
 import { createInMemoryObservabilityTrace } from "../src/observability";
 import type { LLMInvokeOptions, LLMProvider, LLMRequest, LLMResponse, LLMUsage, ModelRouter, ModelSelection } from "../src/providers/llm";
@@ -188,7 +193,7 @@ describe("M23 — Orchestration timeout", () => {
     expect(settings.orchestration.maxRuntimeMs).toBe(60_000);
   });
 
-  it("runtime settings schema rejects negative maxRuntimeMs", () => {
+  it("runtime settings schema normalizes negative maxRuntimeMs to bounded default", () => {
     const result = RuntimeSettingsSchema.safeParse({
       schemaVersion: "rector.runtime.v1",
       orchestrationProfile: "configured",
@@ -196,7 +201,10 @@ describe("M23 — Orchestration timeout", () => {
       updatedAt: new Date().toISOString(),
       orchestration: { maxRuntimeMs: -1 },
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.orchestration.maxRuntimeMs).toBe(DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS);
+    }
   });
 
   it("runtime settings schema rejects non-integer maxRuntimeMs", () => {
@@ -210,11 +218,26 @@ describe("M23 — Orchestration timeout", () => {
     expect(result.success).toBe(false);
   });
 
+  it("runOrchestratedChatRun clamps programmatic maxRuntimeMs to product maximum", async () => {
+    const store = makeStore();
+    const hugeMs = 86_400_000_000;
+    const args = await buildArgs(store, { maxRuntimeMs: hugeMs });
+    const deps: ChatRunnerDeps = { router: makeSlowRouter() };
+
+    const promise = runOrchestratedChatRun(store, args, deps);
+    await vi.advanceTimersByTimeAsync(MAX_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS + 50_000);
+
+    const result = await promise;
+    expect(result.synthesis.status).toBe("FAILED");
+    expect(normalizeProductOrchestrationMaxRuntimeMs(hugeMs)).toBe(MAX_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS);
+    expect(result.synthesis.response).toContain(`${MAX_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS}ms`);
+  });
+
   // --- Timeout behavior tests ---
 
   it("transitions run to FAILED on timeout with slow provider", async () => {
     const store = makeStore();
-    const args = await buildArgs(store, { maxRuntimeMs: 50 });
+    const args = await buildArgs(store, { maxRuntimeMs: MIN_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS });
     const deps: ChatRunnerDeps = {
       router: makeSlowRouter(),
     };
@@ -222,7 +245,7 @@ describe("M23 — Orchestration timeout", () => {
     const promise = runOrchestratedChatRun(store, args, deps);
 
     // Advance timers past the timeout — this triggers the AbortController abort
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(MIN_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS + 1_000);
 
     const result = await promise;
     expect(result.synthesis.status).toBe("FAILED");
@@ -234,7 +257,7 @@ describe("M23 — Orchestration timeout", () => {
   });
 
   it("timeout error message includes maxRuntimeMs value", async () => {
-    const customMs = 99;
+    const customMs = 90_000;
     const store = makeStore();
     const args = await buildArgs(store, { maxRuntimeMs: customMs });
     const deps: ChatRunnerDeps = {
@@ -242,7 +265,7 @@ describe("M23 — Orchestration timeout", () => {
     };
 
     const promise = runOrchestratedChatRun(store, args, deps);
-    await vi.advanceTimersByTimeAsync(customMs + 50);
+    await vi.advanceTimersByTimeAsync(customMs + 1_000);
 
     const result = await promise;
     expect(result.synthesis.status).toBe("FAILED");
@@ -251,7 +274,7 @@ describe("M23 — Orchestration timeout", () => {
 
   it("clears timeout timer on successful completion (no spurious timeout)", async () => {
     const store = makeStore();
-    const args = await buildArgs(store, { maxRuntimeMs: 50_000 });
+    const args = await buildArgs(store, { maxRuntimeMs: 120_000 });
     const deps: ChatRunnerDeps = {
       router: makeNormalRouter(),
     };
@@ -261,6 +284,6 @@ describe("M23 — Orchestration timeout", () => {
     expect(result).toBeDefined();
 
     // Advance timers well past the timeout — no error should occur since timer was cleared
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(130_000);
   });
 });

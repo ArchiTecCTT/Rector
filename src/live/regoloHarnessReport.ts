@@ -22,11 +22,8 @@ import {
   type ChatRunArgs,
   type ChatRunResult,
 } from "../orchestration/chatRunner";
-import {
-  STRUCTURED_JSON_ROLES,
-  resolveStructuredRoleMaxOutputTokens,
-  structuredRoleOutputCapPolicyForHarnessScenario,
-} from "../orchestration/structuredRoleOutputCaps";
+import { structuredRoleOutputCapPolicyForHarnessScenario } from "../orchestration/structuredRoleOutputCaps";
+import { estimateScenarioPreflight } from "./liveHarnessPreflight";
 import {
   LLMUsageSchema,
   ProviderError,
@@ -532,7 +529,7 @@ async function runScenario(input: {
   let result: ChatRunResult | undefined;
   let events: RunEvent[] = [];
   let facts: unknown[] = [];
-  const preflightUsage = estimateScenarioPreflight(input.selected, input.scenario);
+  const preflightUsage = estimateScenarioPreflight(input.selected, input.scenario, { harnessId: "regolo" });
   input.tokenTracker.recordPreflight(input.scenario.id, preflightUsage);
   if (!input.tokenTracker.canStart(preflightUsage)) {
     failures.push(failure(
@@ -881,31 +878,6 @@ class HarnessTokenTracker {
       scenarios: [...this.scenarioActuals.entries()].map(([scenarioId, actual]) => ({ scenarioId, actual: usageShape(actual) })),
     });
   }
-}
-
-function estimateScenarioPreflight(selected: DiscoveredLiveProvider, scenario: ZaiHarnessScenario): LLMUsage {
-  const structuredRoleOutputCaps = structuredRoleOutputCapPolicyForHarnessScenario(scenario);
-  const baseMessages: LLMRequest["messages"] = [
-    { role: "system", content: "Estimate this non-mutating Rector harness smoke prompt." },
-    { role: "user", content: scenario.prompt },
-  ];
-  let total = ZERO_USAGE;
-  for (const role of STRUCTURED_JSON_ROLES) {
-    if (role === "repair") continue;
-    const maxOutputTokens = resolveStructuredRoleMaxOutputTokens(role, structuredRoleOutputCaps);
-    const estimate = selected.provider.estimateRequest({
-      task: `regolo-harness-smoke:${scenario.id}:preflight:${role}`,
-      route: "HARNESS_PREFLIGHT",
-      modelRoute: selected.route,
-      model: selected.modelId,
-      maxOutputTokens,
-      temperature: 0,
-      messages: baseMessages,
-      metadata: { scenarioId: scenario.id, nonMutating: true, structuredRole: role },
-    });
-    total = addUsage(total, estimate);
-  }
-  return total;
 }
 
 function classifyRunResultFailures(

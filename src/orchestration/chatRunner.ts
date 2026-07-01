@@ -65,6 +65,7 @@ import {
   NEURO_PLANNING_MODULE_ID,
 } from "../modules/builtin/neuro-planning";
 import { resolveNeuroFeatureFlags, type NeuroFeatureFlags } from "../modules/featureFlags";
+import { normalizeProductOrchestrationMaxRuntimeMs } from "../config/orchestrationMaxRuntime";
 import { IterationBudget, type TurnBudgetConfig } from "./turnBudget";
 
 /** Default maximum orchestration runtime: 30 minutes (M23). */
@@ -187,7 +188,9 @@ export async function runOrchestratedChatRun(
 ): Promise<ChatRunResult> {
   const { conversationId } = args;
   const options = args.options ?? {};
-  const maxRuntimeMs = options.maxRuntimeMs ?? DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS;
+  const maxRuntimeMs = normalizeProductOrchestrationMaxRuntimeMs(
+    options.maxRuntimeMs ?? DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS,
+  );
 
   // M23: Orchestration timeout guard. We set up a timer that marks the run as
   // timed out and aborts the run control. The inner orchestration may catch the
