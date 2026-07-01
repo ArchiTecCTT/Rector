@@ -21,6 +21,7 @@ import {
 } from "../orchestration/strictJsonRepairLoop";
 import {
   createStrictOutputDiagnostic,
+  diagnosticFromSemanticInvariant,
   projectSafeStrictOutputDiagnostics,
   type StrictOutputRuntimeMetadata,
 } from "../orchestration/strictOutputDiagnostics";
@@ -389,6 +390,8 @@ function taxonomyToSmokeErrorKind(taxonomy: ZaiLiveProviderFailureTaxonomy): z.i
   }
 }
 
+const SMOKE_JSON_CONTRACT_PROVIDER = "zai";
+
 function validateSmokeJsonObject(value: unknown):
   | Readonly<{ ok: true; value: Record<string, unknown> }>
   | Readonly<{ ok: false; diagnostics: ReturnType<typeof createStrictOutputDiagnostic>[] }> {
@@ -405,7 +408,53 @@ function validateSmokeJsonObject(value: unknown):
       ],
     };
   }
-  return { ok: true, value: value as Record<string, unknown> };
+
+  const record = value as Record<string, unknown>;
+  const diagnostics: ReturnType<typeof createStrictOutputDiagnostic>[] = [];
+
+  if (!Object.prototype.hasOwnProperty.call(record, "ok")) {
+    diagnostics.push(
+      createStrictOutputDiagnostic({
+        kind: "schema",
+        code: "smoke_json_ok_missing",
+        path: ["ok"],
+        message: 'Provider smoke contract requires property "ok".',
+      }),
+    );
+  } else if (record.ok !== true) {
+    diagnostics.push(
+      diagnosticFromSemanticInvariant({
+        code: "smoke_json_ok_invalid",
+        path: ["ok"],
+        message: 'Provider smoke contract requires ok to equal true.',
+      }),
+    );
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(record, "provider")) {
+    diagnostics.push(
+      createStrictOutputDiagnostic({
+        kind: "schema",
+        code: "smoke_json_provider_missing",
+        path: ["provider"],
+        message: 'Provider smoke contract requires property "provider".',
+      }),
+    );
+  } else if (record.provider !== SMOKE_JSON_CONTRACT_PROVIDER) {
+    diagnostics.push(
+      diagnosticFromSemanticInvariant({
+        code: "smoke_json_provider_invalid",
+        path: ["provider"],
+        message: `Provider smoke contract requires provider to equal "${SMOKE_JSON_CONTRACT_PROVIDER}".`,
+      }),
+    );
+  }
+
+  if (diagnostics.length > 0) {
+    return { ok: false, diagnostics };
+  }
+
+  return { ok: true, value: record };
 }
 
 function smokeJsonErrorFromLoop(
@@ -414,13 +463,20 @@ function smokeJsonErrorFromLoop(
 ): z.infer<typeof SmokeErrorSchema> {
   const lastAttempt = loopResult.attempts[loopResult.attempts.length - 1];
   const notObject = lastAttempt?.diagnostics.some((diagnostic) => diagnostic.code === "smoke_json_not_object");
+  const contractViolation = lastAttempt?.diagnostics.some((diagnostic) =>
+    diagnostic.code.startsWith("smoke_json_") && diagnostic.code !== "smoke_json_not_object",
+  );
   return {
     kind: "provider_json",
     message: notObject
       ? "Provider smoke response was JSON but not an object."
-      : loopResult.classification === "failed_after_repair"
-        ? "Provider smoke response was not parseable JSON after bounded repair."
-        : "Provider smoke response was not parseable JSON.",
+      : contractViolation
+        ? loopResult.classification === "failed_after_repair"
+          ? "Provider smoke response did not satisfy the required JSON contract after bounded repair."
+          : "Provider smoke response did not satisfy the required JSON contract."
+        : loopResult.classification === "failed_after_repair"
+          ? "Provider smoke response was not parseable JSON after bounded repair."
+          : "Provider smoke response was not parseable JSON.",
     host,
     taxonomy: "provider_json",
   };

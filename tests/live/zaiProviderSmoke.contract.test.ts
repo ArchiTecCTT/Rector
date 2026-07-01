@@ -105,6 +105,36 @@ describe("Z.ai provider smoke report", () => {
     }
   });
 
+  it("accepts additional keys when ok and provider match the smoke contract", async () => {
+    class ExtraKeysProvider extends SmokeProvider {
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.requests.push(request);
+        return {
+          provider: this.metadata.id,
+          model: request.model ?? this.metadata.models.cheap,
+          content: "{\"ok\":true,\"provider\":\"zai\",\"trace\":\"contract\"}",
+          finishReason: "stop",
+          usage: USAGE,
+        };
+      }
+    }
+
+    const outputDir = await tempDir();
+    try {
+      const report = await runZaiProviderSmoke({
+        outputDir,
+        env: { RECTOR_LIVE_PROVIDER: "zai", RECTOR_ZAI_PROVIDER_SMOKE: "1" },
+        now: fixedNow,
+        providerDiscovery: async () => ({ selected: discovered(new ExtraKeysProvider()), rejections: [] }),
+      });
+
+      expect(report.status).toBe("passed");
+      expect(report.passClassification).toBe("first_pass");
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("sends one cheap JSON-only chat completion and records sanitized live metrics", async () => {
     const outputDir = await tempDir();
     const provider = new SmokeProvider();
@@ -286,6 +316,131 @@ describe("Z.ai provider smoke report", () => {
       expect(report.attempts).toHaveLength(2);
       expect(report.error?.kind).toBe("provider_json");
       expect(report.liveEvidenceStatus).toBe("test_only_injected");
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails with failed_after_repair and provider_json when the model returns an empty object on every attempt", async () => {
+    class EmptyObjectProvider extends SmokeProvider {
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.requests.push(request);
+        return {
+          provider: this.metadata.id,
+          model: request.model ?? this.metadata.models.cheap,
+          content: "{}",
+          finishReason: "stop",
+          usage: USAGE,
+        };
+      }
+    }
+
+    const outputDir = await tempDir();
+    const provider = new EmptyObjectProvider();
+    try {
+      const report = await runZaiProviderSmoke({
+        outputDir,
+        env: { RECTOR_LIVE_PROVIDER: "zai", RECTOR_ZAI_PROVIDER_SMOKE: "1" },
+        now: fixedNow,
+        providerDiscovery: async () => ({ selected: discovered(provider), rejections: [] }),
+      });
+
+      expect(provider.requests).toHaveLength(2);
+      expect(report.status).toBe("failed");
+      expect(report.passClassification).toBe("failed_after_repair");
+      expect(report.error?.kind).toBe("provider_json");
+      expect(report.error?.message).toContain("required JSON contract");
+      expect(report.attempts?.[1]?.safeDiagnostics.map((d) => d.code)).toEqual(
+        expect.arrayContaining(["smoke_json_ok_missing", "smoke_json_provider_missing"]),
+      );
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails with provider_json when parsed JSON is null, an array, or the wrong contract shape", async () => {
+    const cases: ReadonlyArray<{ readonly label: string; readonly content: string; readonly expectedCodes: string[] }> = [
+      { label: "null", content: "null", expectedCodes: ["smoke_json_not_object"] },
+      { label: "array", content: "[]", expectedCodes: ["smoke_json_not_object"] },
+      {
+        label: "wrong provider",
+        content: "{\"ok\":true,\"provider\":\"openai\"}",
+        expectedCodes: ["smoke_json_provider_invalid"],
+      },
+    ];
+
+    for (const testCase of cases) {
+      class FixedShapeProvider extends SmokeProvider {
+        override async invoke(request: LLMRequest): Promise<LLMResponse> {
+          this.requests.push(request);
+          return {
+            provider: this.metadata.id,
+            model: request.model ?? this.metadata.models.cheap,
+            content: testCase.content,
+            finishReason: "stop",
+            usage: USAGE,
+          };
+        }
+      }
+
+      const outputDir = await tempDir();
+      const provider = new FixedShapeProvider();
+      try {
+        const report = await runZaiProviderSmoke({
+          outputDir,
+          env: { RECTOR_LIVE_PROVIDER: "zai", RECTOR_ZAI_PROVIDER_SMOKE: "1" },
+          now: fixedNow,
+          providerDiscovery: async () => ({ selected: discovered(provider), rejections: [] }),
+        });
+
+        expect(report.status, testCase.label).toBe("failed");
+        expect(report.passClassification, testCase.label).toBe("failed_after_repair");
+        expect(report.error?.kind, testCase.label).toBe("provider_json");
+        const lastAttempt = report.attempts?.[report.attempts.length - 1];
+        for (const code of testCase.expectedCodes) {
+          expect(lastAttempt?.safeDiagnostics.some((d) => d.code === code), `${testCase.label}:${code}`).toBe(true);
+        }
+      } finally {
+        await rm(outputDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("passes with repair_pass when the first attempt violates the smoke contract and the repair attempt is valid", async () => {
+    class ContractRepairProvider extends SmokeProvider {
+      private calls = 0;
+
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.calls += 1;
+        this.requests.push(request);
+        const content = this.calls === 1 ? "{}" : "{\"ok\":true,\"provider\":\"zai\"}";
+        return {
+          provider: this.metadata.id,
+          model: request.model ?? this.metadata.models.cheap,
+          content,
+          finishReason: "stop",
+          usage: USAGE,
+        };
+      }
+    }
+
+    const outputDir = await tempDir();
+    const provider = new ContractRepairProvider();
+    try {
+      const report = await runZaiProviderSmoke({
+        outputDir,
+        env: { RECTOR_LIVE_PROVIDER: "zai", RECTOR_ZAI_PROVIDER_SMOKE: "1" },
+        now: fixedNow,
+        providerDiscovery: async () => ({ selected: discovered(provider), rejections: [] }),
+      });
+
+      expect(provider.requests).toHaveLength(2);
+      expect(report.status).toBe("passed");
+      expect(report.passClassification).toBe("repair_pass");
+      expect(report.attempts).toHaveLength(2);
+      expect(report.attempts?.[0]?.safeDiagnostics.map((d) => d.code)).toEqual(
+        expect.arrayContaining(["smoke_json_ok_missing", "smoke_json_provider_missing"]),
+      );
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
