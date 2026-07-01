@@ -16,7 +16,11 @@ import {
   type GateRegoloLiveEvidenceResult,
   type GateRegoloLiveEvidenceSummary,
 } from "./gateRegoloLiveEvidence";
-import { sanitizeHarnessEvidenceValue, secretLeakFindings } from "./harnessEvidence";
+import {
+  assertLiveMatrixArtifactHasNoSecrets,
+  LIVE_MATRIX_CREDENTIAL_ENV_KEYS,
+  sanitizeHarnessEvidenceValue,
+} from "./harnessEvidence";
 import { RegoloHarnessReportSchema } from "./regoloHarnessReport";
 import {
   buildZaiLiveDiagnostics,
@@ -27,11 +31,8 @@ import {
 
 export const REGOLO_MATRIX_SUMMARY_SCHEMA_VERSION = "rector.regolo-live-matrix-summary.v1";
 
-export const REGOLO_MATRIX_SENSITIVE_ENV_KEYS = new Set([
-  "REGOLO_API_KEY",
-  "OPENAI_COMPATIBLE_API_KEY",
-  "Authorization",
-]);
+/** @deprecated Prefer {@link LIVE_MATRIX_CREDENTIAL_ENV_KEYS} — kept for importers. */
+export const REGOLO_MATRIX_SENSITIVE_ENV_KEYS = LIVE_MATRIX_CREDENTIAL_ENV_KEYS;
 
 export type RegoloMatrixGrade = "A" | "B" | "C" | "D" | "F";
 
@@ -201,17 +202,17 @@ export { dedupeRegoloModelsPreserveOrder, parseRegoloModelsList } from "./regolo
 export function toSafeModelEvidenceId(modelId: string): string {
   const trimmed = modelId.trim();
   if (!trimmed) {
-    throw new Error("Z.ai matrix model id must not be empty.");
+    throw new Error("Regolo live matrix model id must not be empty.");
   }
   let sanitized = trimmed.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   if (!sanitized || sanitized === "." || sanitized === "..") {
-    throw new Error(`Z.ai matrix model id cannot be converted to a safe evidence segment: ${modelId}`);
+    throw new Error(`Regolo live matrix model id cannot be converted to a safe evidence segment: ${modelId}`);
   }
   if (!/^[A-Za-z0-9]/.test(sanitized)) {
     sanitized = `m_${sanitized}`;
   }
   if (!SAFE_EVIDENCE_RUN_ID_PATTERN.test(sanitized)) {
-    throw new Error(`Z.ai matrix model id is not a safe evidence segment after sanitization: ${modelId}`);
+    throw new Error(`Regolo live matrix model id is not a safe evidence segment after sanitization: ${modelId}`);
   }
   return sanitized;
 }
@@ -275,7 +276,7 @@ export function buildStepCommandLog(
   return sanitizeEvidenceStringLeaves({
     stepId: step.id,
     command,
-    envKeys: Object.keys(env).filter((key) => !REGOLO_MATRIX_SENSITIVE_ENV_KEYS.has(key)).sort(),
+    envKeys: Object.keys(env).filter((key) => !LIVE_MATRIX_CREDENTIAL_ENV_KEYS.has(key)).sort(),
     exitCode: result.exitCode,
     durationMs: result.durationMs,
     ...(result.stderr.trim()
@@ -310,17 +311,7 @@ export function deriveRegoloModelCampaignRating(input: {
 }
 
 export function assertMatrixArtifactHasNoSecrets(value: unknown): void {
-  const findings = secretLeakFindings(value);
-  if (findings.length > 0) {
-    throw new Error(`Z.ai matrix artifact contains secret-like content: ${findings.join(", ")}`);
-  }
-  const serialized = JSON.stringify(value);
-  for (const key of REGOLO_MATRIX_SENSITIVE_ENV_KEYS) {
-    const pattern = new RegExp(`${key}\\s*[:=]\\s*["']?[^\\s"']{8,}`, "i");
-    if (pattern.test(serialized)) {
-      throw new Error(`Z.ai matrix artifact must not embed ${key} values.`);
-    }
-  }
+  assertLiveMatrixArtifactHasNoSecrets(value, { artifactLabel: "Regolo live matrix" });
 }
 
 export async function runRegoloModelMatrix(options: {
@@ -354,7 +345,7 @@ export async function runRegoloModelMatrix(options: {
       }
     : resolveRegoloMatrixModels(env);
   if (resolved.models.length === 0 || resolved.source === "empty") {
-    throw new Error("Z.ai matrix requires REGOLO_MODELS or REGOLO_MODEL to be set.");
+    throw new Error("Regolo live matrix requires REGOLO_MODELS or REGOLO_MODEL to be set.");
   }
 
   const gateEvaluator = options.gateEvaluator ?? ((input) =>
@@ -400,7 +391,7 @@ export async function runRegoloModelMatrix(options: {
       rows: probeReport.rows,
     };
     if (modelsToRun.length === 0 && !config.continueOnFailure) {
-      throw new Error("Z.ai matrix probe pre-filter found no callable models.");
+      throw new Error("Regolo live matrix probe pre-filter found no callable models.");
     }
   }
 
@@ -415,7 +406,7 @@ export async function runRegoloModelMatrix(options: {
       offlineFailed = true;
       if (!config.continueOnFailure) {
         throw new Error(
-          `Z.ai matrix offline step ${REGOLO_MATRIX_OFFLINE_STEP.id} failed with exit ${offlineResult.exitCode}.`,
+          `Regolo live matrix offline step ${REGOLO_MATRIX_OFFLINE_STEP.id} failed with exit ${offlineResult.exitCode}.`,
         );
       }
     }
@@ -557,7 +548,7 @@ export async function writeRegoloMatrixSummary(
 
 export function formatRegoloMatrixSummaryMarkdown(summary: RegoloMatrixSummary): string {
   const lines: string[] = [];
-  lines.push("# Z.ai live model matrix summary");
+  lines.push("# Regolo live model matrix summary");
   lines.push("");
   lines.push(`Generated: ${summary.generatedAt}`);
   lines.push(`Schema: ${summary.schemaVersion}`);

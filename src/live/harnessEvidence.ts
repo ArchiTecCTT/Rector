@@ -38,9 +38,18 @@ const SECRET_LEAK_PATTERNS = [
   /\bsk-[A-Za-z0-9_-]{8,}\b/i,
   /\b(api[_-]?key|token|secret|password)=((?!\[REDACTED])[^"\s,;&]+)/i,
   /\bOPENAI_COMPATIBLE_API_KEY\b/i,
+  /\bREGOLO_API_KEY\b/i,
   /\bZAI_API_KEY\b/i,
   /\bAuthorization\b/i,
 ];
+
+/** Env var names that must never appear in live matrix command logs or rollups. */
+export const LIVE_MATRIX_CREDENTIAL_ENV_KEYS = new Set([
+  "ZAI_API_KEY",
+  "REGOLO_API_KEY",
+  "OPENAI_COMPATIBLE_API_KEY",
+  "Authorization",
+]);
 
 export interface SourceWorkspaceManifestFile {
   readonly path: string;
@@ -178,6 +187,27 @@ export function secretLeakFindings(value: unknown): string[] {
     .map((match) => match.slice(0, 80));
 }
 
+export function assertLiveMatrixArtifactHasNoSecrets(
+  value: unknown,
+  options: {
+    readonly artifactLabel: string;
+    readonly credentialEnvKeys?: ReadonlySet<string>;
+  },
+): void {
+  const credentialEnvKeys = options.credentialEnvKeys ?? LIVE_MATRIX_CREDENTIAL_ENV_KEYS;
+  const findings = secretLeakFindings(value);
+  if (findings.length > 0) {
+    throw new Error(`${options.artifactLabel} artifact contains secret-like content: ${findings.join(", ")}`);
+  }
+  const serialized = JSON.stringify(value);
+  for (const key of credentialEnvKeys) {
+    const pattern = new RegExp(`${key}\\s*[:=]\\s*["']?[^\\s"']{8,}`, "i");
+    if (pattern.test(serialized)) {
+      throw new Error(`${options.artifactLabel} artifact must not embed ${key} values.`);
+    }
+  }
+}
+
 function hardenStringLeaves(value: unknown): unknown {
   if (typeof value === "string") {
     return value
@@ -185,6 +215,7 @@ function hardenStringLeaves(value: unknown): unknown {
       .replace(/\bBearer\s+(?!\[REDACTED])[^"\s,;]+/gi, "Bearer [REDACTED]")
       .replace(/\bBasic\s+(?!\[REDACTED])[^"\s,;]+/gi, "Basic [REDACTED]")
       .replace(/\bOPENAI_COMPATIBLE_API_KEY\b/g, "[REDACTED_KEY_NAME]")
+      .replace(/\bREGOLO_API_KEY\b/g, "[REDACTED_KEY_NAME]")
       .replace(/\bZAI_API_KEY\b/g, "[REDACTED_KEY_NAME]")
       .replace(/\bAuthorization\b/g, "[REDACTED_HEADER_NAME]");
   }

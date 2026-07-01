@@ -16,7 +16,11 @@ import {
   type GateZaiLiveEvidenceResult,
   type GateZaiLiveEvidenceSummary,
 } from "./gateZaiLiveEvidence";
-import { sanitizeHarnessEvidenceValue, secretLeakFindings } from "./harnessEvidence";
+import {
+  assertLiveMatrixArtifactHasNoSecrets,
+  LIVE_MATRIX_CREDENTIAL_ENV_KEYS,
+  sanitizeHarnessEvidenceValue,
+} from "./harnessEvidence";
 import { ZaiHarnessReportSchema } from "./zaiHarnessReport";
 import {
   buildZaiLiveDiagnostics,
@@ -27,11 +31,8 @@ import {
 
 export const ZAI_MATRIX_SUMMARY_SCHEMA_VERSION = "rector.zai-live-matrix-summary.v1";
 
-export const ZAI_MATRIX_SENSITIVE_ENV_KEYS = new Set([
-  "ZAI_API_KEY",
-  "OPENAI_COMPATIBLE_API_KEY",
-  "Authorization",
-]);
+/** @deprecated Prefer {@link LIVE_MATRIX_CREDENTIAL_ENV_KEYS} — kept for importers. */
+export const ZAI_MATRIX_SENSITIVE_ENV_KEYS = LIVE_MATRIX_CREDENTIAL_ENV_KEYS;
 
 export type ZaiMatrixGrade = "A" | "B" | "C" | "D" | "F";
 
@@ -275,7 +276,7 @@ export function buildStepCommandLog(
   return sanitizeEvidenceStringLeaves({
     stepId: step.id,
     command,
-    envKeys: Object.keys(env).filter((key) => !ZAI_MATRIX_SENSITIVE_ENV_KEYS.has(key)).sort(),
+    envKeys: Object.keys(env).filter((key) => !LIVE_MATRIX_CREDENTIAL_ENV_KEYS.has(key)).sort(),
     exitCode: result.exitCode,
     durationMs: result.durationMs,
     ...(result.stderr.trim()
@@ -310,17 +311,7 @@ export function deriveZaiModelCampaignRating(input: {
 }
 
 export function assertMatrixArtifactHasNoSecrets(value: unknown): void {
-  const findings = secretLeakFindings(value);
-  if (findings.length > 0) {
-    throw new Error(`Z.ai matrix artifact contains secret-like content: ${findings.join(", ")}`);
-  }
-  const serialized = JSON.stringify(value);
-  for (const key of ZAI_MATRIX_SENSITIVE_ENV_KEYS) {
-    const pattern = new RegExp(`${key}\\s*[:=]\\s*["']?[^\\s"']{8,}`, "i");
-    if (pattern.test(serialized)) {
-      throw new Error(`Z.ai matrix artifact must not embed ${key} values.`);
-    }
-  }
+  assertLiveMatrixArtifactHasNoSecrets(value, { artifactLabel: "Z.ai live matrix" });
 }
 
 export async function runZaiModelMatrix(options: {
