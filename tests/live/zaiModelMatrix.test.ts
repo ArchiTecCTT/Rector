@@ -102,10 +102,18 @@ describe("zaiModelMatrix env isolation and logs", () => {
       {
         ZAI_MODEL: "glm-4",
         ZAI_API_KEY: "sk-live-abcdefghijklmnop",
+        AZURE_OPENAI_API_KEY: "azure-secret",
+        GITHUB_TOKEN: "gh-secret",
+        LINEAR_API_KEY: "linear-secret",
         RECTOR_LIVE_PROVIDER: "zai",
+        LIVE_FACT_EVALS: "1",
       },
     );
     expect(entry.envKeys).not.toContain("ZAI_API_KEY");
+    expect(entry.envKeys).not.toContain("AZURE_OPENAI_API_KEY");
+    expect(entry.envKeys).not.toContain("GITHUB_TOKEN");
+    expect(entry.envKeys).not.toContain("LINEAR_API_KEY");
+    expect(entry.envKeys).toContain("LIVE_FACT_EVALS");
     expect(entry.command).not.toContain("sk-live");
     expect(entry.stderrTail).not.toContain("sk-live");
   });
@@ -250,6 +258,7 @@ describe("runZaiModelMatrix orchestration", () => {
           phase2ShadowJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/phase2-live-fact-shadow-report.json`,
         },
         copiedFiles: [],
+        skippedArtifacts: [],
       }),
       runCommand: async (input) => {
         const script = input.args[1] ?? "";
@@ -290,6 +299,7 @@ describe("runZaiModelMatrix orchestration", () => {
           phase2ShadowJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/phase2-live-fact-shadow-report.json`,
         },
         copiedFiles: [],
+        skippedArtifacts: [],
       }),
       runCommand: async (input) => ({
         exitCode: input.env.ZAI_MODEL === "bad-model" ? 1 : 0,
@@ -346,6 +356,7 @@ describe("runZaiModelMatrix orchestration", () => {
             phase2ShadowJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/phase2-live-fact-shadow-report.json`,
           },
           copiedFiles: [],
+        skippedArtifacts: [],
         }),
         runCommand: async () => ({ exitCode: 1, stdout: "", stderr: "step failed", durationMs: 2 }),
         gateEvaluator: async () => ({ ok: false, violations: ["fixture"], summary: {
@@ -383,7 +394,11 @@ describe("runZaiModelMatrix orchestration", () => {
       const phase2Dir = getEvidenceTrackDir("phase2", repoRoot);
       await mkdir(zaiDir, { recursive: true });
       await mkdir(phase2Dir, { recursive: true });
-      await writeFile(path.join(zaiDir, "latest.json"), "{\"campaign\":true}\n", "utf8");
+      await writeFile(
+        path.join(zaiDir, "latest.json"),
+        `${JSON.stringify({ modelId: "glm-4.7", campaign: true })}\n`,
+        "utf8",
+      );
       await writeFile(path.join(zaiDir, "provider-smoke.json"), "{\"passed\":true}\n", "utf8");
       await writeFile(path.join(phase2Dir, "live-fact-shadow-report.json"), "{\"status\":\"completed\"}\n", "utf8");
 
@@ -391,6 +406,7 @@ describe("runZaiModelMatrix orchestration", () => {
         repoRoot,
         safeModelId: "glm-4.7",
         runIndex: 0,
+        modelId: "glm-4.7",
       });
 
       expect(snapshot.evidenceSnapshotDir).toBe(".rector/evidence/live/zai/matrix/glm-4.7/0");
@@ -438,6 +454,7 @@ describe("runZaiModelMatrix orchestration", () => {
           phase2ShadowJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/phase2-live-fact-shadow-report.json`,
         },
         copiedFiles: [],
+        skippedArtifacts: [],
       }),
       runCommand: async (input) => {
         invocations.push(input.env.ZAI_MODEL ?? "");
@@ -506,6 +523,7 @@ describe("runZaiModelMatrix orchestration", () => {
           phase2ShadowJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/phase2-live-fact-shadow-report.json`,
         },
         copiedFiles: [],
+        skippedArtifacts: [],
       }),
       runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "", durationMs: 1 }),
       gateEvaluator: async () => ({

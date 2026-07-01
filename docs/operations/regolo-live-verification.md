@@ -19,7 +19,7 @@ Model IDs and `/models` metadata must be validated via live probe; candidate exa
 - Matrix: `.rector/evidence/live/regolo/matrix/matrix-summary.{json,md}`
 - Probe: `.rector/evidence/live/regolo/model-probe/latest.json`
 
-Matrix runs overwrite shared canonical rollups (last writer wins). Use per-model snapshots under `matrix/<safe-model-id>/<run-index>/` for comparisons. Matrix grades do **not** imply live-verified status.
+Matrix runs overwrite shared canonical rollups (last writer wins). Use per-model snapshots under `matrix/<safe-model-id>/<run-index>/` for comparisons; snapshots are incremental per successful step and skip `latest.json` / `provider-smoke.json` when `modelId` does not match the campaign. Matrix grades do **not** imply live-verified status.
 
 ## Commands
 

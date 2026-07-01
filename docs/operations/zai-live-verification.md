@@ -25,7 +25,7 @@ Rector’s **first** live Z.ai foundation discovery campaign on branch `zai-evid
 - `.rector/evidence/live/zai/matrix/matrix-summary.json` (`generatedAt` ~2026-07-01T04:04:37Z)
 - Per-model snapshots: `.rector/evidence/live/zai/matrix/<safe-model-id>/0/` (e.g. `phase2-live-fact-shadow-report.json`, `latest.json`)
 
-**Caution:** Shared canonical rollups (`.rector/evidence/live/zai/latest.json`, root Phase 2 shadow) are **last-writer-wins** during matrix runs. Prefer `matrix-summary.json` and per-model snapshot paths for triage; a snapshot’s copied `latest.json` can disagree with the model that “won” the shared rollup.
+**Caution:** Shared canonical rollups (`.rector/evidence/live/zai/latest.json`, root Phase 2 shadow) are **last-writer-wins** during matrix runs. Prefer `matrix-summary.json` and per-model snapshot paths for triage. Matrix snapshots copy artifacts **incrementally after each successful live step**; `latest.json` / `provider-smoke.json` are only copied when their embedded `modelId` matches the campaign (stale shared rollups are skipped, not duplicated into the wrong model directory).
 
 ## Evidence layout
 

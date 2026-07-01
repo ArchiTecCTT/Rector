@@ -65,13 +65,21 @@ describe("regoloModelMatrix env isolation and artifact hygiene", () => {
         REGOLO_API_KEY: "regolo-secret-value",
         ZAI_API_KEY: "zai-secret-from-shared-envrc",
         OPENAI_COMPATIBLE_API_KEY: "compat-secret",
+        AZURE_OPENAI_API_KEY: "azure-from-envrc",
+        GITHUB_TOKEN: "gh-from-envrc",
+        LINEAR_API_KEY: "linear-from-envrc",
         RECTOR_LIVE_PROVIDER: "regolo",
+        LIVE_FACT_EVALS: "1",
       },
     );
     expect(entry.envKeys).not.toContain("REGOLO_API_KEY");
     expect(entry.envKeys).not.toContain("ZAI_API_KEY");
     expect(entry.envKeys).not.toContain("OPENAI_COMPATIBLE_API_KEY");
+    expect(entry.envKeys).not.toContain("AZURE_OPENAI_API_KEY");
+    expect(entry.envKeys).not.toContain("GITHUB_TOKEN");
+    expect(entry.envKeys).not.toContain("LINEAR_API_KEY");
     expect(entry.envKeys).toContain("REGOLO_MODEL");
+    expect(entry.envKeys).toContain("LIVE_FACT_EVALS");
   });
 
   it("uses Regolo-specific secret scan errors", () => {
@@ -109,6 +117,7 @@ describe("regoloModelMatrix env isolation and artifact hygiene", () => {
           phase2ShadowJson: `.rector/evidence/phase2/live-fact-shadow-report.json`,
         },
         copiedFiles: [],
+        skippedArtifacts: [],
       }),
       runCommand: async () => ({ exitCode: 1, stdout: "", stderr: "", durationMs: 1 }),
       gateEvaluator: async () => ({

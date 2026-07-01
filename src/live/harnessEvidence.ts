@@ -51,6 +51,48 @@ export const LIVE_MATRIX_CREDENTIAL_ENV_KEYS = new Set([
   "Authorization",
 ]);
 
+const MATRIX_STEP_REPRO_ENV_EXACT = new Set([
+  "CI",
+  "LIVE_FACT_EVALS",
+  "NODE_ENV",
+  "OPENAI_COMPATIBLE_BASE_URL",
+  "REGOLO_BASE_URL",
+  "REGOLO_MODEL",
+  "REGOLO_MODELS",
+  "RECTOR_LIVE_PROVIDER",
+  "ZAI_BASE_URL",
+  "ZAI_MODEL",
+  "ZAI_MODELS",
+]);
+
+const MATRIX_STEP_REPRO_ENV_PREFIXES = [
+  "REGOLO_MATRIX_",
+  "RECTOR_LIVE_",
+  "RECTOR_REGOLO_",
+  "RECTOR_ZAI_",
+  "ZAI_MATRIX_",
+] as const;
+
+const SENSITIVE_MATRIX_ENV_NAME_PATTERN =
+  /(?:^|_)(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|PRIVATE[_-]?KEY)(?:$|_)/i;
+
+/** True when an env var name must not be listed in matrix step logs (allowlist-only policy). */
+export function isSensitiveMatrixEnvKeyName(key: string): boolean {
+  if (LIVE_MATRIX_CREDENTIAL_ENV_KEYS.has(key)) return true;
+  if (isMatrixStepReproEnvKey(key)) return false;
+  return SENSITIVE_MATRIX_ENV_NAME_PATTERN.test(key);
+}
+
+/** Env keys safe to record for reproducing a matrix step (values are never written). */
+export function isMatrixStepReproEnvKey(key: string): boolean {
+  if (MATRIX_STEP_REPRO_ENV_EXACT.has(key)) return true;
+  return MATRIX_STEP_REPRO_ENV_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
+export function listMatrixStepReproEnvKeys(env: Record<string, string>): readonly string[] {
+  return Object.keys(env).filter(isMatrixStepReproEnvKey).sort();
+}
+
 export interface SourceWorkspaceManifestFile {
   readonly path: string;
   readonly sizeBytes: number;
@@ -205,6 +247,28 @@ export function assertLiveMatrixArtifactHasNoSecrets(
     if (pattern.test(serialized)) {
       throw new Error(`${options.artifactLabel} artifact must not embed ${key} values.`);
     }
+  }
+  assertMatrixArtifactEnvKeysAllowlist(value, options.artifactLabel);
+}
+
+function assertMatrixArtifactEnvKeysAllowlist(value: unknown, artifactLabel: string): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) assertMatrixArtifactEnvKeysAllowlist(entry, artifactLabel);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (key === "envKeys" && Array.isArray(child)) {
+      for (const envKey of child) {
+        if (typeof envKey !== "string") continue;
+        if (isSensitiveMatrixEnvKeyName(envKey)) {
+          throw new Error(
+            `${artifactLabel} artifact must not enumerate sensitive env var name: ${envKey}`,
+          );
+        }
+      }
+    }
+    assertMatrixArtifactEnvKeysAllowlist(child, artifactLabel);
   }
 }
 

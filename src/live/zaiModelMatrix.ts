@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
-  getEvidenceTrackDir,
   getZaiLiveEvidenceDir,
   SAFE_EVIDENCE_RUN_ID_PATTERN,
   sanitizeEvidenceStringLeaves,
@@ -19,8 +18,17 @@ import {
 import {
   assertLiveMatrixArtifactHasNoSecrets,
   LIVE_MATRIX_CREDENTIAL_ENV_KEYS,
+  listMatrixStepReproEnvKeys,
   sanitizeHarnessEvidenceValue,
 } from "./harnessEvidence";
+import {
+  beginMatrixCampaignSnapshotSession,
+  copyMatrixCampaignArtifactsForStep,
+  finalizeMatrixCampaignSnapshot,
+  getMatrixCampaignSnapshotRelativeDir,
+  snapshotMatrixCampaignEvidenceLegacy,
+  type MatrixSkippedArtifact,
+} from "./liveMatrixCampaignSnapshot";
 import { ZaiHarnessReportSchema } from "./zaiHarnessReport";
 import {
   buildZaiLiveDiagnostics,
@@ -112,6 +120,8 @@ export interface ZaiMatrixCampaignResult {
   readonly rating: string;
   readonly evidenceSnapshotDir: string;
   readonly reportPointers: ZaiMatrixCampaignReportPointers;
+  readonly snapshotCopiedFiles?: readonly string[];
+  readonly snapshotSkippedArtifacts?: readonly MatrixSkippedArtifact[];
   readonly probePrefilterSkipped?: boolean;
 }
 
@@ -144,56 +154,32 @@ export function getZaiLiveMatrixEvidenceDir(repoRoot?: string): string {
 }
 
 export function getZaiMatrixCampaignSnapshotRelativeDir(safeModelId: string, runIndex: number): string {
-  return `.rector/evidence/live/zai/matrix/${safeModelId}/${runIndex}`;
+  return getMatrixCampaignSnapshotRelativeDir("zai", safeModelId, runIndex);
 }
 
 export async function snapshotZaiMatrixCampaignEvidence(input: {
   readonly repoRoot: string;
   readonly safeModelId: string;
   readonly runIndex: number;
+  readonly modelId?: string;
 }): Promise<{
   readonly evidenceSnapshotDir: string;
   readonly reportPointers: ZaiMatrixCampaignReportPointers;
   readonly copiedFiles: readonly string[];
+  readonly skippedArtifacts: readonly MatrixSkippedArtifact[];
 }> {
-  const evidenceSnapshotDir = getZaiMatrixCampaignSnapshotRelativeDir(input.safeModelId, input.runIndex);
-  const absSnapshotDir = path.join(
-    getZaiLiveMatrixEvidenceDir(input.repoRoot),
-    input.safeModelId,
-    String(input.runIndex),
-  );
-  await fs.mkdir(absSnapshotDir, { recursive: true });
-
-  const copyPlans: Array<{ readonly src: string; readonly destName: string }> = [
-    { src: path.join(getZaiLiveEvidenceDir(input.repoRoot), "latest.json"), destName: "latest.json" },
-    { src: path.join(getZaiLiveEvidenceDir(input.repoRoot), "latest.md"), destName: "latest.md" },
-    { src: path.join(getZaiLiveEvidenceDir(input.repoRoot), "provider-smoke.json"), destName: "provider-smoke.json" },
-    {
-      src: path.join(getEvidenceTrackDir("phase2", input.repoRoot), "live-fact-shadow-report.json"),
-      destName: "phase2-live-fact-shadow-report.json",
-    },
-  ];
-
-  const copiedFiles: string[] = [];
-  for (const plan of copyPlans) {
-    try {
-      await fs.copyFile(plan.src, path.join(absSnapshotDir, plan.destName));
-      copiedFiles.push(plan.destName);
-    } catch {
-      // campaign artifacts may be absent when steps fail early
-    }
-  }
-
-  const prefix = `${evidenceSnapshotDir}/`;
+  const snapshot = await snapshotMatrixCampaignEvidenceLegacy({
+    track: "zai",
+    repoRoot: input.repoRoot,
+    safeModelId: input.safeModelId,
+    runIndex: input.runIndex,
+    modelId: input.modelId ?? input.safeModelId,
+  });
   return {
-    evidenceSnapshotDir,
-    reportPointers: {
-      latestJson: `${prefix}latest.json`,
-      latestMd: `${prefix}latest.md`,
-      providerSmokeJson: `${prefix}provider-smoke.json`,
-      phase2ShadowJson: `${prefix}phase2-live-fact-shadow-report.json`,
-    },
-    copiedFiles,
+    evidenceSnapshotDir: snapshot.evidenceSnapshotDir,
+    reportPointers: snapshot.reportPointers,
+    copiedFiles: snapshot.copiedFiles,
+    skippedArtifacts: snapshot.skippedArtifacts,
   };
 }
 
@@ -276,7 +262,7 @@ export function buildStepCommandLog(
   return sanitizeEvidenceStringLeaves({
     stepId: step.id,
     command,
-    envKeys: Object.keys(env).filter((key) => !LIVE_MATRIX_CREDENTIAL_ENV_KEYS.has(key)).sort(),
+    envKeys: listMatrixStepReproEnvKeys(env),
     exitCode: result.exitCode,
     durationMs: result.durationMs,
     ...(result.stderr.trim()
@@ -441,6 +427,13 @@ export async function runZaiModelMatrix(options: {
       const campaignEnv = buildIsolatedCampaignEnv(env, modelId);
       const steps: ZaiMatrixStepLogEntry[] = [];
       let campaignFailed = offlineFailed;
+      const snapshotSession = await beginMatrixCampaignSnapshotSession({
+        track: "zai",
+        repoRoot,
+        safeModelId,
+        runIndex,
+        modelId,
+      });
 
       for (const step of ZAI_MATRIX_LIVE_CAMPAIGN_STEPS) {
         const args = ["run", step.npmScript, ...(step.npmArgs?.length ? ["--", ...step.npmArgs] : [])];
@@ -454,6 +447,9 @@ export async function runZaiModelMatrix(options: {
         steps.push(
           buildStepCommandLog(step, { ...result, durationMs: Date.now() - stepStart }, campaignEnv),
         );
+        if (result.exitCode === 0) {
+          await copyMatrixCampaignArtifactsForStep(snapshotSession, step.id);
+        }
         if (result.exitCode !== 0) {
           campaignFailed = true;
           break;
@@ -476,7 +472,9 @@ export async function runZaiModelMatrix(options: {
         scorecardPassed,
       });
 
-      const snapshot = await snapshotCampaignEvidence({ repoRoot, safeModelId, runIndex });
+      const snapshot = options.snapshotCampaignEvidence
+        ? await snapshotCampaignEvidence({ repoRoot, safeModelId, runIndex })
+        : await finalizeMatrixCampaignSnapshot(snapshotSession);
 
       campaigns.push({
         modelId,
@@ -491,6 +489,12 @@ export async function runZaiModelMatrix(options: {
         rating,
         evidenceSnapshotDir: snapshot.evidenceSnapshotDir,
         reportPointers: snapshot.reportPointers,
+        ...("copiedFiles" in snapshot && snapshot.copiedFiles.length > 0
+          ? { snapshotCopiedFiles: snapshot.copiedFiles }
+          : {}),
+        ...("skippedArtifacts" in snapshot && snapshot.skippedArtifacts.length > 0
+          ? { snapshotSkippedArtifacts: snapshot.skippedArtifacts }
+          : {}),
       });
 
       if (campaignFailed && !config.continueOnFailure) {
@@ -586,9 +590,16 @@ export function formatZaiMatrixSummaryMarkdown(summary: ZaiMatrixSummary): strin
   lines.push("");
   lines.push("## Per-model evidence snapshots");
   lines.push("");
+  lines.push(
+    "> Snapshots are copied **incrementally after each successful live step** into isolated matrix directories. `latest.json` / `provider-smoke.json` are only copied when their embedded `modelId` matches the campaign model (stale shared rollups are skipped).",
+  );
+  lines.push("");
   for (const campaign of summary.campaigns) {
+    const skipped = campaign.snapshotSkippedArtifacts?.length
+      ? ` (skipped: ${campaign.snapshotSkippedArtifacts.map((entry) => entry.destName).join(", ")})`
+      : "";
     lines.push(
-      `- ${campaign.modelId} run ${campaign.runIndex + 1}: \`${campaign.evidenceSnapshotDir}/\` (latest: \`${campaign.reportPointers.latestJson}\`)`,
+      `- ${campaign.modelId} run ${campaign.runIndex + 1}: \`${campaign.evidenceSnapshotDir}/\` (latest: \`${campaign.reportPointers.latestJson}\`)${skipped}`,
     );
   }
   lines.push("");
