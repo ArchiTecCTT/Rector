@@ -64,7 +64,7 @@ describe("liveHarnessDiagnostics", () => {
         durationMs: 500,
         steps: [{ stepId: "a", command: "npm run x", envKeys: [], exitCode: 0, durationMs: 100 }],
         grade: "A",
-        rating: "verified_pass",
+        rating: "gate_and_harness_pass",
         evidenceSnapshotDir: ".rector/evidence/live/zai/matrix/glm-4/0",
         reportPointers: {
           latestJson: ".rector/evidence/live/zai/latest.json",

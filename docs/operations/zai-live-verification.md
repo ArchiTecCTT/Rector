@@ -82,6 +82,8 @@ Live harness, provider smoke, and matrix summaries include a `diagnostics` block
 - **Latency aggregates** — min/avg/p50/p95/max for provider calls, harness scenarios, and (matrix) campaign/step durations.
 - **Token totals** — input/output/total tokens, model calls, and estimated USD where tracked.
 
+For **matrix** summaries specifically, the diagnostics `tokens` block rolls up **only** each campaign's gate `campaignTokens` (summed when > 0). Matrix diagnostics set input/output/model-call/cost fields to zero because the matrix runner does not merge per-snapshot harness breakdowns; per-model token detail lives under `.rector/evidence/live/zai/matrix/<safe-model-id>/<run-index>/latest.json`.
+
 Markdown rollups (`latest.md`, `provider-smoke.md`, `matrix-summary.md`) echo the same diagnostics tables. Artifacts remain redacted (no API keys or auth headers).
 
 ### How tests relate to live verification
@@ -96,7 +98,7 @@ Per-model **grade** / **rating** in `matrix-summary.json` are derived from gate 
 
 | Grade | Meaning |
 | --- | --- |
-| **A** | Gate pass, scorecard pass, all harness scenarios passed |
+| **A** | Gate pass, scorecard pass, all harness scenarios passed (`rating`: `gate_and_harness_pass` — campaign-local, not org manifest live verification) |
 | **B** | Gate pass, ≥80% scenarios passed |
 | **C** | Gate pass but harness scorecard failed |
 | **D** | Gate pass with weak scenario coverage |

@@ -9,6 +9,7 @@ import type { GateZaiLiveEvidenceResult } from "../../src/live/gateZaiLiveEviden
 import {
   assertMatrixArtifactHasNoSecrets,
   buildIsolatedCampaignEnv,
+  buildMatrixDiagnostics,
   buildStepCommandLog,
   dedupeZaiModelsPreserveOrder,
   deriveZaiModelCampaignRating,
@@ -122,27 +123,87 @@ describe("zaiModelMatrix env isolation and logs", () => {
 describe("zaiModelMatrix ratings", () => {
   it("derives grades from gate and harness evidence", () => {
     expect(deriveZaiModelCampaignRating({ gateOk: false }).grade).toBe("F");
-    expect(
-      deriveZaiModelCampaignRating({
-        gateOk: true,
-        gateSummary: {
+    const topCampaign = deriveZaiModelCampaignRating({
+      gateOk: true,
+      gateSummary: {
+        providerId: "zai",
+        adapterId: "openai-compatible",
+        modelId: "glm",
+        host: "https://api.z.ai",
+        harnessStatus: "passed",
+        scenariosPassed: 3,
+        scenariosTotal: 3,
+        campaignTokens: 100,
+        campaignTokenLimit: 100_000,
+        campaignModelCalls: 3,
+        estimatedCostUsd: 0,
+        latestMarkdown: "x",
+        manifestUpdated: false,
+      },
+      scorecardPassed: true,
+    });
+    expect(topCampaign.rating).toBe("gate_and_harness_pass");
+    expect(topCampaign.grade).toBe("A");
+  });
+});
+
+describe("buildMatrixDiagnostics edge cases", () => {
+  it("sums gate campaignTokens only and stays zero-safe when gate totals are absent", () => {
+    const diagnostics = buildMatrixDiagnostics([
+      {
+        modelId: "m1",
+        safeModelId: "m1",
+        runIndex: 0,
+        status: "fail",
+        durationMs: 10,
+        steps: [],
+        grade: "F",
+        rating: "gate_fail",
+        evidenceSnapshotDir: ".rector/evidence/live/zai/matrix/m1/0",
+        reportPointers: {
+          latestJson: ".rector/evidence/live/zai/latest.json",
+          latestMd: ".rector/evidence/live/zai/latest.md",
+          providerSmokeJson: ".rector/evidence/live/zai/provider-smoke.json",
+          phase2ShadowJson: ".rector/evidence/phase2/live-fact-shadow-report.json",
+        },
+      },
+      {
+        modelId: "m2",
+        safeModelId: "m2",
+        runIndex: 0,
+        status: "pass",
+        durationMs: 20,
+        steps: [{ stepId: "gate", command: "npm run evidence:zai-live:gate", envKeys: [], exitCode: 0, durationMs: 5 }],
+        grade: "A",
+        rating: "gate_and_harness_pass",
+        evidenceSnapshotDir: ".rector/evidence/live/zai/matrix/m2/0",
+        reportPointers: {
+          latestJson: ".rector/evidence/live/zai/latest.json",
+          latestMd: ".rector/evidence/live/zai/latest.md",
+          providerSmokeJson: ".rector/evidence/live/zai/provider-smoke.json",
+          phase2ShadowJson: ".rector/evidence/phase2/live-fact-shadow-report.json",
+        },
+        gate: {
           providerId: "zai",
           adapterId: "openai-compatible",
-          modelId: "glm",
+          modelId: "m2",
           host: "https://api.z.ai",
           harnessStatus: "passed",
-          scenariosPassed: 3,
-          scenariosTotal: 3,
-          campaignTokens: 100,
+          scenariosPassed: 1,
+          scenariosTotal: 1,
+          campaignTokens: 0,
           campaignTokenLimit: 100_000,
-          campaignModelCalls: 3,
+          campaignModelCalls: 1,
           estimatedCostUsd: 0,
           latestMarkdown: "x",
           manifestUpdated: false,
         },
-        scorecardPassed: true,
-      }).grade,
-    ).toBe("A");
+      },
+    ]);
+    expect(diagnostics.tokens.totalTokens).toBe(0);
+    expect(diagnostics.tokens.inputTokens).toBe(0);
+    expect(diagnostics.tokens.outputTokens).toBe(0);
+    expect(diagnostics.tokens.modelCalls).toBe(0);
   });
 });
 
@@ -408,5 +469,70 @@ describe("runZaiModelMatrix orchestration", () => {
     expect(new Set(invocations)).toEqual(new Set(["good-model"]));
     expect(invocations.length).toBe(ZAI_MATRIX_LIVE_CAMPAIGN_STEPS.length);
     expect(summary.campaigns.find((c) => c.modelId === "bad-model")?.status).toBe("skipped_probe");
+  });
+
+  it("marks overall status fail with passedCount 0 when probe pre-filter skips every model", async () => {
+    const summary = await runZaiModelMatrix({
+      repoRoot: process.cwd(),
+      models: ["bad-a", "bad-b"],
+      modelSource: "ZAI_MODELS",
+      config: {
+        runsPerModel: 1,
+        skipOffline: true,
+        continueOnFailure: true,
+        prefilterWithProbe: true,
+        probeJsonCapability: false,
+      },
+      probeRunner: async () => ({
+        schemaVersion: ZAI_MODEL_PROBE_REPORT_SCHEMA,
+        generatedAt: "2026-06-30T00:00:00.000Z",
+        baseUrlHost: "api.z.ai",
+        modelsProbed: 2,
+        callable: 0,
+        failed: 2,
+        estimatedModelCalls: 2,
+        jsonCapabilityProbed: false,
+        rows: [
+          { modelId: "bad-a", classification: "invalid_model_id", latencyMs: 1, message: "nope" },
+          { modelId: "bad-b", classification: "auth_failure", latencyMs: 1, message: "nope" },
+        ],
+      }),
+      snapshotCampaignEvidence: async ({ safeModelId, runIndex }) => ({
+        evidenceSnapshotDir: getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex),
+        reportPointers: {
+          latestJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/latest.json`,
+          latestMd: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/latest.md`,
+          providerSmokeJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/provider-smoke.json`,
+          phase2ShadowJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/phase2-live-fact-shadow-report.json`,
+        },
+        copiedFiles: [],
+      }),
+      runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "", durationMs: 1 }),
+      gateEvaluator: async () => ({
+        ok: true,
+        violations: [],
+        summary: {
+          providerId: "zai",
+          adapterId: "openai-compatible",
+          modelId: "unused",
+          host: "https://api.z.ai",
+          harnessStatus: "passed",
+          scenariosPassed: 1,
+          scenariosTotal: 1,
+          campaignTokens: 10,
+          campaignTokenLimit: 100_000,
+          campaignModelCalls: 1,
+          estimatedCostUsd: 0,
+          latestMarkdown: "x",
+          manifestUpdated: false,
+        },
+      }),
+    });
+
+    expect(summary.passedCount).toBe(0);
+    expect(summary.failedCount).toBe(0);
+    expect(summary.skippedProbeCount).toBe(2);
+    expect(summary.overallStatus).toBe("fail");
+    expect(formatZaiMatrixSummaryMarkdown(summary)).toContain("gate `campaignTokens`");
   });
 });

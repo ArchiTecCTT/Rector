@@ -294,7 +294,7 @@ export function deriveZaiModelCampaignRating(input: {
   const total = input.gateSummary?.scenariosTotal ?? 0;
   const passed = input.gateSummary?.scenariosPassed ?? 0;
   if (total > 0 && passed === total) {
-    return { grade: "A", rating: "verified_pass" };
+    return { grade: "A", rating: "gate_and_harness_pass" };
   }
   if (total > 0 && passed / total >= 0.8) {
     return { grade: "B", rating: "partial_scenarios" };
@@ -563,6 +563,11 @@ export function formatZaiMatrixSummaryMarkdown(summary: ZaiMatrixSummary): strin
   );
   lines.push(`Model source: ${summary.modelSource}`);
   lines.push(`Runs per model: ${summary.config.runsPerModel}`);
+  lines.push("");
+  lines.push(
+    "> Matrix diagnostics **token totals** sum each campaign's gate `campaignTokens` only (when present and > 0). They do **not** include per-snapshot input/output breakdowns from isolated matrix copies; use per-model snapshot `latest.json` for full harness token detail.",
+  );
+  lines.push("");
   lines.push(renderZaiLiveDiagnosticsMarkdown(summary.diagnostics).trimEnd());
   lines.push("");
   lines.push("## Models");
