@@ -6,6 +6,7 @@ export * from "./planner";
 export * from "./preprocessor";
 export * from "./prompts";
 export * from "./strictJsonRepairLoop";
+export * from "./strictJsonRepairCards";
 export * from "./strictOutputDiagnostics";
 export * from "./runStateMachine";
 export * from "./runControl";

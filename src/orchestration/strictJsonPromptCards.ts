@@ -1,6 +1,8 @@
 import type { ContextPack } from "./contextBuilder";
 import { PlannerRiskLevelSchema } from "./planner";
 import { SkepticFindingSeveritySchema, SkepticReviewVerdictSchema } from "./skeptic";
+import type { StrictOutputDiagnostic } from "./strictOutputDiagnostics";
+import { renderStrictJsonRepairCards, STRICT_JSON_REPAIR_OUTPUT_RULES } from "./strictJsonRepairCards";
 
 export type StrictJsonPromptRole = "planner" | "skeptic" | "synthesizer";
 
@@ -73,6 +75,8 @@ export interface RepairPromptHints {
   readonly issuePaths?: readonly string[];
   readonly allowedTaskIds?: readonly string[];
   readonly allowedEnumHints?: Readonly<Record<string, readonly string[]>>;
+  /** Structured validator diagnostics rendered as compiler-style repair cards on repair attempts. */
+  readonly diagnostics?: readonly StrictOutputDiagnostic[];
 }
 
 export function strictJsonCardForRole(role: StrictJsonPromptRole): string {
@@ -138,13 +142,26 @@ export function buildStructuredRepairUserMessage(
   hints?: RepairPromptHints,
 ): string {
   const role = hints?.role ?? "planner";
-  const lines = [
-    "Your previous response was rejected by the validator.",
-    `Validation error: ${errorSummary}`,
-  ];
+  const repairCards =
+    hints?.diagnostics && hints.diagnostics.length > 0
+      ? renderStrictJsonRepairCards(hints.diagnostics)
+      : undefined;
 
-  if (hints?.issuePaths?.length) {
-    lines.push(`Failed schema paths: ${hints.issuePaths.join(", ")}`);
+  const lines = ["Your previous response was rejected by the validator."];
+  if (repairCards) {
+    lines.push("", repairCards);
+  } else {
+    lines.push(`Validation error: ${errorSummary}`);
+  }
+
+  const issuePaths =
+    hints?.issuePaths ??
+    (hints?.diagnostics?.length
+      ? Array.from(new Set(hints.diagnostics.map((diagnostic) => diagnostic.path).filter(Boolean)))
+      : undefined);
+
+  if (issuePaths?.length) {
+    lines.push(`Failed schema paths: ${issuePaths.join(", ")}`);
   }
 
   if (hints?.allowedTaskIds?.length) {
@@ -163,6 +180,7 @@ export function buildStructuredRepairUserMessage(
     "",
     "You have exactly one repair attempt. Regenerate the FULL JSON object from scratch (not a patch or partial diff).",
     "Fix every issue above and reply again with ONLY the corrected JSON object.",
+    STRICT_JSON_REPAIR_OUTPUT_RULES,
   );
 
   if (role === "synthesizer") {

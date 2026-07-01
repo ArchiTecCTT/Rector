@@ -634,6 +634,7 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
           const repairSummary = summarizeStrictOutputDiagnostics(attemptContext.priorDiagnostics, { maxChars: 1_200 });
           messages = buildRepairPrompt(parsedInput, lastResponseContent, repairSummary, {
             role: "planner",
+            diagnostics: attemptContext.priorDiagnostics,
             issuePaths: issuePathsFromDiagnostics(attemptContext.priorDiagnostics),
             allowedTaskIds: extractTaskIdsFromPlannerJson(parseJsonForRepairHints(lastResponseContent)),
           });
