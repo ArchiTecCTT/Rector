@@ -569,7 +569,10 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
 
     // Req 1.5: issue exactly one repair prompt on the first failure, then stop.
     if (attempt === 1) {
-      messages = buildRepairPrompt(promptInput, response.content, lastFailure.repairSummary);
+      messages = buildRepairPrompt(promptInput, response.content, lastFailure.repairSummary, {
+        role: "skeptic",
+        issuePaths: lastFailure.issuePaths,
+      });
     }
   }
 

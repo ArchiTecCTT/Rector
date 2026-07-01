@@ -8,7 +8,13 @@ import {
   SYNTHESIZER_SYSTEM_RULES,
   REPAIR_SYSTEM_RULES,
   sanitizeMemoryContextForPrompt,
+  buildPlannerPrompt,
+  buildPlannerRepairPrompt,
 } from "../src/orchestration/prompts";
+import { type PlannerInput } from "../src/orchestration/planner";
+import { triageUserMessage } from "../src/orchestration/triage";
+import type { ContextPack } from "../src/orchestration/contextBuilder";
+import { STRICT_JSON_OUTPUT_HABITS } from "../src/orchestration/strictJsonPromptCards";
 
 // ---------------------------------------------------------------------------
 // PROMPT_ISOLATION_INSTRUCTION
@@ -111,6 +117,41 @@ describe("System rules include isolation instruction", () => {
 
   it("REPAIR_SYSTEM_RULES includes PROMPT_ISOLATION_INSTRUCTION", () => {
     expect(REPAIR_SYSTEM_RULES).toContain(PROMPT_ISOLATION_INSTRUCTION);
+  });
+});
+
+describe("Strict JSON contract cards in planner prompts", () => {
+  function harnessPlannerInput(): PlannerInput {
+    const triage = triageUserMessage("Read-only harness smoke");
+    const contextPack: ContextPack = {
+      id: "ctx-b1",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      userIntentSummary: "Read-only harness smoke",
+      conversationRef: { id: "conv-b1", title: "Regolo harness B1", workspaceId: "regolo-live-harness" },
+      messageRefs: [],
+      relevantDocs: [],
+      relevantMemory: [],
+      constraints: [],
+      availableProviders: { configured: [], unavailable: [], notes: [] },
+      availableTools: { names: [], notes: [] },
+      riskFlags: triage.riskFlags,
+      triage,
+      artifactHandles: [],
+      inlineContext: [],
+    };
+    return { triage, contextPack, messageContent: "Read-only harness smoke" };
+  }
+
+  it("includes shared strict JSON habits in the planner user context", () => {
+    const messages = buildPlannerPrompt(harnessPlannerInput());
+    expect(messages[1].content).toContain(STRICT_JSON_OUTPUT_HABITS);
+    expect(messages[1].content).toContain("Harness B1");
+  });
+
+  it("repair prompts require a full JSON regeneration", () => {
+    const input = harnessPlannerInput();
+    const repair = buildPlannerRepairPrompt(input, "{}", "goal: Required");
+    expect(repair.at(-1)?.content).toContain("FULL JSON object");
   });
 });
 

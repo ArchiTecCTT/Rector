@@ -6,6 +6,15 @@ import { TriageResultSchema } from "./triage";
 import type { BrainstemSynthesisInput } from "./synthesizer";
 import { redactSecrets, redactString } from "../security/redaction";
 import { assemblePromptTiers, joinPromptTiers } from "./promptTiers";
+import {
+  buildStructuredRepairUserMessage,
+  harnessScenarioRoleCard,
+  inferHarnessScenarioIdFromContextPack,
+  joinStrictJsonContractSections,
+  strictJsonCardForRole,
+  STRICT_JSON_OUTPUT_HABITS,
+  type RepairPromptHints,
+} from "./strictJsonPromptCards";
 
 const MEMORY_CONTEXT_MAX_ENTRIES = 8;
 const MEMORY_CONTEXT_MAX_CHARS_PER_LINE = 200;
@@ -124,6 +133,15 @@ Hard invariants (the control plane rejects any plan that violates these):
  * request intent and the deterministic context pack. Validates `input` against `PlannerInputSchema`
  * so callers cannot construct a prompt from malformed input.
  */
+function strictJsonPromptAddendum(role: "planner" | "skeptic" | "synthesizer", contextPack: ContextPack): string {
+  const scenarioId = inferHarnessScenarioIdFromContextPack(contextPack);
+  return joinStrictJsonContractSections(
+    strictJsonCardForRole(role),
+    STRICT_JSON_OUTPUT_HABITS,
+    harnessScenarioRoleCard(scenarioId, role),
+  );
+}
+
 export function buildPlannerPrompt(input: PlannerInput): LLMMessage[] {
   const parsed = PlannerInputSchema.parse(input);
   const tiers = assemblePromptTiers({
@@ -146,22 +164,18 @@ export function buildPlannerPrompt(input: PlannerInput): LLMMessage[] {
 export function buildPlannerRepairPrompt(
   input: PlannerInput,
   priorContent: string,
-  errorSummary: string
+  errorSummary: string,
+  repairHints?: RepairPromptHints,
 ): LLMMessage[] {
   const [systemMessage, userMessage] = buildPlannerPrompt(input);
+  const hints: RepairPromptHints = { role: "planner", ...repairHints };
   return [
     systemMessage,
     userMessage,
     { role: "assistant", content: priorContent },
     {
       role: "user",
-      content: [
-        "Your previous response was rejected by the validator.",
-        `Validation error: ${errorSummary}`,
-        "",
-        "Fix every issue above and reply again with ONLY the corrected JSON object.",
-        "Do not include markdown fences, explanations, or any text outside the JSON object.",
-      ].join("\n"),
+      content: buildStructuredRepairUserMessage(errorSummary, hints),
     },
   ];
 }
@@ -194,8 +208,11 @@ function buildContextMessage(input: PlannerInput): string {
     },
   };
 
+  const strictAddendum = strictJsonPromptAddendum("planner", input.contextPack);
   return [
     "Plan the following request. Use the triage decision and context as the source of truth.",
+    "",
+    strictAddendum,
     "",
     "CONTEXT (JSON):",
     JSON.stringify(context, null, 2),
@@ -306,22 +323,22 @@ export function buildSkepticPrompt(input: SkepticPromptInput): LLMMessage[] {
 export function buildSkepticRepairPrompt(
   input: SkepticPromptInput,
   priorContent: string,
-  errorSummary: string
+  errorSummary: string,
+  repairHints?: RepairPromptHints,
 ): LLMMessage[] {
   const [systemMessage, userMessage] = buildSkepticPrompt(input);
+  const hints: RepairPromptHints = {
+    role: "skeptic",
+    allowedTaskIds: input.plannerOutput.tasks.map((task) => task.id),
+    ...repairHints,
+  };
   return [
     systemMessage,
     userMessage,
     { role: "assistant", content: priorContent },
     {
       role: "user",
-      content: [
-        "Your previous response was rejected by the validator.",
-        `Validation error: ${errorSummary}`,
-        "",
-        "Fix every issue above and reply again with ONLY the corrected JSON object.",
-        "Do not include markdown fences, explanations, or any text outside the JSON object.",
-      ].join("\n"),
+      content: buildStructuredRepairUserMessage(errorSummary, hints),
     },
   ];
 }
@@ -374,8 +391,11 @@ function buildSkepticContextMessage(input: SkepticPromptInput): string {
     },
   });
 
+  const strictAddendum = strictJsonPromptAddendum("skeptic", input.contextPack);
   return [
     "Critique the following plan. Use the plan, triage decision, and context as the source of truth.",
+    "",
+    strictAddendum,
     "",
     "PLAN AND CONTEXT (JSON):",
     JSON.stringify(payload, null, 2),
@@ -530,24 +550,18 @@ export function buildSynthesizerPrompt(input: SynthesizerPromptInput): LLMMessag
 export function buildSynthesizerRepairPrompt(
   input: SynthesizerPromptInput,
   priorContent: string,
-  errorSummary: string
+  errorSummary: string,
+  repairHints?: RepairPromptHints,
 ): LLMMessage[] {
   const [systemMessage, userMessage] = buildSynthesizerPrompt(input);
+  const hints: RepairPromptHints = { role: "synthesizer", ...repairHints };
   return [
     systemMessage,
     userMessage,
     { role: "assistant", content: priorContent },
     {
       role: "user",
-      content: [
-        "Your previous response was rejected by the validator.",
-        `Validation error: ${errorSummary}`,
-        "",
-        "Fix every issue above and reply again with ONLY the corrected JSON object.",
-        "Use these response sections: Summary, Actions, Validation, Risks, Next steps.",
-        "Cite only evidence that appears in the run state, and include at least one citation when execution or validation evidence exists.",
-        "Do not include markdown fences, explanations, or any text outside the JSON object.",
-      ].join("\n"),
+      content: buildStructuredRepairUserMessage(errorSummary, hints),
     },
   ];
 }
@@ -660,8 +674,11 @@ function buildSynthesizerContextMessage(input: SynthesizerPromptInput): string {
     decomposedResults: decomposedResults || undefined,
   });
 
+  const strictAddendum = strictJsonPromptAddendum("synthesizer", input.contextPack);
   return [
     "Write the final answer to the request below. Use the run state as the source of truth and cite your evidence.",
+    "",
+    strictAddendum,
     "",
     "RUN STATE (JSON):",
     JSON.stringify(payload, null, 2),

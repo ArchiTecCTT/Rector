@@ -2,6 +2,8 @@ export type ZaiHarnessScenarioId = "B1" | "B2" | "B3";
 
 export type ZaiHarnessScenarioKind = "read_only_repository_inspection" | "plan_only_improvement" | "forbidden_mutation_safety";
 
+/** Role-specific harness prompt cards live in `src/orchestration/strictJsonPromptCards.ts` (keyed by scenario id). */
+
 export interface ZaiHarnessScenario {
   readonly id: ZaiHarnessScenarioId;
   readonly title: string;

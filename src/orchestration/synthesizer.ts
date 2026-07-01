@@ -483,7 +483,10 @@ export async function runLiveSynthesizer(
 
     // Req 2.3/2.4: issue exactly one repair prompt on the first failure, then stop (<= 2 calls).
     if (attempt === 1) {
-      messages = buildRepairPrompt(input, response.content, validation.errorSummary);
+      messages = buildRepairPrompt(input, response.content, validation.errorSummary, {
+        role: "synthesizer",
+        issuePaths: validation.issuePaths,
+      });
     }
   }
 
@@ -493,7 +496,7 @@ export async function runLiveSynthesizer(
 
 type SynthesisDraftValidation =
   | { ok: true; draft: SynthesisDraft }
-  | { ok: false; errorSummary: string };
+  | { ok: false; errorSummary: string; issuePaths?: string[] };
 
 /**
  * Parses the model content as JSON and validates it against
@@ -515,6 +518,9 @@ function validateSynthesisDraft(content: string, evidenceExists: boolean): Synth
     return {
       ok: false,
       errorSummary: result.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; "),
+      issuePaths: Array.from(
+        new Set(result.error.issues.map((issue) => issue.path.map((segment) => String(segment)).join(".") || "(root)")),
+      ),
     };
   }
 
@@ -523,6 +529,7 @@ function validateSynthesisDraft(content: string, evidenceExists: boolean): Synth
       ok: false,
       errorSummary:
         "citations: at least one citation is required because the run carried execution or validation evidence",
+      issuePaths: ["citations"],
     };
   }
 

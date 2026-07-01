@@ -18,13 +18,18 @@ import { arbitratePlanWithCrucible } from "../src/orchestration/crucible";
 import { reviewPlanWithSkeptic } from "../src/orchestration/skeptic";
 import { triageUserMessage, type TriageResult } from "../src/orchestration/triage";
 import type { ContextPack } from "../src/orchestration/contextBuilder";
+import {
+  harnessScenarioRoleCard,
+  PLANNER_STRICT_JSON_CARD,
+  STRICT_JSON_OUTPUT_HABITS,
+} from "../src/orchestration/strictJsonPromptCards";
 
-function contextPackFor(triage: TriageResult, intent = "Test user intent"): ContextPack {
+function contextPackFor(triage: TriageResult, intent = "Test user intent", title = "Prompt test"): ContextPack {
   return {
     id: "ctx-test",
     createdAt: "2026-01-01T00:00:00.000Z",
     userIntentSummary: intent,
-    conversationRef: { id: "conv-test", title: "Prompt test", workspaceId: "local" },
+    conversationRef: { id: "conv-test", title, workspaceId: "local" },
     messageRefs: [
       { id: "msg-test", role: "user", status: "completed", createdAt: "2026-01-01T00:00:00.000Z" },
     ],
@@ -57,6 +62,8 @@ describe("planner prompt construction", () => {
     expect(messages[0].role).toBe("system");
     expect(messages[0].content).toContain(PLANNER_SYSTEM_RULES);
     expect(messages[0].content).toContain(PLANNER_JSON_CONTRACT);
+    expect(messages[1].content).toContain(PLANNER_STRICT_JSON_CARD);
+    expect(messages[1].content).toContain(STRICT_JSON_OUTPUT_HABITS);
 
     expect(messages[1].role).toBe("user");
     expect(messages[1].content).toContain("Fix the bug in src/api/server.ts");
@@ -92,7 +99,30 @@ describe("planner prompt construction", () => {
     expect(messages[2]).toEqual({ role: "assistant", content: priorContent });
     expect(messages[3].role).toBe("user");
     expect(messages[3].content).toContain(errorSummary);
-    expect(messages[3].content).toContain("ONLY the corrected JSON object");
+    expect(messages[3].content).toContain("FULL JSON object");
+    expect(messages[3].content).toContain("exactly one repair attempt");
+  });
+
+  it("includes harness B1 planner card when conversation title marks a harness scenario", () => {
+    const triage = triageUserMessage("Inspect repo read-only");
+    const input: PlannerInput = {
+      triage,
+      contextPack: contextPackFor(triage, "Inspect repo read-only", "Z.ai harness B1"),
+      messageContent: "Inspect repo read-only",
+    };
+    const messages = buildPlannerPrompt(input);
+    expect(messages[1].content).toContain(harnessScenarioRoleCard("B1", "planner")!);
+  });
+
+  it("passes schema paths and task ids into planner repair prompts when provided", () => {
+    const input = inputFor("Plan a migration");
+    const messages = buildPlannerRepairPrompt(input, '{"goal":"x"}', "tasks.0.dependencies: Invalid", {
+      role: "planner",
+      issuePaths: ["tasks.0.dependencies"],
+      allowedTaskIds: ["alpha", "beta"],
+    });
+    expect(messages[3].content).toContain("Failed schema paths: tasks.0.dependencies");
+    expect(messages[3].content).toContain("Allowed task ids for dependencies and gates: alpha, beta");
   });
 
   it("reuses the same system rules and context message in the repair prompt", () => {

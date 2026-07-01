@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ContextPackSchema, summarize, type ContextPack } from "./contextBuilder";
 import { TRIAGE_ROUTES, TriageResultSchema, type TriageResult } from "./triage";
 import { buildPlannerPrompt, buildPlannerRepairPrompt } from "./prompts";
+import { extractTaskIdsFromPlannerJson } from "./strictJsonPromptCards";
 import {
   invokeWithBudget,
   LLMUsageSchema,
@@ -673,7 +674,11 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
 
     // Req 4.2: issue exactly one repair prompt on the first failure, then stop.
     if (attempt === 1) {
-      messages = buildRepairPrompt(parsedInput, response.content, lastFailure.repairSummary);
+      messages = buildRepairPrompt(parsedInput, response.content, lastFailure.repairSummary, {
+        role: "planner",
+        issuePaths: lastFailure.issuePaths,
+        allowedTaskIds: extractTaskIdsFromPlannerJson(parsed.ok ? parsed.value : undefined),
+      });
     }
   }
 
