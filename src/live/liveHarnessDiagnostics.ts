@@ -348,21 +348,26 @@ export function buildLiveHarnessScenarioDiagnostics(input: {
   readonly configuredMaxRuntimeMs: number;
   readonly orchestrationTimeout?: boolean;
 }): LiveHarnessScenarioDiagnostics {
-  const primaryFailure = input.failures[0];
-  const bottleneckClass = classifyLiveHarnessBottleneck({
-    failureKind: primaryFailure?.kind,
-    failureMessage: primaryFailure?.message,
-    finishReason: input.lastFinishReason,
-    reasoningContentPresent: input.lastReasoningContentPresent,
-    orchestrationTimeout: input.orchestrationTimeout,
-  });
-  const firstFailingStep = inferFirstFailingOrchestrationStep(
-    `${input.eventText}\n${input.failures.map((failure) => `${failure.kind}:${failure.message}`).join("\n")}`,
-  );
+  const hasFailures = input.failures.length > 0;
+  const primaryFailure = hasFailures ? input.failures[0] : undefined;
+  const bottleneckClass = hasFailures
+    ? classifyLiveHarnessBottleneck({
+        failureKind: primaryFailure?.kind,
+        failureMessage: primaryFailure?.message,
+        finishReason: input.lastFinishReason,
+        reasoningContentPresent: input.lastReasoningContentPresent,
+        orchestrationTimeout: input.orchestrationTimeout,
+      })
+    : undefined;
+  const firstFailingStep = hasFailures
+    ? inferFirstFailingOrchestrationStep(
+        `${input.eventText}\n${input.failures.map((failure) => `${failure.kind}:${failure.message}`).join("\n")}`,
+      )
+    : undefined;
   return LiveHarnessScenarioDiagnosticsSchema.parse({
     scenarioId: input.scenarioId,
-    ...(firstFailingStep ? { firstFailingStep } : {}),
-    ...(input.failures.length > 0 ? { bottleneckClass } : {}),
+    ...(hasFailures && firstFailingStep ? { firstFailingStep } : {}),
+    ...(hasFailures && bottleneckClass ? { bottleneckClass } : {}),
     configuredMaxRuntimeMs: input.configuredMaxRuntimeMs,
     repairAttemptsByRole: countStructuredRoleAttempts(input.providerCalls),
     providerCalls: input.providerCalls.length,

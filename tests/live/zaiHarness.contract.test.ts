@@ -136,6 +136,10 @@ describe("Z.ai harness smoke runner", () => {
       const parsed = ZaiHarnessReportSchema.parse(JSON.parse(serializedRunDir));
       expect(parsed.scorecard.passed).toBe(true);
       expect(parsed.tokenUsage.total.totalTokens).toBeGreaterThanOrEqual(0);
+      for (const scenario of parsed.diagnostics.scenarios ?? []) {
+        expect(scenario.firstFailingStep).toBeUndefined();
+        expect(scenario.bottleneckClass).toBeUndefined();
+      }
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

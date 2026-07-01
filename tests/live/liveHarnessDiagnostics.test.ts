@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ProviderError } from "../../src/providers/llm";
 import {
   aggregateNumericStats,
+  buildLiveHarnessScenarioDiagnostics,
   buildZaiLiveDiagnostics,
   classifyLiveHarnessBottleneck,
   classifyLiveProviderFailure,
@@ -103,6 +104,36 @@ describe("liveHarnessDiagnostics", () => {
     expect(diagnostics.bottleneckTaxonomy.orchestration_timeout).toBe(2);
     expect(diagnostics.harnessMaxRuntimeMs).toBe(180_000);
     expect(renderZaiLiveDiagnosticsMarkdown(diagnostics)).toContain("Bottleneck taxonomy");
+  });
+
+  it("omits first failing step and bottleneck for passed scenarios even when event log mentions crucible", () => {
+    const diagnostics = buildLiveHarnessScenarioDiagnostics({
+      scenarioId: "read-only-smoke",
+      failures: [],
+      eventText: JSON.stringify([{ type: "crucible", phase: "arbitration" }, { type: "run-complete" }]),
+      providerCalls: [{ task: "planner", metadata: { structuredRole: "planner" } }],
+      configuredMaxRuntimeMs: 120_000,
+    });
+    expect(diagnostics.scenarioId).toBe("read-only-smoke");
+    expect(diagnostics.firstFailingStep).toBeUndefined();
+    expect(diagnostics.bottleneckClass).toBeUndefined();
+    expect(diagnostics.providerCalls).toBe(1);
+  });
+
+  it("classifies first failing step and bottleneck for failed scenarios", () => {
+    const diagnostics = buildLiveHarnessScenarioDiagnostics({
+      scenarioId: "timeout-case",
+      failures: [{ kind: "timeout", message: "Orchestration timeout exceeded" }],
+      eventText: JSON.stringify([{ type: "orchestration-timeout" }]),
+      providerCalls: [],
+      configuredMaxRuntimeMs: 120_000,
+      orchestrationTimeout: true,
+    });
+    expect(diagnostics).toMatchObject({
+      scenarioId: "timeout-case",
+      firstFailingStep: "orchestration",
+      bottleneckClass: "orchestration_timeout",
+    });
   });
 
   it("summarizes matrix campaign first failing step", () => {
