@@ -1,12 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { getEvidenceTrackDir, getZaiLiveEvidenceDir, SAFE_EVIDENCE_RUN_ID_PATTERN } from "../evidence";
+import {
+  getEvidenceTrackDir,
+  getZaiLiveEvidenceDir,
+  SAFE_EVIDENCE_RUN_ID_PATTERN,
+  sanitizeEvidenceStringLeaves,
+} from "../evidence";
 import type { ModelProbeReport } from "./zaiModelProbe";
 import { callableModelsFromProbeReport, runZaiModelProbe } from "./zaiModelProbe";
 import { dedupeZaiModelsPreserveOrder, parseZaiModelsList } from "./zaiModelsEnv";
 
-import { sanitizeEvidenceStringLeaves } from "../evidence/sanitize";
 import {
   gateZaiLiveEvidence,
   type GateZaiLiveEvidenceResult,
@@ -436,7 +440,6 @@ export async function runZaiModelMatrix(options: {
           probePrefilterSkipped: true,
         });
       }
-      continue;
     }
   }
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { ProviderError } from "../providers/llm";
+import { ProviderError } from "../providers";
 
 export const ZAI_LIVE_DIAGNOSTICS_SCHEMA_VERSION = "rector.zai-live-diagnostics.v1";
 
