@@ -71,10 +71,15 @@ import {
   type ZaiHarnessScenarioStatus,
 } from "./harnessScorecard";
 import {
+  buildLiveHarnessScenarioDiagnostics,
   buildZaiLiveDiagnostics,
+  classifyLiveHarnessBottleneck,
   classifyLiveProviderFailureFromError,
+  emptyBottleneckTaxonomyCounts,
   emptyFailureTaxonomyCounts,
+  incrementBottleneckTaxonomy,
   incrementFailureTaxonomy,
+  providerRawHasReasoningContent,
   renderZaiLiveDiagnosticsMarkdown,
   taxonomyFromHarnessFailureKind,
   ZaiLiveDiagnosticsSchema,
@@ -82,6 +87,10 @@ import {
   type ZaiLiveDiagnostics,
   type ZaiLiveProviderFailureTaxonomy,
 } from "./liveHarnessDiagnostics";
+import {
+  DEFAULT_LIVE_HARNESS_MAX_RUNTIME_MS,
+  resolveLiveHarnessMaxRuntimeMs,
+} from "./liveHarnessRuntime";
 import { zaiHarnessScenarios, type ZaiHarnessScenario } from "./harnessScenarios";
 
 export const REGOLO_HARNESS_REPORT_SCHEMA_VERSION = "rector.regolo-harness-smoke.v1";
@@ -257,6 +266,10 @@ interface ProviderCallRecord {
   readonly latencyMs: number;
   readonly estimatedUsage: LLMUsage;
   readonly actualUsage: LLMUsage;
+  readonly requestedMaxOutputTokens?: number;
+  readonly finishReason?: LLMResponse["finishReason"];
+  readonly reasoningContentPresent?: boolean;
+  readonly metadata?: Record<string, unknown>;
   readonly failure?: ZaiHarnessFailure;
 }
 
@@ -286,6 +299,7 @@ interface ScenarioExecutionArtifacts {
   readonly facts: readonly unknown[];
   readonly beforeManifest: SourceWorkspaceManifest;
   readonly afterManifest: SourceWorkspaceManifest;
+  readonly harnessMaxRuntimeMs: number;
 }
 
 export async function runRegoloHarnessSmoke(options: RegoloHarnessSmokeOptions = {}): Promise<RegoloHarnessReport> {
@@ -367,6 +381,7 @@ export async function runRegoloHarnessSmoke(options: RegoloHarnessSmokeOptions =
   const recordingProvider = new RecordingBudgetedProvider(selected.provider, tokenTracker);
   const router = singleProviderRouter(selected, recordingProvider);
   const runner = options.runner ?? DEFAULT_REGOLO_HARNESS_CHAT_RUNNER;
+  const harnessMaxRuntimeMs = resolveLiveHarnessMaxRuntimeMs(env);
   const executed: ScenarioExecutionArtifacts[] = [];
   const beforeEntries: WorkspaceManifestSeriesEntry[] = [];
   const afterEntries: WorkspaceManifestSeriesEntry[] = [];
@@ -382,6 +397,7 @@ export async function runRegoloHarnessSmoke(options: RegoloHarnessSmokeOptions =
       recordingProvider,
       tokenTracker,
       now,
+      harnessMaxRuntimeMs,
     });
     executed.push(scenarioResult);
     beforeEntries.push({ scenarioId: scenario.id, manifest: scenarioResult.beforeManifest });
@@ -392,7 +408,7 @@ export async function runRegoloHarnessSmoke(options: RegoloHarnessSmokeOptions =
     const remainingFailure = failure("token_budget", "Scenario was not run because the Z.ai harness campaign token budget was exhausted.");
     for (const scenario of scenarios.slice(executed.length)) {
       const manifest = await computeSourceWorkspaceManifest(repoRoot, { generatedAt });
-      const blocked = blockedScenarioExecution(scenario, generatedAt, remainingFailure, manifest);
+      const blocked = blockedScenarioExecution(scenario, generatedAt, remainingFailure, manifest, harnessMaxRuntimeMs);
       executed.push(blocked);
       beforeEntries.push({ scenarioId: scenario.id, manifest });
       afterEntries.push({ scenarioId: scenario.id, manifest });
@@ -443,6 +459,8 @@ export async function runRegoloHarnessSmoke(options: RegoloHarnessSmokeOptions =
     scorecard,
     failures: topLevelFailures,
     providerCalls: recordingProvider.providerCalls,
+    harnessMaxRuntimeMs,
+    scenarioExecutions: executed,
   });
 
   return writeHarnessReport(report, {
@@ -465,12 +483,14 @@ function blockedScenarioExecution(
   generatedAt: string,
   blockedFailure: ZaiHarnessFailure,
   manifest: SourceWorkspaceManifest,
+  harnessMaxRuntimeMs: number = DEFAULT_LIVE_HARNESS_MAX_RUNTIME_MS,
 ): ScenarioExecutionArtifacts {
   return {
     beforeManifest: manifest,
     afterManifest: manifest,
     events: [],
     facts: [],
+    harnessMaxRuntimeMs,
     report: ScenarioReportSchema.parse({
       scenarioId: scenario.id,
       title: scenario.title,
@@ -502,6 +522,7 @@ async function runScenario(input: {
   readonly recordingProvider: RecordingBudgetedProvider;
   readonly tokenTracker: HarnessTokenTracker;
   readonly now: () => Date;
+  readonly harnessMaxRuntimeMs: number;
 }): Promise<ScenarioExecutionArtifacts> {
   const startedAt = input.now().toISOString();
   const startedMs = Date.now();
@@ -526,6 +547,7 @@ async function runScenario(input: {
         manifest: beforeManifest,
         selected: input.selected,
         now: input.now,
+        harnessMaxRuntimeMs: input.harnessMaxRuntimeMs,
       });
       result = await input.runner(input.store, args, {
         router: input.router,
@@ -538,7 +560,7 @@ async function runScenario(input: {
           maxInputTokens: input.tokenTracker.remainingTokens(),
           maxOutputTokens: input.tokenTracker.remainingTokens(),
           maxModelCalls: 20,
-          maxRuntimeMs: 120_000,
+          maxRuntimeMs: input.harnessMaxRuntimeMs,
           maxHealingAttempts: 0,
           allowedProviders: [input.selected.provider.metadata.id],
           approvalRequiredAboveUsd: 0,
@@ -574,6 +596,7 @@ async function runScenario(input: {
     afterManifest,
     events,
     facts,
+    harnessMaxRuntimeMs: input.harnessMaxRuntimeMs,
     report: ScenarioReportSchema.parse({
       scenarioId: input.scenario.id,
       title: input.scenario.title,
@@ -601,6 +624,7 @@ async function buildScenarioArgs(input: {
   readonly manifest: SourceWorkspaceManifest;
   readonly selected: DiscoveredLiveProvider;
   readonly now: () => Date;
+  readonly harnessMaxRuntimeMs: number;
 }): Promise<ChatRunArgs> {
   const conversation = await input.store.createConversation({
     title: `Z.ai harness ${input.scenario.id}`,
@@ -667,7 +691,7 @@ async function buildScenarioArgs(input: {
     contextPack,
     observability: createInMemoryObservabilityTrace({ provider: input.selected.providerId }),
     options: {
-      maxRuntimeMs: 120_000,
+      maxRuntimeMs: input.harnessMaxRuntimeMs,
       maxHealingAttempts: 0,
       turnBudget: { maxIterations: 6 },
       structuredRoleOutputCaps: structuredRoleOutputCapPolicyForHarnessScenario(input.scenario),
@@ -766,6 +790,7 @@ class RecordingBudgetedProvider implements LLMProvider {
       const actualUsage = LLMUsageSchema.parse(response.usage);
       this.tokenTracker.recordActual(this.scenarioId, actualUsage);
       this.outputs.push(redactedOutput(callId, this.scenarioId, response));
+      const reasoningContentPresent = providerRawHasReasoningContent(response.raw);
       const overrun = this.tokenTracker.withinBudget()
         ? undefined
         : failure("token_budget", `Campaign token usage exceeded ${this.tokenTracker.maxTotalTokens} total tokens during scenario ${this.scenarioId}.`);
@@ -781,6 +806,10 @@ class RecordingBudgetedProvider implements LLMProvider {
         latencyMs: Math.max(0, Date.now() - started),
         estimatedUsage,
         actualUsage,
+        ...(request.maxOutputTokens !== undefined ? { requestedMaxOutputTokens: request.maxOutputTokens } : {}),
+        finishReason: response.finishReason,
+        ...(reasoningContentPresent ? { reasoningContentPresent: true } : {}),
+        ...(request.metadata ? { metadata: request.metadata } : {}),
         ...(overrun ? { failure: overrun } : {}),
       });
       return response;
@@ -1041,6 +1070,8 @@ function buildReport(input: {
   readonly scorecard: ZaiHarnessScorecard;
   readonly failures: readonly ZaiHarnessFailure[];
   readonly providerCalls?: readonly ProviderCallRecord[];
+  readonly harnessMaxRuntimeMs?: number;
+  readonly scenarioExecutions?: readonly ScenarioExecutionArtifacts[];
 }): RegoloHarnessReport {
   const passedCount = input.scenarioReports.filter((scenario) => scenario.status === "passed").length;
   const failedCount = input.scenarioReports.filter((scenario) => scenario.status === "failed").length;
@@ -1073,6 +1104,8 @@ function buildReport(input: {
       scenarioReports: input.scenarioReports,
       providerCalls: input.providerCalls,
       tokenUsage: input.tokenUsage,
+      harnessMaxRuntimeMs: input.harnessMaxRuntimeMs,
+      scenarioExecutions: input.scenarioExecutions,
     }),
     artifacts: artifactPointers(input.runId),
     failures: input.failures,
@@ -1293,8 +1326,11 @@ function buildHarnessDiagnostics(input: {
   readonly scenarioReports: readonly ZaiHarnessScenarioReport[];
   readonly providerCalls?: readonly ProviderCallRecord[];
   readonly tokenUsage: RegoloHarnessTokenUsageReport;
+  readonly harnessMaxRuntimeMs?: number;
+  readonly scenarioExecutions?: readonly ScenarioExecutionArtifacts[];
 }): ZaiLiveDiagnostics {
   const failureTaxonomy = emptyFailureTaxonomyCounts();
+  const bottleneckTaxonomy = emptyBottleneckTaxonomyCounts();
   const collectFailure = (item: ZaiHarnessFailure): void => {
     const taxonomy = (item.taxonomy as ZaiLiveProviderFailureTaxonomy | undefined)
       ?? taxonomyFromHarnessFailureKind(item.kind);
@@ -1307,8 +1343,41 @@ function buildHarnessDiagnostics(input: {
     if (call.failure) collectFailure(call.failure);
   }
 
+  const scenarioDiagnostics = (input.scenarioExecutions ?? []).map((execution) => {
+    const scenarioCalls = (input.providerCalls ?? []).filter((call) => call.scenarioId === execution.report.scenarioId);
+    const lastCall = scenarioCalls[scenarioCalls.length - 1];
+    const eventText = JSON.stringify(execution.events);
+    const orchestrationTimeout = eventText.includes("orchestration-timeout");
+    const diagnostics = buildLiveHarnessScenarioDiagnostics({
+      scenarioId: execution.report.scenarioId,
+      failures: execution.report.failures,
+      eventText,
+      providerCalls: scenarioCalls,
+      lastFinishReason: lastCall?.finishReason,
+      lastReasoningContentPresent: lastCall?.reasoningContentPresent,
+      configuredMaxRuntimeMs: execution.harnessMaxRuntimeMs,
+      orchestrationTimeout,
+    });
+    if (execution.report.failures.length > 0 && diagnostics.bottleneckClass) {
+      incrementBottleneckTaxonomy(bottleneckTaxonomy, diagnostics.bottleneckClass);
+    }
+    return diagnostics;
+  });
+
+  for (const call of input.providerCalls ?? []) {
+    if (!call.failure) continue;
+    const bottleneck = classifyLiveHarnessBottleneck({
+      failureKind: call.failure.kind,
+      failureMessage: call.failure.message,
+      finishReason: call.finishReason,
+      reasoningContentPresent: call.reasoningContentPresent,
+    });
+    incrementBottleneckTaxonomy(bottleneckTaxonomy, bottleneck);
+  }
+
   return buildZaiLiveDiagnostics({
     failureTaxonomy,
+    bottleneckTaxonomy,
     providerCallLatencyMs: (input.providerCalls ?? []).map((call) => call.latencyMs),
     scenarioDurationMs: input.scenarioReports.map((scenario) => scenario.durationMs),
     tokens: {
@@ -1318,6 +1387,8 @@ function buildHarnessDiagnostics(input: {
       modelCalls: input.tokenUsage.total.modelCalls,
       estimatedCostUsd: input.tokenUsage.total.estimatedUsd,
     },
+    ...(input.harnessMaxRuntimeMs !== undefined ? { harnessMaxRuntimeMs: input.harnessMaxRuntimeMs } : {}),
+    ...(scenarioDiagnostics.length > 0 ? { scenarios: scenarioDiagnostics } : {}),
   });
 }
 

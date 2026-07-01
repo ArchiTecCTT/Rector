@@ -4,9 +4,13 @@ import { ProviderError } from "../../src/providers/llm";
 import {
   aggregateNumericStats,
   buildZaiLiveDiagnostics,
+  classifyLiveHarnessBottleneck,
   classifyLiveProviderFailure,
   classifyLiveProviderFailureFromError,
+  providerRawHasReasoningContent,
   renderZaiLiveDiagnosticsMarkdown,
+  summarizeMatrixCampaignFailure,
+  ZAI_LIVE_DIAGNOSTICS_SCHEMA_VERSION,
 } from "../../src/live/liveHarnessDiagnostics";
 import { buildMatrixDiagnostics } from "../../src/live/zaiModelMatrix";
 
@@ -52,6 +56,62 @@ describe("liveHarnessDiagnostics", () => {
     expect(diagnostics.failureTaxonomy.rate_limit).toBe(1);
     expect(diagnostics.tokens.totalTokens).toBe(40);
     expect(renderZaiLiveDiagnosticsMarkdown(diagnostics)).toContain("Provider failure taxonomy");
+  });
+
+  it("classifies orchestration timeout separately from provider timeout", () => {
+    expect(
+      classifyLiveHarnessBottleneck({
+        failureMessage: "Orchestration timeout exceeded",
+        orchestrationTimeout: true,
+      }),
+    ).toBe("orchestration_timeout");
+    expect(
+      classifyLiveHarnessBottleneck({
+        failureKind: "timeout",
+        failureMessage: "OpenAI-Compatible request aborted",
+      }),
+    ).toBe("provider_timeout");
+    expect(
+      classifyLiveHarnessBottleneck({
+        finishReason: "length",
+        failureMessage: "JSON parse failed",
+      }),
+    ).toBe("truncated_json");
+  });
+
+  it("detects reasoning content metadata without returning raw text", () => {
+    const raw = {
+      choices: [{ message: { content: "{}", reasoning_content: "hidden chain" }, finish_reason: "stop" }],
+    };
+    expect(providerRawHasReasoningContent(raw)).toBe(true);
+    expect(providerRawHasReasoningContent({ choices: [{ message: { content: "{}" } }] })).toBe(false);
+  });
+
+  it("includes bottleneck taxonomy in diagnostics v2", () => {
+    const diagnostics = buildZaiLiveDiagnostics({
+      bottleneckTaxonomy: { orchestration_timeout: 2 },
+      tokens: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        modelCalls: 0,
+        estimatedCostUsd: 0,
+      },
+      harnessMaxRuntimeMs: 180_000,
+    });
+    expect(diagnostics.schemaVersion).toBe(ZAI_LIVE_DIAGNOSTICS_SCHEMA_VERSION);
+    expect(diagnostics.bottleneckTaxonomy.orchestration_timeout).toBe(2);
+    expect(diagnostics.harnessMaxRuntimeMs).toBe(180_000);
+    expect(renderZaiLiveDiagnosticsMarkdown(diagnostics)).toContain("Bottleneck taxonomy");
+  });
+
+  it("summarizes matrix campaign first failing step", () => {
+    expect(
+      summarizeMatrixCampaignFailure({
+        steps: [{ stepId: "eval:facts:live", exitCode: 0 }, { stepId: "test:live:zai:harness", exitCode: 1 }],
+        campaignFailed: true,
+      }),
+    ).toMatchObject({ firstFailingStep: "test:live:zai:harness", bottleneckClass: "unknown" });
   });
 
   it("aggregates matrix campaign and step durations", () => {

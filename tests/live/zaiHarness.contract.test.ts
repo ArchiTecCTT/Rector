@@ -102,6 +102,7 @@ describe("Z.ai harness smoke runner", () => {
         host: "api.z.ai",
       });
       expect(calls).toHaveLength(1);
+      expect(calls[0].args.options?.maxRuntimeMs).toBe(120_000);
       expect(calls[0].deps.sandboxConfigured).toBe(false);
       expect(calls[0].deps.router.select({ capability: "cheap" }).provider.metadata.id).toBe(provider.metadata.id);
 
@@ -234,6 +235,33 @@ describe("Z.ai harness smoke runner", () => {
 
   it("keeps the default harness runner wired to runOrchestratedChatRun", () => {
     expect(DEFAULT_ZAI_HARNESS_CHAT_RUNNER).toBe(runOrchestratedChatRun);
+  });
+
+  it("applies RECTOR_LIVE_HARNESS_MAX_RUNTIME_MS to chat run options and diagnostics", async () => {
+    const workspace = await tempWorkspace();
+    const calls: Array<{ args: ChatRunArgs }> = [];
+    try {
+      const report = await runZaiHarnessSmoke({
+        repoRoot: workspace,
+        runId: RUN_ID,
+        env: {
+          LIVE_HARNESS_EVALS: "1",
+          RECTOR_LIVE_PROVIDER: "zai",
+          RECTOR_LIVE_HARNESS_MAX_RUNTIME_MS: "240000",
+        },
+        now: fixedNow,
+        scenarios: [zaiHarnessScenarios()[0]],
+        providerDiscovery: async () => ({ selected: discovered(new HarnessProvider()), rejections: [] }),
+        runner: async (store, args, deps) => {
+          calls.push({ args });
+          return createMinimalRunResult(store, args, deps);
+        },
+      });
+      expect(calls[0]?.args.options?.maxRuntimeMs).toBe(240_000);
+      expect(report.diagnostics.harnessMaxRuntimeMs).toBe(240_000);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   it("classifies provider rate limits with diagnostics taxonomy metadata", async () => {

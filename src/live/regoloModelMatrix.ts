@@ -37,7 +37,9 @@ import { RegoloHarnessReportSchema } from "./regoloHarnessReport";
 import {
   buildZaiLiveDiagnostics,
   renderZaiLiveDiagnosticsMarkdown,
+  summarizeMatrixCampaignFailure,
   ZaiLiveDiagnosticsSchema,
+  type LiveHarnessBottleneckClass,
   type ZaiLiveDiagnostics,
 } from "./liveHarnessDiagnostics";
 
@@ -130,6 +132,8 @@ export interface RegoloMatrixCampaignResult {
   readonly snapshotCopiedAt?: string;
   readonly snapshotEffectiveModelId: string;
   readonly probePrefilterSkipped?: boolean;
+  readonly firstFailingStep?: string;
+  readonly bottleneckClass?: LiveHarnessBottleneckClass;
 }
 
 export interface RegoloMatrixProbePrefilterSummary {
@@ -477,6 +481,12 @@ export async function runRegoloModelMatrix(options: {
         gateSummary: gateResult?.summary,
         scorecardPassed,
       });
+      const failureSummary = summarizeMatrixCampaignFailure({
+        steps,
+        campaignFailed,
+        gateOk: gateResult?.ok,
+        gateStepId: "evidence:regolo-live:gate",
+      });
 
       const rawSnapshot = options.snapshotCampaignEvidence
         ? await snapshotCampaignEvidence({ repoRoot, safeModelId, runIndex, modelId })
@@ -501,6 +511,8 @@ export async function runRegoloModelMatrix(options: {
         snapshotHealth: snapshot.snapshotHealth,
         snapshotEffectiveModelId: snapshot.snapshotEffectiveModelId,
         ...(snapshot.snapshotCopiedAt ? { snapshotCopiedAt: snapshot.snapshotCopiedAt } : {}),
+        ...(failureSummary.firstFailingStep ? { firstFailingStep: failureSummary.firstFailingStep } : {}),
+        ...(failureSummary.bottleneckClass ? { bottleneckClass: failureSummary.bottleneckClass } : {}),
       });
 
       if (campaignFailed && !config.continueOnFailure) {
@@ -582,15 +594,15 @@ export function formatRegoloMatrixSummaryMarkdown(summary: RegoloMatrixSummary):
   lines.push("");
   lines.push("## Campaigns");
   lines.push("");
-  lines.push("| Model | Run | Status | Grade | Rating | Duration (ms) | Scenarios | Tokens |");
-  lines.push("| --- | ---: | --- | --- | --- | ---: | --- | ---: |");
+  lines.push("| Model | Run | Status | Grade | Rating | Duration (ms) | Scenarios | Tokens | First fail | Bottleneck |");
+  lines.push("| --- | ---: | --- | --- | --- | ---: | --- | ---: | --- | --- |");
   for (const campaign of summary.campaigns) {
     const scenarios = campaign.gate
       ? `${campaign.gate.scenariosPassed}/${campaign.gate.scenariosTotal}`
       : "n/a";
     const tokens = campaign.gate?.campaignTokens?.toLocaleString() ?? "n/a";
     lines.push(
-      `| ${campaign.modelId} | ${campaign.runIndex + 1} | ${campaign.status} | ${campaign.grade} | ${campaign.rating} | ${campaign.durationMs} | ${scenarios} | ${tokens} |`,
+      `| ${campaign.modelId} | ${campaign.runIndex + 1} | ${campaign.status} | ${campaign.grade} | ${campaign.rating} | ${campaign.durationMs} | ${scenarios} | ${tokens} | ${campaign.firstFailingStep ?? "n/a"} | ${campaign.bottleneckClass ?? "n/a"} |`,
     );
   }
   lines.push("");
