@@ -38,6 +38,7 @@
     "build": "tsc && node scripts/fix-dist-esm-imports.js",
     "check": "tsc --noEmit",
     "audit:no-fakes": "tsx scripts/audit/no-production-fakes.ts",
+    "audit:no-fakes:check": "tsx scripts/audit/no-production-fakes.ts --fail-on-unallowed",
     "eval:capabilities": "tsx scripts/evals/run-capability-evals.ts",
     "eval:capabilities:gate": "tsx scripts/evals/run-capability-evals.ts --gate",
     "eval:capabilities:report": "tsx scripts/evals/run-capability-evals.ts && cat .rector/evidence/capabilities/eval-report.md",

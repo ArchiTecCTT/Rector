@@ -918,7 +918,7 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 - **Label:** PARTIALLY HARDENED — `npm run audit:no-fakes` now reports total findings, allowlisted findings, and unallowed findings. The current Z.ai hardening wave removed product `simulator.echo` registration, stopped `workspace.validate` from returning synthetic `passed: true`, prevented configured routers from registering/selecting `FakeLLMProvider` as fallback, and stopped live/deep planner paths from manufacturing deterministic plans as product success.
 - **Current status:** 22 remaining findings are explicitly allowlisted with reasons (test/development provider class, explicit deterministic planner compatibility hook, legacy executor-simulator compatibility/type seams). `unallowedFindingCount` is 0; global harness fake-path status is based on unallowed findings, not total historical seams.
 - **Residual risk:** The allowlisted seams remain source-visible until the Phase 3 / fake-purge workstream extracts test doubles and simulator types out of production modules. They are not acceptable live-provider evidence and must not be used for configured product claims.
-- **Gate policy:** Audit remains report-only until the planned Phase 13 gate, but any new unallowlisted finding is actionable before PR.
+- **Gate policy:** `npm run audit:no-fakes` remains report-only (exit 0) for compatibility; `npm run audit:no-fakes:check` adds `--fail-on-unallowed` strict mode (AST-backed detectors + exact-path allowlist) and exits nonzero on new unallowed seams. Default CI still uses report-only until Phase 13; strict mode is for pre-merge / hardening verification.
 
 ### gitignore negation carve-out for tracked benchmark mirror
 

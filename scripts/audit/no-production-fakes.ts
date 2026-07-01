@@ -3,6 +3,14 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  astDetector,
+  findIdentifierMatches,
+  findImportModuleMatches,
+  findPropertyAccessMatches,
+  findStringLiteralMatches,
+  withRegexFallback,
+} from "./no-production-fakes-ast";
 
 export const NO_PRODUCTION_FAKE_RULE_IDS = [
   "fake_chat_or_tests_support_import",
@@ -27,7 +35,7 @@ export type NoProductionFakeFinding = {
   readonly allowlistReason?: string;
 };
 
-type NoProductionFakeAllowlistEntry = {
+export type NoProductionFakeAllowlistEntry = {
   readonly ruleId: NoProductionFakeRuleId;
   readonly path: string;
   readonly reason: string;
@@ -39,7 +47,8 @@ export type NoProductionFakesAuditReport = {
   readonly findingCount: number;
   readonly allowedFindingCount: number;
   readonly unallowedFindingCount: number;
-  readonly exitCode: 0;
+  readonly failOnUnallowed: boolean;
+  readonly exitCode: 0 | 1;
   readonly findings: readonly NoProductionFakeFinding[];
   readonly unallowedFindings: readonly NoProductionFakeFinding[];
 };
@@ -48,6 +57,7 @@ export type NoProductionFakesAuditOptions = {
   readonly repoRoot?: string;
   readonly sourceDir?: string;
   readonly scanRoot?: string;
+  readonly failOnUnallowed?: boolean;
 };
 
 type SourceFile = {
@@ -64,14 +74,14 @@ type RuleMatch = {
 type AuditRule = {
   readonly id: NoProductionFakeRuleId;
   readonly message: string;
-  readonly detector: (content: string) => readonly RuleMatch[];
+  readonly detector: (content: string, fileName: string) => readonly RuleMatch[];
 };
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(SCRIPT_PATH), "../..");
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"] as const;
 
-const NO_PRODUCTION_FAKE_ALLOWLIST: readonly NoProductionFakeAllowlistEntry[] = [
+export const NO_PRODUCTION_FAKE_ALLOWLIST: readonly NoProductionFakeAllowlistEntry[] = [
   { ruleId: "fake_llm_provider", path: "src/providers/llm.ts", reason: "Test/development provider class and local-mode compatibility only; configured routers no longer register it as fallback." },
   { ruleId: "fake_llm_provider", path: "src/bin/server.ts", reason: "Documentation-only reference in boot comments; not runtime selection." },
   { ruleId: "fake_planner_output", path: "src/orchestration/planner.ts", reason: "Deterministic planner helper retained for tests and explicit compatibility flag; product blockers no longer attach it by default." },
@@ -89,22 +99,40 @@ const AUDIT_RULES: readonly AuditRule[] = [
   {
     id: "fake_chat_or_tests_support_import",
     message: "src must not import tests/support fixtures or runFakeChatRun",
-    detector: regexDetector(/\b(?:import|export)\b[^\n;]*["'][^"']*tests\/support[^"']*["']|\brunFakeChatRun\b/g),
+    detector: withRegexFallback(
+      astDetector((sourceFile) => [
+        ...findImportModuleMatches(sourceFile, ["tests/support"]),
+        ...findIdentifierMatches(sourceFile, ["runFakeChatRun"]),
+      ]),
+      /\b(?:import|export)\b[^\n;]*["'][^"']*tests\/support[^"']*["']|\brunFakeChatRun\b/g,
+    ),
   },
   {
     id: "executor_simulator_import",
     message: "non-test src must not import executorSimulator outside simulation adapters",
-    detector: regexDetector(/\bfrom\s+["'][^"']*executorSimulator["']|\bimport\s*\([^)]*["'][^"']*executorSimulator["'][^)]*\)/g),
+    detector: withRegexFallback(
+      astDetector((sourceFile) => findImportModuleMatches(sourceFile, ["executorSimulator"])),
+      /\bfrom\s+["'][^"']*executorSimulator["']|\bimport\s*\([^)]*["'][^"']*executorSimulator["'][^)]*\)/g,
+    ),
   },
   {
     id: "fake_llm_provider",
     message: "product code must not select FakeLLMProvider under configured profile",
-    detector: regexDetector(/\bFakeLLMProvider\b/g),
+    detector: withRegexFallback(
+      astDetector((sourceFile) => findIdentifierMatches(sourceFile, ["FakeLLMProvider"])),
+      /\bFakeLLMProvider\b/g,
+    ),
   },
   {
     id: "simulator_echo_registration",
     message: "simulator.echo must not be registered outside test or dev registration",
-    detector: regexDetector(/\bsimulator\.echo\b/g),
+    detector: withRegexFallback(
+      astDetector((sourceFile) => [
+        ...findPropertyAccessMatches(sourceFile, "simulator.echo"),
+        ...findStringLiteralMatches(sourceFile, "simulator.echo"),
+      ]),
+      /\bsimulator\.echo\b/g,
+    ),
   },
   {
     id: "workspace_validate_passed_true",
@@ -114,11 +142,38 @@ const AUDIT_RULES: readonly AuditRule[] = [
   {
     id: "fake_planner_output",
     message: "executable fake planner output must not satisfy product planner contracts",
-    detector: regexDetector(/\b(?:createFakePlan|fallbackPlan)\b/g),
+    detector: withRegexFallback(
+      astDetector((sourceFile) => findIdentifierMatches(sourceFile, ["createFakePlan", "fallbackPlan"])),
+      /\b(?:createFakePlan|fallbackPlan)\b/g,
+    ),
   },
 ] as const;
 
+export function validateNoProductionFakeAllowlist(entries: readonly NoProductionFakeAllowlistEntry[] = NO_PRODUCTION_FAKE_ALLOWLIST): readonly string[] {
+  const violations: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (!NO_PRODUCTION_FAKE_RULE_IDS.includes(entry.ruleId)) {
+      violations.push(`allowlist entry uses unknown ruleId ${entry.ruleId} for ${entry.path}`);
+    }
+    if (entry.path.includes("*") || entry.path.endsWith("/") || entry.path === "src") {
+      violations.push(`allowlist entry must be an exact file path, not a directory or glob: ${entry.path}`);
+    }
+    const key = `${entry.ruleId}::${entry.path}`;
+    if (seen.has(key)) {
+      violations.push(`duplicate allowlist entry for ${key}`);
+    }
+    seen.add(key);
+  }
+  return violations;
+}
+
+export function resolveAllowlistEntry(finding: Pick<NoProductionFakeFinding, "ruleId" | "path">): NoProductionFakeAllowlistEntry | undefined {
+  return NO_PRODUCTION_FAKE_ALLOWLIST.find((entry) => entry.ruleId === finding.ruleId && entry.path === finding.path);
+}
+
 export async function auditNoProductionFakes(options: NoProductionFakesAuditOptions = {}): Promise<NoProductionFakesAuditReport> {
+  const failOnUnallowed = options.failOnUnallowed ?? false;
   const repoRoot = path.resolve(options.repoRoot ?? REPO_ROOT);
   const sourceDir = options.scanRoot !== undefined
     ? path.resolve(options.scanRoot)
@@ -126,27 +181,32 @@ export async function auditNoProductionFakes(options: NoProductionFakesAuditOpti
   const files = await readSourceFiles(repoRoot, sourceDir);
   const findings = files.flatMap(scanFile).sort(compareFindings);
   const unallowedFindings = findings.filter((finding) => !finding.allowed);
+  const exitCode = failOnUnallowed && unallowedFindings.length > 0 ? 1 : 0;
   return {
     scanRoot: normalizePath(path.relative(repoRoot, sourceDir) || "."),
     scannedFileCount: files.length,
     findingCount: findings.length,
     allowedFindingCount: findings.length - unallowedFindings.length,
     unallowedFindingCount: unallowedFindings.length,
-    exitCode: 0,
+    failOnUnallowed,
+    exitCode,
     findings,
     unallowedFindings,
   };
 }
 
 export function formatAuditReport(report: NoProductionFakesAuditReport): string {
+  const mode = report.failOnUnallowed ? "strict" : "report-only";
   const lines = [
-    "Rector no-production-fakes audit (report-only)",
+    `Rector no-production-fakes audit (${mode})`,
     `Scan root: ${report.scanRoot}`,
     `Scanned files: ${report.scannedFileCount}`,
     `Findings: ${report.findingCount}`,
     `Allowed findings: ${report.allowedFindingCount}`,
     `Unallowed findings: ${report.unallowedFindingCount}`,
-    "Policy: exits 0 while fake-system seams are report-only; unallowed findings are actionable and must be fixed or explicitly justified.",
+    report.failOnUnallowed
+      ? "Policy: exits nonzero when unallowed findings remain; allowlisted seams stay visible in the report."
+      : "Policy: exits 0 while fake-system seams are report-only; unallowed findings are actionable and must be fixed or explicitly justified.",
   ];
   for (const finding of report.findings) {
     const status = finding.allowed ? "allowed" : "unallowed";
@@ -158,16 +218,11 @@ export function formatAuditReport(report: NoProductionFakesAuditReport): string 
   return `${lines.join("\n")}\n`;
 }
 
-function regexDetector(pattern: RegExp): (content: string) => readonly RuleMatch[] {
-  return (content) => {
-    const detectorPattern = new RegExp(pattern.source, pattern.flags);
-    return [...content.matchAll(detectorPattern)].map((match) => ({ index: match.index, evidence: match[0] }));
-  };
-}
-
-function workspaceValidatePassedTrueDetector(content: string): readonly RuleMatch[] {
-  if (!content.includes("workspace.validate")) return [];
-  return [...content.matchAll(/\bpassed\s*:\s*true\b/g)].map((match) => ({ index: match.index, evidence: match[0] }));
+function workspaceValidatePassedTrueDetector(content: string, _fileName: string): readonly RuleMatch[] {
+  if (!content.includes("workspace.validate")) {
+    return [];
+  }
+  return [...content.matchAll(/\bpassed\s*:\s*true\b/g)].map((match) => ({ index: match.index ?? 0, evidence: match[0] }));
 }
 
 async function readSourceFiles(repoRoot: string, sourceDir: string): Promise<readonly SourceFile[]> {
@@ -200,7 +255,7 @@ async function collectSourceFilePaths(dir: string): Promise<string[]> {
 
 function scanFile(file: SourceFile): readonly NoProductionFakeFinding[] {
   return AUDIT_RULES.flatMap((rule) =>
-    rule.detector(file.content).map((match) => {
+    rule.detector(file.content, file.relativePath).map((match) => {
       const location = locationForIndex(file.content, match.index);
       const baseFinding = {
         ruleId: rule.id,
@@ -211,7 +266,7 @@ function scanFile(file: SourceFile): readonly NoProductionFakeFinding[] {
         evidence: compactEvidence(match.evidence),
         message: rule.message,
       };
-      const allowlist = allowlistEntryFor(baseFinding);
+      const allowlist = resolveAllowlistEntry(baseFinding);
       return {
         ...baseFinding,
         allowed: allowlist !== undefined,
@@ -219,10 +274,6 @@ function scanFile(file: SourceFile): readonly NoProductionFakeFinding[] {
       } satisfies NoProductionFakeFinding;
     }),
   );
-}
-
-function allowlistEntryFor(finding: Pick<NoProductionFakeFinding, "ruleId" | "path">): NoProductionFakeAllowlistEntry | undefined {
-  return NO_PRODUCTION_FAKE_ALLOWLIST.find((entry) => entry.ruleId === finding.ruleId && entry.path === finding.path);
 }
 
 function locationForIndex(content: string, index: number): { readonly line: number; readonly column: number } {
@@ -265,8 +316,22 @@ async function runCli(): Promise<void> {
 }
 
 function optionsFromArgv(argv: readonly string[]): NoProductionFakesAuditOptions {
-  const scanRoot = argv[2];
-  return scanRoot === undefined ? {} : { scanRoot };
+  const args = argv.slice(2);
+  let failOnUnallowed = false;
+  let scanRoot: string | undefined;
+  for (const arg of args) {
+    if (arg === "--fail-on-unallowed") {
+      failOnUnallowed = true;
+      continue;
+    }
+    if (!arg.startsWith("-")) {
+      scanRoot = arg;
+    }
+  }
+  return {
+    ...(scanRoot === undefined ? {} : { scanRoot }),
+    failOnUnallowed,
+  };
 }
 
 if (isDirectRun()) {
