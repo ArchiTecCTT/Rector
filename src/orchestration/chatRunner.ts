@@ -22,6 +22,7 @@ import { rememberStableTierHashForRun, clearStableTierHashForRun, assemblePrompt
 export { DEFAULT_EXTERNAL_BUDGET, ProviderCallMetadataSchema, phaseObservabilityPayload, runEvent } from "./externalRunSupport";
 export type { ProviderCallMetadata } from "./externalRunSupport";
 import { runLivePlanner, type LivePlannerResult, type PlannerBlocker, type PlannerOutput } from "./planner";
+import type { StructuredRoleOutputCapPolicy } from "./structuredRoleOutputCaps";
 import { clearRunControl, createAbortSignal, registerRunControl, type RunControlState } from "./runControl";
 import { createDecisionRequest, transitionRun } from "./runStateMachine";
 import { reviewPlanWithSkeptic, runLiveSkeptic, type SkepticBlocker, type SkepticReview } from "./skeptic";
@@ -78,6 +79,11 @@ export interface ChatRunOptions {
   deepPlanning?: boolean;
   /** Maximum wall-clock time for the orchestrated run in milliseconds. Defaults to {@link DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS}. */
   maxRuntimeMs?: number;
+  /**
+   * Opt-in caps for structured JSON roles (planner/skeptic/synthesizer/repair). Live harness sets
+   * this; normal product chat omits it so provider defaults stay conservative.
+   */
+  structuredRoleOutputCaps?: StructuredRoleOutputCapPolicy;
 }
 
 /** Inputs to a single chat run, gathered by the chat endpoint before dispatch. */
@@ -328,6 +334,7 @@ async function runOrchestratedChatRunInner(
 ): Promise<ChatRunResult> {
   const { conversationId, userMessageId, prompt, triage, contextPack, observability } = args;
   const options = args.options ?? {};
+  const structuredRoleOutputCaps = options.structuredRoleOutputCaps;
   const traceId = observability.traceId;
   const budget = deps.budget ?? DEFAULT_EXTERNAL_BUDGET;
 
@@ -499,6 +506,7 @@ async function runOrchestratedChatRunInner(
           flags: neuroFlags,
           recordSpan: (name, fn) => observability.recordSpan(name, fn),
           abortSignal,
+          structuredRoleOutputCaps,
         },
         planningPrep,
       )
@@ -515,6 +523,7 @@ async function runOrchestratedChatRunInner(
             run: budgetRun,
             model: selection.model,
             abortSignal,
+            structuredRoleOutputCaps,
           },
         );
       });
@@ -562,7 +571,13 @@ async function runOrchestratedChatRunInner(
     const skepticResult = await observability.recordSpan("SKEPTIC_REVIEW", () =>
       runLiveSkeptic(
         { plannerOutput, contextPack: activeContextPack, triage },
-        { provider: skepticSelection.provider, run: costedRun, model: skepticSelection.model, abortSignal },
+        {
+          provider: skepticSelection.provider,
+          run: costedRun,
+          model: skepticSelection.model,
+          abortSignal,
+          structuredRoleOutputCaps,
+        },
       )
     );
     skepticProviderCall = buildProviderCallMetadata(

@@ -2,6 +2,7 @@ import type { PlannerInput, PlannerOutput, LivePlannerResult, PlannerRiskLevel }
 import { validatePlannerOutput } from "./planner";
 import type { LLMProvider } from "../providers/llm";
 import type { Run } from "../store";
+import type { StructuredRoleOutputCapPolicy } from "./structuredRoleOutputCaps";
 import { DEFAULT_PREPROCESSOR_RULES } from "../symbolic/defaultRules";
 import { getSymbolicEngine } from "../symbolic";
 import { redactString } from "../security/redaction";
@@ -73,7 +74,13 @@ interface ScoredCandidate extends DeepPlanCandidate {
  */
 export async function runDeepPlanner(
   input: PlannerInput & { deepPlanning?: boolean },
-  deps: { provider: LLMProvider; run: Run; model?: string; abortSignal?: AbortSignal }
+  deps: {
+    provider: LLMProvider;
+    run: Run;
+    model?: string;
+    abortSignal?: AbortSignal;
+    structuredRoleOutputCaps?: StructuredRoleOutputCapPolicy;
+  }
 ): Promise<LivePlannerResult> {
   const { runLivePlanner } = await import("./planner");
 

@@ -21,6 +21,11 @@ import {
 import { enforceMaxPerRunBudget, evaluateBudget, type BudgetUsage } from "../security/budget";
 import { redactString } from "../security/redaction";
 import type { Run } from "../store";
+import {
+  applyStructuredRoleMaxOutputTokens,
+  type StructuredJsonRole,
+  type StructuredRoleOutputCapPolicy,
+} from "./structuredRoleOutputCaps";
 
 export type BrainstemSynthesisStatus = HealingLoopStatus | "SKIPPED" | "BLOCKED";
 
@@ -280,6 +285,8 @@ export interface LiveSynthesizerDeps {
   abortSignal?: AbortSignal;
   buildPrompt?: typeof buildSynthesizerPrompt;
   buildRepairPrompt?: typeof buildSynthesizerRepairPrompt;
+  /** Opt-in structured-role output caps (live harness); omitted in normal product chat. */
+  structuredRoleOutputCaps?: StructuredRoleOutputCapPolicy;
 }
 
 const ZERO_SYNTHESIS_USAGE: LLMUsage = LLMUsageSchema.parse({
@@ -432,6 +439,7 @@ export async function runLiveSynthesizer(
   const evidenceExists = hasExecutionOrValidationEvidence(input);
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const structuredRole: StructuredJsonRole = attempt === 1 ? "synthesizer" : "repair";
     // Req 2.1 (json_object) + Req 6.2 (budget preflight before EVERY call, incl. the repair call).
     const request: LLMRequest = {
       messages,
@@ -439,6 +447,7 @@ export async function runLiveSynthesizer(
       ...(deps.model ? { model: deps.model } : {}),
       responseFormat: { type: "json_object" },
       task: "synthesizer",
+      ...applyStructuredRoleMaxOutputTokens(structuredRole, deps.structuredRoleOutputCaps, run),
     };
 
     const estimate = provider.estimateRequest(request);

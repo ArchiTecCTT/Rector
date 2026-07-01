@@ -14,6 +14,11 @@ import {
 import { enforceMaxPerRunBudget, evaluateBudget, type BudgetUsage } from "../security/budget";
 import { redactSecrets, redactString } from "../security/redaction";
 import type { Run } from "../store";
+import {
+  applyStructuredRoleMaxOutputTokens,
+  type StructuredJsonRole,
+  type StructuredRoleOutputCapPolicy,
+} from "./structuredRoleOutputCaps";
 
 export const PlannerRiskLevelSchema = z.enum(["low", "medium", "high", "destructive"]);
 export type PlannerRiskLevel = z.infer<typeof PlannerRiskLevelSchema>;
@@ -557,6 +562,8 @@ export interface LivePlannerDeps {
   buildRepairPrompt?: typeof buildPlannerRepairPrompt;
   /** Test-only compatibility hook for callers that explicitly want a deterministic fallback plan on blockers. */
   includeDeterministicFallback?: boolean;
+  /** Opt-in structured-role output caps (live harness); omitted in normal product chat. */
+  structuredRoleOutputCaps?: StructuredRoleOutputCapPolicy;
 }
 
 const ZERO_USAGE: LLMUsage = LLMUsageSchema.parse({
@@ -591,6 +598,7 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
   let lastFailure: ValidationFailure = { repairSummary: "Planner output was not produced", issuePaths: [] };
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const structuredRole: StructuredJsonRole = attempt === 1 ? "planner" : "repair";
     // Req 4.10: request a JSON object response format from the provider.
     const request: LLMRequest = {
       messages,
@@ -598,6 +606,7 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
       ...(deps.model ? { model: deps.model } : {}),
       responseFormat: { type: "json_object" },
       task: "planner",
+      ...applyStructuredRoleMaxOutputTokens(structuredRole, deps.structuredRoleOutputCaps, run),
     };
 
     // Req 4.5 / 4.7 / 4.8: budget preflight BEFORE any provider.invoke.

@@ -23,6 +23,11 @@ import {
   type ChatRunResult,
 } from "../orchestration/chatRunner";
 import {
+  STRUCTURED_JSON_ROLES,
+  resolveStructuredRoleMaxOutputTokens,
+  structuredRoleOutputCapPolicyForHarnessScenario,
+} from "../orchestration/structuredRoleOutputCaps";
+import {
   LLMUsageSchema,
   ProviderError,
   type LLMInvokeOptions,
@@ -665,6 +670,7 @@ async function buildScenarioArgs(input: {
       maxRuntimeMs: 120_000,
       maxHealingAttempts: 0,
       turnBudget: { maxIterations: 6 },
+      structuredRoleOutputCaps: structuredRoleOutputCapPolicyForHarnessScenario(input.scenario),
     },
   };
 }
@@ -849,19 +855,28 @@ class HarnessTokenTracker {
 }
 
 function estimateScenarioPreflight(selected: DiscoveredLiveProvider, scenario: ZaiHarnessScenario): LLMUsage {
-  return selected.provider.estimateRequest({
-    task: `regolo-harness-smoke:${scenario.id}:preflight`,
-    route: "HARNESS_PREFLIGHT",
-    modelRoute: selected.route,
-    model: selected.modelId,
-    maxOutputTokens: scenario.maxOutputTokens,
-    temperature: 0,
-    messages: [
-      { role: "system", content: "Estimate this non-mutating Rector harness smoke prompt." },
-      { role: "user", content: scenario.prompt },
-    ],
-    metadata: { scenarioId: scenario.id, nonMutating: true },
-  });
+  const structuredRoleOutputCaps = structuredRoleOutputCapPolicyForHarnessScenario(scenario);
+  const baseMessages: LLMRequest["messages"] = [
+    { role: "system", content: "Estimate this non-mutating Rector harness smoke prompt." },
+    { role: "user", content: scenario.prompt },
+  ];
+  let total = ZERO_USAGE;
+  for (const role of STRUCTURED_JSON_ROLES) {
+    if (role === "repair") continue;
+    const maxOutputTokens = resolveStructuredRoleMaxOutputTokens(role, structuredRoleOutputCaps);
+    const estimate = selected.provider.estimateRequest({
+      task: `regolo-harness-smoke:${scenario.id}:preflight:${role}`,
+      route: "HARNESS_PREFLIGHT",
+      modelRoute: selected.route,
+      model: selected.modelId,
+      maxOutputTokens,
+      temperature: 0,
+      messages: baseMessages,
+      metadata: { scenarioId: scenario.id, nonMutating: true, structuredRole: role },
+    });
+    total = addUsage(total, estimate);
+  }
+  return total;
 }
 
 function classifyRunResultFailures(
