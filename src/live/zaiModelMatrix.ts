@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { getZaiLiveEvidenceDir, SAFE_EVIDENCE_RUN_ID_PATTERN } from "../evidence";
+import { getEvidenceTrackDir, getZaiLiveEvidenceDir, SAFE_EVIDENCE_RUN_ID_PATTERN } from "../evidence";
+import type { ModelProbeReport } from "./zaiModelProbe";
+import { callableModelsFromProbeReport, runZaiModelProbe } from "./zaiModelProbe";
+import { dedupeZaiModelsPreserveOrder, parseZaiModelsList } from "./zaiModelsEnv";
+
 import { sanitizeEvidenceStringLeaves } from "../evidence/sanitize";
 import {
   gateZaiLiveEvidence,
@@ -64,6 +68,8 @@ export interface ZaiMatrixConfig {
   readonly maxModels?: number;
   readonly skipOffline: boolean;
   readonly continueOnFailure: boolean;
+  readonly prefilterWithProbe: boolean;
+  readonly probeJsonCapability: boolean;
 }
 
 export interface ZaiMatrixStepLogEntry {
@@ -75,23 +81,34 @@ export interface ZaiMatrixStepLogEntry {
   readonly stderrTail?: string;
 }
 
+export interface ZaiMatrixCampaignReportPointers {
+  readonly latestJson: string;
+  readonly latestMd: string;
+  readonly providerSmokeJson: string;
+  readonly phase2ShadowJson: string;
+}
+
 export interface ZaiMatrixCampaignResult {
   readonly modelId: string;
   readonly safeModelId: string;
   readonly runIndex: number;
-  readonly status: "pass" | "fail";
+  readonly status: "pass" | "fail" | "skipped_probe";
   readonly durationMs: number;
   readonly steps: readonly ZaiMatrixStepLogEntry[];
   readonly gate?: GateZaiLiveEvidenceSummary;
   readonly gateViolations?: readonly string[];
   readonly grade: ZaiMatrixGrade;
   readonly rating: string;
-  readonly reportPointers: {
-    readonly latestJson: string;
-    readonly latestMd: string;
-    readonly providerSmokeJson: string;
-    readonly phase2ShadowJson: string;
-  };
+  readonly evidenceSnapshotDir: string;
+  readonly reportPointers: ZaiMatrixCampaignReportPointers;
+  readonly probePrefilterSkipped?: boolean;
+}
+
+export interface ZaiMatrixProbePrefilterSummary {
+  readonly enabled: boolean;
+  readonly modelsSkipped: readonly string[];
+  readonly probeReportPath: string;
+  readonly rows: ModelProbeReport["rows"];
 }
 
 export interface ZaiMatrixSummary {
@@ -106,31 +123,69 @@ export interface ZaiMatrixSummary {
   readonly overallStatus: "pass" | "fail" | "partial";
   readonly passedCount: number;
   readonly failedCount: number;
+  readonly skippedProbeCount: number;
+  readonly probePrefilter?: ZaiMatrixProbePrefilterSummary;
 }
 
 export function getZaiLiveMatrixEvidenceDir(repoRoot?: string): string {
   return path.join(getZaiLiveEvidenceDir(repoRoot), "matrix");
 }
 
-export function parseZaiModelsList(raw: string | undefined): string[] {
-  if (!raw?.trim()) return [];
-  return raw
-    .split(/[\s,]+/)
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
+export function getZaiMatrixCampaignSnapshotRelativeDir(safeModelId: string, runIndex: number): string {
+  return `.rector/evidence/live/zai/matrix/${safeModelId}/${runIndex}`;
 }
 
-export function dedupeZaiModelsPreserveOrder(models: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const output: string[] = [];
-  for (const model of models) {
-    const key = model.trim();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    output.push(key);
+export async function snapshotZaiMatrixCampaignEvidence(input: {
+  readonly repoRoot: string;
+  readonly safeModelId: string;
+  readonly runIndex: number;
+}): Promise<{
+  readonly evidenceSnapshotDir: string;
+  readonly reportPointers: ZaiMatrixCampaignReportPointers;
+  readonly copiedFiles: readonly string[];
+}> {
+  const evidenceSnapshotDir = getZaiMatrixCampaignSnapshotRelativeDir(input.safeModelId, input.runIndex);
+  const absSnapshotDir = path.join(
+    getZaiLiveMatrixEvidenceDir(input.repoRoot),
+    input.safeModelId,
+    String(input.runIndex),
+  );
+  await fs.mkdir(absSnapshotDir, { recursive: true });
+
+  const copyPlans: Array<{ readonly src: string; readonly destName: string }> = [
+    { src: path.join(getZaiLiveEvidenceDir(input.repoRoot), "latest.json"), destName: "latest.json" },
+    { src: path.join(getZaiLiveEvidenceDir(input.repoRoot), "latest.md"), destName: "latest.md" },
+    { src: path.join(getZaiLiveEvidenceDir(input.repoRoot), "provider-smoke.json"), destName: "provider-smoke.json" },
+    {
+      src: path.join(getEvidenceTrackDir("phase2", input.repoRoot), "live-fact-shadow-report.json"),
+      destName: "phase2-live-fact-shadow-report.json",
+    },
+  ];
+
+  const copiedFiles: string[] = [];
+  for (const plan of copyPlans) {
+    try {
+      await fs.copyFile(plan.src, path.join(absSnapshotDir, plan.destName));
+      copiedFiles.push(plan.destName);
+    } catch {
+      // campaign artifacts may be absent when steps fail early
+    }
   }
-  return output;
+
+  const prefix = `${evidenceSnapshotDir}/`;
+  return {
+    evidenceSnapshotDir,
+    reportPointers: {
+      latestJson: `${prefix}latest.json`,
+      latestMd: `${prefix}latest.md`,
+      providerSmokeJson: `${prefix}provider-smoke.json`,
+      phase2ShadowJson: `${prefix}phase2-live-fact-shadow-report.json`,
+    },
+    copiedFiles,
+  };
 }
+
+export { dedupeZaiModelsPreserveOrder, parseZaiModelsList } from "./zaiModelsEnv";
 
 export function toSafeModelEvidenceId(modelId: string): string {
   const trimmed = modelId.trim();
@@ -158,11 +213,15 @@ export function resolveZaiMatrixConfig(env: Record<string, string | undefined> =
   const continueOnFailure = env.ZAI_MATRIX_CONTINUE_ON_FAILURE === undefined
     ? true
     : truthyEnv(env.ZAI_MATRIX_CONTINUE_ON_FAILURE);
+  const prefilterWithProbe = truthyEnv(env.ZAI_MATRIX_PREFILTER_PROBE);
+  const probeJsonCapability = truthyEnv(env.ZAI_MATRIX_PROBE_JSON) || truthyEnv(env.ZAI_MODEL_PROBE_JSON);
   return {
     runsPerModel: Math.max(1, runsPerModel),
     ...(maxModels !== undefined && maxModels > 0 ? { maxModels } : {}),
     skipOffline,
     continueOnFailure,
+    prefilterWithProbe,
+    probeJsonCapability,
   };
 }
 
@@ -262,6 +321,17 @@ export async function runZaiModelMatrix(options: {
   readonly runCommand: ZaiMatrixCommandRunner;
   readonly now?: () => Date;
   readonly gateEvaluator?: (input: { repoRoot: string }) => Promise<GateZaiLiveEvidenceResult>;
+  readonly probeRunner?: (input: {
+    readonly models: readonly string[];
+    readonly env: Record<string, string | undefined>;
+    readonly config: ZaiMatrixConfig;
+    readonly repoRoot: string;
+  }) => Promise<ModelProbeReport>;
+  readonly snapshotCampaignEvidence?: (input: {
+    readonly repoRoot: string;
+    readonly safeModelId: string;
+    readonly runIndex: number;
+  }) => ReturnType<typeof snapshotZaiMatrixCampaignEvidence>;
 }): Promise<ZaiMatrixSummary> {
   const repoRoot = path.resolve(options.repoRoot);
   const env = options.env ?? process.env;
@@ -286,6 +356,42 @@ export async function runZaiModelMatrix(options: {
   const generatedAt = (options.now?.() ?? new Date()).toISOString();
   const campaigns: ZaiMatrixCampaignResult[] = [];
   let offlineFailed = false;
+  const snapshotCampaignEvidence = options.snapshotCampaignEvidence ?? snapshotZaiMatrixCampaignEvidence;
+  const probeRunner = options.probeRunner ?? ((input) =>
+    runZaiModelProbe({
+      env: input.env,
+      models: [...input.models],
+      repoRoot: input.repoRoot,
+      write: true,
+      probeJsonCapability: input.config.probeJsonCapability,
+    }));
+
+  let probePrefilter: ZaiMatrixProbePrefilterSummary | undefined;
+  let modelsToRun = [...resolved.models];
+  const skippedByProbe = new Set<string>();
+
+  if (config.prefilterWithProbe) {
+    const probeReport = await probeRunner({
+      models: resolved.models,
+      env,
+      config,
+      repoRoot,
+    });
+    const callable = new Set(callableModelsFromProbeReport(probeReport));
+    for (const modelId of resolved.models) {
+      if (!callable.has(modelId)) skippedByProbe.add(modelId);
+    }
+    modelsToRun = resolved.models.filter((modelId) => callable.has(modelId));
+    probePrefilter = {
+      enabled: true,
+      modelsSkipped: [...skippedByProbe],
+      probeReportPath: ".rector/evidence/live/zai/model-probe/latest.json",
+      rows: probeReport.rows,
+    };
+    if (modelsToRun.length === 0 && !config.continueOnFailure) {
+      throw new Error("Z.ai matrix probe pre-filter found no callable models.");
+    }
+  }
 
   if (!config.skipOffline) {
     const offlineResult = await options.runCommand({
@@ -304,7 +410,30 @@ export async function runZaiModelMatrix(options: {
     }
   }
 
-  modelLoop: for (const modelId of resolved.models) {
+  for (const modelId of resolved.models) {
+    if (skippedByProbe.has(modelId)) {
+      const safeModelId = toSafeModelEvidenceId(modelId);
+      for (let runIndex = 0; runIndex < config.runsPerModel; runIndex += 1) {
+        const evidenceSnapshotDir = getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex);
+        campaigns.push({
+          modelId,
+          safeModelId,
+          runIndex,
+          status: "skipped_probe",
+          durationMs: 0,
+          steps: [],
+          grade: "F",
+          rating: "probe_not_callable",
+          evidenceSnapshotDir,
+          reportPointers: sharedCanonicalReportPointers(),
+          probePrefilterSkipped: true,
+        });
+      }
+      continue;
+    }
+  }
+
+  modelLoop: for (const modelId of modelsToRun) {
     const safeModelId = toSafeModelEvidenceId(modelId);
     for (let runIndex = 0; runIndex < config.runsPerModel; runIndex += 1) {
       const campaignStart = Date.now();
@@ -346,6 +475,8 @@ export async function runZaiModelMatrix(options: {
         scorecardPassed,
       });
 
+      const snapshot = await snapshotCampaignEvidence({ repoRoot, safeModelId, runIndex });
+
       campaigns.push({
         modelId,
         safeModelId,
@@ -357,7 +488,8 @@ export async function runZaiModelMatrix(options: {
         ...(gateResult && !gateResult.ok ? { gateViolations: gateResult.violations } : {}),
         grade,
         rating,
-        reportPointers: defaultReportPointers(),
+        evidenceSnapshotDir: snapshot.evidenceSnapshotDir,
+        reportPointers: snapshot.reportPointers,
       });
 
       if (campaignFailed && !config.continueOnFailure) {
@@ -368,7 +500,8 @@ export async function runZaiModelMatrix(options: {
 
   const passedCount = campaigns.filter((c) => c.status === "pass").length;
   const failedCount = campaigns.filter((c) => c.status === "fail").length;
-  const overallStatus: ZaiMatrixSummary["overallStatus"] = failedCount === 0
+  const skippedProbeCount = campaigns.filter((c) => c.status === "skipped_probe").length;
+  const overallStatus: ZaiMatrixSummary["overallStatus"] = failedCount === 0 && skippedProbeCount === 0
     ? "pass"
     : passedCount === 0
       ? "fail"
@@ -381,11 +514,15 @@ export async function runZaiModelMatrix(options: {
     modelSource: resolved.source,
     config,
     modelsRequested: [...resolved.models],
-    modelsExecuted: dedupeZaiModelsPreserveOrder(campaigns.map((c) => c.modelId)),
+    modelsExecuted: dedupeZaiModelsPreserveOrder(
+      campaigns.filter((c) => c.status !== "skipped_probe").map((c) => c.modelId),
+    ),
     campaigns,
     overallStatus,
     passedCount,
     failedCount,
+    skippedProbeCount,
+    ...(probePrefilter ? { probePrefilter } : {}),
   };
 
   assertMatrixArtifactHasNoSecrets(summary);
@@ -413,7 +550,9 @@ export function formatZaiMatrixSummaryMarkdown(summary: ZaiMatrixSummary): strin
   lines.push("");
   lines.push(`Generated: ${summary.generatedAt}`);
   lines.push(`Schema: ${summary.schemaVersion}`);
-  lines.push(`Overall: **${summary.overallStatus}** (${summary.passedCount} pass / ${summary.failedCount} fail)`);
+  lines.push(
+    `Overall: **${summary.overallStatus}** (${summary.passedCount} pass / ${summary.failedCount} fail / ${summary.skippedProbeCount} skipped by probe)`,
+  );
   lines.push(`Model source: ${summary.modelSource}`);
   lines.push(`Runs per model: ${summary.config.runsPerModel}`);
   lines.push("");
@@ -437,10 +576,25 @@ export function formatZaiMatrixSummaryMarkdown(summary: ZaiMatrixSummary): strin
     );
   }
   lines.push("");
+  lines.push("## Per-model evidence snapshots");
+  lines.push("");
+  for (const campaign of summary.campaigns) {
+    lines.push(
+      `- ${campaign.modelId} run ${campaign.runIndex + 1}: \`${campaign.evidenceSnapshotDir}/\` (latest: \`${campaign.reportPointers.latestJson}\`)`,
+    );
+  }
+  lines.push("");
   lines.push("## Report pointers");
   lines.push("");
-  lines.push("- `.rector/evidence/live/zai/latest.json` (last campaign overwrote harness rollup)");
-  lines.push("- `.rector/evidence/live/zai/matrix/matrix-summary.json`");
+  lines.push("- `.rector/evidence/live/zai/matrix/matrix-summary.json` (authoritative multi-model rollup)");
+  lines.push("- `.rector/evidence/live/zai/latest.json` (shared canonical rollup; last campaign wins)");
+  if (summary.probePrefilter?.enabled) {
+    lines.push(`- \`${summary.probePrefilter.probeReportPath}\` (optional pre-filter probe)`);
+  }
+  lines.push("");
+  lines.push(
+    "> Matrix comparison does **not** update `.rector/evidence/manifest.json`. Run single-model `npm run verify:zai-live` on a finalist for manifest-backed live verification.",
+  );
   lines.push("");
   lines.push(
     "> Live verification remains **unverified** until a real non-fake provider passes `evidence:zai-live:gate` with `live_provider` evidence. This matrix report is for operator comparison only.",
@@ -449,7 +603,7 @@ export function formatZaiMatrixSummaryMarkdown(summary: ZaiMatrixSummary): strin
   return `${lines.join("\n")}\n`;
 }
 
-function defaultReportPointers(): ZaiMatrixCampaignResult["reportPointers"] {
+function sharedCanonicalReportPointers(): ZaiMatrixCampaignReportPointers {
   return {
     latestJson: ".rector/evidence/live/zai/latest.json",
     latestMd: ".rector/evidence/live/zai/latest.md",

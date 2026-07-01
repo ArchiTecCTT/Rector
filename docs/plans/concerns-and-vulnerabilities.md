@@ -14,14 +14,14 @@
 - **Plan:** Configure Z.ai via UI or env (`ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` preferred for shell; `OPENAI_COMPATIBLE_*` per-field fallback — not `Z.AI_API_KEY`), run `npm run verify:zai-live`, retain sanitized evidence under `.rector/evidence`, then document pass date in operator notes only after gate PASS. Do not relabel Phase 2 or harness milestones as live-verified before that.
 - **Boundaries:** `test_only_injected` and spy doubles remain test-only; gate rejects them for live-verified claims.
 
-### Z.ai multi-model matrix — shared rollup overwrite (deferred)
+### Z.ai multi-model matrix — shared canonical rollup still overwritten
 
-- **Source:** `src/live/zaiModelMatrix.ts`, `scripts/live/run-zai-model-matrix.ts`, `tests/live/zaiModelMatrix.test.ts`, `npm run verify:zai-live:matrix`.
-- **Severity:** Low (operator workflow / reporting); can confuse which model produced `latest.json` if multiple campaigns run back-to-back.
-- **Status:** Open — documented; matrix summary is the multi-model source of truth; per-model sub-rollup dirs not implemented.
-- **Observed:** Each model campaign reuses the standard live writers (`latest.json`, provider smoke, Phase 2 shadow), so the **last** model in the matrix wins those rollups. Matrix gate uses `--no-manifest-update` to avoid manifest thrash. Matrix **grades** in `matrix-summary.json` support comparison only—they do not replace `live_provider` gate PASS or manifest update for live-verified labels.
-- **Plan:** Use matrix summary for comparisons; run single-model `verify:zai-live` on the finalist for manifest update. Future hardening: per-model evidence subdirectories and campaign correlation ids.
-- **Budget:** Each model campaign consumes up to the 100k-token / ≤20 model-call gate budget; cap candidates with `ZAI_MATRIX_MAX_MODELS` and keep `ZAI_MATRIX_RUNS_PER_MODEL=1` until finalists are chosen (then 3–5 repeats only).
+- **Source:** `src/live/zaiModelMatrix.ts`, `src/live/zaiModelProbe.ts`, `scripts/live/run-zai-model-matrix.ts`, `npm run verify:zai-live:matrix`.
+- **Severity:** Low (operator workflow / reporting).
+- **Status:** Open — mitigated by per-model matrix snapshots; shared canonical rollups still last-writer-wins.
+- **Observed:** Each model campaign still reuses standard live writers (`.rector/evidence/live/zai/latest.json`, provider smoke, Phase 2 shadow). Matrix now copies campaign artifacts into `.rector/evidence/live/zai/matrix/<safe-model-id>/<run-index>/` and `matrix-summary.json` points at those snapshots. Optional `ZAI_MATRIX_PREFILTER_PROBE` skips non-callable models via cheap OpenAI-compatible probes (`src/live/zaiModelProbe.ts`). Matrix gate uses `--no-manifest-update`; matrix grades do not replace `live_provider` gate PASS for live-verified labels.
+- **Plan:** Use matrix summary + per-model snapshot pointers for comparisons; run single-model `verify:zai-live` on the finalist for manifest update. Deferred: campaign correlation ids across probe/matrix/gate.
+- **Budget:** Each model campaign consumes up to the 100k-token / ≤20 model-call gate budget; pre-filter probes are cheap (1–2 calls per model when JSON probe enabled). Cap candidates with `ZAI_MATRIX_MAX_MODELS` and keep `ZAI_MATRIX_RUNS_PER_MODEL=1` until finalists are chosen.
 
 ### Z.ai evidence hardening wave — RESOLVED
 

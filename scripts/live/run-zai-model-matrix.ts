@@ -71,6 +71,8 @@ function parseArgs(argv: readonly string[]): { repoRoot?: string } {
           "  ZAI_MATRIX_MAX_MODELS (optional cap)",
           "  ZAI_MATRIX_SKIP_OFFLINE=1",
           "  ZAI_MATRIX_CONTINUE_ON_FAILURE (default 1)",
+          "  ZAI_MATRIX_PREFILTER_PROBE=1 (cheap callability probe before live chains)",
+          "  ZAI_MATRIX_PROBE_JSON=1 or ZAI_MODEL_PROBE_JSON=1 (optional JSON-mode probe per callable model)",
         ].join("\n") + "\n",
       );
       process.exit(0);

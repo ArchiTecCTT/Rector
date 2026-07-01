@@ -11,6 +11,8 @@ Rector separates **offline** gates from **live** Z.ai verification. Offline infr
 - Provider smoke: `.rector/evidence/live/zai/provider-smoke.json`
 - Phase 2F live fact shadow: `.rector/evidence/phase2/live-fact-shadow-report.json`
 - Multi-model matrix rollup (opt-in): `.rector/evidence/live/zai/matrix/matrix-summary.json` and `matrix-summary.md`
+- Per-model matrix snapshots: `.rector/evidence/live/zai/matrix/<safe-model-id>/<run-index>/` (isolated copies of campaign rollups)
+- Optional model callability probe: `.rector/evidence/live/zai/model-probe/latest.json` (`npm run probe:zai-models`)
 
 ## Offline vs live
 
@@ -58,6 +60,8 @@ If `ZAI_MODELS` is unset, the matrix falls back to a **single** campaign using `
 | `ZAI_MATRIX_MAX_MODELS` | unset | Safety cap on parsed `ZAI_MODELS` length |
 | `ZAI_MATRIX_SKIP_OFFLINE` | unset | Set `1` to skip one-shot `npm run verify:phase2` before live campaigns |
 | `ZAI_MATRIX_CONTINUE_ON_FAILURE` | `1` | Set `0` to stop after the first failing model campaign |
+| `ZAI_MATRIX_PREFILTER_PROBE` | unset | Set `1` to run `probe:zai-models` logic before live chains and skip non-callable models |
+| `ZAI_MATRIX_PROBE_JSON` / `ZAI_MODEL_PROBE_JSON` | unset | Set `1` for an extra cheap JSON-mode probe per callable model (probe CLI or matrix pre-filter) |
 
 Each model campaign sets `ZAI_MODEL=<model>` and runs, in order:
 
@@ -68,7 +72,7 @@ Each model campaign sets `ZAI_MODEL=<model>` and runs, in order:
 
 Matrix gate runs disable manifest updates so comparing models does not thrash `.rector/evidence/manifest.json`. Run plain `npm run verify:zai-live` once on the chosen finalist to update the manifest after review.
 
-**Shared rollup overwrite:** each model campaign writes the same canonical paths (`.rector/evidence/live/zai/latest.json`, provider smoke, Phase 2 shadow). The **last** model in the run wins those files; use `matrix-summary.json` for per-model results until per-model subdirectories are implemented (deferred — see concerns register).
+**Shared rollup overwrite:** each model campaign still writes the same canonical paths (`.rector/evidence/live/zai/latest.json`, provider smoke, Phase 2 shadow). The **last** model in the run wins those shared files. Use `matrix-summary.json` **and** per-model snapshots under `.rector/evidence/live/zai/matrix/<safe-model-id>/<run-index>/` for isolated evidence pointers (matrix is comparison-only; single-model `verify:zai-live` remains required for manifest-backed live verification).
 
 ### How tests relate to live verification
 
@@ -100,7 +104,7 @@ Recommended matrix workflow:
 2. **Finalists:** repeat `3`–`5` campaigns only for 1–2 models that graded **A** or **B**.
 3. Avoid `50`–`100` repeats per model until budget and stability are proven.
 
-Hardening ideas (deferred): per-model evidence subdirectories so `latest.json` is not overwritten, pinned campaign correlation ids, and automatic finalist promotion into `verify:zai-live` manifest update.
+Hardening ideas (deferred): pinned campaign correlation ids across probe/matrix/gate, and automatic finalist promotion into `verify:zai-live` manifest update.
 
 ## Gate behavior
 
