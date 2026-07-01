@@ -149,6 +149,22 @@ const REPORT_JSON = "provider-smoke.json";
 const REPORT_MD = "provider-smoke.md";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/** Modest cap for a tiny JSON smoke object; 64 was too tight for reasoning-heavy Z.ai models (truncation before contract validation). */
+export const DEFAULT_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS = 256;
+const ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS_MIN = 64;
+const ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS_MAX = 1024;
+
+export function resolveZaiProviderSmokeMaxOutputTokens(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.RECTOR_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS?.trim();
+  if (!raw) return DEFAULT_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS;
+  return Math.min(
+    ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS_MAX,
+    Math.max(ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS_MIN, parsed),
+  );
+}
+
 export async function runZaiProviderSmoke(options: ZaiProviderSmokeOptions = {}): Promise<ZaiProviderSmokeReport> {
   const env = options.env ?? process.env;
   const outputDir = options.outputDir ?? getZaiLiveEvidenceDir(options.repoRoot);
@@ -194,6 +210,7 @@ export async function runZaiProviderSmoke(options: ZaiProviderSmokeOptions = {})
 
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxOutputTokens = resolveZaiProviderSmokeMaxOutputTokens(env);
   const strictEvidenceStatus: StrictJsonEvidenceStatus = liveEvidenceStatus;
   let aggregatedUsage = ZERO_USAGE;
 
@@ -211,7 +228,7 @@ export async function runZaiProviderSmoke(options: ZaiProviderSmokeOptions = {})
         const response = await invokeWithTimeout(
           selected,
           timeoutMs,
-          buildSmokeRequest(selected, repairAppendix),
+          buildSmokeRequest(selected, repairAppendix, maxOutputTokens),
         );
         aggregatedUsage = sumTokenUsage(aggregatedUsage, response.usage);
         const metadata: StrictOutputRuntimeMetadata = {
@@ -219,7 +236,7 @@ export async function runZaiProviderSmoke(options: ZaiProviderSmokeOptions = {})
           model: response.model,
           finishReason: response.finishReason,
           outputChars: response.content.length,
-          maxOutputTokens: 64,
+          maxOutputTokens,
         };
         return {
           content: response.content,
@@ -266,15 +283,20 @@ export async function runZaiProviderSmoke(options: ZaiProviderSmokeOptions = {})
   );
 }
 
-function buildSmokeRequest(selected: DiscoveredLiveProvider, repairAppendix = ""): LLMRequest {
+function buildSmokeRequest(
+  selected: DiscoveredLiveProvider,
+  repairAppendix = "",
+  maxOutputTokens: number = DEFAULT_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS,
+): LLMRequest {
   return {
     task: "zai-provider-smoke",
     route: "PROVIDER_SMOKE",
     modelRoute: "cheap",
     model: selected.modelId,
-    maxOutputTokens: 64,
+    maxOutputTokens,
     temperature: 0,
     responseFormat: { type: "json_object" },
+    providerOptions: { strictJsonMinimizeReasoning: true },
     metadata: { nonMutating: true, createdBy: "zai-provider-smoke" },
     messages: [
       { role: "system", content: "Return only a compact JSON object. Do not use Markdown." },

@@ -13,6 +13,8 @@ import {
   type LLMUsage,
 } from "../../src/providers/llm";
 import {
+  DEFAULT_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS,
+  resolveZaiProviderSmokeMaxOutputTokens,
   runZaiProviderSmoke,
   ZAI_PROVIDER_SMOKE_REPORT_SCHEMA_VERSION,
   ZaiProviderSmokeReportSchema,
@@ -83,6 +85,36 @@ function discovered(provider: LLMProvider = new SmokeProvider()): DiscoveredLive
 }
 
 describe("Z.ai provider smoke report", () => {
+  it("resolves smoke max output tokens with a modest default and bounded env override", () => {
+    expect(DEFAULT_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS).toBe(256);
+    expect(resolveZaiProviderSmokeMaxOutputTokens({})).toBe(256);
+    expect(resolveZaiProviderSmokeMaxOutputTokens({ RECTOR_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS: "512" })).toBe(512);
+    expect(resolveZaiProviderSmokeMaxOutputTokens({ RECTOR_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS: "32" })).toBe(64);
+    expect(resolveZaiProviderSmokeMaxOutputTokens({ RECTOR_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS: "9999" })).toBe(1024);
+  });
+
+  it("honors RECTOR_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS on the outbound LLM request", async () => {
+    const outputDir = await tempDir();
+    const provider = new SmokeProvider();
+    try {
+      await runZaiProviderSmoke({
+        outputDir,
+        env: {
+          RECTOR_LIVE_PROVIDER: "zai",
+          RECTOR_ZAI_PROVIDER_SMOKE: "1",
+          RECTOR_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS: "384",
+        },
+        now: fixedNow,
+        providerDiscovery: async () => ({ selected: discovered(provider), rejections: [] }),
+      });
+
+      expect(provider.requests[0]?.maxOutputTokens).toBe(384);
+      expect(provider.requests[0]?.providerOptions).toEqual({ strictJsonMinimizeReasoning: true });
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("is opt-in and writes an honest skipped report when the smoke flag is absent", async () => {
     const outputDir = await tempDir();
     const provider = new SmokeProvider();
@@ -150,9 +182,10 @@ describe("Z.ai provider smoke report", () => {
       expect(provider.requests[0]).toMatchObject({
         modelRoute: "cheap",
         model: "glm-4.5-air",
-        maxOutputTokens: 64,
+        maxOutputTokens: DEFAULT_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS,
         temperature: 0,
         responseFormat: { type: "json_object" },
+        providerOptions: { strictJsonMinimizeReasoning: true },
       });
       expect(report).toMatchObject({
         status: "passed",
