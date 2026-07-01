@@ -15,6 +15,7 @@ import type {
   LiveFactShadowFailureCategoryCounts,
   LiveFactShadowPassClassification,
 } from "./liveFactShadowReport";
+import { LIVE_FACT_SHADOW_ALLOWED_KINDS } from "../liveFactShadowPrompt";
 
 export type LiveFactShadowCaseEvaluation = Readonly<{
   facts: readonly RectorFact[];
@@ -26,12 +27,17 @@ export type LiveFactShadowCaseEvaluation = Readonly<{
 }>;
 
 export function factValidationErrorToDiagnostic(error: FactValidationError): StrictOutputDiagnostic {
+  const details =
+    error.code === "invalid_union_discriminator"
+      ? { expectedValues: [...LIVE_FACT_SHADOW_ALLOWED_KINDS] }
+      : undefined;
   return createStrictOutputDiagnostic({
     kind: factValidationGateToKind(error),
     code: error.code,
     path: error.path,
     message: error.message,
     severity: error.severity,
+    details,
   });
 }
 

@@ -40,7 +40,7 @@ export function renderStrictJsonRepairCards(
 }
 
 export function repairHintForDiagnostic(diagnostic: StrictOutputDiagnostic): string {
-  const fromDetails = repairHintFromDetails(diagnostic.details, diagnostic.kind, diagnostic.code);
+  const fromDetails = repairHintFromDetails(diagnostic.details, diagnostic.kind, diagnostic.code, diagnostic.path);
   if (fromDetails) return boundRepairText(fromDetails, DEFAULT_MAX_REPAIR_CHARS);
   const byCode = REPAIR_GUIDANCE_BY_CODE[diagnostic.code];
   if (byCode) return byCode;
@@ -64,12 +64,26 @@ function repairHintFromDetails(
   details: unknown,
   kind: StrictOutputDiagnosticKind,
   code: string,
+  path: string,
 ): string | undefined {
   if (!details || typeof details !== "object") return undefined;
   const record = details as Record<string, unknown>;
 
   if (typeof record.expected === "string" && record.expected.trim().length > 0) {
     return `Expected ${record.expected.trim()} at this path.`;
+  }
+
+  if (code === "invalid_union_discriminator" && path === "kind") {
+    if (Array.isArray(record.expectedValues) && record.expectedValues.length > 0) {
+      const values = record.expectedValues
+        .map((value) => (typeof value === "string" ? value.trim() : String(value)))
+        .filter((value) => value.length > 0)
+        .slice(0, 12);
+      if (values.length > 0) {
+        return `Set kind to one of: ${values.join(", ")}. Map TypeScript root diagnostics to capability_evidence (with source_span); cascades/uncertainty to capability_warning — never diagnostic/root_cause/cascade kinds.`;
+      }
+    }
+    return "Set kind to an allowed shadow fact kind; map invented diagnostic labels to capability_evidence or capability_warning with grounded provenance.";
   }
 
   if (Array.isArray(record.expectedValues) && record.expectedValues.length > 0) {
@@ -135,6 +149,8 @@ const REPAIR_GUIDANCE_BY_CODE: Readonly<Record<string, string>> = {
   planner_invariant_failed:
     "Fix dependency edges, gate taskIds, and approvalRequired flags so every reference resolves to tasks[].id.",
   dangling_dependency: "Point dependency ids at existing tasks[].id values only.",
+  invalid_union_discriminator:
+    "Use only allowed fact kinds from the contract; convert unsupported diagnostic/root_cause/cascade labels to capability_evidence or capability_warning.",
 };
 
 function boundRepairText(value: string, maxChars: number): string {

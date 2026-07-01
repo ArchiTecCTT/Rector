@@ -62,6 +62,10 @@ import {
   type StrictJsonValidationResult,
 } from "../../src/orchestration/strictJsonRepairLoop";
 import type { StrictOutputRuntimeMetadata } from "../../src/orchestration/strictOutputDiagnostics";
+import {
+  buildLiveFactShadowScenarioGuidance,
+  buildLiveFactShadowSystemContract,
+} from "../../src/facts/liveFactShadowPrompt";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -552,18 +556,11 @@ function buildRequest(
   artifactText: string,
   repairAppendix = "",
 ): LLMRequest {
-  const contract = [
-    "Return only JSON. Do not use Markdown.",
-    "Shape: {\"facts\":[...]}.",
-    "Allowed fact objects:",
-    "{\"kind\":\"intent\",\"intent\":string,\"confidence\":number?}",
-    "{\"kind\":\"task_constraint\",\"constraint\":string}",
-    "{\"kind\":\"unknown_or_ambiguity\",\"question\":string,\"options\":string[]?}",
-    "{\"kind\":\"capability_evidence\",\"capabilityId\":string,\"summary\":string,\"evidence\":[{\"refType\":\"source_span\",\"path\":string,\"startLine\":number,\"endLine\":number}]}",
-    "{\"kind\":\"capability_warning\",\"capabilityId\":string,\"warning\":string,\"severity\":\"low\"|\"medium\"|\"high\"}",
-    "{\"kind\":\"capability_failure\",\"capabilityId\":string,\"reason\":string,\"retryable\":boolean,\"evidence\":[{\"refType\":\"insufficient_evidence\",\"reason\":string,\"missing\":string[],\"searched\":string[]}]}",
-    "Never invent files, line numbers, tests, fixes, or root causes. Use insufficient_evidence when unsupported.",
-  ].join("\n");
+  const contract = buildLiveFactShadowSystemContract();
+  const scenarioGuidance = buildLiveFactShadowScenarioGuidance({
+    id: scenario.id,
+    expectedKinds: scenario.expectedKinds,
+  });
   const artifactBlock = artifactText ? `\n\nCommitted raw artifact:\n---\n${artifactText.slice(0, 12_000)}\n---` : "";
   return {
     task: `phase-2f-live-fact-shadow:${scenario.id}`,
@@ -576,7 +573,10 @@ function buildRequest(
     metadata: { caseId: scenario.id, nonMutating: true, createdBy: CREATED_BY },
     messages: [
       { role: "system", content: contract },
-      { role: "user", content: `${scenario.prompt}${artifactBlock}${repairAppendix}` },
+      {
+        role: "user",
+        content: `${scenario.prompt}\n\n${scenarioGuidance}${artifactBlock}${repairAppendix}`,
+      },
     ],
   };
 }

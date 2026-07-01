@@ -57,6 +57,22 @@ describe("strictJsonRepairCards", () => {
     expect(cards.length).toBeLessThanOrEqual(2_000);
   });
 
+  it("maps invalid_union_discriminator on kind to shadow fact kinds and TS guidance", () => {
+    const diagnostic = createStrictOutputDiagnostic({
+      kind: "semantic_invariant",
+      code: "invalid_union_discriminator",
+      message: "Invalid discriminator value",
+      path: "kind",
+      details: {
+        expectedValues: ["capability_evidence", "capability_warning", "capability_failure"],
+      },
+    });
+    const hint = repairHintForDiagnostic(diagnostic);
+    expect(hint).toContain("capability_evidence");
+    expect(hint).toContain("capability_warning");
+    expect(hint).toContain("diagnostic/root_cause/cascade");
+  });
+
   it("uses zod details for repair hints when available", () => {
     const Schema = z.object({ riskLevel: z.enum(["low", "medium"]) });
     const parsed = Schema.safeParse({ riskLevel: "nope" });
