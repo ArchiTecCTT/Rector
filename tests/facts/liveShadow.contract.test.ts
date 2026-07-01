@@ -189,6 +189,11 @@ describe("Phase 2F live fact shadow contract", () => {
       expect(report.liveEvidenceStatus).toBe("test_only_injected");
       expect(report.caseCount).toBe(5);
       expect(report.failedCount).toBe(0);
+      expect(report.firstPassCases).toBe(5);
+      expect(report.repairPassCases).toBe(0);
+      expect(report.failedAfterRepairCases).toBe(0);
+      expect(report.cases.every((caseReport) => caseReport.passClassification === "first_pass")).toBe(true);
+      expect(report.cases.every((caseReport) => caseReport.attempts.length >= 1)).toBe(true);
       expect(report.cases.map((caseReport) => caseReport.caseId)).toEqual([
         "intent_extraction_stress",
         "rg_artifact_evidence_extraction",
@@ -208,6 +213,54 @@ describe("Phase 2F live fact shadow contract", () => {
       const summary = JSON.parse(await readFile(path.join(outputDir, "live-fact-shadow-summary.json"), "utf8"));
       expect(summary.reportJson).toBe("live-fact-shadow-report.json");
       expect(summary.totalTokenUsage.totalTokens).toBe(375);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies repair-pass outcomes when the first attempt returns invalid JSON", async () => {
+    const outputDir = await tempDir();
+
+    class RepairOnSecondAttemptProvider extends ContractLiveProvider {
+      private calls = 0;
+
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.calls += 1;
+        this.requests.push(request);
+        if (this.calls === 1) {
+          return LLMResponseSchema.parse({
+            provider: this.metadata.id,
+            model: request.model ?? this.metadata.models.fast,
+            content: "not-json",
+            finishReason: "stop",
+            usage: USAGE,
+          });
+        }
+        return super.invoke(request);
+      }
+    }
+
+    try {
+      const report = await runLiveFactShadow({
+        outputDir,
+        env: { LIVE_FACT_EVALS: "1" },
+        now: fixedNow,
+        providerDiscovery: () => [
+          {
+            provider: new RepairOnSecondAttemptProvider(),
+            route: "fast",
+            modelId: "contract-live-model",
+            liveEvidence: false,
+            discoveryLabel: "contract test injection",
+          },
+        ],
+      });
+
+      const intentCase = report.cases.find((caseReport) => caseReport.caseId === "intent_extraction_stress");
+      expect(intentCase?.passClassification).toBe("repair_pass");
+      expect(intentCase?.status).toBe("passed");
+      expect(intentCase?.attempts).toHaveLength(2);
+      expect(report.repairPassCases).toBeGreaterThanOrEqual(1);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
