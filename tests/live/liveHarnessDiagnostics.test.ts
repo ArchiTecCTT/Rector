@@ -72,6 +72,10 @@ describe("liveHarnessDiagnostics", () => {
           providerSmokeJson: ".rector/evidence/live/zai/provider-smoke.json",
           phase2ShadowJson: ".rector/evidence/phase2/live-fact-shadow-report.json",
         },
+        snapshotCopiedFiles: [],
+        snapshotSkippedArtifacts: [],
+        snapshotHealth: "empty",
+        snapshotEffectiveModelId: "glm-4",
         gate: {
           providerId: "zai",
           adapterId: "openai-compatible",

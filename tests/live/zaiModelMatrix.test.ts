@@ -26,6 +26,36 @@ import {
   ZAI_MATRIX_SUMMARY_SCHEMA_VERSION,
 } from "../../src/live/zaiModelMatrix";
 import { ZAI_MODEL_PROBE_REPORT_SCHEMA } from "../../src/live/zaiModelProbe";
+import {
+  MATRIX_ARTIFACT_NOT_CAPTURED,
+  type MatrixCampaignSnapshotResult,
+} from "../../src/live/liveMatrixCampaignSnapshot";
+
+function mockCampaignSnapshot(input: {
+  readonly safeModelId: string;
+  readonly runIndex: number;
+  readonly modelId: string;
+  readonly copiedFiles?: readonly string[];
+}): MatrixCampaignSnapshotResult {
+  const dir = getZaiMatrixCampaignSnapshotRelativeDir(input.safeModelId, input.runIndex);
+  const prefix = `${dir}/`;
+  const copied = [...(input.copiedFiles ?? [])];
+  const pointer = (name: string) => (copied.includes(name) ? `${prefix}${name}` : MATRIX_ARTIFACT_NOT_CAPTURED);
+  return {
+    evidenceSnapshotDir: dir,
+    reportPointers: {
+      latestJson: pointer("latest.json"),
+      latestMd: pointer("latest.md"),
+      providerSmokeJson: pointer("provider-smoke.json"),
+      phase2ShadowJson: pointer("phase2-live-fact-shadow-report.json"),
+    },
+    copiedFiles: copied,
+    skippedArtifacts: [],
+    snapshotHealth: copied.length === 0 ? "empty" : copied.length === 4 ? "complete" : "partial",
+    snapshotCopiedAt: "2026-06-30T12:00:00.000Z",
+    snapshotEffectiveModelId: input.modelId,
+  };
+}
 
 describe("zaiModelMatrix parsing", () => {
   it("parses comma, newline, and space separated model lists", () => {
@@ -169,11 +199,15 @@ describe("buildMatrixDiagnostics edge cases", () => {
         rating: "gate_fail",
         evidenceSnapshotDir: ".rector/evidence/live/zai/matrix/m1/0",
         reportPointers: {
-          latestJson: ".rector/evidence/live/zai/latest.json",
-          latestMd: ".rector/evidence/live/zai/latest.md",
-          providerSmokeJson: ".rector/evidence/live/zai/provider-smoke.json",
-          phase2ShadowJson: ".rector/evidence/phase2/live-fact-shadow-report.json",
+          latestJson: MATRIX_ARTIFACT_NOT_CAPTURED,
+          latestMd: MATRIX_ARTIFACT_NOT_CAPTURED,
+          providerSmokeJson: MATRIX_ARTIFACT_NOT_CAPTURED,
+          phase2ShadowJson: MATRIX_ARTIFACT_NOT_CAPTURED,
         },
+        snapshotCopiedFiles: [],
+        snapshotSkippedArtifacts: [],
+        snapshotHealth: "empty",
+        snapshotEffectiveModelId: "m1",
       },
       {
         modelId: "m2",
@@ -186,11 +220,15 @@ describe("buildMatrixDiagnostics edge cases", () => {
         rating: "gate_and_harness_pass",
         evidenceSnapshotDir: ".rector/evidence/live/zai/matrix/m2/0",
         reportPointers: {
-          latestJson: ".rector/evidence/live/zai/latest.json",
-          latestMd: ".rector/evidence/live/zai/latest.md",
-          providerSmokeJson: ".rector/evidence/live/zai/provider-smoke.json",
-          phase2ShadowJson: ".rector/evidence/phase2/live-fact-shadow-report.json",
+          latestJson: MATRIX_ARTIFACT_NOT_CAPTURED,
+          latestMd: MATRIX_ARTIFACT_NOT_CAPTURED,
+          providerSmokeJson: MATRIX_ARTIFACT_NOT_CAPTURED,
+          phase2ShadowJson: MATRIX_ARTIFACT_NOT_CAPTURED,
         },
+        snapshotCopiedFiles: [],
+        snapshotSkippedArtifacts: [],
+        snapshotHealth: "empty",
+        snapshotEffectiveModelId: "m2",
         gate: {
           providerId: "zai",
           adapterId: "openai-compatible",
@@ -249,17 +287,8 @@ describe("runZaiModelMatrix orchestration", () => {
         prefilterWithProbe: false,
         probeJsonCapability: false,
       },
-      snapshotCampaignEvidence: async ({ safeModelId, runIndex }) => ({
-        evidenceSnapshotDir: getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex),
-        reportPointers: {
-          latestJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/latest.json`,
-          latestMd: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/latest.md`,
-          providerSmokeJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/provider-smoke.json`,
-          phase2ShadowJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/phase2-live-fact-shadow-report.json`,
-        },
-        copiedFiles: [],
-        skippedArtifacts: [],
-      }),
+      snapshotCampaignEvidence: async ({ safeModelId, runIndex, modelId }) =>
+        mockCampaignSnapshot({ safeModelId, runIndex, modelId }),
       runCommand: async (input) => {
         const script = input.args[1] ?? "";
         invocations.push({ model: input.env.ZAI_MODEL, script });
@@ -290,17 +319,8 @@ describe("runZaiModelMatrix orchestration", () => {
         prefilterWithProbe: false,
         probeJsonCapability: false,
       },
-      snapshotCampaignEvidence: async ({ safeModelId, runIndex }) => ({
-        evidenceSnapshotDir: getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex),
-        reportPointers: {
-          latestJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/latest.json`,
-          latestMd: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/latest.md`,
-          providerSmokeJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/provider-smoke.json`,
-          phase2ShadowJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/phase2-live-fact-shadow-report.json`,
-        },
-        copiedFiles: [],
-        skippedArtifacts: [],
-      }),
+      snapshotCampaignEvidence: async ({ safeModelId, runIndex, modelId }) =>
+        mockCampaignSnapshot({ safeModelId, runIndex, modelId }),
       runCommand: async (input) => ({
         exitCode: input.env.ZAI_MODEL === "bad-model" ? 1 : 0,
         stdout: "",
@@ -347,17 +367,8 @@ describe("runZaiModelMatrix orchestration", () => {
           prefilterWithProbe: false,
           probeJsonCapability: false,
         },
-        snapshotCampaignEvidence: async ({ safeModelId, runIndex }) => ({
-          evidenceSnapshotDir: getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex),
-          reportPointers: {
-            latestJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/latest.json`,
-            latestMd: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/latest.md`,
-            providerSmokeJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/provider-smoke.json`,
-            phase2ShadowJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/phase2-live-fact-shadow-report.json`,
-          },
-          copiedFiles: [],
-        skippedArtifacts: [],
-        }),
+        snapshotCampaignEvidence: async ({ safeModelId, runIndex, modelId }) =>
+          mockCampaignSnapshot({ safeModelId, runIndex, modelId }),
         runCommand: async () => ({ exitCode: 1, stdout: "", stderr: "step failed", durationMs: 2 }),
         gateEvaluator: async () => ({ ok: false, violations: ["fixture"], summary: {
           providerId: null,
@@ -445,17 +456,8 @@ describe("runZaiModelMatrix orchestration", () => {
           { modelId: "good-model", classification: "callable", latencyMs: 1, message: "ok" },
         ],
       }),
-      snapshotCampaignEvidence: async ({ safeModelId, runIndex }) => ({
-        evidenceSnapshotDir: getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex),
-        reportPointers: {
-          latestJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/latest.json`,
-          latestMd: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/latest.md`,
-          providerSmokeJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/provider-smoke.json`,
-          phase2ShadowJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/phase2-live-fact-shadow-report.json`,
-        },
-        copiedFiles: [],
-        skippedArtifacts: [],
-      }),
+      snapshotCampaignEvidence: async ({ safeModelId, runIndex, modelId }) =>
+        mockCampaignSnapshot({ safeModelId, runIndex, modelId }),
       runCommand: async (input) => {
         invocations.push(input.env.ZAI_MODEL ?? "");
         return { exitCode: 0, stdout: "", stderr: "", durationMs: 1 };
@@ -514,17 +516,8 @@ describe("runZaiModelMatrix orchestration", () => {
           { modelId: "bad-b", classification: "auth_failure", latencyMs: 1, message: "nope" },
         ],
       }),
-      snapshotCampaignEvidence: async ({ safeModelId, runIndex }) => ({
-        evidenceSnapshotDir: getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex),
-        reportPointers: {
-          latestJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/latest.json`,
-          latestMd: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/latest.md`,
-          providerSmokeJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/provider-smoke.json`,
-          phase2ShadowJson: `${getZaiMatrixCampaignSnapshotRelativeDir(safeModelId, runIndex)}/phase2-live-fact-shadow-report.json`,
-        },
-        copiedFiles: [],
-        skippedArtifacts: [],
-      }),
+      snapshotCampaignEvidence: async ({ safeModelId, runIndex, modelId }) =>
+        mockCampaignSnapshot({ safeModelId, runIndex, modelId }),
       runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "", durationMs: 1 }),
       gateEvaluator: async () => ({
         ok: true,
@@ -552,5 +545,64 @@ describe("runZaiModelMatrix orchestration", () => {
     expect(summary.skippedProbeCount).toBe(2);
     expect(summary.overallStatus).toBe("fail");
     expect(formatZaiMatrixSummaryMarkdown(summary)).toContain("gate `campaignTokens`");
+  });
+
+  it("does not reference stale snapshot files or shared canonical paths when a campaign fails early", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "zai-matrix-stale-"));
+    try {
+      const staleDir = path.join(repoRoot, ".rector/evidence/live/zai/matrix/glm-4.5-flash/0");
+      await mkdir(staleDir, { recursive: true });
+      await writeFile(
+        path.join(staleDir, "latest.json"),
+        `${JSON.stringify({ modelId: "other-model" })}\n`,
+        "utf8",
+      );
+      const zaiDir = getZaiLiveEvidenceDir(repoRoot);
+      await mkdir(zaiDir, { recursive: true });
+      await writeFile(
+        path.join(zaiDir, "latest.json"),
+        `${JSON.stringify({ modelId: "other-model" })}\n`,
+        "utf8",
+      );
+
+      const summary = await runZaiModelMatrix({
+        repoRoot,
+        models: ["glm-4.5-flash"],
+        modelSource: "ZAI_MODEL",
+        env: { ZAI_API_KEY: "secret-key-should-not-appear", ZAI_MODEL: "glm-4.5-flash" },
+        config: {
+          runsPerModel: 1,
+          skipOffline: true,
+          continueOnFailure: true,
+          prefilterWithProbe: false,
+          probeJsonCapability: false,
+        },
+        runCommand: async () => ({ exitCode: 1, stdout: "", stderr: "", durationMs: 1 }),
+        gateEvaluator: async () => ({ ok: false, violations: ["skipped"], summary: {
+          providerId: null,
+          adapterId: null,
+          modelId: null,
+          host: null,
+          harnessStatus: null,
+          scenariosPassed: 0,
+          scenariosTotal: 0,
+          campaignTokens: 0,
+          campaignTokenLimit: 100_000,
+          campaignModelCalls: 0,
+          estimatedCostUsd: 0,
+          latestMarkdown: "x",
+          manifestUpdated: false,
+        } }),
+      });
+
+      const campaign = summary.campaigns[0];
+      expect(campaign.reportPointers.latestJson).toBe(MATRIX_ARTIFACT_NOT_CAPTURED);
+      expect(campaign.snapshotHealth).toBe("empty");
+      expect(JSON.stringify(summary)).not.toContain("ZAI_API_KEY");
+      expect(JSON.stringify(summary)).not.toContain(".rector/evidence/live/zai/latest.json");
+      await expect(readFile(path.join(staleDir, "latest.json"), "utf8")).rejects.toThrow();
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
   });
 });

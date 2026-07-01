@@ -27,7 +27,7 @@ Rector's **first** live Regolo foundation discovery campaign on branch `zai-evid
 - `.rector/evidence/live/regolo/matrix/matrix-summary.{json,md}`
 - Per-model snapshots: `.rector/evidence/live/regolo/matrix/<safe-model-id>/0/` (e.g. `phase2-live-fact-shadow-report.json`, `latest.json`, `provider-smoke.json` when copied)
 
-**Caution:** Shared canonical rollups (`.rector/evidence/live/regolo/latest.json`, root Phase 2 shadow) are **last-writer-wins** during matrix runs. Prefer `matrix-summary.json` and per-model snapshot paths for triage. Snapshots copy artifacts **incrementally after each successful live step**; `latest.json` / `provider-smoke.json` are only copied when embedded `modelId` matches the campaign (stale shared rollups are skipped).
+**Caution:** Shared canonical rollups (`.rector/evidence/live/regolo/latest.json`, root Phase 2 shadow) are **last-writer-wins** during matrix runs. For triage, treat **`matrix-summary.json` campaign rows** as authoritative: `snapshotCopiedFiles`, `snapshotSkippedArtifacts`, `snapshotHealth`, and `reportPointers` (use **`not captured`** when an artifact was not copied for that campaign). Matrix runs **clear** `.rector/evidence/live/regolo/matrix/` at start. Guarded JSON snapshots are re-validated on finalize. **Official live verification** is single-model `npm run verify:regolo-live`, not matrix comparison alone.
 
 ## Evidence layout
 

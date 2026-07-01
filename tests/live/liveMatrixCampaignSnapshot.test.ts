@@ -8,6 +8,8 @@ import {
   beginMatrixCampaignSnapshotSession,
   copyMatrixCampaignArtifactsForStep,
   finalizeMatrixCampaignSnapshot,
+  MATRIX_ARTIFACT_NOT_CAPTURED,
+  resetLiveMatrixEvidenceSnapshots,
 } from "../../src/live/liveMatrixCampaignSnapshot";
 import {
   assertLiveMatrixArtifactHasNoSecrets,
@@ -74,7 +76,9 @@ describe("incremental matrix campaign snapshots", () => {
 
       expect(snapshot.copiedFiles).toContain("phase2-live-fact-shadow-report.json");
       expect(snapshot.copiedFiles).not.toContain("latest.json");
+      expect(snapshot.reportPointers.latestJson).toBe(MATRIX_ARTIFACT_NOT_CAPTURED);
       expect(snapshot.skippedArtifacts.some((entry) => entry.destName === "latest.json")).toBe(true);
+      expect(snapshot.snapshotHealth).toBe("partial");
 
       const snapshotLatest = path.join(
         repoRoot,
@@ -113,6 +117,59 @@ describe("incremental matrix campaign snapshots", () => {
         "utf8",
       );
       expect(copied).toContain("glm-4.7");
+      expect(snapshot.reportPointers.latestJson).toContain("matrix/glm-4.7/0/latest.json");
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("drops finalize pointers when copied JSON modelId no longer matches campaign", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "matrix-snap-tamper-"));
+    try {
+      const session = await beginMatrixCampaignSnapshotSession({
+        track: "zai",
+        repoRoot,
+        safeModelId: "glm-4.7",
+        runIndex: 0,
+        modelId: "glm-4.7",
+      });
+      const tamperedPath = path.join(
+        repoRoot,
+        ".rector/evidence/live/zai/matrix/glm-4.7/0/latest.json",
+      );
+      await writeFile(
+        tamperedPath,
+        `${JSON.stringify({ modelId: "other-model", status: "passed" })}\n`,
+        "utf8",
+      );
+      session.copiedFiles.add("latest.json");
+      const snapshot = await finalizeMatrixCampaignSnapshot(session);
+
+      expect(snapshot.reportPointers.latestJson).toBe(MATRIX_ARTIFACT_NOT_CAPTURED);
+      expect(snapshot.skippedArtifacts.some((entry) => entry.destName === "latest.json")).toBe(true);
+      await expect(readFile(tamperedPath, "utf8")).rejects.toThrow();
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("clears stale matrix snapshot trees at run start", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "matrix-reset-"));
+    try {
+      const staleDir = path.join(
+        repoRoot,
+        ".rector/evidence/live/zai/matrix/glm-4.5-flash/0",
+      );
+      await mkdir(staleDir, { recursive: true });
+      await writeFile(
+        path.join(staleDir, "latest.json"),
+        `${JSON.stringify({ modelId: "wrong-model" })}\n`,
+        "utf8",
+      );
+
+      await resetLiveMatrixEvidenceSnapshots({ track: "zai", repoRoot });
+
+      await expect(readFile(path.join(staleDir, "latest.json"), "utf8")).rejects.toThrow();
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }

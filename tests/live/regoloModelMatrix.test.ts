@@ -1,4 +1,13 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
 import { describe, expect, it } from "vitest";
+
+import { getRegoloLiveEvidenceDir } from "../../src/evidence";
+import {
+  MATRIX_ARTIFACT_NOT_CAPTURED,
+  type MatrixCampaignSnapshotResult,
+} from "../../src/live/liveMatrixCampaignSnapshot";
 
 import {
   assertMatrixArtifactHasNoSecrets,
@@ -9,7 +18,30 @@ import {
   REGOLO_MATRIX_LIVE_CAMPAIGN_STEPS,
   resolveRegoloMatrixModels,
   runRegoloModelMatrix,
+  toSafeModelEvidenceId,
 } from "../../src/live/regoloModelMatrix";
+
+function mockRegoloCampaignSnapshot(input: {
+  readonly safeModelId: string;
+  readonly runIndex: number;
+  readonly modelId: string;
+}): MatrixCampaignSnapshotResult {
+  const dir = `.rector/evidence/live/regolo/matrix/${input.safeModelId}/${input.runIndex}`;
+  return {
+    evidenceSnapshotDir: dir,
+    reportPointers: {
+      latestJson: MATRIX_ARTIFACT_NOT_CAPTURED,
+      latestMd: MATRIX_ARTIFACT_NOT_CAPTURED,
+      providerSmokeJson: MATRIX_ARTIFACT_NOT_CAPTURED,
+      phase2ShadowJson: MATRIX_ARTIFACT_NOT_CAPTURED,
+    },
+    copiedFiles: [],
+    skippedArtifacts: [],
+    snapshotHealth: "empty",
+    snapshotCopiedAt: "2026-07-01T12:00:00.000Z",
+    snapshotEffectiveModelId: input.modelId,
+  };
+}
 
 describe("regoloModelMatrix parsing", () => {
   it("resolves models from REGOLO_MODELS with optional cap", () => {
@@ -108,17 +140,8 @@ describe("regoloModelMatrix env isolation and artifact hygiene", () => {
         prefilterWithProbe: false,
         probeJsonCapability: false,
       },
-      snapshotCampaignEvidence: async ({ safeModelId, runIndex }) => ({
-        evidenceSnapshotDir: `.rector/evidence/live/regolo/matrix/${safeModelId}/${runIndex}`,
-        reportPointers: {
-          latestJson: `.rector/evidence/live/regolo/matrix/${safeModelId}/${runIndex}/latest.json`,
-          latestMd: `.rector/evidence/live/regolo/matrix/${safeModelId}/${runIndex}/latest.md`,
-          providerSmokeJson: `.rector/evidence/live/regolo/matrix/${safeModelId}/${runIndex}/provider-smoke.json`,
-          phase2ShadowJson: `.rector/evidence/phase2/live-fact-shadow-report.json`,
-        },
-        copiedFiles: [],
-        skippedArtifacts: [],
-      }),
+      snapshotCampaignEvidence: async ({ safeModelId, runIndex, modelId }) =>
+        mockRegoloCampaignSnapshot({ safeModelId, runIndex, modelId }),
       runCommand: async () => ({ exitCode: 1, stdout: "", stderr: "", durationMs: 1 }),
       gateEvaluator: async () => ({
         ok: false,
@@ -147,5 +170,74 @@ describe("regoloModelMatrix env isolation and artifact hygiene", () => {
     expect(serialized).not.toContain("REGOLO_API_KEY");
     expect(formatRegoloMatrixSummaryMarkdown(summary)).toContain("Regolo live model matrix summary");
     expect(formatRegoloMatrixSummaryMarkdown(summary)).not.toContain("Z.ai live model matrix summary");
+  });
+
+  it("clears stale matrix dirs and omits misleading pointers when campaigns fail early", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "regolo-matrix-stale-"));
+    try {
+      const modelId = "qwen3.5-9b";
+      const safeModelId = toSafeModelEvidenceId(modelId);
+      const staleDir = path.join(repoRoot, ".rector/evidence/live/regolo/matrix", safeModelId, "0");
+      await mkdir(staleDir, { recursive: true });
+      await writeFile(
+        path.join(staleDir, "provider-smoke.json"),
+        `${JSON.stringify({ modelId: "wrong-model" })}\n`,
+        "utf8",
+      );
+      const regoloDir = getRegoloLiveEvidenceDir(repoRoot);
+      await mkdir(regoloDir, { recursive: true });
+      await writeFile(
+        path.join(regoloDir, "provider-smoke.json"),
+        `${JSON.stringify({ modelId: "wrong-model" })}\n`,
+        "utf8",
+      );
+
+      const summary = await runRegoloModelMatrix({
+        repoRoot,
+        models: [modelId],
+        modelSource: "REGOLO_MODEL",
+        env: {
+          REGOLO_API_KEY: "regolo-secret-should-not-serialize",
+          REGOLO_MODEL: modelId,
+        },
+        config: {
+          runsPerModel: 1,
+          skipOffline: true,
+          continueOnFailure: true,
+          prefilterWithProbe: false,
+          probeJsonCapability: false,
+        },
+        runCommand: async () => ({ exitCode: 1, stdout: "", stderr: "", durationMs: 1 }),
+        gateEvaluator: async () => ({
+          ok: false,
+          violations: ["skipped"],
+          summary: {
+            providerId: null,
+            adapterId: null,
+            modelId: null,
+            host: null,
+            harnessStatus: null,
+            scenariosPassed: 0,
+            scenariosTotal: 0,
+            campaignTokens: 0,
+            campaignTokenLimit: 100_000,
+            campaignModelCalls: 0,
+            estimatedCostUsd: 0,
+            latestMarkdown: "x",
+            manifestUpdated: false,
+          },
+        }),
+      });
+
+      const campaign = summary.campaigns[0];
+      expect(campaign.reportPointers.providerSmokeJson).toBe(MATRIX_ARTIFACT_NOT_CAPTURED);
+      expect(campaign.snapshotHealth).toBe("empty");
+      expect(JSON.stringify(summary)).not.toContain("REGOLO_API_KEY");
+      expect(JSON.stringify(summary)).not.toContain("ZAI_API_KEY");
+      expect(JSON.stringify(summary)).not.toContain(".rector/evidence/live/regolo/latest.json");
+      await expect(readFile(path.join(staleDir, "provider-smoke.json"), "utf8")).rejects.toThrow();
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
   });
 });

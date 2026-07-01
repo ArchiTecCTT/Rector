@@ -26,8 +26,12 @@ import {
   copyMatrixCampaignArtifactsForStep,
   finalizeMatrixCampaignSnapshot,
   getMatrixCampaignSnapshotRelativeDir,
+  matrixCampaignNotCapturedPointers,
+  resetLiveMatrixEvidenceSnapshots,
   snapshotMatrixCampaignEvidenceLegacy,
+  type MatrixCampaignSnapshotResult,
   type MatrixSkippedArtifact,
+  type MatrixSnapshotHealth,
 } from "./liveMatrixCampaignSnapshot";
 import { ZaiHarnessReportSchema } from "./zaiHarnessReport";
 import {
@@ -120,8 +124,11 @@ export interface ZaiMatrixCampaignResult {
   readonly rating: string;
   readonly evidenceSnapshotDir: string;
   readonly reportPointers: ZaiMatrixCampaignReportPointers;
-  readonly snapshotCopiedFiles?: readonly string[];
-  readonly snapshotSkippedArtifacts?: readonly MatrixSkippedArtifact[];
+  readonly snapshotCopiedFiles: readonly string[];
+  readonly snapshotSkippedArtifacts: readonly MatrixSkippedArtifact[];
+  readonly snapshotHealth: MatrixSnapshotHealth;
+  readonly snapshotCopiedAt?: string;
+  readonly snapshotEffectiveModelId: string;
   readonly probePrefilterSkipped?: boolean;
 }
 
@@ -162,12 +169,7 @@ export async function snapshotZaiMatrixCampaignEvidence(input: {
   readonly safeModelId: string;
   readonly runIndex: number;
   readonly modelId?: string;
-}): Promise<{
-  readonly evidenceSnapshotDir: string;
-  readonly reportPointers: ZaiMatrixCampaignReportPointers;
-  readonly copiedFiles: readonly string[];
-  readonly skippedArtifacts: readonly MatrixSkippedArtifact[];
-}> {
+}): Promise<MatrixCampaignSnapshotResult> {
   const snapshot = await snapshotMatrixCampaignEvidenceLegacy({
     track: "zai",
     repoRoot: input.repoRoot,
@@ -175,12 +177,7 @@ export async function snapshotZaiMatrixCampaignEvidence(input: {
     runIndex: input.runIndex,
     modelId: input.modelId ?? input.safeModelId,
   });
-  return {
-    evidenceSnapshotDir: snapshot.evidenceSnapshotDir,
-    reportPointers: snapshot.reportPointers,
-    copiedFiles: snapshot.copiedFiles,
-    skippedArtifacts: snapshot.skippedArtifacts,
-  };
+  return snapshot;
 }
 
 export { dedupeZaiModelsPreserveOrder, parseZaiModelsList } from "./zaiModelsEnv";
@@ -319,7 +316,9 @@ export async function runZaiModelMatrix(options: {
     readonly repoRoot: string;
     readonly safeModelId: string;
     readonly runIndex: number;
-  }) => ReturnType<typeof snapshotZaiMatrixCampaignEvidence>;
+    readonly modelId: string;
+  }) => Promise<MatrixCampaignSnapshotResult> | MatrixCampaignSnapshotResult;
+  readonly resetMatrixSnapshots?: boolean;
 }): Promise<ZaiMatrixSummary> {
   const repoRoot = path.resolve(options.repoRoot);
   const env = options.env ?? process.env;
@@ -340,6 +339,10 @@ export async function runZaiModelMatrix(options: {
       updateManifestOnPass: false,
       requireCampaignTracks: true,
     }));
+
+  if (options.resetMatrixSnapshots !== false) {
+    await resetLiveMatrixEvidenceSnapshots({ track: "zai", repoRoot });
+  }
 
   const generatedAt = (options.now?.() ?? new Date()).toISOString();
   const campaigns: ZaiMatrixCampaignResult[] = [];
@@ -413,7 +416,11 @@ export async function runZaiModelMatrix(options: {
           grade: "F",
           rating: "probe_not_callable",
           evidenceSnapshotDir,
-          reportPointers: sharedCanonicalReportPointers(),
+          reportPointers: matrixCampaignNotCapturedPointers(),
+          snapshotCopiedFiles: [],
+          snapshotSkippedArtifacts: [],
+          snapshotHealth: "empty",
+          snapshotEffectiveModelId: modelId,
           probePrefilterSkipped: true,
         });
       }
@@ -472,9 +479,10 @@ export async function runZaiModelMatrix(options: {
         scorecardPassed,
       });
 
-      const snapshot = options.snapshotCampaignEvidence
-        ? await snapshotCampaignEvidence({ repoRoot, safeModelId, runIndex })
-        : await finalizeMatrixCampaignSnapshot(snapshotSession);
+      const rawSnapshot = options.snapshotCampaignEvidence
+        ? await snapshotCampaignEvidence({ repoRoot, safeModelId, runIndex, modelId })
+        : await finalizeMatrixCampaignSnapshot(snapshotSession, { now: options.now });
+      const snapshot = ensureCampaignSnapshot(rawSnapshot, modelId, options.now);
 
       campaigns.push({
         modelId,
@@ -489,12 +497,11 @@ export async function runZaiModelMatrix(options: {
         rating,
         evidenceSnapshotDir: snapshot.evidenceSnapshotDir,
         reportPointers: snapshot.reportPointers,
-        ...("copiedFiles" in snapshot && snapshot.copiedFiles.length > 0
-          ? { snapshotCopiedFiles: snapshot.copiedFiles }
-          : {}),
-        ...("skippedArtifacts" in snapshot && snapshot.skippedArtifacts.length > 0
-          ? { snapshotSkippedArtifacts: snapshot.skippedArtifacts }
-          : {}),
+        snapshotCopiedFiles: snapshot.copiedFiles,
+        snapshotSkippedArtifacts: snapshot.skippedArtifacts,
+        snapshotHealth: snapshot.snapshotHealth,
+        snapshotEffectiveModelId: snapshot.snapshotEffectiveModelId,
+        ...(snapshot.snapshotCopiedAt ? { snapshotCopiedAt: snapshot.snapshotCopiedAt } : {}),
       });
 
       if (campaignFailed && !config.continueOnFailure) {
@@ -595,11 +602,12 @@ export function formatZaiMatrixSummaryMarkdown(summary: ZaiMatrixSummary): strin
   );
   lines.push("");
   for (const campaign of summary.campaigns) {
-    const skipped = campaign.snapshotSkippedArtifacts?.length
-      ? ` (skipped: ${campaign.snapshotSkippedArtifacts.map((entry) => entry.destName).join(", ")})`
+    const skipped = campaign.snapshotSkippedArtifacts.length
+      ? ` (skipped: ${campaign.snapshotSkippedArtifacts.map((entry) => `${entry.destName}=${entry.reason}`).join(", ")})`
       : "";
+    const latestPointer = formatMatrixReportPointer(campaign.reportPointers.latestJson);
     lines.push(
-      `- ${campaign.modelId} run ${campaign.runIndex + 1}: \`${campaign.evidenceSnapshotDir}/\` (latest: \`${campaign.reportPointers.latestJson}\`)${skipped}`,
+      `- ${campaign.modelId} run ${campaign.runIndex + 1}: \`${campaign.evidenceSnapshotDir}/\` health=${campaign.snapshotHealth} copied=[${campaign.snapshotCopiedFiles.join(", ") || "none"}] latest=${latestPointer}${skipped}`,
     );
   }
   lines.push("");
@@ -622,12 +630,28 @@ export function formatZaiMatrixSummaryMarkdown(summary: ZaiMatrixSummary): strin
   return `${lines.join("\n")}\n`;
 }
 
-function sharedCanonicalReportPointers(): ZaiMatrixCampaignReportPointers {
+function formatMatrixReportPointer(pointer: string): string {
+  return pointer.includes("/") ? `\`${pointer}\`` : pointer;
+}
+
+function ensureCampaignSnapshot(
+  snapshot: MatrixCampaignSnapshotResult,
+  fallbackModelId: string,
+  now?: () => Date,
+): MatrixCampaignSnapshotResult {
+  const copiedFiles = snapshot.copiedFiles ?? [];
+  const skippedArtifacts = snapshot.skippedArtifacts ?? [];
+  const snapshotHealth =
+    snapshot.snapshotHealth ??
+    (copiedFiles.length === 0 ? "empty" : copiedFiles.length === 4 ? "complete" : "partial");
   return {
-    latestJson: ".rector/evidence/live/zai/latest.json",
-    latestMd: ".rector/evidence/live/zai/latest.md",
-    providerSmokeJson: ".rector/evidence/live/zai/provider-smoke.json",
-    phase2ShadowJson: ".rector/evidence/phase2/live-fact-shadow-report.json",
+    evidenceSnapshotDir: snapshot.evidenceSnapshotDir,
+    reportPointers: snapshot.reportPointers,
+    copiedFiles,
+    skippedArtifacts,
+    snapshotHealth,
+    snapshotCopiedAt: snapshot.snapshotCopiedAt ?? (now?.() ?? new Date()).toISOString(),
+    snapshotEffectiveModelId: snapshot.snapshotEffectiveModelId ?? fallbackModelId,
   };
 }
 
