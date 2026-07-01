@@ -14,6 +14,12 @@ import {
 } from "./gateZaiLiveEvidence";
 import { sanitizeHarnessEvidenceValue, secretLeakFindings } from "./harnessEvidence";
 import { ZaiHarnessReportSchema } from "./zaiHarnessReport";
+import {
+  buildZaiLiveDiagnostics,
+  renderZaiLiveDiagnosticsMarkdown,
+  ZaiLiveDiagnosticsSchema,
+  type ZaiLiveDiagnostics,
+} from "./liveHarnessDiagnostics";
 
 export const ZAI_MATRIX_SUMMARY_SCHEMA_VERSION = "rector.zai-live-matrix-summary.v1";
 
@@ -125,6 +131,7 @@ export interface ZaiMatrixSummary {
   readonly failedCount: number;
   readonly skippedProbeCount: number;
   readonly probePrefilter?: ZaiMatrixProbePrefilterSummary;
+  readonly diagnostics: ZaiLiveDiagnostics;
 }
 
 export function getZaiLiveMatrixEvidenceDir(repoRoot?: string): string {
@@ -522,6 +529,7 @@ export async function runZaiModelMatrix(options: {
     passedCount,
     failedCount,
     skippedProbeCount,
+    diagnostics: buildMatrixDiagnostics(campaigns),
     ...(probePrefilter ? { probePrefilter } : {}),
   };
 
@@ -555,6 +563,7 @@ export function formatZaiMatrixSummaryMarkdown(summary: ZaiMatrixSummary): strin
   );
   lines.push(`Model source: ${summary.modelSource}`);
   lines.push(`Runs per model: ${summary.config.runsPerModel}`);
+  lines.push(renderZaiLiveDiagnosticsMarkdown(summary.diagnostics).trimEnd());
   lines.push("");
   lines.push("## Models");
   lines.push("");
@@ -648,6 +657,28 @@ function truthyEnv(raw: string | undefined): boolean {
   if (!raw?.trim()) return false;
   const normalized = raw.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+export function buildMatrixDiagnostics(campaigns: readonly ZaiMatrixCampaignResult[]): ZaiLiveDiagnostics {
+  const matrixStepDurationMs = campaigns.flatMap((campaign) => campaign.steps.map((step) => step.durationMs));
+  const campaignDurationMs = campaigns.map((campaign) => campaign.durationMs);
+  const campaignTokens = campaigns
+    .map((campaign) => campaign.gate?.campaignTokens ?? 0)
+    .filter((value) => value > 0);
+  const totalTokens = campaignTokens.reduce((sum, value) => sum + value, 0);
+  return ZaiLiveDiagnosticsSchema.parse(
+    buildZaiLiveDiagnostics({
+      matrixStepDurationMs,
+      campaignDurationMs,
+      tokens: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens,
+        modelCalls: 0,
+        estimatedCostUsd: 0,
+      },
+    }),
+  );
 }
 
 function truncateRedactedTail(stderr: string, maxLen = 400): string {

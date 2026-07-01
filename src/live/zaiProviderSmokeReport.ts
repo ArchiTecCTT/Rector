@@ -18,6 +18,14 @@ import {
   type LiveProviderRejection,
 } from "./liveProviderDiscovery";
 import { discoverLiveProviderFromRepo } from "./repoLiveProviderDiscovery";
+import {
+  buildZaiLiveDiagnostics,
+  classifyLiveProviderFailureFromError,
+  renderZaiLiveDiagnosticsMarkdown,
+  ZaiLiveDiagnosticsSchema,
+  type ZaiLiveDiagnostics,
+  type ZaiLiveProviderFailureTaxonomy,
+} from "./liveHarnessDiagnostics";
 
 export const ZAI_PROVIDER_SMOKE_REPORT_SCHEMA_VERSION = "rector.zai-provider-smoke.v1";
 
@@ -32,12 +40,21 @@ const SmokeTokenUsageSchema = z
 
 const SmokeErrorSchema = z
   .object({
-    kind: z.enum(["provider_config", "provider_http", "provider_timeout", "provider_json", "provider_unknown"]),
+    kind: z.enum([
+      "provider_config",
+      "rate_limit",
+      "quota",
+      "provider_http",
+      "provider_timeout",
+      "provider_json",
+      "provider_unknown",
+    ]),
     message: z.string().min(1),
     host: z.string().min(1).optional(),
     providerCode: z.string().min(1).optional(),
     status: z.number().int().positive().optional(),
     retryable: z.boolean().optional(),
+    taxonomy: z.string().min(1).optional(),
   })
   .strict();
 
@@ -56,6 +73,7 @@ export const ZaiProviderSmokeReportSchema = z
     estimatedCostUsd: z.number().nonnegative(),
     latencyMs: z.number().int().nonnegative(),
     error: SmokeErrorSchema.optional(),
+    diagnostics: ZaiLiveDiagnosticsSchema,
     notes: z.array(z.string().min(1)),
   })
   .strict();
@@ -214,31 +232,56 @@ function validateSelectedProvider(selected: DiscoveredLiveProvider): z.infer<typ
 
 function classifyProviderError(error: unknown, host: string): z.infer<typeof SmokeErrorSchema> {
   if (error instanceof ProviderError) {
-    if (error.code === "PROVIDER_HTTP_ERROR") {
+    if (error.code === "CONFIG_INVALID" || error.code === "NETWORK_DISABLED") {
       return {
-        kind: "provider_http",
+        kind: "provider_config",
         message: safeMessage(error),
         host,
         providerCode: error.code,
-        ...(error.status ? { status: error.status } : {}),
-        retryable: error.retryable,
       };
     }
-    if (error.code === "ABORTED") {
-      return { kind: "provider_timeout", message: safeMessage(error), host, providerCode: error.code };
-    }
-    if (error.code === "CONFIG_INVALID" || error.code === "NETWORK_DISABLED") {
-      return { kind: "provider_config", message: safeMessage(error), host, providerCode: error.code };
-    }
-    if (error.code === "PROVIDER_RESPONSE_INVALID") {
-      return { kind: "provider_json", message: safeMessage(error), host, providerCode: error.code };
-    }
-    return { kind: "provider_unknown", message: safeMessage(error), host, providerCode: error.code };
+    const classified = classifyLiveProviderFailureFromError(error);
+    return smokeErrorFromClassification(classified, safeMessage(error), host);
   }
   if (isAbortLike(error)) {
-    return { kind: "provider_timeout", message: safeMessage(error), host };
+    const classified = classifyLiveProviderFailureFromError(error);
+    return smokeErrorFromClassification(classified, safeMessage(error), host);
   }
-  return { kind: "provider_unknown", message: safeMessage(error), host };
+  const classified = classifyLiveProviderFailureFromError(error);
+  return smokeErrorFromClassification(classified, safeMessage(error), host);
+}
+
+function smokeErrorFromClassification(
+  classification: ReturnType<typeof classifyLiveProviderFailureFromError>,
+  message: string,
+  host: string,
+): z.infer<typeof SmokeErrorSchema> {
+  return {
+    kind: taxonomyToSmokeErrorKind(classification.taxonomy),
+    message,
+    host,
+    taxonomy: classification.taxonomy,
+    ...(classification.providerCode ? { providerCode: classification.providerCode } : {}),
+    ...(classification.status !== undefined ? { status: classification.status } : {}),
+    ...(classification.retryable !== undefined ? { retryable: classification.retryable } : {}),
+  };
+}
+
+function taxonomyToSmokeErrorKind(taxonomy: ZaiLiveProviderFailureTaxonomy): z.infer<typeof SmokeErrorSchema>["kind"] {
+  switch (taxonomy) {
+    case "rate_limit":
+      return "rate_limit";
+    case "quota":
+      return "quota";
+    case "timeout":
+      return "provider_timeout";
+    case "provider_http":
+      return "provider_http";
+    case "provider_json":
+      return "provider_json";
+    default:
+      return "provider_unknown";
+  }
 }
 
 function validateJsonContent(content: string, host: string): z.infer<typeof SmokeErrorSchema> | undefined {
@@ -266,6 +309,7 @@ function failedReportFromRejection(generatedAt: string, rejection: LiveProviderR
     tokenUsage: tokenUsage(ZERO_USAGE),
     estimatedCostUsd: 0,
     latencyMs: 0,
+    diagnostics: buildProviderSmokeDiagnostics(ZERO_USAGE, 0),
     error: {
       kind: "provider_config",
       message: messageForRejection(rejection),
@@ -292,6 +336,7 @@ function skippedReport(generatedAt: string, skippedReason: string): ZaiProviderS
     tokenUsage: tokenUsage(ZERO_USAGE),
     estimatedCostUsd: 0,
     latencyMs: 0,
+    diagnostics: buildProviderSmokeDiagnostics(ZERO_USAGE, 0),
     notes: [
       "Z.ai provider smoke did not run model calls.",
       "Set RECTOR_LIVE_PROVIDER=zai and RECTOR_ZAI_PROVIDER_SMOKE=1 with OpenAI-compatible Z.ai credentials to run it.",
@@ -320,6 +365,7 @@ function baseReport(
     tokenUsage: tokenUsage(usage),
     estimatedCostUsd: usage.estimatedUsd,
     latencyMs,
+    diagnostics: buildProviderSmokeDiagnostics(usage, latencyMs, error),
     ...(error ? { error } : {}),
     notes: [
       "Z.ai smoke performs one non-mutating JSON-only chat completion.",
@@ -358,6 +404,7 @@ export function renderZaiProviderSmokeMarkdown(report: ZaiProviderSmokeReport): 
   lines.push(`- Tokens: ${report.tokenUsage.totalTokens}`);
   lines.push(`- Cost USD: ${report.estimatedCostUsd.toFixed(6)}`);
   lines.push(`- Latency ms: ${report.latencyMs}`);
+  lines.push(renderZaiLiveDiagnosticsMarkdown(report.diagnostics).trimEnd());
   if (report.error) {
     lines.push("", "## Error", "");
     lines.push(`- Kind: ${report.error.kind}`);
@@ -369,6 +416,27 @@ export function renderZaiProviderSmokeMarkdown(report: ZaiProviderSmokeReport): 
   for (const note of report.notes) lines.push(`> ${safeMarkdown(note)}`);
   lines.push("");
   return `${lines.join("\n")}\n`;
+}
+
+function buildProviderSmokeDiagnostics(
+  usage: LLMUsage,
+  latencyMs: number,
+  error?: z.infer<typeof SmokeErrorSchema>,
+): ZaiLiveDiagnostics {
+  const failureTaxonomy = error?.taxonomy
+    ? { [error.taxonomy as ZaiLiveProviderFailureTaxonomy]: 1 }
+    : undefined;
+  return buildZaiLiveDiagnostics({
+    failureTaxonomy,
+    providerCallLatencyMs: latencyMs > 0 ? [latencyMs] : [],
+    tokens: {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+      modelCalls: usage.modelCalls,
+      estimatedCostUsd: usage.estimatedUsd,
+    },
+  });
 }
 
 function tokenUsage(usage: LLMUsage): z.infer<typeof SmokeTokenUsageSchema> {

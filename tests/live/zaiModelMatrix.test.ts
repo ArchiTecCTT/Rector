@@ -200,6 +200,7 @@ describe("runZaiModelMatrix orchestration", () => {
     });
 
     expect(summary.schemaVersion).toBe(ZAI_MATRIX_SUMMARY_SCHEMA_VERSION);
+    expect(summary.diagnostics.latencyMs.matrixSteps?.count).toBeGreaterThan(0);
     expect(summary.campaigns).toHaveLength(2);
     expect(summary.campaigns.every((c) => c.status === "pass")).toBe(true);
     expect(invocations.filter((i) => i.model === "glm-4.7").length).toBeGreaterThan(0);

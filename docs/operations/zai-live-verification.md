@@ -74,6 +74,16 @@ Matrix gate runs disable manifest updates so comparing models does not thrash `.
 
 **Shared rollup overwrite:** each model campaign still writes the same canonical paths (`.rector/evidence/live/zai/latest.json`, provider smoke, Phase 2 shadow). The **last** model in the run wins those shared files. Use `matrix-summary.json` **and** per-model snapshots under `.rector/evidence/live/zai/matrix/<safe-model-id>/<run-index>/` for isolated evidence pointers (matrix is comparison-only; single-model `verify:zai-live` remains required for manifest-backed live verification).
 
+### Harness diagnostics (operator / partner triage)
+
+Live harness, provider smoke, and matrix summaries include a `diagnostics` block (`rector.zai-live-diagnostics.v1`):
+
+- **Provider failure taxonomy** — `rate_limit`, `quota`, `timeout`, `provider_http`, `provider_json`, `unknown` (derived from provider HTTP status, retryability, and error codes when available; otherwise `unknown`).
+- **Latency aggregates** — min/avg/p50/p95/max for provider calls, harness scenarios, and (matrix) campaign/step durations.
+- **Token totals** — input/output/total tokens, model calls, and estimated USD where tracked.
+
+Markdown rollups (`latest.md`, `provider-smoke.md`, `matrix-summary.md`) echo the same diagnostics tables. Artifacts remain redacted (no API keys or auth headers).
+
 ### How tests relate to live verification
 
 - **Unit/integration (`npm test`)** — matrix parsing, env isolation, secret redaction, and orchestration use **injected command runners**; no network, no real API keys, no live gate pass claims.

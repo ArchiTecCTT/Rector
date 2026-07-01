@@ -65,6 +65,18 @@ import {
   type ZaiHarnessScorecard,
   type ZaiHarnessScenarioStatus,
 } from "./harnessScorecard";
+import {
+  buildZaiLiveDiagnostics,
+  classifyLiveProviderFailureFromError,
+  emptyFailureTaxonomyCounts,
+  incrementFailureTaxonomy,
+  renderZaiLiveDiagnosticsMarkdown,
+  taxonomyFromHarnessFailureKind,
+  ZaiLiveDiagnosticsSchema,
+  type LiveProviderFailureClassification,
+  type ZaiLiveDiagnostics,
+  type ZaiLiveProviderFailureTaxonomy,
+} from "./liveHarnessDiagnostics";
 import { zaiHarnessScenarios, type ZaiHarnessScenario } from "./harnessScenarios";
 
 export const ZAI_HARNESS_REPORT_SCHEMA_VERSION = "rector.zai-harness-smoke.v1";
@@ -113,6 +125,10 @@ const FailureSchema = z
     kind: z.enum(ZAI_HARNESS_FAILURE_KINDS),
     message: z.string().min(1),
     detail: z.string().min(1).optional(),
+    taxonomy: z.string().min(1).optional(),
+    status: z.number().int().positive().optional(),
+    retryable: z.boolean().optional(),
+    providerCode: z.string().min(1).optional(),
   })
   .strict();
 
@@ -199,6 +215,7 @@ export const ZaiHarnessReportSchema = z
     tokenUsage: TokenUsageReportSchema,
     costReport: z.unknown(),
     scorecard: ScorecardSchema,
+    diagnostics: ZaiLiveDiagnosticsSchema,
     artifacts: z.record(z.string().min(1)),
     failures: z.array(FailureSchema),
     notes: z.array(z.string().min(1)),
@@ -420,6 +437,7 @@ export async function runZaiHarnessSmoke(options: ZaiHarnessSmokeOptions = {}): 
     costReport,
     scorecard,
     failures: topLevelFailures,
+    providerCalls: recordingProvider.providerCalls,
   });
 
   return writeHarnessReport(report, {
@@ -863,12 +881,14 @@ function classifyRunResultFailures(
 function classifyThrownFailure(error: unknown): ZaiHarnessFailure {
   if (error instanceof ProviderError) {
     if (error.code === "BUDGET_DENIED") return failure("token_budget", safeMessage(error));
-    if (error.code === "PROVIDER_HTTP_ERROR") return failure("http", safeMessage(error), error.status ? `HTTP ${error.status}` : undefined);
-    if (error.code === "ABORTED") return failure("timeout", safeMessage(error));
-    if (error.code === "PROVIDER_RESPONSE_INVALID") return failure("json", safeMessage(error));
-    if (error.code === "CONFIG_INVALID" || error.code === "NETWORK_DISABLED") return failure("provider_config", safeMessage(error));
+    if (error.code === "CONFIG_INVALID" || error.code === "NETWORK_DISABLED") {
+      return failure("provider_config", safeMessage(error), undefined, { providerCode: error.code });
+    }
+    return providerFailure(classifyLiveProviderFailureFromError(error), safeMessage(error), error.status ? `HTTP ${error.status}` : undefined);
   }
-  if (isAbortLike(error)) return failure("timeout", safeMessage(error));
+  if (isAbortLike(error)) {
+    return providerFailure(classifyLiveProviderFailureFromError(error), safeMessage(error));
+  }
   return classifyRunTextFailure(safeMessage(error));
 }
 
@@ -877,9 +897,19 @@ function classifyRunTextFailure(text: string): ZaiHarnessFailure {
   if (lower.includes("budget_denied") || lower.includes("token budget") || lower.includes("exceed") && lower.includes("token")) {
     return failure("token_budget", firstLine(text) || "Token budget failure.");
   }
-  if (lower.includes("provider_http_error") || lower.includes("http ")) return failure("http", firstLine(text) || "Provider HTTP failure.");
-  if (lower.includes("abort") || lower.includes("timeout")) return failure("timeout", firstLine(text) || "Provider timeout.");
-  if (lower.includes("json") || lower.includes("parse")) return failure("json", firstLine(text) || "JSON/schema failure.");
+  const providerClassified = classifyLiveProviderFailureFromError(new Error(text));
+  if (providerClassified.taxonomy !== "unknown") {
+    return providerFailure(providerClassified, firstLine(text) || "Provider failure.");
+  }
+  if (lower.includes("provider_http_error") || lower.includes("http ")) {
+    return providerFailure({ taxonomy: "provider_http" }, firstLine(text) || "Provider HTTP failure.");
+  }
+  if (lower.includes("abort") || lower.includes("timeout")) {
+    return providerFailure({ taxonomy: "timeout" }, firstLine(text) || "Provider timeout.");
+  }
+  if (lower.includes("json") || lower.includes("parse")) {
+    return providerFailure({ taxonomy: "provider_json" }, firstLine(text) || "JSON/schema failure.");
+  }
   if (lower.includes("planner") || lower.includes("planner_invalid")) return failure("planner", firstLine(text) || "Planner failure.");
   if (lower.includes("skeptic") || lower.includes("skeptic_invalid")) return failure("skeptic", firstLine(text) || "Skeptic failure.");
   if (lower.includes("crucible")) return failure("crucible", firstLine(text) || "Crucible failure.");
@@ -995,6 +1025,7 @@ function buildReport(input: {
   readonly costReport: unknown;
   readonly scorecard: ZaiHarnessScorecard;
   readonly failures: readonly ZaiHarnessFailure[];
+  readonly providerCalls?: readonly ProviderCallRecord[];
 }): ZaiHarnessReport {
   const passedCount = input.scenarioReports.filter((scenario) => scenario.status === "passed").length;
   const failedCount = input.scenarioReports.filter((scenario) => scenario.status === "failed").length;
@@ -1023,6 +1054,11 @@ function buildReport(input: {
     tokenUsage: input.tokenUsage,
     costReport: input.costReport,
     scorecard: input.scorecard,
+    diagnostics: buildHarnessDiagnostics({
+      scenarioReports: input.scenarioReports,
+      providerCalls: input.providerCalls,
+      tokenUsage: input.tokenUsage,
+    }),
     artifacts: artifactPointers(input.runId),
     failures: input.failures,
     notes: [
@@ -1135,6 +1171,7 @@ export function renderZaiHarnessMarkdown(report: ZaiHarnessReport): string {
   lines.push(`- Scenarios: ${report.passedCount} passed / ${report.failedCount} failed / ${report.skippedCount} skipped`);
   lines.push(`- Tokens: ${report.tokenUsage.total.totalTokens} / ${report.tokenUsage.limits.maxTotalTokens}`);
   lines.push(`- Scorecard passed: ${report.scorecard.passed}`);
+  lines.push(renderZaiLiveDiagnosticsMarkdown(report.diagnostics).trimEnd());
   lines.push("", "## Scenarios", "");
   lines.push("| scenario | status | run phase | mutations | events | facts | tokens | failures |");
   lines.push("| --- | --- | --- | ---: | ---: | ---: | ---: | --- |");
@@ -1193,8 +1230,80 @@ function reportFailures(scenarios: readonly ZaiHarnessScenarioReport[], scorecar
   return dedupeFailures(failures);
 }
 
-function failure(kind: ZaiHarnessFailureKind, message: string, detail?: string): ZaiHarnessFailure {
-  return { kind, message: redactHarnessString(message), ...(detail ? { detail: redactHarnessString(detail) } : {}) };
+function failure(
+  kind: ZaiHarnessFailureKind,
+  message: string,
+  detail?: string,
+  metadata?: Pick<ZaiHarnessFailure, "taxonomy" | "status" | "retryable" | "providerCode">,
+): ZaiHarnessFailure {
+  return {
+    kind,
+    message: redactHarnessString(message),
+    ...(detail ? { detail: redactHarnessString(detail) } : {}),
+    ...(metadata ?? {}),
+  };
+}
+
+function providerFailure(
+  classification: LiveProviderFailureClassification,
+  message: string,
+  detail?: string,
+): ZaiHarnessFailure {
+  return failure(taxonomyToHarnessFailureKind(classification.taxonomy), message, detail, {
+    taxonomy: classification.taxonomy,
+    ...(classification.status !== undefined ? { status: classification.status } : {}),
+    ...(classification.retryable !== undefined ? { retryable: classification.retryable } : {}),
+    ...(classification.providerCode ? { providerCode: classification.providerCode } : {}),
+  });
+}
+
+function taxonomyToHarnessFailureKind(taxonomy: ZaiLiveProviderFailureTaxonomy): ZaiHarnessFailureKind {
+  switch (taxonomy) {
+    case "rate_limit":
+      return "rate_limit";
+    case "quota":
+      return "quota";
+    case "timeout":
+      return "timeout";
+    case "provider_http":
+      return "provider_http";
+    case "provider_json":
+      return "provider_json";
+    default:
+      return "unknown";
+  }
+}
+
+function buildHarnessDiagnostics(input: {
+  readonly scenarioReports: readonly ZaiHarnessScenarioReport[];
+  readonly providerCalls?: readonly ProviderCallRecord[];
+  readonly tokenUsage: ZaiHarnessTokenUsageReport;
+}): ZaiLiveDiagnostics {
+  const failureTaxonomy = emptyFailureTaxonomyCounts();
+  const collectFailure = (item: ZaiHarnessFailure): void => {
+    const taxonomy = (item.taxonomy as ZaiLiveProviderFailureTaxonomy | undefined)
+      ?? taxonomyFromHarnessFailureKind(item.kind);
+    if (taxonomy) incrementFailureTaxonomy(failureTaxonomy, taxonomy);
+  };
+  for (const scenario of input.scenarioReports) {
+    for (const item of scenario.failures) collectFailure(item);
+  }
+  for (const call of input.providerCalls ?? []) {
+    if (call.failure) collectFailure(call.failure);
+  }
+
+  return buildZaiLiveDiagnostics({
+    failureTaxonomy,
+    providerCallLatencyMs: (input.providerCalls ?? []).map((call) => call.latencyMs),
+    scenarioDurationMs: input.scenarioReports.map((scenario) => scenario.durationMs),
+    tokens: {
+      inputTokens: input.tokenUsage.total.inputTokens,
+      outputTokens: input.tokenUsage.total.outputTokens,
+      totalTokens: input.tokenUsage.total.totalTokens,
+      modelCalls: input.tokenUsage.total.modelCalls,
+      estimatedCostUsd: input.tokenUsage.total.estimatedUsd,
+    },
+  });
 }
 
 function failureFromRejection(rejection: LiveProviderRejection): ZaiHarnessFailure {

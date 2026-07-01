@@ -165,6 +165,37 @@ describe("Z.ai provider smoke report", () => {
     }
   });
 
+  it("classifies HTTP 429 as rate_limit", async () => {
+    class RateLimitedProvider extends SmokeProvider {
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.requests.push(request);
+        throw new ProviderError({
+          code: "PROVIDER_HTTP_ERROR",
+          provider: "openai-compatible",
+          status: 429,
+          retryable: true,
+          message: "OpenAI-Compatible request failed with HTTP 429",
+        });
+      }
+    }
+
+    const outputDir = await tempDir();
+    try {
+      const report = await runZaiProviderSmoke({
+        outputDir,
+        env: { RECTOR_LIVE_PROVIDER: "zai", RECTOR_ZAI_PROVIDER_SMOKE: "1" },
+        now: fixedNow,
+        providerDiscovery: async () => ({ selected: discovered(new RateLimitedProvider()), rejections: [] }),
+      });
+
+      expect(report.status).toBe("failed");
+      expect(report.error).toMatchObject({ kind: "rate_limit", taxonomy: "rate_limit", status: 429, retryable: true });
+      expect(report.diagnostics.failureTaxonomy.rate_limit).toBe(1);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("classifies HTTP provider errors", async () => {
     class HttpFailureProvider extends SmokeProvider {
       override async invoke(request: LLMRequest): Promise<LLMResponse> {

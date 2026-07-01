@@ -4,7 +4,8 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ZAI_HARNESS_SCORECARD_SCHEMA_VERSION } from "../../src/live/harnessScorecard";
+import { ZAI_HARNESS_FAILURE_KINDS, ZAI_HARNESS_SCORECARD_SCHEMA_VERSION } from "../../src/live/harnessScorecard";
+import { buildZaiLiveDiagnostics } from "../../src/live/liveHarnessDiagnostics";
 import {
   ZAI_HARNESS_REPORT_SCHEMA_VERSION,
   ZaiHarnessReportSchema,
@@ -375,29 +376,24 @@ async function writePassingCampaignFixture(
     passedCount: 3,
     failedCount: 0,
     skippedCount: 0,
-    failureCounts: Object.fromEntries(
-      [
-        "provider_config",
-        "http",
-        "timeout",
-        "json",
-        "planner",
-        "skeptic",
-        "crucible",
-        "unsafe_unexpected_mutation",
-        "missing_evidence",
-        "secret_leak",
-        "token_budget",
-        "scorecard",
-        "unknown",
-      ].map((kind) => [kind, 0]),
-    ),
+    failureCounts: Object.fromEntries(ZAI_HARNESS_FAILURE_KINDS.map((kind) => [kind, 0])),
     mutationFree: true,
     evidenceComplete: true,
     noSecretLeaks: true,
     withinTokenBudget: true,
     notes: ["fixture"],
   };
+
+  const harnessDiagnostics = buildZaiLiveDiagnostics({
+    scenarioDurationMs: [1, 1, 1],
+    tokens: {
+      inputTokens: harnessTokens,
+      outputTokens: 0,
+      totalTokens: harnessTokens,
+      modelCalls,
+      estimatedCostUsd: 0.01,
+    },
+  });
 
   const latest = ZaiHarnessReportSchema.parse({
     schemaVersion: ZAI_HARNESS_REPORT_SCHEMA_VERSION,
@@ -417,6 +413,7 @@ async function writePassingCampaignFixture(
     tokenUsage,
     costReport: { status: "within_budget" },
     scorecard,
+    diagnostics: harnessDiagnostics,
     artifacts: {
       harnessReportJson: options.artifactPointerEscape ?? `runs/${RUN_ID}/harness-report.json`,
       harnessReportMarkdown: `runs/${RUN_ID}/harness-report.md`,
@@ -484,6 +481,16 @@ async function writePassingCampaignFixture(
     },
     estimatedCostUsd: 0.0001,
     latencyMs: 12,
+    diagnostics: buildZaiLiveDiagnostics({
+      providerCallLatencyMs: [12],
+      tokens: {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        modelCalls: options.zeroModelCalls ? 0 : 1,
+        estimatedCostUsd: 0.0001,
+      },
+    }),
     notes: ["fixture"],
   });
   await writeFile(path.join(zaiDir, "provider-smoke.json"), `${JSON.stringify(providerSmoke, null, 2)}\n`, "utf8");

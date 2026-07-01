@@ -8,6 +8,7 @@ import { DEFAULT_ZAI_CAMPAIGN_TOKEN_LIMIT } from "../../src/evidence";
 import { runOrchestratedChatRun, type ChatRunResult } from "../../src/orchestration/chatRunner";
 import {
   ProviderCapabilityMetadataSchema,
+  ProviderError,
   type LLMProvider,
   type LLMRequest,
   type LLMResponse,
@@ -233,6 +234,41 @@ describe("Z.ai harness smoke runner", () => {
 
   it("keeps the default harness runner wired to runOrchestratedChatRun", () => {
     expect(DEFAULT_ZAI_HARNESS_CHAT_RUNNER).toBe(runOrchestratedChatRun);
+  });
+
+  it("classifies provider rate limits with diagnostics taxonomy metadata", async () => {
+    const workspace = await tempWorkspace();
+    try {
+      const report = await runZaiHarnessSmoke({
+        repoRoot: workspace,
+        runId: RUN_ID,
+        env: { LIVE_HARNESS_EVALS: "1", RECTOR_LIVE_PROVIDER: "zai" },
+        now: fixedNow,
+        scenarios: [zaiHarnessScenarios()[0]],
+        providerDiscovery: async () => ({ selected: discovered(new HarnessProvider()), rejections: [] }),
+        runner: async () => {
+          throw new ProviderError({
+            code: "PROVIDER_HTTP_ERROR",
+            provider: "openai-compatible",
+            status: 429,
+            retryable: true,
+            message: "OpenAI-Compatible request failed with HTTP 429",
+          });
+        },
+      });
+
+      expect(report.status).toBe("failed");
+      expect(report.scenarios[0].failures).toContainEqual(expect.objectContaining({
+        kind: "rate_limit",
+        taxonomy: "rate_limit",
+        status: 429,
+        retryable: true,
+      }));
+      expect(report.diagnostics.failureTaxonomy.rate_limit).toBeGreaterThan(0);
+      expect(report.diagnostics.latencyMs.scenarios.count).toBe(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 });
 

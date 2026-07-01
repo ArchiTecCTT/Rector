@@ -2,6 +2,10 @@ export const ZAI_HARNESS_SCORECARD_SCHEMA_VERSION = "rector.zai-harness-scorecar
 
 export const ZAI_HARNESS_FAILURE_KINDS = [
   "provider_config",
+  "rate_limit",
+  "quota",
+  "provider_http",
+  "provider_json",
   "http",
   "timeout",
   "json",
@@ -23,6 +27,10 @@ export interface ZaiHarnessFailure {
   readonly kind: ZaiHarnessFailureKind;
   readonly message: string;
   readonly detail?: string;
+  readonly taxonomy?: string;
+  readonly status?: number;
+  readonly retryable?: boolean;
+  readonly providerCode?: string;
 }
 
 export interface ZaiHarnessScorecardScenario {
