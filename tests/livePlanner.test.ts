@@ -583,6 +583,91 @@ describe("runLivePlanner unit tests (concrete examples)", () => {
 
   // Validates: Requirements 4.7, 4.8 (budget preflight precedes the provider
   // call; a denied budget yields BUDGET_DENIED with zero invocations).
+  it("does not persist model-derived diagnostic messages in PLANNER_INVALID blocker details", async () => {
+    const input = makeFixedInput();
+    const taskSentinel = "MODEL_TASK_ID_sentinel_abc123";
+    const schemaInvalidPlan = JSON.stringify({
+      goal: "Do something",
+      assumptions: ["one"],
+      tasks: [
+        {
+          id: taskSentinel,
+          title: "Bad task",
+          description: "References a missing dependency",
+          dependencies: ["missing.parent.task"],
+          expectedArtifacts: ["notes"],
+          validation: ["check"],
+          risk: "low",
+          approvalRequired: false,
+        },
+      ],
+      dependencies: [{ from: taskSentinel, to: "missing.parent.task" }],
+      validation: { summary: "x", checks: ["y"] },
+      riskLevel: "low",
+      approvalGates: [],
+    });
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [schemaInvalidPlan, schemaInvalidPlan],
+    });
+    const run = makeExternalRun(generousBudget());
+
+    const result = await runLivePlanner(input, { provider, run });
+
+    expect(result.status).toBe("blocked");
+    expect(result.blocker?.code).toBe("PLANNER_INVALID");
+
+    const serialized = JSON.stringify(result.blocker);
+    expect(serialized).not.toContain(taskSentinel);
+
+    const details = result.blocker?.details as {
+      diagnostics?: Array<Record<string, unknown>>;
+      evidenceStatus?: string;
+    };
+    expect(details?.evidenceStatus).toBe("test_only_injected");
+    expect(details?.diagnostics?.every((entry) => !("message" in entry))).toBe(true);
+  });
+
+  it("reports test_only_injected strict JSON evidence for spy provider passes", async () => {
+    const input = makeFixedInput();
+    const validPlan = createFakePlan(input);
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [planToJson(validPlan)],
+    });
+    const run = makeExternalRun(generousBudget());
+
+    const result = await runLivePlanner(input, { provider, run });
+
+    expect(result.status).toBe("ok");
+    expect(result.strictJsonEvidenceStatus).toBe("test_only_injected");
+    expect(result.strictJsonClassification).toBe("first_pass");
+  });
+
+  it("blocks schema-valid planner JSON when provider output is truncated (finishReason length)", async () => {
+    const input = makeFixedInput();
+    const validPlan = createFakePlan(input);
+    const validJson = planToJson(validPlan);
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [
+        { content: validJson, finishReason: "length" },
+        { content: validJson, finishReason: "length" },
+      ],
+    });
+    const run = makeExternalRun(generousBudget());
+
+    const result = await runLivePlanner(input, { provider, run });
+
+    expect(result.status).toBe("blocked");
+    expect(result.blocker?.code).toBe("PLANNER_INVALID");
+    expect(result.plan).toBeUndefined();
+    expect(provider.invokeCount).toBe(2);
+    expect(result.strictJsonAttempts?.some((attempt) =>
+      attempt.diagnostics.some((diagnostic) => diagnostic.code === "provider_output_truncated"),
+    )).toBe(true);
+  });
+
   it("denies via budget preflight before invoking the provider", async () => {
     const input = makeFixedInput();
     const provider = new SpyLLMProvider({

@@ -143,5 +143,6 @@ describe("bounded strict JSON repair loop", () => {
     expect(result.attempts).toBe(2);
     expect(result.strictJsonClassification).toBe("repair_pass");
     expect(result.strictJsonAttempts?.[0]?.diagnostics.map((diagnostic) => diagnostic.path)).toContain("tasks.0.id");
+    expect(result.strictJsonEvidenceStatus).toBe("test_only_injected");
   });
 });

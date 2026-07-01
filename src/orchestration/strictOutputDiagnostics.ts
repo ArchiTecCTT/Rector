@@ -28,6 +28,14 @@ export interface StrictOutputDiagnostic {
   readonly details?: unknown;
 }
 
+/** Bounded, persistence-safe view of diagnostics (no model-derived messages or details). */
+export interface SafeStrictOutputDiagnostic {
+  readonly kind: StrictOutputDiagnosticKind;
+  readonly code: string;
+  readonly path: string;
+  readonly severity: StrictOutputDiagnosticSeverity;
+}
+
 export type StrictOutputDiagnosticInput = Readonly<{
   kind: StrictOutputDiagnosticKind;
   code: string;
@@ -69,7 +77,21 @@ export type StrictJsonParseResult =
 
 const MAX_DIAGNOSTIC_MESSAGE_CHARS = 500;
 const DEFAULT_SUMMARY_CHARS = 1_200;
+const DEFAULT_MAX_SAFE_DIAGNOSTIC_ITEMS = 32;
 const DIAGNOSTIC_SECRET_VALUE_PATTERN = /\b(sk-[A-Za-z0-9][A-Za-z0-9_-]{8,}|xai-[A-Za-z0-9][A-Za-z0-9_-]{8,})\b/g;
+
+export function projectSafeStrictOutputDiagnostics(
+  diagnostics: readonly StrictOutputDiagnostic[],
+  options: Readonly<{ maxItems?: number }> = {},
+): readonly SafeStrictOutputDiagnostic[] {
+  const maxItems = Math.max(1, Math.trunc(options.maxItems ?? DEFAULT_MAX_SAFE_DIAGNOSTIC_ITEMS));
+  return diagnostics.slice(0, maxItems).map((diagnostic) => ({
+    kind: diagnostic.kind,
+    code: diagnostic.code,
+    path: diagnostic.path,
+    severity: diagnostic.severity,
+  }));
+}
 
 export function parseStrictJsonObject(content: string): StrictJsonParseResult {
   try {

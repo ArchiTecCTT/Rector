@@ -12,6 +12,7 @@ import {
 } from "./strictJsonRepairLoop";
 import {
   diagnosticFromSemanticInvariant,
+  projectSafeStrictOutputDiagnostics,
   summarizeStrictOutputDiagnostics,
   zodDiagnostics,
   type StrictOutputDiagnostic,
@@ -567,8 +568,13 @@ export interface LivePlannerResult {
   strictJsonClassification?: StrictJsonPassClassification;
   /** Per-attempt strict JSON diagnostics; redacted and safe for trace/report surfaces. */
   strictJsonAttempts?: readonly StrictJsonAttemptReport[];
-  /** Aggregated strict JSON diagnostics; redacted and safe for blocker details. */
+  /** Aggregated strict JSON diagnostics (full messages; for in-process trace/repair only). */
   strictJsonDiagnostics?: readonly StrictOutputDiagnostic[];
+  /**
+   * Whether strict JSON pass evidence came from a live provider or test-only injection.
+   * Downstream consumers must not treat `test_only_injected` as live verification evidence.
+   */
+  strictJsonEvidenceStatus?: StrictJsonEvidenceStatus;
 }
 
 /** Dependencies for {@link runLivePlanner}. The provider is mocked in tests. */
@@ -712,6 +718,8 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
     throw error;
   }
 
+  const evidenceStatus = summarizeStrictJsonEvidenceStatus(loopResult.attempts);
+
   if (loopResult.status === "passed") {
     return okResult(
       loopResult.value,
@@ -722,6 +730,7 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
       loopResult.classification,
       loopResult.attempts,
       loopResult.diagnostics,
+      evidenceStatus,
     );
   }
 
@@ -731,7 +740,8 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
     makeBlocker("PLANNER_INVALID", plannerInvalidMessage(issuePaths), {
       issues: issuePaths,
       classification: loopResult.classification,
-      diagnostics: loopResult.diagnostics,
+      diagnostics: projectSafeStrictOutputDiagnostics(loopResult.diagnostics),
+      evidenceStatus,
     }),
     totalUsage,
     provider,
@@ -744,6 +754,7 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
     loopResult.classification,
     loopResult.attempts,
     loopResult.diagnostics,
+    evidenceStatus,
   );
 }
 
@@ -799,6 +810,15 @@ function plannerInvalidMessage(issuePaths: string[]): string {
 
 function issuePathsFromDiagnostics(diagnostics: readonly StrictOutputDiagnostic[]): string[] {
   return Array.from(new Set(diagnostics.map((diagnostic) => diagnostic.path).filter(Boolean)));
+}
+
+function summarizeStrictJsonEvidenceStatus(attempts: readonly StrictJsonAttemptReport[]): StrictJsonEvidenceStatus {
+  if (attempts.length === 0) return "unknown";
+  const statuses = attempts.map((attempt) => attempt.evidenceStatus);
+  if (statuses.includes("deterministic_fallback")) return "deterministic_fallback";
+  if (statuses.every((status) => status === "live_provider")) return "live_provider";
+  if (statuses.some((status) => status === "test_only_injected")) return "test_only_injected";
+  return "unknown";
 }
 
 function parseJsonForRepairHints(content: string): unknown {
@@ -874,14 +894,6 @@ function addUsage(left: LLMUsage, right: LLMUsage): LLMUsage {
   });
 }
 
-function tryParseJson(content: string): { ok: true; value: unknown } | { ok: false; error: string } {
-  try {
-    return { ok: true, value: JSON.parse(content) as unknown };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
 /** Builds a redacted blocker. `message` runs through redactString; `details` through redactSecrets. */
 function makeBlocker(code: PlannerBlocker["code"], message: string, details?: unknown): PlannerBlocker {
   const redactedMessage = redactString(message).trim();
@@ -903,6 +915,7 @@ function blockedResult(
   strictJsonClassification?: StrictJsonPassClassification,
   strictJsonAttempts?: readonly StrictJsonAttemptReport[],
   strictJsonDiagnostics?: readonly StrictOutputDiagnostic[],
+  strictJsonEvidenceStatus?: StrictJsonEvidenceStatus,
 ): LivePlannerResult {
   return {
     status: "blocked",
@@ -916,6 +929,7 @@ function blockedResult(
     ...(strictJsonClassification ? { strictJsonClassification } : {}),
     ...(strictJsonAttempts ? { strictJsonAttempts } : {}),
     ...(strictJsonDiagnostics ? { strictJsonDiagnostics } : {}),
+    ...(strictJsonEvidenceStatus ? { strictJsonEvidenceStatus } : {}),
   };
 }
 
@@ -928,6 +942,7 @@ function okResult(
   strictJsonClassification?: StrictJsonPassClassification,
   strictJsonAttempts?: readonly StrictJsonAttemptReport[],
   strictJsonDiagnostics?: readonly StrictOutputDiagnostic[],
+  strictJsonEvidenceStatus?: StrictJsonEvidenceStatus,
 ): LivePlannerResult {
   return {
     status: "ok",
@@ -939,6 +954,7 @@ function okResult(
     ...(strictJsonClassification ? { strictJsonClassification } : {}),
     ...(strictJsonAttempts ? { strictJsonAttempts } : {}),
     ...(strictJsonDiagnostics ? { strictJsonDiagnostics } : {}),
+    ...(strictJsonEvidenceStatus ? { strictJsonEvidenceStatus } : {}),
   };
 }
 

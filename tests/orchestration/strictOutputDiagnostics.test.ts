@@ -6,6 +6,7 @@ import {
   diagnosticsFromProviderRuntimeMetadata,
   diagnosticsFromValidationHooks,
   parseStrictJsonObject,
+  projectSafeStrictOutputDiagnostics,
   summarizeStrictOutputDiagnostics,
   zodDiagnostics,
 } from "../../src/orchestration/strictOutputDiagnostics";
@@ -104,6 +105,43 @@ describe("strict output diagnostics", () => {
       "provider_output_truncated",
       "provider_timeout",
     ]);
+  });
+
+  it("projects persistence-safe diagnostics without model-derived messages", () => {
+    const sentinel = "MODEL_DERIVED_TASK_ID_sentinel_xyz";
+    const diagnostics = [
+      diagnosticFromSemanticInvariant({
+        code: "dangling_dependency",
+        message: `Planner task ${sentinel} references missing dependency`,
+        path: ["dependencies", 0, "to"],
+      }),
+    ];
+
+    const safe = projectSafeStrictOutputDiagnostics(diagnostics);
+    const serialized = JSON.stringify(safe);
+
+    expect(safe).toEqual([
+      {
+        kind: "semantic_invariant",
+        code: "dangling_dependency",
+        path: "dependencies.0.to",
+        severity: "error",
+      },
+    ]);
+    expect(serialized).not.toContain(sentinel);
+    expect(serialized).not.toContain("message");
+  });
+
+  it("caps safe diagnostic projections to a bounded item count", () => {
+    const diagnostics = Array.from({ length: 40 }, (_, index) =>
+      diagnosticFromSemanticInvariant({
+        code: `code_${index}`,
+        message: `message ${index}`,
+        path: `field.${index}`,
+      }),
+    );
+
+    expect(projectSafeStrictOutputDiagnostics(diagnostics, { maxItems: 8 })).toHaveLength(8);
   });
 
   it("renders bounded redacted summaries for repair prompts and reports", () => {
