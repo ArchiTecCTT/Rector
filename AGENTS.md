@@ -123,6 +123,7 @@ npm audit
 - Work one chunk at a time.
 - Each chunk gets its own plan under `docs/plans/chunks/` before code.
 - Commit each completed chunk separately.
+- **Documentation is mandatory. Document every material implementation, live run, investigation result, evidence finding, limitation, operator footgun, and follow-up before claiming completion.** If a slice changes behavior or produces new evidence, run `rector-librarian` after verification and update the relevant operations docs, phase/chunk docs, roadmap, and concerns register. Do not leave important findings only in chat or terminal logs.
 - Keep `docs/plans/concerns-and-vulnerabilities.md` updated with concerns, vulnerabilities, limitations, and deferred fixes.
 - No background/async subagents; foreground only. Background subagents caused stale-run failures.
 - Parent orchestrator remains in charge: plan (optional) → coder → verify → librarian → commit → next chunk.
