@@ -31,13 +31,13 @@
 - **Resolution:** Matrix step repro env keys are allowlisted (prefixes `REGOLO_MATRIX_`, `ZAI_MATRIX_`, `RECTOR_LIVE_*`, etc.); sensitive name patterns and credential keys are excluded from summaries. Per-model snapshots copy incrementally and skip mismatched `modelId` rollups.
 - **Evidence:** `tests/live/regoloModelMatrix.test.ts` and Z.ai matrix tests; operator Regolo matrix post-hardening completed without summary env-name leakage (values never logged).
 
-### Z.ai live verification gate — finalist PASS (single model); matrix discovery still mostly fail
+### Z.ai live verification gate — two official model PASSes; matrix discovery still mostly fail
 
-- **Source:** branch `zai-evidence-live-integration` @ `75f4233`; Tickets 1–6 + harness hardening `4438205`–`75f4233`. Entry points: `npm run evidence:zai-live:gate`, `npm run verify:zai-live`.
+- **Source:** branch `zai-evidence-live-integration` @ `75f4233` + fact-shadow/provider smoke `ff65580`–`07abf93`. Entry points: `npm run evidence:zai-live:gate`, `npm run verify:zai-live`.
 - **Severity:** Low (measurement / operator workflow; not a product fake-chat regression).
-- **Status:** **RESOLVED for official live claims on one finalist** — `glm-4-32b-0414-128k` @ 2026-07-01 after harness hardening (`RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=glm-4-32b-0414-128k npm run verify:zai-live` gate PASS: 3/3 harness scenarios, 46,695 tokens, manifest updated, `live_provider`). **Open** for other Z.ai models and for matrix-wide “all GLM pass” claims — discovery matrix remains 0/10 full-chain passes.
-- **Observed:** Offline gates green after hardening + strict-json repair slice (`npm test` 415 files / 2858 tests @ post-`a282128`). Gate behavior unchanged: rejects spy/fake, enforces budgets and diagnostics; Phase 2 shadow gate parsers passthrough v2 fields. Matrix/compare grades still ≠ manifest live-verified until fresh per-model `verify:zai-live`.
-- **Plan:** Re-run matrix only for operator comparison on non-finalist models; repeat `verify:zai-live` on other models individually before claiming live-verified per model. Broader post-fix reruns are budget-feasible (~$0.50 spent in early campaigns vs ~$100 operator budget) but still require gate budgets and artifact hygiene. See `docs/operations/zai-live-verification.md`.
+- **Status:** **RESOLVED for official live claims on two models** — `glm-4-32b-0414-128k` @ 2026-07-01 (harness hardening, 3/3 harness, ~46,695 tokens); **`glm-5v-turbo`** @ 2026-07-01 (full chain PASS: shadow 5/5, provider smoke, harness 3/3, **43,911** tokens, ~$0.0392, manifest updated). **Open** for matrix-wide “all GLM pass” and remaining candidates.
+- **Observed:** Offline gates green in full verify (`npm test` **416** files / **2878** tests; `eval:facts` 10/10). Gate behavior unchanged: rejects spy/fake, enforces budgets and diagnostics. Manifest is last-writer-wins across per-model verify runs.
+- **Plan:** Repeat `verify:zai-live` per model before live-verified claims; see `docs/operations/zai-live-verification.md`.
 - **Boundaries:** `test_only_injected` and spy doubles remain test-only. **Do not weaken the harness** for demo labels.
 
 ### Z.ai GLM models — strict harness / typed-fact schema mismatch (discovery)
@@ -46,25 +46,24 @@
 - **Severity:** Medium for non-finalist models; Low for documented finalist.
 - **Status:** **Partially resolved** — `glm-4-32b-0414-128k` passes full chain after structured-role caps, strict JSON cards, repair preflight, and diagnostics fixes (`75f4233`); v2 shadow reconfirmed **5/5** first-pass on finalist. **Open** for other models — v2 discovery shows repair uplift but most still fail shadow or downstream steps; **4.7-flash / 4.7-flashx** **0/5** with `provider_runtime` dominance.
 - **Observed:** Failure modes include `model_json_invalid`, missing schema-valid expected facts, `invalid_union_discriminator`, evidence extraction, `tsc_diagnostic_grouping`, HTTP 429, and post-v2 **`provider_runtime`** on several flash variants. Strict validators unchanged; repair loop improves convergence reporting, not gate rules.
-- **Plan:** Prioritize promising candidates: **`glm-5v-turbo`** (shadow **5/5** with 2 repair passes but **provider smoke** fails `provider_json` — fix adapter/smoke parse path before `verify:zai-live`); **`glm-4.6v-flashx`** (shadow **4/5**, provider + harness smoke **3/3** passed — fix remaining shadow case); **`glm-5-turbo`** (4/5, 3 repair passes, 1 failed-after-repair). Do **not** claim live-verified from shadow-only 5/5 without full chain PASS.
+- **Plan:** **`glm-5v-turbo`** — **resolved** via provider smoke cap/strict JSON + shadow hardening (official `verify:zai-live` PASS). Prioritize **`glm-4.6v-flashx`** (shadow **4/5** — `test_log_diagnosis` hallucinated ref `stdout:2` after Slice B `tsc` prompt); **`glm-5-turbo`** (4/5, 1 failed-after-repair). Do **not** claim live-verified from shadow-only without full chain PASS.
 - **Boundaries:** Matrix and v2 shadow discovery ≠ official verification. Only per-model `verify:zai-live` updates manifest live claims.
 
-### Z.ai vision-turbo — shadow vs provider smoke split (`glm-5v-turbo`)
+### Z.ai vision-turbo — shadow vs provider smoke split (`glm-5v-turbo`) — RESOLVED
 
-- **Source:** v2 fact-shadow rerun + follow-up probes @ 2026-07-01 (operator, uncommitted evidence).
-- **Severity:** Medium (blocks full verify on otherwise strong shadow model).
-- **Status:** Open.
-- **Observed:** `glm-5v-turbo` completed v2 live shadow **5/5** (`firstPassCases` 3, `repairPassCases` 2, `failedAfterRepairCases` 0, `live_provider`). Immediate **provider smoke** failed with taxonomy **`provider_json`** (“Provider smoke response was not parseable JSON”). Model is **not** live-verified and must not be promoted without smoke + harness + gate.
-- **Plan:** Investigate OpenAI-compatible response shape / JSON mode for vision-turbo smoke path; re-run `test:live:zai:provider` then full `verify:zai-live` only after smoke passes. Validators and harness remain strict.
-- **Boundaries:** Fact-shadow pass alone does not satisfy `evidence:zai-live:gate`.
+- **Source:** v2 fact-shadow rerun @ 2026-07-01; fix slice `ff65580`–`bff0a16` + shadow hardening `138d92e` / `07abf93`.
+- **Severity:** Was Medium; resolved for this model.
+- **Status:** **RESOLVED** @ 2026-07-01 — `RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=glm-5v-turbo npm run verify:zai-live` gate PASS (`live_provider`, provider smoke `first_pass`, harness 3/3).
+- **Observed (historical):** Pre-fix, shadow **5/5** but provider smoke failed **`provider_json`** / truncation. Root cause class: **truncation** and strict JSON convergence — not relaxing validators. Earlier full verify also failed fact-shadow on `rg_artifact_evidence_extraction` until shadow caps/guidance.
+- **Plan:** None for `glm-5v-turbo` live claims; use per-model verify for any new model.
 
 ### Z.ai `glm-4.6v-flashx` — promising partial finalist (shadow 4/5)
 
-- **Source:** v2 fact-shadow broad rerun + provider/harness probes @ 2026-07-01.
+- **Source:** v2 fact-shadow broad rerun + Slice B `tsc` prompt (`07abf93`) @ 2026-07-01.
 - **Severity:** Low (measurement / model selection).
 - **Status:** Open — candidate for next shadow + verify iteration.
-- **Observed:** v2 shadow **4/5** (`firstPassCases` 3, `repairPassCases` 1, `failedAfterRepairCases` 1). Provider smoke and harness smoke **passed** (`live_provider`, 3/3 scenarios). Official `verify:zai-live` would still fail at `eval:facts:live` (nonzero failed cases).
-- **Plan:** Triage the one failed-after-repair shadow case (strict JSON / schema / grounding — not harness relaxation); repeat single-model verify only after **5/5** shadow with zero `failedCount`.
+- **Observed:** Slice B improved `tsc` grouping cases; one live fact-shadow run still failed **`test_log_diagnosis`** with hallucinated grounding ref **`stdout:2`** (not officially verified). Prior v2 table: **4/5** shadow; provider + harness smoke **passed** when probed in isolation.
+- **Plan:** Triage log-diagnosis grounding (refs must cite artifact lines — not harness relaxation); repeat `verify:zai-live` only after **5/5** shadow with zero `failedCount`.
 - **Boundaries:** Promising ≠ verified; matrix/v2 tables are discovery grades only.
 
 ### Live harness smoke — false pass with zero usage — RESOLVED
@@ -113,8 +112,8 @@
 
 - **Source:** Phase 2G @ `45768e5`; Z.ai finalist gate @ 2026-07-01 post `75f4233` on `zai-evidence-live-integration`.
 - **Severity:** Low (measurement scope, not a product regression).
-- **Status:** **RESOLVED for Z.ai finalist live-fact + harness chain** — `glm-4-32b-0414-128k` `verify:zai-live` PASS includes Phase 2F live shadow in chain. **Open** for Regolo and for claiming live fact reliability across all providers/models.
-- **Observed:** Completion label updated to `phase2-complete-live-verified-zai-finalist` (see `phase-2-completion-report.md`). Regolo and matrix discovery models lack single-model gate PASS.
+- **Status:** **RESOLVED for documented Z.ai live-fact + harness chains** — `glm-4-32b-0414-128k` and **`glm-5v-turbo`** each passed `verify:zai-live` (Phase 2F shadow in chain). **Open** for Regolo and for claiming live fact reliability across all providers/models.
+- **Observed:** Label `phase2-complete-live-verified-zai-finalist` remains the Phase 2 completion marker; **two** Z.ai models now have manifest-backed single-model gate PASS (see `phase-2-completion-report.md`). Regolo lacks gate PASS.
 - **Plan:** Regolo `verify:regolo-live` when a finalist passes; avoid broad live claims from matrix grades alone.
 - **Boundaries:** `FakeLLMProvider` and spy doubles remain test/CI-only; offline `verify:phase2` remains default CI.
 

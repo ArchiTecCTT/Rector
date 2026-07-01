@@ -2,7 +2,7 @@
 
 Rector separates **offline** gates from **live** Z.ai verification. **Official live verification** is a single-model `npm run verify:zai-live` gate PASS with `live_provider` evidence — not matrix discovery grades or partial fact-shadow reruns.
 
-**Current status (2026-07-01):** One **official** finalist PASS — `glm-4-32b-0414-128k` (`verify:zai-live`, manifest updated). All other Z.ai models remain **live-unverified** until each passes its own full chain. Regolo and spy/fake/deterministic paths do not count as live evidence.
+**Current status (2026-07-01):** Two **official** single-model `verify:zai-live` gate PASSes documented on this branch — `glm-4-32b-0414-128k` (post harness hardening `75f4233`) and `glm-5v-turbo` (post fact-shadow + provider-smoke hardening `ff65580`–`07abf93`). `.rector/evidence/manifest.json` reflects the **last** successful gate (this session: **`glm-5v-turbo`**). All other Z.ai models remain **live-unverified** until each passes its own full chain. Regolo and spy/fake/deterministic paths do not count as live evidence.
 
 ## First foundation discovery run (2026-07-01)
 
@@ -21,7 +21,23 @@ Rector’s **first** live Z.ai **matrix** discovery campaign on branch `zai-evid
 
 **Operator interpretation (not a harness change):** Strict gate + harness behavior appears useful; failures look like **model ↔ schema/instruction mismatch**. Likely follow-on is model-specific prompting, adapters, or fine-tuning — **not** relaxing the harness for live-verified claims.
 
-**Official finalist verification (harness hardening, 2026-07-01):** After live-harness optimization commits `4438205`–`75f4233` (structured-role output caps, strict JSON prompt cards + provider-gated no-thinking, diagnostics/bottleneck taxonomy, bounded product `maxRuntimeMs`, harness repair preflight), **`RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=glm-4-32b-0414-128k npm run verify:zai-live`** **passed** the strict gate: harness **3/3** scenarios, **46,695** / 100,000 tokens, **$0.0441** estimated cost, `live_provider` evidence, manifest updated. Report: `.rector/evidence/live/zai/latest.md`. **Only this single-model gate PASS** supports `zai-live-verified` / `phase2-complete-live-verified-zai-finalist` labels. Matrix discovery and partial fact-shadow reruns do **not** update the manifest or substitute for per-model `verify:zai-live`.
+**Official verification — `glm-4-32b-0414-128k` (harness hardening, 2026-07-01):** After live-harness optimization commits `4438205`–`75f4233` (structured-role output caps, strict JSON prompt cards + provider-gated no-thinking, diagnostics/bottleneck taxonomy, bounded product `maxRuntimeMs`, harness repair preflight), **`RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=glm-4-32b-0414-128k npm run verify:zai-live`** **passed** the strict gate: harness **3/3** scenarios, **46,695** / 100,000 tokens, **~$0.0441** estimated cost, `live_provider` evidence, manifest updated. Report: `.rector/evidence/live/zai/latest.md` (overwritten if a later model gate passes).
+
+**Official verification — `glm-5v-turbo` (fact-shadow + provider smoke hardening, 2026-07-01):** After commits `ff65580` (provider smoke token cap + strict JSON options), `d04ab03` (`ok` / `provider` smoke JSON contract), `bff0a16` (bounded strict JSON repair on provider smoke), `138d92e` (live fact-shadow prompt/output/ref/failure diagnostics), and `07abf93` (fact-shadow prompt for `tsc` diagnostic grouping), **`RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=glm-5v-turbo npm run verify:zai-live`** **passed** the strict gate end-to-end:
+
+| Step | Result |
+| --- | --- |
+| `verify:phase2` (offline chain) | Pass — `npm test` **416** files / **1** skipped; **2878** tests / **5** skipped; `eval:facts` **10/10**; `test:global` + `test:systems` pass |
+| Live fact-shadow v2 | `live_provider`, **5/5** passed; `firstPassCases` **4**, `repairPassCases` **1**, `failedAfterRepairCases` **0**; **4,680** tokens, **~$0.004681** |
+| Provider smoke | Pass, `live_provider`, `first_pass`, **1** attempt, **106** tokens, **~$0.000106** |
+| Harness smoke | Pass, `live_provider`, **3/3** scenarios, **39,125** tokens, **~$0.039128**; no mutations, no failures |
+| Gate | **Z.ai live verification: PASS** — openai-compatible / Z.ai (`zai:env`); **43,911** / 100,000 tokens; **~$0.0392**; manifest updated |
+
+Post-gate checks in the same session: `npm run build` pass; `npm audit` **0** vulnerabilities; `npm run audit:no-fakes:check` **0** unallowed; `npm run evidence:verify-paths` pass.
+
+**Intermediate failures (same campaign, not official):** An earlier full `glm-5v-turbo` verify failed at fact-shadow on `rg_artifact_evidence_extraction` (**truncation**) — addressed via shadow cap / strict JSON guidance. Provider smoke had failed on **truncation / `json_syntax`** before the stricter **`ok` / `provider`** contract was enforced (`d04ab03`); not a contract-shape regression. **`glm-4.6v-flashx`** after Slice B (`tsc` grouping prompt) improved `tsc` cases but still failed one live fact-shadow run on **`test_log_diagnosis`** (hallucinated ref `stdout:2`) — **not** officially verified in this session.
+
+Each **per-model** `verify:zai-live` gate PASS supports `zai-live-verified` for that model only. Matrix discovery and partial fact-shadow reruns do **not** update the manifest or substitute for the full chain.
 
 ### Strict JSON diagnostics and bounded repair (offline verified @ `a282128`)
 
@@ -50,7 +66,7 @@ Bounded repair + **v2** report (`rector.live-fact-shadow-report.v2`) was exercis
 | Model | Passed | first | repair | failedAfter | Notes (failure categories) |
 | --- | --- | --- | --- | --- | --- |
 | `glm-4-32b-0414-128k` | 5/5 | 5 | 0 | 0 | Official verified set (full chain elsewhere) |
-| `glm-5v-turbo` | 5/5 | 3 | 2 | 0 | **Not verified** — provider smoke failed `provider_json` immediately after shadow |
+| `glm-5v-turbo` | 5/5 | 3 | 2 | 0 | **Official full-chain PASS** after `ff65580`–`07abf93` (see § Official verification — `glm-5v-turbo`); pre-hardening row was shadow-only + `provider_json` smoke fail |
 | `glm-5-turbo` | 4/5 | 1 | 3 | 1 | Measurable repair uplift; still fails full gate at 1 failed case |
 | `glm-4.6v-flashx` | 4/5 | 3 | 1 | 1 | Provider + harness smoke **passed** post-probe; **not verified** — shadow 4/5 blocks `eval:facts:live` in verify chain |
 | `glm-4.5-flash` | 3/5 | 2 | 1 | 2 | `provider_runtime` on 2 cases |
@@ -60,7 +76,7 @@ Bounded repair + **v2** report (`rector.live-fact-shadow-report.v2`) was exercis
 | `glm-4.7-flash` | 0/5 | 0 | 0 | 5 | `provider_runtime` on 5 cases |
 | `glm-4.7-flashx` | 0/5 | 0 | 0 | 5 | `provider_runtime` on 5 cases |
 
-**Interpretation:** v2 rollups show **repair-pass uplift** (e.g. `glm-5v-turbo` **2** repair passes, `glm-5-turbo` **3** repair passes) against **unchanged** strict validators — not a reason to relax gates. **Official live-verified set remains only `glm-4-32b-0414-128k`** until another model completes the full chain (`verify:phase2` → `eval:facts:live` **0 failed** → provider smoke → harness → gate). **Promising next work:** `glm-5v-turbo` (fix provider smoke JSON parse path), `glm-4.6v-flashx` (one remaining shadow case), then `glm-5-turbo` (one failed-after-repair case).
+**Interpretation:** v2 rollups show **repair-pass uplift** against **unchanged** strict validators — not a reason to relax gates. **Official live-verified models on this branch:** `glm-4-32b-0414-128k`, `glm-5v-turbo` (each via its own `verify:zai-live` PASS). **Promising next work:** `glm-4.6v-flashx` (shadow still **4/5** — `test_log_diagnosis` grounding ref `stdout:2` after Slice B), then `glm-5-turbo` (one failed-after-repair case).
 
 ### Typed-fact live shadow reruns (historical pre–v2 baselines)
 
@@ -173,6 +189,8 @@ These env vars are **operator and live-test overrides** — not the configured-p
 | `RECTOR_LIVE_HARNESS_SKEPTIC_MAX_OUTPUT_TOKENS` | same | Skeptic strict JSON |
 | `RECTOR_LIVE_HARNESS_SYNTH_MAX_OUTPUT_TOKENS` | same | Synthesizer strict JSON |
 | `RECTOR_LIVE_HARNESS_REPAIR_MAX_OUTPUT_TOKENS` | same (falls back to planner cap) | Repair strict JSON |
+| `LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS` | default **1200**; clamp **256**–**4096** | Per-case Phase 2F live shadow strict JSON generation (`scripts/facts/run-live-fact-shadow.ts`) |
+| `RECTOR_ZAI_PROVIDER_SMOKE_MAX_OUTPUT_TOKENS` | default **256**; clamp **64**–**1024** | Z.ai provider smoke minimal JSON object (`src/live/zaiProviderSmokeReport.ts`; default raised from 64 to reduce truncation before contract validation) |
 
 Live harness attaches structured-role caps and `strictJsonMinimizeReasoning` on planner/skeptic/synthesizer/repair only; normal product chat via `runOrchestratedChatRun` does **not** opt into this policy unless explicitly passed.
 
