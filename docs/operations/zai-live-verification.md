@@ -37,11 +37,34 @@ Orchestration and the Phase 2F live shadow runner now share a **strict output di
 
 **Live fact-shadow report v2** (`rector.live-fact-shadow-report.v2` / summary v2): adds `firstPassCases`, `repairPassCases`, `failedAfterRepairCases`, `failureCategoryCounts`, per-case `passClassification`, and safe per-attempt summaries. `scripts/facts/run-live-fact-shadow.ts` runs bounded repair with repair cards. Z.ai/Regolo live gates still enforce `live_provider`, zero `failedCount`, and related summary fields; gate parsers use **passthrough** on report JSON so v2 fields do not break older gate checks. **Pre-v2 artifacts on disk do not include classification rollups** — regenerate with opt-in `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live` before triaging repair-pass rates.
 
-**Offline verification (2026-07-01, no new live gate rerun):** `npm run check`, targeted strict-json / planner / live-shadow tests, `npm run eval:facts` (10/10), `npm run build`, `npm run audit:no-fakes:check` (0 unallowed), `npm audit` (0 vulnerabilities), full `npm test` (415 files passed / 1 skipped; 2858 tests passed / 5 skipped), `npm run evidence:verify-paths`. **Next operator step:** opt-in v2 live shadow + harness reruns on finalists/non-finalists; do not relabel manifest live-verified until a fresh `verify:zai-live` PASS.
+**Offline verification (2026-07-01):** `npm run check`, targeted strict-json / planner / live-shadow tests, `npm run eval:facts` (10/10), `npm run build`, `npm run audit:no-fakes:check` (0 unallowed), `npm audit` (0 vulnerabilities), full `npm test` (415 files passed / 1 skipped; 2858 tests passed / 5 skipped), `npm run evidence:verify-paths`.
 
-### Typed-fact live shadow reruns (operator, pre–repair-loop baselines)
+### v2 live fact-shadow reruns (operator discovery, 2026-07-01)
 
-Historical **first-pass-only** `eval:facts:live` reruns (before bounded repair in the shadow runner) summarized approximate pass rates on **5** shadow cases per model:
+Bounded repair + **v2** report (`rector.live-fact-shadow-report.v2`) was exercised on Z.ai models via opt-in `RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=<model> npm run eval:facts:live`. **Raw report JSON under `.rector/evidence` is gitignored and was not committed**; broad multi-model summaries were also captured under `/tmp/rector-zai-v2-fact-shadow` (operator-local only). These runs are **discovery** — they do **not** update `.rector/evidence/manifest.json` and do **not** substitute for per-model `npm run verify:zai-live`.
+
+**Finalist reconfirmation (single model):** `glm-4-32b-0414-128k` — `live_provider`, `completed`, **5/5** passed; `firstPassCases` **5**, `repairPassCases` **0**, `failedAfterRepairCases` **0**; ~**$0.002614** / **2613** tokens (v2 shadow only; not a full verify chain).
+
+**Broad v2 shadow matrix (5 cases per model, discovery grades):**
+
+| Model | Passed | first | repair | failedAfter | Notes (failure categories) |
+| --- | --- | --- | --- | --- | --- |
+| `glm-4-32b-0414-128k` | 5/5 | 5 | 0 | 0 | Official verified set (full chain elsewhere) |
+| `glm-5v-turbo` | 5/5 | 3 | 2 | 0 | **Not verified** — provider smoke failed `provider_json` immediately after shadow |
+| `glm-5-turbo` | 4/5 | 1 | 3 | 1 | Measurable repair uplift; still fails full gate at 1 failed case |
+| `glm-4.6v-flashx` | 4/5 | 3 | 1 | 1 | Provider + harness smoke **passed** post-probe; **not verified** — shadow 4/5 blocks `eval:facts:live` in verify chain |
+| `glm-4.5-flash` | 3/5 | 2 | 1 | 2 | `provider_runtime` on 2 cases |
+| `glm-4.5-air` | 3/5 | 3 | 0 | 2 | `provider_runtime` on 1 case |
+| `glm-4.5-airx` | 2/5 | 1 | 1 | 3 | |
+| `glm-4.6v-flash` | 2/5 | 1 | 1 | 3 | `provider_runtime` on 3 cases |
+| `glm-4.7-flash` | 0/5 | 0 | 0 | 5 | `provider_runtime` on 5 cases |
+| `glm-4.7-flashx` | 0/5 | 0 | 0 | 5 | `provider_runtime` on 5 cases |
+
+**Interpretation:** v2 rollups show **repair-pass uplift** (e.g. `glm-5v-turbo` **2** repair passes, `glm-5-turbo` **3** repair passes) against **unchanged** strict validators — not a reason to relax gates. **Official live-verified set remains only `glm-4-32b-0414-128k`** until another model completes the full chain (`verify:phase2` → `eval:facts:live` **0 failed** → provider smoke → harness → gate). **Promising next work:** `glm-5v-turbo` (fix provider smoke JSON parse path), `glm-4.6v-flashx` (one remaining shadow case), then `glm-5-turbo` (one failed-after-repair case).
+
+### Typed-fact live shadow reruns (historical pre–v2 baselines)
+
+Earlier **first-pass-only** reruns (before bounded repair in the shadow runner) summarized approximate pass rates on **5** shadow cases per model:
 
 | Model | First-pass shadow (approx.) | Common failure modes |
 | --- | --- | --- |
@@ -49,7 +72,7 @@ Historical **first-pass-only** `eval:facts:live` reruns (before bounded repair i
 | `glm-4.6v-flashx`, `glm-5v-turbo` | ~2/5 | Same JSON/schema classes + vision-turbo variability |
 | `glm-4.7-flash`, `glm-4.7-flashx`, `glm-4.6v-flash` | Poor / rate-limited | HTTP 429 / overload, `model_json_invalid`, `tsc_diagnostic_grouping` |
 
-**Interpretation:** These scores describe **raw first-pass** output against strict validators on the **old** shadow path. The repair loop and v2 report taxonomy are implemented offline (see § Strict JSON diagnostics and bounded repair); rerun `eval:facts:live` to measure **repair-pass** uplift. **Do not** relax validators to improve matrix grades.
+**Interpretation:** Pre-v2 scores describe **raw first-pass** behavior. Compare against the v2 table above for repair-pass uplift. **Do not** relax validators to improve matrix grades.
 
 ### Live harness smoke integrity (fixed `d86d679`)
 
