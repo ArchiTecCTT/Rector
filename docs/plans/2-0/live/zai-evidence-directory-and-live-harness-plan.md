@@ -1,6 +1,6 @@
 # Rector Evidence Directory Overhaul + Z.ai GLM Live Verification Plan
 
-**Status:** **Implementation complete (Tickets 1–6 + opt-in multi-model matrix + post-Ticket hardening)** on branch `zai-evidence-live-integration` (integration HEAD `350d49d`; matrix `src/live/zaiModelMatrix.ts`, probe pre-filter `src/live/zaiModelProbe.ts`, harness diagnostics `src/live/liveHarnessDiagnostics.ts`). Offline gates passed (`npm test`, `npm run build`, `npm run verify:phase2`, `npm run check`, `npm run evidence:verify-paths`, `npm run audit:no-fakes` / `npm run audit:no-fakes:check` with 0 unallowed findings). **Live Z.ai verification remains unverified** — no operator campaign has produced gate PASS with `liveEvidenceStatus: live_provider` from real credentials on this VM.  
+**Status:** **Implementation complete (Tickets 1–6 + opt-in multi-model matrix + post-Ticket hardening)** on branch `zai-evidence-live-integration` (integration HEAD `04800fb`; matrix `src/live/zaiModelMatrix.ts`, probe pre-filter `src/live/zaiModelProbe.ts`, harness diagnostics `src/live/liveHarnessDiagnostics.ts`). Offline gates passed (`npm test`, `npm run build`, `npm run verify:phase2`, `npm run check`, `npm run evidence:verify-paths`, `npm run audit:no-fakes` / `npm run audit:no-fakes:check` with 0 unallowed findings). **Live Z.ai verification remains unverified** — first foundation discovery (2026-07-01) ran real credentials with 0 full-chain gate passes; see §1.1 and `docs/operations/zai-live-verification.md`.
 **Target branch:** `rector-0.3.0` (merge target)  
 **Operator runbook:** `docs/operations/zai-live-verification.md`  
 **Primary branch under test:** `rector-0.3.0` after Phase 2A through Phase 2F implementation.
@@ -84,6 +84,20 @@ zai-live-harness-smoke-verified
 Those labels require real provider calls, real model outputs, real budget accounting, real evidence files, and honest failure reporting.
 
 The evidence directory cleanup belongs before the live test because the first serious Z.ai proof artifacts should not land under `.omo`, a legacy development harness namespace. Rector needs its own proof directory.
+
+### 1.1 First foundation discovery run (2026-07-01) — fail, informative
+
+After Z.ai / no-fakes hardening, operators ran the recommended discovery workflow (preflight, `ZAI_MATRIX_PREFILTER_PROBE`, JSON capability probe, `ZAI_MATRIX_RUNS_PER_MODEL=1`, ten GLM candidates). **Outcome:** matrix `overallStatus: fail` (0 pass / 9 fail / 1 probe-skipped). **Not run:** 10-repeat matrix or finalist `verify:zai-live` (no model completed the full live chain).
+
+| Signal | Detail |
+| --- | --- |
+| Live infra | Auth OK; `live_provider` recorded where steps executed; matrix diagnostics showed no systemic rate-limit/quota class for executed campaigns |
+| Probe | 9/10 callable; `glm-4.6v-flash` 429 overload; only `glm-4-32b-0414-128k` JSON-capability **supported** |
+| Phase 2F | Most models failed `eval:facts:live` (`model_json_invalid`); finalist passed **5/5** shadow only |
+| Harness | Finalist failed B1–B3 on schema/validation (skeptic/planner JSON), not workspace mutation |
+| Next target | `glm-4-32b-0414-128k` for debug; likely model-specific training/prompting — harness strictness unchanged |
+
+Evidence pointers: `.rector/evidence/live/zai/model-probe/latest.json`, `matrix/matrix-summary.json`, `matrix/<model>/0/*`. Shared `latest.json` rollups are last-writer-wins during matrix — use per-model snapshots for truth per campaign.
 
 ---
 

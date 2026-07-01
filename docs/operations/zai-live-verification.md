@@ -2,6 +2,31 @@
 
 Rector separates **offline** gates from **live** Z.ai verification. Offline infrastructure can be complete while live status remains **unverified** until a real non-fake provider campaign passes `npm run verify:zai-live`.
 
+## First foundation discovery run (2026-07-01)
+
+Rector’s **first** live Z.ai foundation discovery campaign on branch `zai-evidence-live-integration` (after evidence-path + no-fakes hardening). **Live verification did not pass** — do not relabel Phase 2 or harness milestones as live-verified.
+
+| Item | Result |
+| --- | --- |
+| Preflight | `evidence:verify-paths`, strict `audit:no-fakes:check`, clean worktree, env loaded |
+| Probe (`probe:zai-models` + JSON capability) | 9/10 callable; `glm-4.6v-flash` skipped (HTTP 429 / overload); only `glm-4-32b-0414-128k` reported JSON capability **supported** |
+| Matrix (`verify:zai-live:matrix`, 1 run/model, pre-filter + JSON probe) | `overallStatus: fail` — **0** pass / **9** fail / **1** skipped (probe) |
+| Follow-up intentionally skipped | No 10-run matrix repeat and no finalist `verify:zai-live` — discovery found **zero** full-chain gate passes |
+
+**Failure pattern (evidence-backed):** Most flash / air / turbo / vision-turbo candidates failed at `eval:facts:live` with `model_json_invalid` and schema/provenance failures (see per-model `phase2-live-fact-shadow-report.json` under matrix snapshots). `glm-4-32b-0414-128k` was the only candidate that completed Phase 2F live shadow **5/5** and provider smoke, then failed live harness on orchestration schema/validation (e.g. skeptic `findings.*.recommendation`, planner `dependencies` / `approvalGates` — `provider_json` / validation after one repair). Treat it as the **best current finalist / debug target**, not a verified pass.
+
+**What this run did prove:** Real Z.ai OpenAI-compatible calls, `live_provider` evidence, no auth failure, no systemic quota failure in matrix diagnostics, no secret leakage in artifacts, and gate rejection of fake/spy doubles remains intact. Matrix is **comparison/discovery only** (no manifest update).
+
+**Operator interpretation (not a harness change):** Strict gate + harness behavior appears useful; failures look like **model ↔ schema/instruction mismatch**. Likely follow-on is model-specific prompting, adapters, or fine-tuning — **not** relaxing the harness for live-verified claims.
+
+**Artifact pointers (local, gitignored):**
+
+- `.rector/evidence/live/zai/model-probe/latest.json`
+- `.rector/evidence/live/zai/matrix/matrix-summary.json` (`generatedAt` ~2026-07-01T04:04:37Z)
+- Per-model snapshots: `.rector/evidence/live/zai/matrix/<safe-model-id>/0/` (e.g. `phase2-live-fact-shadow-report.json`, `latest.json`)
+
+**Caution:** Shared canonical rollups (`.rector/evidence/live/zai/latest.json`, root Phase 2 shadow) are **last-writer-wins** during matrix runs. Prefer `matrix-summary.json` and per-model snapshot paths for triage; a snapshot’s copied `latest.json` can disagree with the model that “won” the shared rollup.
+
 ## Evidence layout
 
 - Canonical root: `.rector/evidence`

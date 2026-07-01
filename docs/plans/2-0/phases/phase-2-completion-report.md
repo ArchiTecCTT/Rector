@@ -183,8 +183,9 @@ Proposal fact kinds (`PlanCandidateFact`, `MemoryPatchCandidateFact`, etc.) may 
 
 ### Z.ai live evidence harness (parallel track, branch `zai-evidence-live-integration`)
 
-- `.rector/evidence` path module, Z.ai provider/harness smoke writers, live evidence gate, opt-in matrix (per-model snapshots, optional probe pre-filter), and harness/provider diagnostics are implemented @ `350d49d` (plan: `docs/plans/2-0/live/zai-evidence-directory-and-live-harness-plan.md`; operator steps: `docs/operations/zai-live-verification.md`).
-- **Does not change this report’s label:** completion remains `phase2-offline-complete-live-unverified` until Phase 2F live shadow and single-model `verify:zai-live` pass with real non-fake `live_provider` evidence (matrix comparison alone does not update the canonical manifest or live-verified labels).
+- `.rector/evidence` path module, Z.ai provider/harness smoke writers, live evidence gate, opt-in matrix (per-model snapshots, optional probe pre-filter), and harness/provider diagnostics are implemented (plan: `docs/plans/2-0/live/zai-evidence-directory-and-live-harness-plan.md`; operator steps: `docs/operations/zai-live-verification.md`).
+- **First foundation discovery (2026-07-01):** one-run matrix with ten GLM candidates — 0 full-chain gate passes; most models failed live fact shadow JSON; `glm-4-32b-0414-128k` passed 5/5 shadow + provider smoke then failed harness schema checks. Evidence local under `.rector/evidence/live/zai/matrix/` (gitignored).
+- **Does not change this report’s label:** completion remains `phase2-offline-complete-live-unverified` until Phase 2F live shadow **and** single-model `verify:zai-live` pass with real non-fake `live_provider` evidence on the **same** finalist campaign (matrix comparison alone does not update the canonical manifest or live-verified labels).
 
 ---
 
