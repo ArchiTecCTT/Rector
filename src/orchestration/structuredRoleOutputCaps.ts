@@ -1,3 +1,4 @@
+import type { LLMProviderOptions, LLMRequest } from "../providers/llm";
 import type { Run } from "../store/schemas";
 
 /** Structured JSON roles that must not silently fall back to provider default output caps in live harness. */
@@ -29,6 +30,11 @@ export interface StructuredRoleOutputCapPolicy {
   repair?: number;
   /** Fallback when a role-specific cap is omitted inside an opted-in policy. */
   defaultCap?: number;
+  /**
+   * When true, structured JSON role requests include {@link LLMProviderOptions.strictJsonMinimizeReasoning}.
+   * Live harness policies set this explicitly; normal product chat omits the whole policy.
+   */
+  strictJsonMinimizeReasoning?: boolean;
 }
 
 export interface HarnessScenarioOutputCapSource {
@@ -114,7 +120,41 @@ export function structuredRoleOutputCapPolicyForHarnessScenario(
         ? clampStructuredRoleMaxOutputTokens(repairEnv)
         : clampStructuredRoleMaxOutputTokens(repairFallback),
     defaultCap: DEFAULT_LIVE_HARNESS_STRUCTURED_ROLE_MAX_OUTPUT_TOKENS,
+    strictJsonMinimizeReasoning: true,
   };
+}
+
+export function resolveStructuredRoleProviderOptions(
+  policy: StructuredRoleOutputCapPolicy | undefined,
+): LLMProviderOptions | undefined {
+  if (!policy?.strictJsonMinimizeReasoning) return undefined;
+  return { strictJsonMinimizeReasoning: true };
+}
+
+export type StructuredRoleLlmRequestFields = Pick<
+  LLMRequest,
+  "maxOutputTokens" | "providerOptions" | "metadata"
+>;
+
+export function applyStructuredRoleLlmRequestFields(
+  role: StructuredJsonRole,
+  policy: StructuredRoleOutputCapPolicy | undefined,
+  run: Pick<Run, "budget"> | undefined,
+): StructuredRoleLlmRequestFields {
+  const maxOutputTokens = resolveStructuredRoleMaxOutputTokens(role, policy, run);
+  const providerOptions = resolveStructuredRoleProviderOptions(policy);
+  const fields: StructuredRoleLlmRequestFields = {};
+  if (maxOutputTokens !== undefined) {
+    fields.maxOutputTokens = maxOutputTokens;
+  }
+  if (providerOptions) {
+    fields.providerOptions = providerOptions;
+    fields.metadata = {
+      structuredRole: role,
+      strictJsonMinimizeReasoning: true,
+    };
+  }
+  return fields;
 }
 
 export function applyStructuredRoleMaxOutputTokens(
@@ -122,6 +162,6 @@ export function applyStructuredRoleMaxOutputTokens(
   policy: StructuredRoleOutputCapPolicy | undefined,
   run: Pick<Run, "budget"> | undefined,
 ): { maxOutputTokens?: number } {
-  const maxOutputTokens = resolveStructuredRoleMaxOutputTokens(role, policy, run);
+  const { maxOutputTokens } = applyStructuredRoleLlmRequestFields(role, policy, run);
   return maxOutputTokens === undefined ? {} : { maxOutputTokens };
 }

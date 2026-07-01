@@ -15,7 +15,7 @@ import { enforceMaxPerRunBudget, evaluateBudget, type BudgetUsage } from "../sec
 import { redactSecrets, redactString } from "../security/redaction";
 import type { Run } from "../store";
 import {
-  applyStructuredRoleMaxOutputTokens,
+  applyStructuredRoleLlmRequestFields,
   type StructuredJsonRole,
   type StructuredRoleOutputCapPolicy,
 } from "./structuredRoleOutputCaps";
@@ -606,7 +606,7 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
       ...(deps.model ? { model: deps.model } : {}),
       responseFormat: { type: "json_object" },
       task: "planner",
-      ...applyStructuredRoleMaxOutputTokens(structuredRole, deps.structuredRoleOutputCaps, run),
+      ...applyStructuredRoleLlmRequestFields(structuredRole, deps.structuredRoleOutputCaps, run),
     };
 
     // Req 4.5 / 4.7 / 4.8: budget preflight BEFORE any provider.invoke.

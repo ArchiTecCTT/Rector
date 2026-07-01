@@ -37,6 +37,11 @@ describe("structuredRoleOutputCaps policy", () => {
     process.env = { ...envSnapshot };
   });
 
+  it("enables strict JSON reasoning minimization on harness policies", () => {
+    const policy = structuredRoleOutputCapPolicyForHarnessScenario({ maxOutputTokens: 900 });
+    expect(policy.strictJsonMinimizeReasoning).toBe(true);
+  });
+
   it("uses scenario caps for harness roles when env overrides are absent", () => {
     const policy = structuredRoleOutputCapPolicyForHarnessScenario({ maxOutputTokens: 900 });
     expect(resolveStructuredRoleMaxOutputTokens("planner", policy)).toBe(900);
@@ -81,6 +86,7 @@ describe("structured role cap propagation to provider requests", () => {
     await runLivePlanner(input, { provider, run });
 
     expect(provider.requests[0]?.maxOutputTokens).toBeUndefined();
+    expect(provider.requests[0]?.providerOptions).toBeUndefined();
   });
 
   it("propagates harness planner caps to spy invoke and estimate preflight", async () => {
@@ -99,6 +105,11 @@ describe("structured role cap propagation to provider requests", () => {
     await runLivePlanner(input, { provider, run, structuredRoleOutputCaps: policy });
 
     expect(provider.requests[0]?.maxOutputTokens).toBe(1_000);
+    expect(provider.requests[0]?.providerOptions).toEqual({ strictJsonMinimizeReasoning: true });
+    expect(provider.requests[0]?.metadata).toMatchObject({
+      structuredRole: "planner",
+      strictJsonMinimizeReasoning: true,
+    });
     expect(provider.estimateCount).toBeGreaterThan(0);
   });
 
@@ -117,6 +128,8 @@ describe("structured role cap propagation to provider requests", () => {
 
     expect(provider.requests[0]?.maxOutputTokens).toBe(900);
     expect(provider.requests[1]?.maxOutputTokens).toBe(777);
+    expect(provider.requests[1]?.providerOptions).toEqual({ strictJsonMinimizeReasoning: true });
+    expect(provider.requests[1]?.metadata).toMatchObject({ structuredRole: "repair" });
   });
 
   it("propagates harness skeptic caps instead of provider 512 default", async () => {

@@ -16,7 +16,7 @@ import { enforceMaxPerRunBudget, evaluateBudget, type BudgetUsage } from "../sec
 import { redactSecrets, redactString } from "../security/redaction";
 import type { Run } from "../store";
 import {
-  applyStructuredRoleMaxOutputTokens,
+  applyStructuredRoleLlmRequestFields,
   type StructuredJsonRole,
   type StructuredRoleOutputCapPolicy,
 } from "./structuredRoleOutputCaps";
@@ -488,7 +488,7 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
       ...(deps.model ? { model: deps.model } : {}),
       responseFormat: { type: "json_object" },
       task: "skeptic",
-      ...applyStructuredRoleMaxOutputTokens(structuredRole, deps.structuredRoleOutputCaps, run),
+      ...applyStructuredRoleLlmRequestFields(structuredRole, deps.structuredRoleOutputCaps, run),
     };
 
     const estimate = provider.estimateRequest(request);

@@ -22,7 +22,7 @@ import { enforceMaxPerRunBudget, evaluateBudget, type BudgetUsage } from "../sec
 import { redactString } from "../security/redaction";
 import type { Run } from "../store";
 import {
-  applyStructuredRoleMaxOutputTokens,
+  applyStructuredRoleLlmRequestFields,
   type StructuredJsonRole,
   type StructuredRoleOutputCapPolicy,
 } from "./structuredRoleOutputCaps";
@@ -447,7 +447,7 @@ export async function runLiveSynthesizer(
       ...(deps.model ? { model: deps.model } : {}),
       responseFormat: { type: "json_object" },
       task: "synthesizer",
-      ...applyStructuredRoleMaxOutputTokens(structuredRole, deps.structuredRoleOutputCaps, run),
+      ...applyStructuredRoleLlmRequestFields(structuredRole, deps.structuredRoleOutputCaps, run),
     };
 
     const estimate = provider.estimateRequest(request);

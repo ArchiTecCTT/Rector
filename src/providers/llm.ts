@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { buildOpenAiCompatibleStrictJsonBodyExtensions } from "./openAiCompatibleStrictJson";
 import { evaluateBudget, type BudgetUsage } from "../security/budget";
 import { validateProviderUrl, BLOCKED_HOSTNAMES, isPrivateIp } from "../security/ssrfProtection.js";
 import { isIP } from "node:net";
@@ -70,6 +71,18 @@ export const LLMMessageSchema = z.object({
 });
 export type LLMMessage = z.infer<typeof LLMMessageSchema>;
 
+/**
+ * Narrow, zod-validated provider knobs for live harness / operator overrides only.
+ * Not a generic passthrough — unknown keys are rejected by `.strict()`.
+ */
+export const LLMProviderOptionsSchema = z
+  .object({
+    /** Request documented provider-specific reasoning minimization for strict `json_object` roles. */
+    strictJsonMinimizeReasoning: z.literal(true).optional(),
+  })
+  .strict();
+export type LLMProviderOptions = z.infer<typeof LLMProviderOptionsSchema>;
+
 export const LLMRequestSchema = z.object({
   messages: z.array(LLMMessageSchema).min(1),
   route: z.string().min(1).optional(),
@@ -79,6 +92,7 @@ export const LLMRequestSchema = z.object({
   maxOutputTokens: z.number().int().positive().max(128_000).optional(),
   temperature: z.number().min(0).max(2).optional(),
   responseFormat: z.object({ type: z.enum(["text", "json_object"]) }).optional(),
+  providerOptions: LLMProviderOptionsSchema.optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 export type LLMRequest = z.infer<typeof LLMRequestSchema>;
@@ -869,6 +883,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     if (parsed.temperature !== undefined) body.temperature = parsed.temperature;
     if (parsed.responseFormat !== undefined) body.response_format = parsed.responseFormat;
+
+    const strictExtensions = buildOpenAiCompatibleStrictJsonBodyExtensions(parsed, this.baseUrl);
+    for (const [key, value] of Object.entries(strictExtensions)) {
+      body[key] = value;
+    }
 
     return {
       url: `${this.baseUrl}/chat/completions`,

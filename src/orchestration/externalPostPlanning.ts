@@ -43,7 +43,7 @@ import {
   runEvent,
   type ProviderCallMetadata,
 } from "./externalRunSupport";
-import { applyStructuredRoleMaxOutputTokens } from "./structuredRoleOutputCaps";
+import { applyStructuredRoleLlmRequestFields } from "./structuredRoleOutputCaps";
 
 export interface ExternalPostPlanningParams {
   store: RectorStore;
@@ -1003,7 +1003,7 @@ function createLiveRepairAgent(deps: {
         ...(deps.model ? { model: deps.model } : {}),
         responseFormat: { type: "json_object" },
         task: "repair",
-        ...applyStructuredRoleMaxOutputTokens("repair", deps.structuredRoleOutputCaps, currentRun),
+        ...applyStructuredRoleLlmRequestFields("repair", deps.structuredRoleOutputCaps, currentRun),
       };
       const estimate = deps.provider.estimateRequest(request);
       const decision = evaluateBudget(currentRun, buildRepairPreflightUsage(deps.provider, estimate, currentRun));
