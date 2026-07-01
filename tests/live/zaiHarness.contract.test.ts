@@ -268,6 +268,46 @@ describe("Z.ai harness smoke runner", () => {
     }
   });
 
+  it("fails smoke evidence when orchestration swallows provider failures without live usage", async () => {
+    const workspace = await tempWorkspace();
+    const provider = new FailingHarnessProvider();
+    try {
+      const report = await runZaiHarnessSmoke({
+        repoRoot: workspace,
+        runId: RUN_ID,
+        env: { LIVE_HARNESS_EVALS: "1", RECTOR_LIVE_PROVIDER: "zai" },
+        now: fixedNow,
+        scenarios: [zaiHarnessScenarios()[0]],
+        providerDiscovery: async () => ({ selected: discovered(provider), rejections: [] }),
+        runner: async (store, args, deps) => {
+          try {
+            const route = deps.router.select({ capability: "cheap" });
+            await route.provider.invoke({
+              task: "planner",
+              route: "cheap",
+              modelRoute: route.modelRoute,
+              model: route.model,
+              messages: [{ role: "user", content: args.prompt }],
+            });
+          } catch {
+            // orchestration path continued without surfacing provider failure to harness scenario checks
+          }
+          return createMinimalRunResult(store, args, deps);
+        },
+      });
+
+      expect(report.status).toBe("failed");
+      expect(report.scorecard.passed).toBe(false);
+      expect(report.scenarios[0].status).toBe("failed");
+      expect(report.scenarios[0].failures).toContainEqual(expect.objectContaining({ kind: "rate_limit" }));
+      expect(report.scenarios[0].failures).toContainEqual(expect.objectContaining({ kind: "missing_live_usage" }));
+      expect(report.tokenUsage.total.modelCalls).toBe(0);
+      expect(report.diagnostics.failureTaxonomy.rate_limit).toBeGreaterThan(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("classifies provider rate limits with diagnostics taxonomy metadata", async () => {
     const workspace = await tempWorkspace();
     try {
@@ -303,6 +343,38 @@ describe("Z.ai harness smoke runner", () => {
     }
   });
 });
+
+class FailingHarnessProvider implements LLMProvider {
+  readonly metadata = ProviderCapabilityMetadataSchema.parse({
+    id: "openai-compatible",
+    displayName: "OpenAI-Compatible",
+    routes: ["cheap"],
+    models: { cheap: "glm-4.7-flash" },
+    supportsJson: true,
+    supportsStreaming: false,
+    maxContextTokens: 16_000,
+    estimatedUsdPer1kInputTokens: 0.001,
+    estimatedUsdPer1kOutputTokens: 0.001,
+  });
+
+  validateConfig(): void {
+    return undefined;
+  }
+
+  estimateRequest(): LLMUsage {
+    return BASE_USAGE;
+  }
+
+  async invoke(): Promise<LLMResponse> {
+    throw new ProviderError({
+      code: "PROVIDER_HTTP_ERROR",
+      provider: "openai-compatible",
+      status: 429,
+      retryable: true,
+      message: "OpenAI-Compatible request failed with HTTP 429",
+    });
+  }
+}
 
 class HarnessProvider implements LLMProvider {
   readonly metadata = ProviderCapabilityMetadataSchema.parse({

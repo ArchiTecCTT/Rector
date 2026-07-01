@@ -89,6 +89,10 @@ import {
   resolveLiveHarnessMaxRuntimeMs,
 } from "./liveHarnessRuntime";
 import { zaiHarnessScenarios, type ZaiHarnessScenario } from "./harnessScenarios";
+import {
+  collectLiveHarnessIntegrityFailures,
+  reconcileHarnessScenarioReports,
+} from "./liveHarnessIntegrity";
 
 export const ZAI_HARNESS_REPORT_SCHEMA_VERSION = "rector.zai-harness-smoke.v1";
 const TOKEN_USAGE_SCHEMA_VERSION = "rector.zai-harness-token-usage.v1";
@@ -412,7 +416,8 @@ export async function runZaiHarnessSmoke(options: ZaiHarnessSmokeOptions = {}): 
     }
   }
 
-  const scenarioReports = executed.map((entry) => entry.report);
+  const rawScenarioReports = executed.map((entry) => entry.report);
+  const scenarioReports = reconcileHarnessScenarioReports(rawScenarioReports, recordingProvider.providerCalls);
   const allEvents = executed.flatMap((entry) => [...entry.events]);
   const allFacts = executed.flatMap((entry) => [...entry.facts]);
   const tokenUsage = tokenTracker.report(generatedAt);
@@ -445,6 +450,19 @@ export async function runZaiHarnessSmoke(options: ZaiHarnessSmokeOptions = {}): 
   if (secretLeakCount > 0) {
     topLevelFailures.push(failure("secret_leak", `Harness evidence secret scan found ${secretLeakCount} possible secret leak(s).`));
   }
+  const provisionalDiagnostics = buildHarnessDiagnostics({
+    scenarioReports,
+    providerCalls: recordingProvider.providerCalls,
+    tokenUsage,
+    harnessMaxRuntimeMs,
+    scenarioExecutions: executed,
+  });
+  topLevelFailures.push(...collectLiveHarnessIntegrityFailures({
+    liveEvidenceStatus: discoveryWasInjected || !selected.liveEvidence ? "test_only_injected" : "live_provider",
+    scenarios: scenarioReports,
+    providerCalls: recordingProvider.providerCalls,
+    diagnostics: provisionalDiagnostics,
+  }));
   const report = buildReport({
     generatedAt,
     runId,
@@ -453,8 +471,8 @@ export async function runZaiHarnessSmoke(options: ZaiHarnessSmokeOptions = {}): 
     scenarioReports,
     tokenUsage,
     costReport,
-    scorecard,
-    failures: topLevelFailures,
+    scorecard: finalizeHarnessScorecard(scorecard, topLevelFailures),
+    failures: dedupeFailures(topLevelFailures),
     providerCalls: recordingProvider.providerCalls,
     harnessMaxRuntimeMs,
     scenarioExecutions: executed,
@@ -1240,6 +1258,21 @@ function emptyTokenUsage(generatedAt: string, maxTotalTokens: number): ZaiHarnes
     preflightEstimates: [],
     scenarios: [],
   });
+}
+
+function finalizeHarnessScorecard(
+  scorecard: ZaiHarnessScorecard,
+  topLevelFailures: readonly ZaiHarnessFailure[],
+): ZaiHarnessScorecard {
+  if (topLevelFailures.length === 0 && scorecard.passed) return scorecard;
+  return {
+    ...scorecard,
+    passed: scorecard.passed && topLevelFailures.length === 0,
+    failedCount: Math.max(scorecard.failedCount, topLevelFailures.length > 0 && scorecard.failedCount === 0 ? 1 : scorecard.failedCount),
+    notes: topLevelFailures.length > 0
+      ? [...scorecard.notes, "Harness report includes top-level integrity failures; smoke pass requires zero scenario and report failures."]
+      : scorecard.notes,
+  };
 }
 
 function reportFailures(scenarios: readonly ZaiHarnessScenarioReport[], scorecard: ZaiHarnessScorecard): ZaiHarnessFailure[] {

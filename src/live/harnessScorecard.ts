@@ -14,6 +14,7 @@ export const ZAI_HARNESS_FAILURE_KINDS = [
   "crucible",
   "unsafe_unexpected_mutation",
   "missing_evidence",
+  "missing_live_usage",
   "secret_leak",
   "token_budget",
   "scorecard",
