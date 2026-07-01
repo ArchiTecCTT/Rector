@@ -95,7 +95,8 @@ Plan reference: `docs/plans/2-0/phases/phase-2-typed-facts.md`.
 | `npm run eval:facts:live` | Historical skipped evidence; current live script exits nonzero without a live provider | No live provider; see live section below |
 | `npm run build` | Pass | |
 | `npm audit` | Pass | 0 vulnerabilities |
-| `npm run audit:no-fakes` | Exit 0, report-only | 22 remaining allowlisted fake/simulator seams, 0 unallowed findings after Z.ai hardening |
+| `npm run audit:no-fakes` | Exit 0, report-only | 20 allowlisted fake/simulator seams (AST scan), 0 unallowed findings after Z.ai hardening |
+| `npm run audit:no-fakes:check` | Exit 0, strict | Same scan with `--fail-on-unallowed` (AST detectors); pre-merge / hardening verification, not default CI |
 
 Primary Phase 2 gate for ongoing CI: `npm run verify:phase2`.
 
@@ -130,7 +131,7 @@ Follow-up: configure a non-fake provider via the web UI (`runtime-settings.json`
 
 1. **Live unverified** — No real-model shadow cases executed on this VM; schema/provenance stress under live LLM output is not evidenced here.
 2. **Global harness mixed corpus** — `test:global` exits 0 while reporting 19/33 scenario passes; intentional regressions and fake-path rows remain in the committed scenario set.
-3. **Fake seams partially hardened** — `audit:no-fakes` reports 22 remaining allowlisted findings and 0 unallowed findings; full extraction of test doubles/simulator compatibility remains Phase 3 / Phase 13 fake-purge policy.
+3. **Fake seams partially hardened** — `audit:no-fakes` reports 20 allowlisted findings and 0 unallowed findings; `audit:no-fakes:check` enforces zero new unallowed seams; full extraction of test doubles/simulator compatibility remains Phase 3 / Phase 13 fake-purge policy.
 4. **No product wiring** — Facts are not yet consumed by chat orchestration, Memory OS, rules, or DAG execution; adapters ingest existing surfaces only.
 5. **`validate-phase2.ts`** — Exists as a helper script; the documented gate is `verify:phase2` (does not invoke `validate-phase2.ts` as a separate step).
 
@@ -182,8 +183,8 @@ Proposal fact kinds (`PlanCandidateFact`, `MemoryPatchCandidateFact`, etc.) may 
 
 ### Z.ai live evidence harness (parallel track, branch `zai-evidence-live-integration`)
 
-- `.rector/evidence` path module, Z.ai provider/harness smoke writers, and `evidence:zai-live:gate` are implemented (plan: `docs/plans/2-0/live/zai-evidence-directory-and-live-harness-plan.md`; operator steps: `docs/operations/zai-live-verification.md`).
-- **Does not change this report’s label:** completion remains `phase2-offline-complete-live-unverified` until Phase 2F live shadow and `verify:zai-live` pass with real non-fake provider evidence.
+- `.rector/evidence` path module, Z.ai provider/harness smoke writers, live evidence gate, opt-in matrix (per-model snapshots, optional probe pre-filter), and harness/provider diagnostics are implemented @ `350d49d` (plan: `docs/plans/2-0/live/zai-evidence-directory-and-live-harness-plan.md`; operator steps: `docs/operations/zai-live-verification.md`).
+- **Does not change this report’s label:** completion remains `phase2-offline-complete-live-unverified` until Phase 2F live shadow and single-model `verify:zai-live` pass with real non-fake `live_provider` evidence (matrix comparison alone does not update the canonical manifest or live-verified labels).
 
 ---
 

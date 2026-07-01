@@ -7,10 +7,10 @@
 
 ### Z.ai live verification gate — offline complete / live unverified (Ticket 6)
 
-- **Source:** branch `zai-evidence-live-integration` @ `26abc22`; Tickets 1–6 (`src/evidence/**`, live scripts, `src/live/gateZaiLiveEvidence.ts`, configured discovery). Entry points: `scripts/live/gate-zai-live-evidence.ts`, `npm run evidence:zai-live:gate`, `npm run verify:zai-live`.
+- **Source:** branch `zai-evidence-live-integration` @ `350d49d`; Tickets 1–6 plus hardening (`src/evidence/**`, live scripts, `src/live/gateZaiLiveEvidence.ts`, matrix/probe/diagnostics). Entry points: `scripts/live/gate-zai-live-evidence.ts`, `npm run evidence:zai-live:gate`, `npm run verify:zai-live`.
 - **Severity:** Low (measurement / operator workflow; not a product fake-chat regression).
 - **Status:** Open until a real non-fake Z.ai provider campaign passes the gate on operator hardware with credentials and budget.
-- **Observed:** Offline implementation and contract tests pass; gate enforces `live_provider`, campaign freshness, path containment, artifact completeness, mutation checks, token budget, secret scanning, safe run IDs, and Phase 2 report/summary agreement. No committed proof that `verify:zai-live` has passed against live Z.ai on this VM without test injection. Live scripts now exit nonzero on skipped/non-live evidence so intermediate smoke/shadow steps cannot look green before the final gate.
+- **Observed:** Offline implementation and contract tests pass; gate enforces `live_provider`, campaign freshness, path containment, artifact completeness, mutation checks, token budget, secret scanning, safe run IDs, Phase 2 report/summary agreement, and harness/provider/matrix `diagnostics` rollups for operator triage. No committed proof that `verify:zai-live` has passed against live Z.ai on this VM without test injection. Live scripts exit nonzero on skipped/non-live evidence so intermediate smoke/shadow steps cannot look green before the final gate. Matrix grades use `gate_and_harness_pass` (not manifest live-verified).
 - **Plan:** Configure Z.ai via UI or env (`ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` preferred for shell; `OPENAI_COMPATIBLE_*` per-field fallback — not `Z.AI_API_KEY`), run `npm run verify:zai-live`, retain sanitized evidence under `.rector/evidence`, then document pass date in operator notes only after gate PASS. Do not relabel Phase 2 or harness milestones as live-verified before that.
 - **Boundaries:** `test_only_injected` and spy doubles remain test-only; gate rejects them for live-verified claims.
 
@@ -916,7 +916,7 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 ### Report-only fake-seam audit now separates actionable from allowlisted seams
 
 - **Label:** PARTIALLY HARDENED — `npm run audit:no-fakes` now reports total findings, allowlisted findings, and unallowed findings. The current Z.ai hardening wave removed product `simulator.echo` registration, stopped `workspace.validate` from returning synthetic `passed: true`, prevented configured routers from registering/selecting `FakeLLMProvider` as fallback, and stopped live/deep planner paths from manufacturing deterministic plans as product success.
-- **Current status:** 22 remaining findings are explicitly allowlisted with reasons (test/development provider class, explicit deterministic planner compatibility hook, legacy executor-simulator compatibility/type seams). `unallowedFindingCount` is 0; global harness fake-path status is based on unallowed findings, not total historical seams.
+- **Current status:** 20 findings are explicitly allowlisted with reasons (AST-backed scan; test/development provider class, explicit deterministic planner compatibility hook, legacy executor-simulator compatibility/type seams). `unallowedFindingCount` is 0; global harness fake-path status is based on unallowed findings, not total historical seams.
 - **Residual risk:** The allowlisted seams remain source-visible until the Phase 3 / fake-purge workstream extracts test doubles and simulator types out of production modules. They are not acceptable live-provider evidence and must not be used for configured product claims.
 - **Gate policy:** `npm run audit:no-fakes` remains report-only (exit 0) for compatibility; `npm run audit:no-fakes:check` adds `--fail-on-unallowed` strict mode (AST-backed detectors + exact-path allowlist) and exits nonzero on new unallowed seams. Default CI still uses report-only until Phase 13; strict mode is for pre-merge / hardening verification.
 
@@ -947,7 +947,7 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 ### Live-scenario posture and fake-path surfacing
 
 - **Label:** NOTE — Live scenarios are opt-in only: when no provider credentials are present the live path is SKIPPED (proven by a skipped-path test), never faked, and live scenarios are NOT added to default CI.
-- **Label:** DEFERRED — fake-path-status is surfaced as a scorecard dimension (`fakes_present`), keyed off `unallowedFindingCount` from `audit:no-fakes` (0 unallowed / 22 allowlisted after Z.ai hardening on `zai-evidence-live-integration`; historical Phase 0 baselines cited 40 total seams). Purge remains deferred to Phase 3 + the fake-purge workstream; CI-gating to Phase 13.
+- **Label:** DEFERRED — fake-path-status is surfaced as a scorecard dimension (`fakes_present`), keyed off `unallowedFindingCount` from `audit:no-fakes` (0 unallowed / 20 allowlisted after Z.ai hardening on `zai-evidence-live-integration`; historical Phase 0 baselines cited 40 total seams). Purge remains deferred to Phase 3 + the fake-purge workstream; CI-gating to Phase 13.
 
 ### src-cannot-import-scripts → injected fakePathAuditor
 

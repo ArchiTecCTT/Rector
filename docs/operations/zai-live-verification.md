@@ -88,7 +88,8 @@ Markdown rollups (`latest.md`, `provider-smoke.md`, `matrix-summary.md`) echo th
 
 ### How tests relate to live verification
 
-- **Unit/integration (`npm test`)** — matrix parsing, env isolation, secret redaction, and orchestration use **injected command runners**; no network, no real API keys, no live gate pass claims.
+- **Unit/integration (`npm test`)** — matrix parsing, env isolation, secret redaction, diagnostics rollups, and orchestration use **injected command runners**; no network, no real API keys, no live gate pass claims.
+- **Fake-seam containment (`npm run audit:no-fakes:check`)** — offline strict scan (0 unallowed production fake seams); default `audit:no-fakes` remains report-only unless CI policy changes.
 - **Live scripts** (`test:live:zai:*`, `eval:facts:live`) — opt-in; exit nonzero unless evidence records `live_provider` with passing tracks.
 - **Gate** (`evidence:zai-live:gate`) — rejects spy/fake providers and `test_only_injected` evidence; fake doubles cannot satisfy live verification.
 

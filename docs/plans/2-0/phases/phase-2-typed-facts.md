@@ -70,6 +70,7 @@ npm run check
 npm test
 npm run build
 npm run audit:no-fakes
+npm run audit:no-fakes:check
 npm run eval:capabilities:gate
 npm run test:global
 npm run test:global:gate

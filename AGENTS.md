@@ -43,7 +43,7 @@ Stale/quarantined docs have warning banners. If stale docs conflict with source-
 - Dependency audit: `npm audit`
 - Dev server: `npm run dev`
 - Capability evals (offline, no model): `npm run eval:capabilities` (and `npm run eval:capabilities:report`) — runs the committed eval corpus and writes `.rector/evidence/capabilities/eval-report.{json,md}` (legacy `.omo/evidence` is read/migrated for compatibility only)
-- Fake-seam audit (report-only, non-blocking): `npm run audit:no-fakes` — reports allowlisted vs unallowed seams; Z.ai hardening wave targets 0 unallowed findings (22 allowlisted compatibility seams remain until Phase 3/13 purge)
+- Fake-seam audit: `npm run audit:no-fakes` (report-only, non-blocking) and `npm run audit:no-fakes:check` (strict, fails on unallowed seams); Z.ai hardening targets 0 unallowed (20 allowlisted compatibility seams until Phase 3/13 purge)
 - Global reliability harness (offline, one scorecard per scenario): `npm run test:global` — runs the committed scenarios against the fixture workspace and writes `.rector/evidence/global/global-report.{json,md}`; live scenarios are SKIPPED when no credentials are present
 - Typed fact evals (offline): `npm run eval:facts` → `.rector/evidence/phase2/fact-report.{json,md}`; opt-in live shadow: `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live` (`LIVE_FACT_EVALS=1`) → `.rector/evidence/phase2/live-fact-shadow-*` (exits nonzero without a live provider); Phase 2 gate: `npm run verify:phase2`
 - Evidence paths: `npm run evidence:verify-paths`, optional `npm run evidence:migrate-local` (legacy `.omo/evidence` → `.rector/evidence`)

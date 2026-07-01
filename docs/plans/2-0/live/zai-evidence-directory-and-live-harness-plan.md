@@ -1,6 +1,6 @@
 # Rector Evidence Directory Overhaul + Z.ai GLM Live Verification Plan
 
-**Status:** **Implementation complete (Tickets 1–6 + opt-in multi-model matrix)** on branch `zai-evidence-live-integration` (integration HEAD `26abc22`; matrix orchestration `src/live/zaiModelMatrix.ts`, `tests/live/zaiModelMatrix.test.ts`). Offline gates passed (`npm test`, `npm run build`, `npm run verify:phase2`, `npm run check`, `npm run evidence:verify-paths`, `npm run audit:no-fakes` with 0 unallowed findings). **Live Z.ai verification remains unverified** — no operator campaign has produced gate PASS with `liveEvidenceStatus: live_provider` from real credentials on this VM.  
+**Status:** **Implementation complete (Tickets 1–6 + opt-in multi-model matrix + post-Ticket hardening)** on branch `zai-evidence-live-integration` (integration HEAD `350d49d`; matrix `src/live/zaiModelMatrix.ts`, probe pre-filter `src/live/zaiModelProbe.ts`, harness diagnostics `src/live/liveHarnessDiagnostics.ts`). Offline gates passed (`npm test`, `npm run build`, `npm run verify:phase2`, `npm run check`, `npm run evidence:verify-paths`, `npm run audit:no-fakes` / `npm run audit:no-fakes:check` with 0 unallowed findings). **Live Z.ai verification remains unverified** — no operator campaign has produced gate PASS with `liveEvidenceStatus: live_provider` from real credentials on this VM.  
 **Target branch:** `rector-0.3.0` (merge target)  
 **Operator runbook:** `docs/operations/zai-live-verification.md`  
 **Primary branch under test:** `rector-0.3.0` after Phase 2A through Phase 2F implementation.
@@ -649,7 +649,7 @@ npm run verify:zai-live
   proves live Z.ai model + current harness behavior under evidence gates (manifest update on PASS).
 
 npm run verify:zai-live:matrix
-  opt-in per-model comparison; writes matrix-summary only; reuses shared latest rollups (last model wins — deferred hardening).
+  opt-in per-model comparison; writes matrix-summary + per-model snapshots; shared latest rollups still last-writer-wins (see operator runbook).
 ```
 
 ---
