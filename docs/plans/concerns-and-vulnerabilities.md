@@ -5,6 +5,32 @@
 
 ## Open
 
+### Regolo live verification gate — offline complete / live unverified
+
+- **Source:** branch `zai-evidence-live-integration` @ `f3a58b5` (implementation `2f56975`, hygiene `8900aa1`, matrix env/snapshot hardening `f3a58b5`); parallel to Z.ai track (`src/live/regoloModelMatrix.ts`, `gateRegoloLiveEvidence.ts`, `RegoloAIProvider`). Entry points: `npm run evidence:regolo-live:gate`, `npm run verify:regolo-live`, `npm run verify:regolo-live:matrix`.
+- **Severity:** Low (measurement / operator workflow; not a configured-product fake-chat regression).
+- **Status:** Open until a real non-fake Regolo provider campaign passes the gate on operator hardware with credentials and budget.
+- **Observed:** Offline gates passed after `f3a58b5` (`check`, `npm test`, `build`, `npm audit`, `audit:no-fakes:check`). **First foundation discovery (2026-07-01):** probe **10/10** callable; one-run matrix **0** pass / **10** fail / **0** skipped; no `verify:regolo-live` gate PASS. Nine models failed at `eval:facts:live`; `gemma4-31b` passed live shadow + provider smoke then failed harness on orchestration **timeout** (B1/B2/B3). Matrix remains comparison-only; live scripts exit nonzero on skipped/non-live evidence.
+- **Plan:** Debug finalist `gemma4-31b` (timeout vs schema depth) or tune timeouts/prompting per model; then run single-model `npm run verify:regolo-live` on a chosen finalist. Document pass date only after gate PASS. See `docs/operations/regolo-live-verification.md` § First foundation discovery run.
+- **Boundaries:** Gate rejects spy/fake/`test_only_injected` for live-verified claims. **Do not weaken the harness** for demo labels.
+
+### Regolo models — typed-fact shadow failures and harness timeouts (discovery)
+
+- **Source:** First Regolo discovery matrix @ 2026-07-01; artifacts under `.rector/evidence/live/regolo/matrix/` (local, gitignored).
+- **Severity:** Medium (live verification blocked until a model completes fact shadow + harness within gate budgets).
+- **Status:** Open — expect model selection, timeout tuning, prompt specialization, or smaller finalist sets before repeating full ten-model matrices.
+- **Observed:** 9/10 failed at Phase 2F live shadow. Only `gemma4-31b` reached harness; failures were **timeouts** on orchestration scenarios, not the Z.ai-style schema-validation path seen on `glm-4-32b-0414-128k`. Large-model output caps and JSON reliability remain **uncharacterized** per model beyond probe callability.
+- **Plan:** Cap matrix breadth with `REGOLO_MATRIX_MAX_MODELS`; keep `REGOLO_MATRIX_RUNS_PER_MODEL=1` until a finalist shows A/B-grade steps; avoid claiming Regolo superiority over Z.ai without paired finalist gate PASS evidence.
+- **Boundaries:** Broad matrices are slow/costly operator spend — not default CI.
+
+### Live provider matrix — evidence env-name hygiene — RESOLVED (Z.ai + Regolo)
+
+- **Source:** `f3a58b5` — `src/live/harnessEvidence.ts` (`isMatrixStepReproEnvKey` / `isSensitiveMatrixEnvKeyName`), shared snapshot copy in `liveMatrixCampaignSnapshot.ts`.
+- **Severity:** Moderate if unfixed (matrix summaries could leak credential-related env key names or imply stale per-model snapshots).
+- **Status:** **RESOLVED** @ `f3a58b5` — **guard:** keep allowlist-only matrix step logging and model-matched snapshot copies in code review; do not revert to dumping full `process.env` key lists into `matrix-summary.json`.
+- **Resolution:** Matrix step repro env keys are allowlisted (prefixes `REGOLO_MATRIX_`, `ZAI_MATRIX_`, `RECTOR_LIVE_*`, etc.); sensitive name patterns and credential keys are excluded from summaries. Per-model snapshots copy incrementally and skip mismatched `modelId` rollups.
+- **Evidence:** `tests/live/regoloModelMatrix.test.ts` and Z.ai matrix tests; operator Regolo matrix post-hardening completed without summary env-name leakage (values never logged).
+
 ### Z.ai live verification gate — offline complete / live unverified (Ticket 6)
 
 - **Source:** branch `zai-evidence-live-integration` @ `04800fb` (docs); Tickets 1–6 plus hardening (`src/evidence/**`, live scripts, `src/live/gateZaiLiveEvidence.ts`, matrix/probe/diagnostics). Entry points: `scripts/live/gate-zai-live-evidence.ts`, `npm run evidence:zai-live:gate`, `npm run verify:zai-live`.

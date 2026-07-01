@@ -291,6 +291,8 @@ Typed fact contracts, append-only ledger/replay/diff, adapters (Cartographer, To
 
 **Z.ai live evidence track (offline implementation done / live unverified):** Evidence directory migration, Z.ai smoke + harness + gate (`npm run verify:zai-live`), opt-in multi-model matrix with per-model snapshots + probe pre-filter + diagnostics (`npm run verify:zai-live:matrix`; matrix grades ≠ live-verified until finalist single-model gate) on branch `zai-evidence-live-integration` — see `docs/plans/2-0/live/zai-evidence-directory-and-live-harness-plan.md` and `docs/operations/zai-live-verification.md`. **First foundation discovery (2026-07-01):** real-credential matrix 0/10 full-chain passes; finalist debug target `glm-4-32b-0414-128k` (5/5 live fact shadow, harness fail). No `verify:zai-live` gate PASS; do not relabel Phase 2 or harness milestones until single-model gate PASS with `live_provider` evidence.
 
+**Regolo live evidence track (offline implementation done / live unverified):** Parallel opt-in track (`npm run verify:regolo-live`, `verify:regolo-live:matrix`) — `docs/operations/regolo-live-verification.md`. **First discovery (2026-07-01):** probe 10/10 callable; matrix 0/10 gate passes; finalist debug target `gemma4-31b` (live shadow + provider smoke, harness timeout). No `verify:regolo-live` gate PASS.
+
 **Next neuro-symbolic phases:** 2.1 / 2.2 Memory OS, then 2.4 Capability Contract Generator and 2.5 Capability-SLM Fabric; Phase 3 rule engine consumes facts.
 
 ## Chunk 047 — Runtime Maturity (post-042a/042b)
