@@ -4,8 +4,8 @@
 **Integration target:** `rector-0.3.0` / `origin/rector-0.3.0`  
 **Evidence worktree:** `phase-2G-docs-completion`  
 **Gate commit (post Phase 2F merge):** `45768e5`  
-**Completion label:** `phase2-offline-complete-live-unverified`  
-**Report date:** 2026-06-28  
+**Completion label:** `phase2-complete-live-verified-zai-finalist` (Z.ai `glm-4-32b-0414-128k` single-model `verify:zai-live` gate PASS @ 2026-07-01 post harness hardening `75f4233`; Regolo and other models remain live-unverified)  
+**Report date:** 2026-06-28 (live finalist gate documented 2026-07-01)
 
 ---
 
@@ -13,7 +13,7 @@
 
 Phase 2 delivered the typed fact protocol substrate: strict Zod fact contracts, append-only ledgers with replay/diff, adapters from Cartographer / ToolRegistry / capability evals / global harness / run events, structural validation gates, offline fact evals with JSON/Markdown reports, and an opt-in live shadow runner with honest skipped evidence plus nonzero live-verification exit behavior when no live provider is available.
 
-**Offline CI gates passed** on this worktree at `45768e5`. **Live-model shadow capture did not run** — no configured non-fake live provider was available on the dev VM. Do **not** use this completion state for investor/demo claims about live-model fact reliability; use `phase2-complete-live-verified` only after a real-provider shadow report is captured.
+**Offline CI gates passed** at `45768e5` and remain green after live-harness hardening on `zai-evidence-live-integration` (`npm test` 410 files / 2829 tests @ `75f4233`). **Live-model verification (scoped):** official `RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=glm-4-32b-0414-128k npm run verify:zai-live` passed the strict gate (Phase 2F shadow + provider + harness, `live_provider`, manifest updated). Do **not** extrapolate to all Z.ai GLM variants, matrix discovery grades, or Regolo — those lack single-model gate PASS. Broader label `phase2-complete-live-verified` applies only when operator policy extends beyond this documented finalist.
 
 Configured-product invariants remain: product chat is gated on UI-written `runtime-settings.json` and `runOrchestratedChatRun`; deterministic doubles (`FakeLLMProvider`, spy/simulator seams) are **test/CI-only**, not end-user defaults.
 

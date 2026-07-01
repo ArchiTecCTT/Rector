@@ -21,6 +21,8 @@ Rector's **first** live Regolo foundation discovery campaign on branch `zai-evid
 
 **Operator interpretation (not a harness change):** Broad multi-model matrices are **slow and costly**; large Regolo models may hit **timeouts** before schema issues surface; output caps and JSON/schema behavior per model remain **unknown until probed and snapshotted**. Likely follow-on is model-specific timeouts, prompting, or finalist-only campaigns — **not** relaxing the harness for live-verified claims.
 
+**Post–Z.ai-parity harness hardening focused rerun (2026-07-01, branch @ `75f4233`):** After the same structured-role caps, strict JSON cards, and diagnostics landed for Regolo harness writers, focused **`gemma4-31b`** reruns: **provider smoke passed**; **harness smoke failed** B1/B2/B3. Diagnostics showed **300000ms** harness runtime (`RECTOR_LIVE_HARNESS_MAX_RUNTIME_MS` override), **three** provider/orchestration **timeouts**, **one planner call per scenario**, **0** usage tokens — bottleneck is **provider latency/timeout**, not JSON truncation or schema validation after caps. **No** `npm run verify:regolo-live` gate PASS; Regolo remains live-unverified. Do not infer Regolo quality from this single finalist smoke.
+
 **Artifact pointers (local, gitignored — do not commit):**
 
 - `.rector/evidence/live/regolo/model-probe/latest.json`
@@ -102,6 +104,10 @@ Each model campaign sets `REGOLO_MODEL=<model>` and runs, in order:
 4. `npm run evidence:regolo-live:gate -- --no-manifest-update`
 
 Matrix step logs record **allowlisted** env key names only (values never written); credential key names are redacted from summaries (`f3a58b5`).
+
+### Strict harness operator knobs
+
+Same live-harness env overrides as Z.ai (`RECTOR_LIVE_HARNESS_MAX_RUNTIME_MS`, `RECTOR_LIVE_HARNESS_*_MAX_OUTPUT_TOKENS`). See `docs/operations/zai-live-verification.md` § Strict harness operator knobs — including the warning **not** to leave cap overrides exported in a shell that also runs `npm run verify:regolo-live` (offline `verify:phase2` unit tests read `process.env`).
 
 ## Commands (quick reference)
 

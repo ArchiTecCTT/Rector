@@ -19,6 +19,8 @@ Rector’s **first** live Z.ai foundation discovery campaign on branch `zai-evid
 
 **Operator interpretation (not a harness change):** Strict gate + harness behavior appears useful; failures look like **model ↔ schema/instruction mismatch**. Likely follow-on is model-specific prompting, adapters, or fine-tuning — **not** relaxing the harness for live-verified claims.
 
+**Superseded for one finalist (harness hardening, 2026-07-01):** After live-harness optimization commits `4438205`–`75f4233` (structured-role output caps, strict JSON prompt cards + provider-gated no-thinking, diagnostics/bottleneck taxonomy, bounded product `maxRuntimeMs`, harness repair preflight), focused reruns and official **`RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=glm-4-32b-0414-128k npm run verify:zai-live`** **passed** the strict gate: harness **3/3** scenarios, **46,695** / 100,000 tokens, **$0.0441** estimated cost, `live_provider` evidence, manifest updated. Report: `.rector/evidence/live/zai/latest.md`. This **does not** grade other Z.ai models or matrix campaigns — only this single-model gate PASS supports `zai-live-verified` / `phase2-complete-live-verified` labels for the Z.ai finalist.
+
 **Artifact pointers (local, gitignored):**
 
 - `.rector/evidence/live/zai/model-probe/latest.json`
@@ -99,11 +101,28 @@ Matrix gate runs disable manifest updates so comparing models does not thrash `.
 
 **Shared rollup overwrite:** each model campaign still writes the same canonical paths (`.rector/evidence/live/zai/latest.json`, provider smoke, Phase 2 shadow). The **last** model in the run wins those shared files. Use `matrix-summary.json` **and** per-model snapshots under `.rector/evidence/live/zai/matrix/<safe-model-id>/<run-index>/` for isolated evidence pointers (matrix is comparison-only; single-model `verify:zai-live` remains required for manifest-backed live verification).
 
+### Strict harness operator knobs (live smoke / matrix only)
+
+These env vars are **operator and live-test overrides** — not the configured-product web UI setup path.
+
+| Variable | Default / clamp | Purpose |
+| --- | --- | --- |
+| `RECTOR_LIVE_HARNESS_MAX_RUNTIME_MS` | default **120000**; clamp **30000**–**600000** | Per-scenario orchestration wall-clock for live harness smoke |
+| `RECTOR_LIVE_HARNESS_PLANNER_MAX_OUTPUT_TOKENS` | harness default **4096** per role (scenario cap when unset) | Explicit cap on planner strict JSON calls |
+| `RECTOR_LIVE_HARNESS_SKEPTIC_MAX_OUTPUT_TOKENS` | same | Skeptic strict JSON |
+| `RECTOR_LIVE_HARNESS_SYNTH_MAX_OUTPUT_TOKENS` | same | Synthesizer strict JSON |
+| `RECTOR_LIVE_HARNESS_REPAIR_MAX_OUTPUT_TOKENS` | same (falls back to planner cap) | Repair strict JSON |
+
+Live harness attaches structured-role caps and `strictJsonMinimizeReasoning` on planner/skeptic/synthesizer/repair only; normal product chat via `runOrchestratedChatRun` does **not** opt into this policy unless explicitly passed.
+
+**Do not export cap overrides in the same shell session as `npm run verify:zai-live`:** the chain runs `npm run verify:phase2` first, which includes unit tests that read `process.env`. A prior `export RECTOR_LIVE_HARNESS_*_MAX_OUTPUT_TOKENS=8192` (or similar) can make offline tests observe operator overrides and fail or skew results. For cap experiments, use `npm run test:live:zai:harness` / provider smoke in a clean shell, unset overrides before the full verify chain, or scope env only to the live harness subprocess (smoke scripts), not the parent verify shell.
+
 ### Harness diagnostics (operator / partner triage)
 
 Live harness, provider smoke, and matrix summaries include a `diagnostics` block (`rector.zai-live-diagnostics.v1`):
 
 - **Provider failure taxonomy** — `rate_limit`, `quota`, `timeout`, `provider_http`, `provider_json`, `unknown` (derived from provider HTTP status, retryability, and error codes when available; otherwise `unknown`).
+- **Bottleneck taxonomy** — per-scenario `firstFailingStep` and `bottleneckClass` (e.g. `provider_timeout`, `provider_json`, `orchestration_validation`) when a scenario fails; omitted when the scenario **passed** (post-`75f4233`).
 - **Latency aggregates** — min/avg/p50/p95/max for provider calls, harness scenarios, and (matrix) campaign/step durations.
 - **Token totals** — input/output/total tokens, model calls, and estimated USD where tracked.
 
