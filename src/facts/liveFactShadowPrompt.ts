@@ -15,11 +15,20 @@ export type LiveFactShadowPromptScenario = Readonly<{
   expectedKinds: readonly string[];
 }>;
 
+/** Ground-truth path:startLine refs per fixture-backed shadow case (validators enforce these). */
+export function liveFactShadowAllowedSourceSpanRefs(scenarioId: string): readonly string[] {
+  if (scenarioId === "rg_artifact_evidence_extraction") return ["src/notes.md:1", "src/notes.md:3"];
+  if (scenarioId === "test_log_diagnosis") return ["/tmp/vitest-case/failing.test.ts:1", "tests/**/*.test.ts:1"];
+  if (scenarioId === "tsc_diagnostic_grouping") return ["src/index.ts:2"];
+  return [];
+}
+
 export function buildLiveFactShadowSystemContract(): string {
   const allowedKindsLine = `ONLY allowed values for facts[].kind: ${LIVE_FACT_SHADOW_ALLOWED_KINDS.join(", ")}.`;
   return [
     "Return only JSON. Do not use Markdown.",
     'Shape: {"facts":[...]}.',
+    "Compact output: short strings, minimal facts (usually 1–3), complete JSON — never truncate mid-object.",
     allowedKindsLine,
     "Allowed fact object shapes (kind must be one of the list above):",
     '{"kind":"intent","intent":string,"confidence":number?}',
@@ -53,6 +62,20 @@ export function buildLiveFactShadowScenarioGuidance(scenario: LiveFactShadowProm
   if (scenario.expectedKinds.includes("capability_evidence")) {
     lines.push(
       "When emitting capability_evidence, include at least one source_span evidence ref grounded in the artifact text.",
+    );
+  }
+
+  const allowedRefs = liveFactShadowAllowedSourceSpanRefs(scenario.id);
+  if (allowedRefs.length > 0) {
+    lines.push(
+      `ONLY copy these exact source_span refs (path:startLine) from the artifact: ${allowedRefs.join(", ")}.`,
+      "Refs like stdout:2, stderr:1, or invented paths/lines are invalid and fail validation.",
+    );
+  }
+
+  if (scenario.id === "test_log_diagnosis") {
+    lines.push(
+      "If the log lacks a failing assertion, use capability_failure with insufficient_evidence — do not invent stdout/stderr line refs.",
     );
   }
 

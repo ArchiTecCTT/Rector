@@ -61,10 +61,11 @@ import {
   type StrictJsonEvidenceStatus,
   type StrictJsonValidationResult,
 } from "../../src/orchestration/strictJsonRepairLoop";
-import type { StrictOutputRuntimeMetadata } from "../../src/orchestration/strictOutputDiagnostics";
+import type { StrictOutputDiagnostic, StrictOutputRuntimeMetadata } from "../../src/orchestration/strictOutputDiagnostics";
 import {
   buildLiveFactShadowScenarioGuidance,
   buildLiveFactShadowSystemContract,
+  liveFactShadowAllowedSourceSpanRefs,
 } from "../../src/facts/liveFactShadowPrompt";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -76,8 +77,19 @@ const REPORT_MD = "live-fact-shadow-report.md";
 const SUMMARY_JSON = "live-fact-shadow-summary.json";
 const RAW_MODEL_OUTPUT_DIR = "live-fact-shadow-artifacts";
 const CREATED_BY = "Phase 2F live fact shadow runner";
+const DEFAULT_LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS = 1200;
+const LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS_MIN = 256;
+const LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS_MAX = 4096;
 
 export { LIVE_FACT_SHADOW_REPORT_SCHEMA_VERSION, LiveFactShadowReportSchema };
+
+export function resolveLiveFactShadowMaxOutputTokens(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS?.trim();
+  if (!raw) return DEFAULT_LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS;
+  return Math.min(LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS_MAX, Math.max(LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS_MIN, parsed));
+}
 
 export interface DiscoveredLiveFactProvider {
   readonly provider: LLMProvider;
@@ -294,6 +306,7 @@ export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {
   const cases: LiveFactShadowCaseReport[] = [];
   const strictEvidenceStatus: StrictJsonEvidenceStatus =
     discoveryWasInjected || !selected.liveEvidence ? "test_only_injected" : "live_provider";
+  const maxOutputTokens = resolveLiveFactShadowMaxOutputTokens(env);
   for (const scenario of liveFactShadowScenarios()) {
     cases.push(
       await runScenario(scenario, selected.provider, {
@@ -307,6 +320,7 @@ export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {
         write,
         now,
         strictEvidenceStatus,
+        maxOutputTokens,
       }),
     );
   }
@@ -358,6 +372,7 @@ async function runScenario(
     readonly write: boolean;
     readonly now: () => Date;
     readonly strictEvidenceStatus: StrictJsonEvidenceStatus;
+    readonly maxOutputTokens: number;
   },
 ): Promise<LiveFactShadowCaseReport> {
   const started = Date.now();
@@ -383,7 +398,7 @@ async function runScenario(
       let response: LLMResponse | undefined;
       try {
         response = await provider.invoke(
-          buildRequest(scenario, context.modelId, context.route, artifactText, repairAppendix),
+          buildRequest(scenario, context.modelId, context.route, artifactText, repairAppendix, context.maxOutputTokens),
           {},
         );
       } catch {
@@ -396,7 +411,7 @@ async function runScenario(
             model: response.model,
             finishReason: response.finishReason,
             outputChars: response.content.length,
-            maxOutputTokens: 800,
+            maxOutputTokens: context.maxOutputTokens,
           }
         : {
             provider: context.providerId,
@@ -404,6 +419,7 @@ async function runScenario(
             finishReason: "error",
             errorCode: "provider_invocation_failed",
             errorMessage: "Provider invocation failed during live fact shadow attempt",
+            maxOutputTokens: context.maxOutputTokens,
           };
       return {
         content: response?.content ?? "",
@@ -443,7 +459,11 @@ async function runScenario(
         `provider invocation failed: ${providerFailures[providerFailures.length - 1]?.message ?? "unknown provider error"}`,
       );
     }
+    failureReasons.push(...shadowFailureReasonsFromDiagnostics(loopResult.diagnostics));
     failureReasons.push(...caseFailureReasons(scenario, evaluation));
+    const uniqueFailureReasons = [...new Set(failureReasons)];
+    failureReasons.length = 0;
+    failureReasons.push(...uniqueFailureReasons);
     if (failureReasons.length === 0) {
       failureReasons.push("strict JSON repair loop failed without case-specific failure reasons");
     }
@@ -555,6 +575,7 @@ function buildRequest(
   route: ModelRoute,
   artifactText: string,
   repairAppendix = "",
+  maxOutputTokens = DEFAULT_LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS,
 ): LLMRequest {
   const contract = buildLiveFactShadowSystemContract();
   const scenarioGuidance = buildLiveFactShadowScenarioGuidance({
@@ -567,10 +588,11 @@ function buildRequest(
     route: "FACT_SHADOW",
     modelRoute: route,
     model,
-    maxOutputTokens: 800,
+    maxOutputTokens,
     temperature: 0,
     responseFormat: { type: "json_object" },
-    metadata: { caseId: scenario.id, nonMutating: true, createdBy: CREATED_BY },
+    providerOptions: { strictJsonMinimizeReasoning: true },
+    metadata: { caseId: scenario.id, nonMutating: true, createdBy: CREATED_BY, maxOutputTokens },
     messages: [
       { role: "system", content: contract },
       {
@@ -730,10 +752,40 @@ function detectHallucinatedRefs(fact: RectorFact, scenario: LiveScenario): strin
 }
 
 function allowedRefsForScenario(caseId: string): ReadonlySet<string> {
-  if (caseId === "rg_artifact_evidence_extraction") return new Set(["src/notes.md:1", "src/notes.md:3"]);
-  if (caseId === "test_log_diagnosis") return new Set(["/tmp/vitest-case/failing.test.ts:1", "tests/**/*.test.ts:1"]);
-  if (caseId === "tsc_diagnostic_grouping") return new Set(["src/index.ts:2"]);
-  return new Set<string>();
+  return new Set(liveFactShadowAllowedSourceSpanRefs(caseId));
+}
+
+export function shadowFailureReasonsFromDiagnostics(diagnostics: readonly StrictOutputDiagnostic[]): string[] {
+  const reasons: string[] = [];
+  const seenCodes = new Set<string>();
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.severity !== "error") continue;
+    if (seenCodes.has(diagnostic.code)) continue;
+    seenCodes.add(diagnostic.code);
+    const reason = shadowFailureReasonForDiagnostic(diagnostic);
+    if (reason) reasons.push(reason);
+  }
+  return reasons;
+}
+
+function shadowFailureReasonForDiagnostic(diagnostic: StrictOutputDiagnostic): string | undefined {
+  if (diagnostic.code === "provider_output_truncated") {
+    return "provider output truncated before a complete JSON object";
+  }
+  if (diagnostic.code === "json_syntax_error") {
+    return "model output was not valid JSON (syntax error)";
+  }
+  if (diagnostic.code === "shadow_hallucinated_reference") {
+    const refs = diagnostic.message.replace(/^Hallucinated references detected:\s*/i, "").trim();
+    return refs.length > 0 ? `hallucinated refs: ${refs}` : "hallucinated source_span references detected";
+  }
+  if (diagnostic.code === "provider_attempt_failed") {
+    return "provider attempt failed during strict JSON repair loop";
+  }
+  if (diagnostic.kind === "provider_runtime" && diagnostic.code !== "provider_output_truncated") {
+    return `provider runtime: ${diagnostic.code}`;
+  }
+  return undefined;
 }
 
 function collectSourceSpanRefs(value: unknown, refs: string[]): void {

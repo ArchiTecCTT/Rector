@@ -4,13 +4,18 @@ import {
   LIVE_FACT_SHADOW_ALLOWED_KINDS,
   buildLiveFactShadowScenarioGuidance,
   buildLiveFactShadowSystemContract,
+  liveFactShadowAllowedSourceSpanRefs,
 } from "../../src/facts/liveFactShadowPrompt";
 import {
   diagnosticsFromShadowCaseEvaluation,
   factValidationErrorToDiagnostic,
 } from "../../src/facts/reports/liveFactShadowClassification";
 import { repairHintForDiagnostic } from "../../src/orchestration/strictJsonRepairCards";
-import { runLiveFactShadow, liveFactShadowScenarios } from "../../scripts/facts/run-live-fact-shadow";
+import {
+  resolveLiveFactShadowMaxOutputTokens,
+  runLiveFactShadow,
+  liveFactShadowScenarios,
+} from "../../scripts/facts/run-live-fact-shadow";
 import { LLMResponseSchema, ProviderCapabilityMetadataSchema, type LLMProvider, type LLMRequest, type LLMResponse } from "../../src/providers/llm";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -20,9 +25,27 @@ describe("liveFactShadowPrompt contract", () => {
   it("lists only runner-accepted fact kinds in the system contract", () => {
     const contract = buildLiveFactShadowSystemContract();
     expect(contract).toContain(`ONLY allowed values for facts[].kind: ${LIVE_FACT_SHADOW_ALLOWED_KINDS.join(", ")}`);
+    expect(contract).toContain("Compact output");
+    expect(contract).toContain("complete JSON");
     expect(contract).toContain("capability_evidence");
     expect(contract).toContain("source_span");
     expect(contract).not.toContain("cartographer_snapshot");
+  });
+
+  it("surfaces allowed source_span refs for fixture-backed scenarios", () => {
+    const rg = buildLiveFactShadowScenarioGuidance({
+      id: "rg_artifact_evidence_extraction",
+      expectedKinds: ["capability_evidence"],
+    });
+    expect(rg).toContain(liveFactShadowAllowedSourceSpanRefs("rg_artifact_evidence_extraction").join(", "));
+    expect(rg).toContain("stdout:2");
+
+    const vitest = buildLiveFactShadowScenarioGuidance({
+      id: "test_log_diagnosis",
+      expectedKinds: ["capability_failure"],
+    });
+    expect(vitest).toContain("/tmp/vitest-case/failing.test.ts:1");
+    expect(vitest).toContain("stdout:2");
   });
 
   it("includes TypeScript diagnostic mapping guidance for tsc_diagnostic_grouping", () => {
@@ -231,8 +254,31 @@ describe("live fact shadow runner prompts", () => {
       expect(userContent).toContain("capability_evidence");
       expect(userContent).toContain("capability_warning");
       expect(userContent).toContain("Never use kind diagnostic");
+      expect(tscRequest?.maxOutputTokens).toBe(1200);
+      expect(tscRequest?.providerOptions).toEqual({ strictJsonMinimizeReasoning: true });
+      expect(tscRequest?.metadata?.maxOutputTokens).toBe(1200);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
+  });
+
+  it("clamps LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS override", () => {
+    expect(resolveLiveFactShadowMaxOutputTokens({})).toBe(1200);
+    expect(resolveLiveFactShadowMaxOutputTokens({ LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS: "9999" })).toBe(4096);
+    expect(resolveLiveFactShadowMaxOutputTokens({ LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS: "100" })).toBe(256);
+    expect(resolveLiveFactShadowMaxOutputTokens({ LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS: "1500" })).toBe(1500);
+  });
+
+  it("maps shadow_hallucinated_reference to repair guidance", () => {
+    const diagnostic = diagnosticsFromShadowCaseEvaluation({
+      facts: [],
+      errors: [],
+      schemaValidity: true,
+      provenanceCompleteness: true,
+      hallucinatedRefs: ["stdout:2"],
+      insufficientEvidenceCorrect: null,
+    }).find((entry) => entry.code === "shadow_hallucinated_reference");
+    expect(diagnostic).toBeDefined();
+    expect(repairHintForDiagnostic(diagnostic!)).toContain("stdout");
   });
 });

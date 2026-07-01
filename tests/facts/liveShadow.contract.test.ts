@@ -10,7 +10,9 @@ import {
   discoverLiveFactProviders,
   isAcceptableLiveShadowProvider,
   runLiveFactShadow,
+  shadowFailureReasonsFromDiagnostics,
 } from "../../scripts/facts/run-live-fact-shadow";
+import { createStrictOutputDiagnostic } from "../../src/orchestration/strictOutputDiagnostics";
 import {
   FakeLLMProvider,
   LLMResponseSchema,
@@ -324,6 +326,121 @@ describe("Phase 2F live fact shadow contract", () => {
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
+  });
+
+  it("reports truncation-specific failureReasons when output hits length limit", async () => {
+    const outputDir = await tempDir();
+
+    class TruncatedOutputProvider extends ContractLiveProvider {
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.requests.push(request);
+        return LLMResponseSchema.parse({
+          provider: this.metadata.id,
+          model: request.model ?? this.metadata.models.fast,
+          content: '{"facts":[{"kind":"intent","intent":"incomplete',
+          finishReason: "length",
+          usage: USAGE,
+        });
+      }
+    }
+
+    try {
+      const report = await runLiveFactShadow({
+        outputDir,
+        env: { LIVE_FACT_EVALS: "1" },
+        now: fixedNow,
+        providerDiscovery: () => [
+          {
+            provider: new TruncatedOutputProvider(),
+            route: "fast",
+            modelId: "contract-live-model",
+            liveEvidence: false,
+            discoveryLabel: "truncation contract test",
+          },
+        ],
+      });
+
+      const intentCase = report.cases.find((caseReport) => caseReport.caseId === "intent_extraction_stress");
+      expect(intentCase?.status).toBe("failed");
+      expect(intentCase?.passClassification).toBe("failed_after_repair");
+      expect(intentCase?.failureReasons.some((reason) => reason.includes("truncated"))).toBe(true);
+      expect(intentCase?.failureReasons.some((reason) => reason.includes("valid JSON"))).toBe(true);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports hallucinated ref failureReasons for invalid stdout line refs", async () => {
+    const outputDir = await tempDir();
+
+    class HallucinatedRefProvider extends ContractLiveProvider {
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.requests.push(request);
+        const caseId = String(request.metadata?.caseId ?? "");
+        if (caseId === "test_log_diagnosis") {
+          return LLMResponseSchema.parse({
+            provider: this.metadata.id,
+            model: request.model ?? this.metadata.models.fast,
+            content: JSON.stringify({
+              facts: [
+                {
+                  kind: "capability_evidence",
+                  capabilityId: "live_shadow.vitest",
+                  summary: "claimed failure at stdout",
+                  evidence: [{ refType: "source_span", path: "stdout", startLine: 2, endLine: 2 }],
+                },
+              ],
+            }),
+            finishReason: "stop",
+            usage: USAGE,
+          });
+        }
+        return super.invoke(request);
+      }
+    }
+
+    try {
+      const report = await runLiveFactShadow({
+        outputDir,
+        env: { LIVE_FACT_EVALS: "1" },
+        now: fixedNow,
+        providerDiscovery: () => [
+          {
+            provider: new HallucinatedRefProvider(),
+            route: "fast",
+            modelId: "contract-live-model",
+            liveEvidence: false,
+            discoveryLabel: "hallucinated ref contract test",
+          },
+        ],
+      });
+
+      const vitestCase = report.cases.find((caseReport) => caseReport.caseId === "test_log_diagnosis");
+      expect(vitestCase?.status).toBe("failed");
+      expect(vitestCase?.hallucinatedRefs).toContain("stdout:2");
+      expect(vitestCase?.failureReasons.some((reason) => reason.includes("stdout:2"))).toBe(true);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("maps shadowFailureReasonsFromDiagnostics without echoing secrets", () => {
+    const reasons = shadowFailureReasonsFromDiagnostics([
+      createStrictOutputDiagnostic({
+        kind: "truncation",
+        code: "provider_output_truncated",
+        message: "Provider output was truncated",
+      }),
+      createStrictOutputDiagnostic({
+        kind: "json_syntax",
+        code: "json_syntax_error",
+        message: "not json",
+      }),
+    ]);
+    expect(reasons).toEqual([
+      "provider output truncated before a complete JSON object",
+      "model output was not valid JSON (syntax error)",
+    ]);
   });
 
   it("does not mutate source files while writing only evidence reports", async () => {

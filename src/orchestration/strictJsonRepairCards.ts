@@ -137,6 +137,8 @@ const REPAIR_GUIDANCE_BY_CODE: Readonly<Record<string, string>> = {
     "Start from `{` and end with `}`; ensure the payload is a single JSON object with no surrounding text.",
   provider_output_truncated:
     "Reduce verbosity and return a complete object before the output limit; required keys must still be present.",
+  shadow_hallucinated_reference:
+    "Cite only path:startLine refs listed in the scenario guidance; never use stdout, stderr, or invented paths/lines.",
   provider_timeout: "Return a valid complete JSON object promptly; avoid oversized nested structures.",
   provider_generation_error: "Regenerate the full contract object; do not return an error string or prose.",
   provider_attempt_failed: "Regenerate the full JSON object; the prior attempt did not complete successfully.",
