@@ -4,7 +4,16 @@ export const RECTOR_LOCAL_DIR = ".rector";
 export const RECTOR_EVIDENCE_DIR = ".rector/evidence";
 export const LEGACY_OMO_EVIDENCE_DIR = ".omo/evidence";
 
-export const EVIDENCE_TRACKS = ["phase0", "phase0.5", "phase1", "phase2", "live/zai", "global", "capabilities"] as const;
+export const EVIDENCE_TRACKS = [
+  "phase0",
+  "phase0.5",
+  "phase1",
+  "phase2",
+  "live/zai",
+  "live/regolo",
+  "global",
+  "capabilities",
+] as const;
 export type EvidenceTrack = (typeof EVIDENCE_TRACKS)[number];
 
 export interface EvidencePathEnv {
@@ -18,6 +27,7 @@ const TRACK_SEGMENTS: Record<EvidenceTrack, readonly string[]> = {
   phase1: ["phase1"],
   phase2: ["phase2"],
   "live/zai": ["live", "zai"],
+  "live/regolo": ["live", "regolo"],
   global: ["global"],
   capabilities: ["capabilities"],
 };
@@ -59,6 +69,15 @@ export function getZaiLiveRunEvidenceDir(runId: string, repoRoot?: string): stri
   return path.join(getZaiLiveEvidenceDir(repoRoot), "runs", runId);
 }
 
+export function getRegoloLiveEvidenceDir(repoRoot?: string): string {
+  return getEvidenceTrackDir("live/regolo", repoRoot);
+}
+
+export function getRegoloLiveRunEvidenceDir(runId: string, repoRoot?: string): string {
+  assertSafeRunId(runId);
+  return path.join(getRegoloLiveEvidenceDir(repoRoot), "runs", runId);
+}
+
 function resolveRepoRoot(repoRoot?: string): string {
   return path.resolve(repoRoot ?? process.cwd());
 }
@@ -90,7 +109,7 @@ function resolveEvidenceConfiguredPath(
 
 export function assertSafeEvidenceRunId(runId: string): void {
   if (!SAFE_EVIDENCE_RUN_ID_PATTERN.test(runId) || runId === "." || runId === "..") {
-    throw new Error("Z.ai evidence run id must be a single safe path segment.");
+    throw new Error("Live evidence run id must be a single safe path segment.");
   }
 }
 

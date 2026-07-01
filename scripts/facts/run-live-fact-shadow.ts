@@ -232,7 +232,8 @@ export async function discoverLiveFactProviders(
   env: Record<string, string | undefined> = process.env,
   repoRoot?: string,
 ): Promise<DiscoveredLiveFactProvider[]> {
-  if (normalizeRequestedLiveProvider(env.RECTOR_LIVE_PROVIDER) === "zai") {
+  const requested = normalizeRequestedLiveProvider(env.RECTOR_LIVE_PROVIDER);
+  if (requested === "zai" || requested === "regolo") {
     const result = await discoverLiveProviderFromRepo(repoRoot, env);
     if (!result.selected) return [];
     return [{

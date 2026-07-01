@@ -8,6 +8,8 @@ import {
   getEvidenceTrackDir,
   getLegacyEvidenceRoot,
   getRectorLocalDir,
+  getRegoloLiveEvidenceDir,
+  getRegoloLiveRunEvidenceDir,
   getZaiLiveEvidenceDir,
   getZaiLiveRunEvidenceDir,
 } from "../../src/evidence";
@@ -51,13 +53,23 @@ describe("evidence path helpers", () => {
   });
 
   it("supports every canonical evidence track", () => {
-    expect(EVIDENCE_TRACKS).toEqual(["phase0", "phase0.5", "phase1", "phase2", "live/zai", "global", "capabilities"]);
+    expect(EVIDENCE_TRACKS).toEqual([
+      "phase0",
+      "phase0.5",
+      "phase1",
+      "phase2",
+      "live/zai",
+      "live/regolo",
+      "global",
+      "capabilities",
+    ]);
 
     expect(getEvidenceTrackDir("phase0", repoRoot)).toBe(path.join(repoRoot, ".rector", "evidence", "phase0"));
     expect(getEvidenceTrackDir("phase0.5", repoRoot)).toBe(path.join(repoRoot, ".rector", "evidence", "phase0.5"));
     expect(getEvidenceTrackDir("phase1", repoRoot)).toBe(path.join(repoRoot, ".rector", "evidence", "phase1"));
     expect(getEvidenceTrackDir("phase2", repoRoot)).toBe(path.join(repoRoot, ".rector", "evidence", "phase2"));
     expect(getEvidenceTrackDir("live/zai", repoRoot)).toBe(path.join(repoRoot, ".rector", "evidence", "live", "zai"));
+    expect(getEvidenceTrackDir("live/regolo", repoRoot)).toBe(path.join(repoRoot, ".rector", "evidence", "live", "regolo"));
     expect(getEvidenceTrackDir("global", repoRoot)).toBe(path.join(repoRoot, ".rector", "evidence", "global"));
     expect(getEvidenceTrackDir("capabilities", repoRoot)).toBe(path.join(repoRoot, ".rector", "evidence", "capabilities"));
   });
@@ -71,5 +83,14 @@ describe("evidence path helpers", () => {
     );
     expect(() => getZaiLiveRunEvidenceDir("../escape", repoRoot)).toThrow(/run id|traversal/i);
     expect(() => getZaiLiveRunEvidenceDir("nested/run", repoRoot)).toThrow(/run id|traversal/i);
+  });
+
+  it("builds Regolo live run evidence paths with safe run ids only", () => {
+    const runId = "regolo-2026-07-01T00-00-00-000Z";
+
+    expect(getRegoloLiveEvidenceDir(repoRoot)).toBe(path.join(repoRoot, ".rector", "evidence", "live", "regolo"));
+    expect(getRegoloLiveRunEvidenceDir(runId, repoRoot)).toBe(
+      path.join(repoRoot, ".rector", "evidence", "live", "regolo", "runs", runId),
+    );
   });
 });

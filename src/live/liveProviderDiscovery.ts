@@ -11,16 +11,18 @@ import {
 import { redactString } from "../security/redaction";
 import type { SecretStore } from "../security/secretStore";
 
-export type RequestedLiveProvider = "zai";
+export type RequestedLiveProvider = "zai" | "regolo";
 export type LiveProviderSource = "env" | "runtime-settings";
 export type LiveProviderRejectionReason =
   | "missing_env"
   | "base_url_invalid"
   | "zai_host_required"
+  | "regolo_host_required"
   | "adapter_not_openai_compatible"
   | "test_double_rejected"
   | "runtime_not_configured"
   | "no_configured_zai_provider"
+  | "no_configured_regolo_provider"
   | "config_invalid";
 
 export interface LiveProviderRejection {
@@ -103,12 +105,43 @@ const TEST_DOUBLE_PATTERN = /fake|deterministic|spy|mock|fixture|scripted|test[-
 
 export function normalizeRequestedLiveProvider(value: string | undefined): RequestedLiveProvider | undefined {
   const normalized = value?.trim().toLowerCase();
-  return normalized === "zai" || normalized === "z.ai" ? "zai" : undefined;
+  if (normalized === "zai" || normalized === "z.ai") return "zai";
+  if (normalized === "regolo") return "regolo";
+  return undefined;
 }
 
 export function isZaiCompatibleHost(host: string): boolean {
   const normalized = host.trim().toLowerCase().replace(/\.$/, "");
   return normalized === "api.z.ai" || normalized.endsWith(".z.ai");
+}
+
+export const REGOLO_LIVE_ENV_KEYS = ["REGOLO_API_KEY", "REGOLO_BASE_URL", "REGOLO_MODEL"] as const;
+export type RegoloLiveEnvSourceLabel = "REGOLO_*";
+
+export interface ResolvedRegoloLiveEnvCoordinates {
+  readonly apiKey: string;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly envSourceLabel: RegoloLiveEnvSourceLabel;
+}
+
+export function resolveRegoloLiveEnvCoordinates(
+  env: Record<string, string | undefined>,
+): ResolvedRegoloLiveEnvCoordinates {
+  const apiKey = env.REGOLO_API_KEY?.trim() ?? "";
+  const baseUrl = env.REGOLO_BASE_URL?.trim() ?? "";
+  const model = env.REGOLO_MODEL?.trim() ?? "";
+  return {
+    apiKey,
+    baseUrl,
+    model,
+    envSourceLabel: "REGOLO_*",
+  };
+}
+
+export function isRegoloCompatibleHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/\.$/, "");
+  return normalized === "api.regolo.ai" || normalized.endsWith(".regolo.ai");
 }
 
 export function isAcceptableLiveEvidenceProvider(identity: LiveEvidenceProviderIdentity): boolean {
@@ -133,41 +166,50 @@ export async function discoverLiveProvider(
 ): Promise<LiveProviderDiscoveryResult> {
   const env = options.env ?? process.env;
   const requested = normalizeRequestedLiveProvider(env.RECTOR_LIVE_PROVIDER);
-  if (requested !== "zai") {
-    return { selected: undefined, rejections: [] };
-  }
-
-  if (hasUsableZaiEnvConfiguration(env)) {
-    return discoverZaiFromEnv(env, options);
-  }
-
-  const configuredResult = await discoverZaiFromConfiguredProduct(options);
-  if (configuredResult.selected) {
+  if (requested === "zai") {
+    if (hasUsableZaiEnvConfiguration(env)) {
+      return discoverZaiFromEnv(env, options);
+    }
+    const configuredResult = await discoverZaiFromConfiguredProduct(options);
+    if (configuredResult.selected) {
+      return configuredResult;
+    }
+    if (hasAnyZaiEnvCoordinate(env)) {
+      return discoverZaiFromEnv(env, options);
+    }
     return configuredResult;
   }
-
-  if (hasAnyZaiEnvCoordinate(env)) {
-    return discoverZaiFromEnv(env, options);
+  if (requested === "regolo") {
+    if (hasUsableRegoloEnvConfiguration(env)) {
+      return discoverRegoloFromEnv(env, options);
+    }
+    const configuredResult = await discoverRegoloFromConfiguredProduct(options);
+    if (configuredResult.selected) {
+      return configuredResult;
+    }
+    if (hasAnyRegoloEnvCoordinate(env)) {
+      return discoverRegoloFromEnv(env, options);
+    }
+    return configuredResult;
   }
-
-  return configuredResult;
+  return { selected: undefined, rejections: [] };
 }
 
-function discoverZaiFromEnv(
+function discoverRegoloFromEnv(
   env: Record<string, string | undefined>,
   options: LiveProviderDiscoveryOptions,
 ): LiveProviderDiscoveryResult {
-  const { apiKey, baseUrl, model, envSourceLabel } = resolveZaiLiveEnvCoordinates(env);
+  const { apiKey, baseUrl, model, envSourceLabel } = resolveRegoloLiveEnvCoordinates(env);
   if (!apiKey || !baseUrl || !model) {
-    return { selected: undefined, rejections: [rejection("env", "missing_env")] };
+    return { selected: undefined, rejections: [rejection("regolo", "env", "missing_env")] };
   }
 
   const host = hostFromUrl(baseUrl);
   if (!host) {
-    return { selected: undefined, rejections: [rejection("env", "base_url_invalid")] };
+    return { selected: undefined, rejections: [rejection("regolo", "env", "base_url_invalid")] };
   }
-  if (!isZaiCompatibleHost(host)) {
-    return { selected: undefined, rejections: [rejection("env", "zai_host_required", host)] };
+  if (!isRegoloCompatibleHost(host)) {
+    return { selected: undefined, rejections: [rejection("regolo", "env", "regolo_host_required", host)] };
   }
 
   const provider = new OpenAICompatibleProvider({
@@ -178,6 +220,97 @@ function discoverZaiFromEnv(
     fetchImpl: options.fetchImpl,
   });
   return selectedFromProvider({
+    requestedProvider: "regolo",
+    provider,
+    providerId: "regolo:env",
+    modelId: model,
+    host,
+    source: "env",
+    discoveryLabel: `RECTOR_LIVE_PROVIDER=regolo ${envSourceLabel}`,
+  });
+}
+
+async function discoverRegoloFromConfiguredProduct(
+  options: LiveProviderDiscoveryOptions,
+): Promise<LiveProviderDiscoveryResult> {
+  const { providerConfigStore, secretStore } = options;
+  if (!providerConfigStore || !secretStore) {
+    return { selected: undefined, rejections: [] };
+  }
+
+  const settings = options.runtimeSettingsStore
+    ? await options.runtimeSettingsStore.get()
+    : defaultRuntimeSettings();
+  if (settings.orchestrationProfile !== "configured") {
+    return { selected: undefined, rejections: [rejection("regolo", "runtime-settings", "runtime_not_configured")] };
+  }
+
+  const state = await providerConfigStore.getState();
+  const record = selectOpenAiCompatibleRecordByHost(state.providers, [
+    state.activeRoutes.slm,
+    state.activeRoutes.flagship,
+  ], isRegoloCompatibleHost);
+  if (!record) {
+    return { selected: undefined, rejections: [rejection("regolo", "runtime-settings", "no_configured_regolo_provider")] };
+  }
+
+  const host = hostFromUrl(record.baseUrl ?? "");
+  if (!host) {
+    return { selected: undefined, rejections: [rejection("regolo", "runtime-settings", "base_url_invalid")] };
+  }
+  if (!isRegoloCompatibleHost(host)) {
+    return { selected: undefined, rejections: [rejection("regolo", "runtime-settings", "regolo_host_required", host)] };
+  }
+
+  const modelId = record.models?.slm ?? record.model ?? record.manualModels?.[0] ?? "";
+  const provider = await resolveTestProvider(
+    record.id,
+    providerConfigStore,
+    secretStore,
+    { enableNetwork: true, fetchImpl: options.fetchImpl },
+    modelId ? { model: modelId } : {},
+  );
+  if (!provider) {
+    return { selected: undefined, rejections: [rejection("regolo", "runtime-settings", "config_invalid")] };
+  }
+
+  return selectedFromProvider({
+    requestedProvider: "regolo",
+    provider,
+    providerId: record.id,
+    modelId,
+    host,
+    source: "runtime-settings",
+    discoveryLabel: "configured runtime provider state",
+  });
+}
+
+function discoverZaiFromEnv(
+  env: Record<string, string | undefined>,
+  options: LiveProviderDiscoveryOptions,
+): LiveProviderDiscoveryResult {
+  const { apiKey, baseUrl, model, envSourceLabel } = resolveZaiLiveEnvCoordinates(env);
+  if (!apiKey || !baseUrl || !model) {
+    return { selected: undefined, rejections: [rejection("zai", "env", "missing_env")] };
+  }
+
+  const host = hostFromUrl(baseUrl);
+  if (!host) {
+    return { selected: undefined, rejections: [rejection("zai", "env", "base_url_invalid")] };
+  }
+  if (!isZaiCompatibleHost(host)) {
+    return { selected: undefined, rejections: [rejection("zai", "env", "zai_host_required", host)] };
+  }
+
+  const provider = new OpenAICompatibleProvider({
+    apiKey,
+    baseUrl,
+    model,
+    enableNetwork: true,
+    fetchImpl: options.fetchImpl,
+  });
+  return selectedFromProvider({
+    requestedProvider: "zai",
     provider,
     providerId: "zai:env",
     modelId: model,
@@ -199,24 +332,24 @@ async function discoverZaiFromConfiguredProduct(
     ? await options.runtimeSettingsStore.get()
     : defaultRuntimeSettings();
   if (settings.orchestrationProfile !== "configured") {
-    return { selected: undefined, rejections: [rejection("runtime-settings", "runtime_not_configured")] };
+    return { selected: undefined, rejections: [rejection("zai", "runtime-settings", "runtime_not_configured")] };
   }
 
   const state = await providerConfigStore.getState();
-  const record = selectZaiRecord(state.providers, [
+  const record = selectOpenAiCompatibleRecordByHost(state.providers, [
     state.activeRoutes.slm,
     state.activeRoutes.flagship,
-  ]);
+  ], isZaiCompatibleHost);
   if (!record) {
-    return { selected: undefined, rejections: [rejection("runtime-settings", "no_configured_zai_provider")] };
+    return { selected: undefined, rejections: [rejection("zai", "runtime-settings", "no_configured_zai_provider")] };
   }
 
   const host = hostFromUrl(record.baseUrl ?? "");
   if (!host) {
-    return { selected: undefined, rejections: [rejection("runtime-settings", "base_url_invalid")] };
+    return { selected: undefined, rejections: [rejection("zai", "runtime-settings", "base_url_invalid")] };
   }
   if (!isZaiCompatibleHost(host)) {
-    return { selected: undefined, rejections: [rejection("runtime-settings", "zai_host_required", host)] };
+    return { selected: undefined, rejections: [rejection("zai", "runtime-settings", "zai_host_required", host)] };
   }
 
   const modelId = record.models?.slm ?? record.model ?? record.manualModels?.[0] ?? "";
@@ -228,10 +361,11 @@ async function discoverZaiFromConfiguredProduct(
     modelId ? { model: modelId } : {},
   );
   if (!provider) {
-    return { selected: undefined, rejections: [rejection("runtime-settings", "config_invalid")] };
+    return { selected: undefined, rejections: [rejection("zai", "runtime-settings", "config_invalid")] };
   }
 
   return selectedFromProvider({
+    requestedProvider: "zai",
     provider,
     providerId: record.id,
     modelId,
@@ -242,6 +376,7 @@ async function discoverZaiFromConfiguredProduct(
 }
 
 function selectedFromProvider(input: {
+  readonly requestedProvider: RequestedLiveProvider;
   readonly provider: LLMProvider;
   readonly providerId: string;
   readonly modelId: string;
@@ -251,7 +386,10 @@ function selectedFromProvider(input: {
 }): LiveProviderDiscoveryResult {
   const adapterId = input.provider.metadata.id;
   if (adapterId !== "openai-compatible") {
-    return { selected: undefined, rejections: [rejection(input.source, "adapter_not_openai_compatible", input.host)] };
+    return {
+      selected: undefined,
+      rejections: [rejection(input.requestedProvider, input.source, "adapter_not_openai_compatible", input.host)],
+    };
   }
 
   if (!isAcceptableLiveEvidenceProvider({
@@ -259,7 +397,10 @@ function selectedFromProvider(input: {
     providerId: input.providerId,
     displayName: input.provider.metadata.displayName,
   })) {
-    return { selected: undefined, rejections: [rejection(input.source, "test_double_rejected", input.host)] };
+    return {
+      selected: undefined,
+      rejections: [rejection(input.requestedProvider, input.source, "test_double_rejected", input.host)],
+    };
   }
 
   try {
@@ -267,19 +408,24 @@ function selectedFromProvider(input: {
   } catch (error) {
     return {
       selected: undefined,
-      rejections: [rejection(input.source, "config_invalid", input.host, safeErrorMessage(error))],
+      rejections: [
+        rejection(input.requestedProvider, input.source, "config_invalid", input.host, safeErrorMessage(error)),
+      ],
     };
   }
 
   const route: ModelRoute = "cheap";
   const modelId = input.modelId || input.provider.metadata.models[route] || input.provider.metadata.models.fast;
   if (!modelId) {
-    return { selected: undefined, rejections: [rejection(input.source, "config_invalid", input.host)] };
+    return {
+      selected: undefined,
+      rejections: [rejection(input.requestedProvider, input.source, "config_invalid", input.host)],
+    };
   }
 
   return {
     selected: {
-      requestedProvider: "zai",
+      requestedProvider: input.requestedProvider,
       provider: input.provider,
       providerId: input.providerId,
       adapterId,
@@ -295,12 +441,13 @@ function selectedFromProvider(input: {
   };
 }
 
-function selectZaiRecord(
+function selectOpenAiCompatibleRecordByHost(
   records: readonly ProviderConfigRecord[],
   preferredIds: readonly (string | undefined)[],
+  hostGuard: (host: string) => boolean,
 ): ProviderConfigRecord | undefined {
   const candidates = records.filter((record) =>
-    record.kind === "openai-compatible" && isZaiCompatibleHost(hostFromUrl(record.baseUrl ?? "") ?? ""),
+    record.kind === "openai-compatible" && hostGuard(hostFromUrl(record.baseUrl ?? "") ?? ""),
   );
   for (const id of preferredIds) {
     const candidate = candidates.find((record) => record.id === id);
@@ -319,6 +466,16 @@ function hasAnyZaiEnvCoordinate(env: Record<string, string | undefined>): boolea
   return ZAI_ENV_COORDINATE_KEYS.some((key) => (env[key]?.trim() ?? "").length > 0);
 }
 
+function hasUsableRegoloEnvConfiguration(env: Record<string, string | undefined>): boolean {
+  const { apiKey, baseUrl, model } = resolveRegoloLiveEnvCoordinates(env);
+  const host = hostFromUrl(baseUrl);
+  return Boolean(apiKey && model && host && isRegoloCompatibleHost(host));
+}
+
+function hasAnyRegoloEnvCoordinate(env: Record<string, string | undefined>): boolean {
+  return REGOLO_LIVE_ENV_KEYS.some((key) => (env[key]?.trim() ?? "").length > 0);
+}
+
 function hostFromUrl(value: string): string | undefined {
   try {
     return new URL(value).hostname.toLowerCase();
@@ -328,12 +485,13 @@ function hostFromUrl(value: string): string | undefined {
 }
 
 function rejection(
+  provider: RequestedLiveProvider,
   source: LiveProviderSource,
   reason: LiveProviderRejectionReason,
   host?: string,
   message?: string,
 ): LiveProviderRejection {
-  return { provider: "zai", source, reason, ...(host ? { host } : {}), ...(message ? { message } : {}) };
+  return { provider, source, reason, ...(host ? { host } : {}), ...(message ? { message } : {}) };
 }
 
 function stringifyMetadata(value: unknown): string {

@@ -48,6 +48,12 @@ export function defaultEvidenceTrackPointers(evidenceDir = RECTOR_EVIDENCE_DIR):
       latestMarkdown: pointer(evidenceDir, "live", "zai", "latest.md"),
       indexJson: pointer(evidenceDir, "live", "zai", "index.json"),
     },
+    "live/regolo": {
+      directory: pointer(evidenceDir, "live", "regolo"),
+      latestJson: pointer(evidenceDir, "live", "regolo", "latest.json"),
+      latestMarkdown: pointer(evidenceDir, "live", "regolo", "latest.md"),
+      indexJson: pointer(evidenceDir, "live", "regolo", "index.json"),
+    },
     global: reportPointers(evidenceDir, "global", "global-report"),
     capabilities: reportPointers(evidenceDir, "capabilities", "eval-report"),
   };

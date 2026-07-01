@@ -18,13 +18,16 @@ import type { SecretStore } from "../../src/security/secretStore";
 import {
   discoverLiveProvider,
   isAcceptableLiveEvidenceProvider,
+  isRegoloCompatibleHost,
   isZaiCompatibleHost,
+  resolveRegoloLiveEnvCoordinates,
   resolveZaiLiveEnvCoordinates,
 } from "../../src/live/liveProviderDiscovery";
 import { SpyLLMProvider } from "../support/byokArbitraries";
 
 const GENERATED_AT = "2026-06-30T00:00:00.000Z";
 const SECRET = "sk-zai-secret-1234567890";
+const REGOLO_SECRET = "rg-regolo-secret-1234567890";
 
 class ContractProvider implements LLMProvider {
   readonly metadata = ProviderCapabilityMetadataSchema.parse({
@@ -288,5 +291,61 @@ describe("live provider discovery", () => {
     expect(isZaiCompatibleHost("gateway.z.ai")).toBe(true);
     expect(isZaiCompatibleHost("evilz.ai")).toBe(false);
     expect(isZaiCompatibleHost("example.com")).toBe(false);
+  });
+
+  it("selects explicit Regolo env configuration with REGOLO_* coordinates only", async () => {
+    expect(
+      resolveRegoloLiveEnvCoordinates({
+        REGOLO_API_KEY: "k",
+        REGOLO_BASE_URL: "https://api.regolo.ai/v1",
+        REGOLO_MODEL: "qwen3.5-9b",
+      }),
+    ).toMatchObject({ envSourceLabel: "REGOLO_*", model: "qwen3.5-9b" });
+
+    const result = await discoverLiveProvider({
+      env: {
+        RECTOR_LIVE_PROVIDER: "regolo",
+        REGOLO_API_KEY: REGOLO_SECRET,
+        REGOLO_BASE_URL: "https://api.regolo.ai/v1",
+        REGOLO_MODEL: "qwen3.5-9b",
+        OPENAI_COMPATIBLE_API_KEY: "ignored",
+        OPENAI_COMPATIBLE_BASE_URL: "https://example.com/v1",
+      },
+    });
+
+    expect(result.selected).toMatchObject({
+      requestedProvider: "regolo",
+      providerId: "regolo:env",
+      host: "api.regolo.ai",
+      modelId: "qwen3.5-9b",
+      discoveryLabel: "RECTOR_LIVE_PROVIDER=regolo REGOLO_*",
+    });
+    expect(JSON.stringify(result.selected)).not.toContain("ignored");
+  });
+
+  it("rejects Regolo when base URL host is not Regolo-compatible", async () => {
+    const result = await discoverLiveProvider({
+      env: {
+        RECTOR_LIVE_PROVIDER: "regolo",
+        REGOLO_API_KEY: REGOLO_SECRET,
+        REGOLO_BASE_URL: "https://example.com/v1",
+        REGOLO_MODEL: "qwen3.5-9b",
+      },
+    });
+
+    expect(result.selected).toBeUndefined();
+    expect(result.rejections[0]).toMatchObject({
+      provider: "regolo",
+      reason: "regolo_host_required",
+      host: "example.com",
+    });
+    expect(JSON.stringify(result.rejections)).not.toContain(REGOLO_SECRET);
+  });
+
+  it("matches only Regolo-compatible hosts", () => {
+    expect(isRegoloCompatibleHost("api.regolo.ai")).toBe(true);
+    expect(isRegoloCompatibleHost("gateway.regolo.ai")).toBe(true);
+    expect(isRegoloCompatibleHost("notregolo.ai")).toBe(false);
+    expect(isRegoloCompatibleHost("example.com")).toBe(false);
   });
 });
