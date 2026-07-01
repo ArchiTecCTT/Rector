@@ -115,21 +115,21 @@ Primary Phase 2 gate for ongoing CI: `npm run verify:phase2`.
 
 Legacy flat paths under `.omo/evidence/` remain for historical gate runs; new output uses `.rector/evidence` per track layout.
 
-### Live shadow skip (explicit)
+### Live shadow — gate VM skip vs Z.ai finalist (2026-07-01)
 
-The historical `npm run eval:facts:live` run recorded skipped live evidence:
+The **Phase 2G gate VM** historical run recorded skipped live evidence (`status: skipped`, no configured non-fake provider). That does **not** override the **documented finalist** campaign on `zai-evidence-live-integration`:
 
-- **status:** `skipped`
-- **liveEvidenceStatus:** `skipped`
-- **skippedReason:** `No configured non-fake live provider was available; wrote skipped report instead.`
+- **Finalist:** `glm-4-32b-0414-128k` — `npm run verify:zai-live` gate PASS (includes Phase 2F live shadow in chain, `live_provider`, manifest updated).
+- **Other Z.ai models:** Official discovery matrix **0/9** full-chain passes (most failed **first-pass** `eval:facts:live` before harness). Follow-up reruns showed ~3/5 on several GLM-4.5/5 variants and ~2/5 on some vision-turbo models on the **strict raw wrapper** — framed as first-pass bottleneck, not final model rejection.
+- **Regolo:** No single-model gate PASS; `gemma4-31b` deepest runner (provider smoke pass, harness timeout @ 300s) — see `docs/operations/regolo-live-verification.md`.
 
-Follow-up: configure a non-fake provider via the web UI (`runtime-settings.json`) or env (`ZAI_*` preferred; `OPENAI_COMPATIBLE_*` fallback), run `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live` (or full `npm run verify:zai-live`), and only then promote completion label to `phase2-complete-live-verified`. Current live-verification behavior exits nonzero on skipped evidence so no skipped run can look green.
+Live scripts exit nonzero on skipped/failed evidence. **Next mitigation (not in Phase 2 scope):** strict checker/linter + bounded repair loops; report first-pass vs repair-pass vs failed-after-repair. Do not relax validators for demo labels.
 
 ---
 
 ## Known limitations
 
-1. **Live unverified** — No real-model shadow cases executed on this VM; schema/provenance stress under live LLM output is not evidenced here.
+1. **Live scoped to one Z.ai finalist** — Gate VM had no live provider; **official** live verification is documented only for `glm-4-32b-0414-128k` (`verify:zai-live` PASS @ 2026-07-01). Other providers/models and first-pass fact-shadow partials are not generalized live claims. Harness smoke integrity fixed `d86d679` — pre-fix pass-with-zero-usage reports are untrusted.
 2. **Global harness mixed corpus** — `test:global` exits 0 while reporting 19/33 scenario passes; intentional regressions and fake-path rows remain in the committed scenario set.
 3. **Fake seams partially hardened** — `audit:no-fakes` reports 20 allowlisted findings and 0 unallowed findings; `audit:no-fakes:check` enforces zero new unallowed seams; full extraction of test doubles/simulator compatibility remains Phase 3 / Phase 13 fake-purge policy.
 4. **No product wiring** — Facts are not yet consumed by chat orchestration, Memory OS, rules, or DAG execution; adapters ingest existing surfaces only.
@@ -183,9 +183,10 @@ Proposal fact kinds (`PlanCandidateFact`, `MemoryPatchCandidateFact`, etc.) may 
 
 ### Z.ai live evidence harness (parallel track, branch `zai-evidence-live-integration`)
 
-- `.rector/evidence` path module, Z.ai provider/harness smoke writers, live evidence gate, opt-in matrix (per-model snapshots, optional probe pre-filter), and harness/provider diagnostics are implemented (plan: `docs/plans/2-0/live/zai-evidence-directory-and-live-harness-plan.md`; operator steps: `docs/operations/zai-live-verification.md`).
-- **First foundation discovery (2026-07-01):** one-run matrix with ten GLM candidates — 0 full-chain gate passes; most models failed live fact shadow JSON; `glm-4-32b-0414-128k` passed 5/5 shadow + provider smoke then failed harness schema checks. Evidence local under `.rector/evidence/live/zai/matrix/` (gitignored).
-- **Does not change this report’s label:** completion remains `phase2-offline-complete-live-unverified` until Phase 2F live shadow **and** single-model `verify:zai-live` pass with real non-fake `live_provider` evidence on the **same** finalist campaign (matrix comparison alone does not update the canonical manifest or live-verified labels).
+- `.rector/evidence` path module, Z.ai provider/harness smoke writers, live evidence gate, opt-in matrix (per-model snapshots, optional probe pre-filter), harness/provider diagnostics, and smoke integrity (`liveHarnessIntegrity.ts`, `d86d679`) are implemented (plan: `docs/plans/2-0/live/zai-evidence-directory-and-live-harness-plan.md`; operator steps: `docs/operations/zai-live-verification.md`).
+- **Discovery matrix (2026-07-01):** 0/9 official full-chain passes — first-pass strict fact-shadow bottleneck for non-finalists; not final model impossibility.
+- **Official finalist (2026-07-01, post `75f4233`):** `glm-4-32b-0414-128k` — `verify:zai-live` PASS (3/3 harness, 46,695 tokens, ~$0.0441, manifest updated). Label: `phase2-complete-live-verified-zai-finalist`. Matrix grades and partial shadow reruns do **not** extend live-verified to other models without per-model `verify:zai-live` PASS.
+- **Documentation policy:** Material findings from live campaigns must be recorded in ops docs and this register before completion claims (`4b1be28` / `AGENTS.md`).
 
 ---
 

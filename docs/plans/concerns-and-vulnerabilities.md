@@ -37,17 +37,33 @@
 - **Severity:** Low (measurement / operator workflow; not a product fake-chat regression).
 - **Status:** **RESOLVED for official live claims on one finalist** — `glm-4-32b-0414-128k` @ 2026-07-01 after harness hardening (`RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=glm-4-32b-0414-128k npm run verify:zai-live` gate PASS: 3/3 harness scenarios, 46,695 tokens, manifest updated, `live_provider`). **Open** for other Z.ai models and for matrix-wide “all GLM pass” claims — discovery matrix remains 0/10 full-chain passes.
 - **Observed:** Offline gates green after hardening (`npm test` 410 files / 2829 tests). Gate behavior unchanged: rejects spy/fake, enforces budgets and diagnostics. Matrix/compare grades still ≠ manifest live-verified.
-- **Plan:** Re-run matrix only for operator comparison on non-finalist models; repeat `verify:zai-live` on other models individually before claiming live-verified per model. See `docs/operations/zai-live-verification.md`.
+- **Plan:** Re-run matrix only for operator comparison on non-finalist models; repeat `verify:zai-live` on other models individually before claiming live-verified per model. Broader post-fix reruns are budget-feasible (~$0.50 spent in early campaigns vs ~$100 operator budget) but still require gate budgets and artifact hygiene. See `docs/operations/zai-live-verification.md`.
 - **Boundaries:** `test_only_injected` and spy doubles remain test-only. **Do not weaken the harness** for demo labels.
 
 ### Z.ai GLM models — strict harness / typed-fact schema mismatch (discovery)
 
-- **Source:** First foundation discovery matrix @ 2026-07-01; finalist gate PASS post-hardening; artifacts under `.rector/evidence/live/zai/` (local, gitignored).
+- **Source:** First foundation discovery matrix @ 2026-07-01; finalist gate PASS post-hardening; first-pass fact-shadow reruns; artifacts under `.rector/evidence/live/zai/` (local, gitignored).
 - **Severity:** Medium for non-finalist models; Low for documented finalist.
-- **Status:** **Partially resolved** — `glm-4-32b-0414-128k` passes full chain after structured-role caps, strict JSON cards, repair preflight, and diagnostics fixes (`75f4233`). **Open** for flash/air/turbo/vision variants that still fail typed-fact shadow or never reached harness in discovery.
-- **Observed:** Pre-hardening: finalist failed harness on schema/validation. Post-hardening: same model passes official gate. Other candidates largely fail at `eval:facts:live` or remain unproven for harness.
-- **Plan:** Model-specific selection for operators; prompting/training for non-finalists; no harness relaxation for investor claims.
-- **Boundaries:** Matrix smoke alone does not prove org-wide Z.ai readiness.
+- **Status:** **Partially resolved** — `glm-4-32b-0414-128k` passes full chain after structured-role caps, strict JSON cards, repair preflight, and diagnostics fixes (`75f4233`). **Open** for flash/air/turbo/vision variants on **first-pass** `eval:facts:live` (official matrix **0/9** full-chain before harness; reruns ~2–3/5 on several GLM-4.5/5 variants, worse on 4.7/4.6v under rate limits).
+- **Observed:** Failure modes include `model_json_invalid`, missing schema-valid expected facts, `invalid_union_discriminator`, evidence extraction failures, `tsc_diagnostic_grouping`, HTTP 429. This is **current-wrapper strict shadow** behavior — not a final impossibility claim per model.
+- **Plan:** Add **strict checker/linter + bounded repair loops** for shadow and harness; surface **first-pass** vs **repair-pass** vs **failed-after-repair** in evidence (not global pass/fail only). Model-specific prompting remains secondary to **not** relaxing validators. Post-integrity-fix reruns (`d86d679`) before trusting harness-only grades.
+- **Boundaries:** Matrix smoke alone does not prove org-wide Z.ai readiness. Live matrix/discovery ≠ official verification.
+
+### Live harness smoke — false pass with zero usage — RESOLVED
+
+- **Source:** Harness-only reruns @ 2026-07-01; commit `d86d679` (`src/live/liveHarnessIntegrity.ts`, `missing_live_usage`, Z.ai/Regolo harness report writers).
+- **Severity:** High if unfixed (live evidence could claim pass without real model usage).
+- **Status:** **RESOLVED** @ `d86d679`.
+- **Resolution:** Reconcile scenario status with provider-call failures and zero `modelCalls`; report-level integrity checks; regression tests for illusion-class failures (e.g. `glm-4.7-flash` pattern).
+- **Plan:** Operators discard pre-fix smoke JSON for pass claims; re-run smoke after `d86d679` on branch.
+
+### Live evidence documentation discipline — policy
+
+- **Source:** Commit `4b1be28` — `AGENTS.md` mandatory documentation bullet; user directive on live campaigns.
+- **Severity:** Low (process); prevents silent loss of operator findings.
+- **Status:** Open — enforce on every material slice (implementation, live run, investigation, limitation, footgun, follow-up).
+- **Plan:** Parent orchestrator runs `rector-librarian` after verify; update `docs/operations/*`, phase/chunk plans, concerns register, and roadmap nuance before claiming completion.
+- **Boundaries:** Do not commit raw `.rector/evidence` artifacts; document pointers and honest status only.
 
 ### Live verify shell — `RECTOR_LIVE_HARNESS_*` env leaks into `verify:phase2` unit tests
 

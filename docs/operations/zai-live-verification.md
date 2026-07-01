@@ -1,10 +1,12 @@
 # Z.ai live verification (operator)
 
-Rector separates **offline** gates from **live** Z.ai verification. Offline infrastructure can be complete while live status remains **unverified** until a real non-fake provider campaign passes `npm run verify:zai-live`.
+Rector separates **offline** gates from **live** Z.ai verification. **Official live verification** is a single-model `npm run verify:zai-live` gate PASS with `live_provider` evidence — not matrix discovery grades or partial fact-shadow reruns.
+
+**Current status (2026-07-01):** One **official** finalist PASS — `glm-4-32b-0414-128k` (`verify:zai-live`, manifest updated). All other Z.ai models remain **live-unverified** until each passes its own full chain. Regolo and spy/fake/deterministic paths do not count as live evidence.
 
 ## First foundation discovery run (2026-07-01)
 
-Rector’s **first** live Z.ai foundation discovery campaign on branch `zai-evidence-live-integration` (after evidence-path + no-fakes hardening). **Live verification did not pass** — do not relabel Phase 2 or harness milestones as live-verified.
+Rector’s **first** live Z.ai **matrix** discovery campaign on branch `zai-evidence-live-integration` (after evidence-path + no-fakes hardening). That matrix **did not** produce any full-chain gate pass — do not treat matrix `overallStatus: fail` as contradicting the later **single-model** finalist PASS.
 
 | Item | Result |
 | --- | --- |
@@ -13,13 +15,33 @@ Rector’s **first** live Z.ai foundation discovery campaign on branch `zai-evid
 | Matrix (`verify:zai-live:matrix`, 1 run/model, pre-filter + JSON probe) | `overallStatus: fail` — **0** pass / **9** fail / **1** skipped (probe) |
 | Follow-up intentionally skipped | No 10-run matrix repeat and no finalist `verify:zai-live` — discovery found **zero** full-chain gate passes |
 
-**Failure pattern (evidence-backed):** Most flash / air / turbo / vision-turbo candidates failed at `eval:facts:live` with `model_json_invalid` and schema/provenance failures (see per-model `phase2-live-fact-shadow-report.json` under matrix snapshots). `glm-4-32b-0414-128k` was the only candidate that completed Phase 2F live shadow **5/5** and provider smoke, then failed live harness on orchestration schema/validation (e.g. skeptic `findings.*.recommendation`, planner `dependencies` / `approvalGates` — `provider_json` / validation after one repair). Treat it as the **best current finalist / debug target**, not a verified pass.
+**Failure pattern (evidence-backed, official matrix):** **9/9** callable models in the first official matrix run failed **before** harness because `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live` did not complete with zero failed cases. Frame this as a **first-pass / current-wrapper strict fact-shadow bottleneck** on the raw live shadow path — not proof that those models cannot pass after bounded repair or linter-assisted retries. Only `glm-4-32b-0414-128k` completed Phase 2F live shadow **5/5** and provider smoke in that campaign, then failed live harness on orchestration schema/validation (pre-hardening). Treat non-finalist matrix rows as **discovery grades**, not live-verified claims.
 
 **What this run did prove:** Real Z.ai OpenAI-compatible calls, `live_provider` evidence, no auth failure, no systemic quota failure in matrix diagnostics, no secret leakage in artifacts, and gate rejection of fake/spy doubles remains intact. Matrix is **comparison/discovery only** (no manifest update).
 
 **Operator interpretation (not a harness change):** Strict gate + harness behavior appears useful; failures look like **model ↔ schema/instruction mismatch**. Likely follow-on is model-specific prompting, adapters, or fine-tuning — **not** relaxing the harness for live-verified claims.
 
-**Superseded for one finalist (harness hardening, 2026-07-01):** After live-harness optimization commits `4438205`–`75f4233` (structured-role output caps, strict JSON prompt cards + provider-gated no-thinking, diagnostics/bottleneck taxonomy, bounded product `maxRuntimeMs`, harness repair preflight), focused reruns and official **`RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=glm-4-32b-0414-128k npm run verify:zai-live`** **passed** the strict gate: harness **3/3** scenarios, **46,695** / 100,000 tokens, **$0.0441** estimated cost, `live_provider` evidence, manifest updated. Report: `.rector/evidence/live/zai/latest.md`. This **does not** grade other Z.ai models or matrix campaigns — only this single-model gate PASS supports `zai-live-verified` / `phase2-complete-live-verified` labels for the Z.ai finalist.
+**Official finalist verification (harness hardening, 2026-07-01):** After live-harness optimization commits `4438205`–`75f4233` (structured-role output caps, strict JSON prompt cards + provider-gated no-thinking, diagnostics/bottleneck taxonomy, bounded product `maxRuntimeMs`, harness repair preflight), **`RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=glm-4-32b-0414-128k npm run verify:zai-live`** **passed** the strict gate: harness **3/3** scenarios, **46,695** / 100,000 tokens, **$0.0441** estimated cost, `live_provider` evidence, manifest updated. Report: `.rector/evidence/live/zai/latest.md`. **Only this single-model gate PASS** supports `zai-live-verified` / `phase2-complete-live-verified-zai-finalist` labels. Matrix discovery and partial fact-shadow reruns do **not** update the manifest or substitute for per-model `verify:zai-live`.
+
+### Typed-fact live shadow reruns (operator, first-pass only)
+
+Follow-up **first-pass** `eval:facts:live` reruns (same strict wrapper as the official matrix chain; **no** bounded repair loop in the shadow runner yet) summarized approximate pass rates on **5** shadow cases per model:
+
+| Model | First-pass shadow (approx.) | Common failure modes |
+| --- | --- | --- |
+| `glm-4.5-flash`, `glm-4.5-air`, `glm-4.5-airx`, `glm-5-turbo` | ~3/5 | `model_json_invalid`, missing schema-valid expected facts, `invalid_union_discriminator`, evidence extraction |
+| `glm-4.6v-flashx`, `glm-5v-turbo` | ~2/5 | Same JSON/schema classes + vision-turbo variability |
+| `glm-4.7-flash`, `glm-4.7-flashx`, `glm-4.6v-flash` | Poor / rate-limited | HTTP 429 / overload, `model_json_invalid`, `tsc_diagnostic_grouping` |
+
+**Interpretation:** These scores describe **raw first-pass** output against strict validators — not final model capability after repair. Planned mitigation (product/harness): **strict checker/linter + bounded repair loops**; evidence should report **first-pass** vs **repair-pass** vs **failed-after-repair** instead of a single global pass/fail for operator triage. **Do not** relax validators to improve matrix grades.
+
+### Live harness smoke integrity (fixed `d86d679`)
+
+Harness-only reruns exposed a **smoke-report integrity bug**: scenarios could appear to pass while provider calls failed and **zero** live `modelCalls`/usage were recorded (orchestration swallowed errors). Fixed in `d86d679` via `src/live/liveHarnessIntegrity.ts`, scorecard failure kind `missing_live_usage`, and reconciled Z.ai/Regolo harness report writers. Treat pre-fix smoke JSON as **untrusted** for pass claims; post-fix reports fail closed when live usage is missing.
+
+### Operator spend and reruns
+
+Campaign budget remains **≤100,000 tokens** and **≤20 model calls** per single-model gate. Early Z.ai live campaigns used on the order of **~$0.50** total against a much larger operator budget (~$100) — broad post-fix reruns are acceptable **if** budgets, matrix caps (`ZAI_MATRIX_MAX_MODELS`), and **no raw `.rector/evidence` commits** are respected. Deterministic/spy/fake paths never count as live evidence.
 
 **Artifact pointers (local, gitignored):**
 

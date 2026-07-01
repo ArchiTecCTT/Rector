@@ -279,19 +279,19 @@ Offline-by-default with live opt-in: live scenarios are SKIPPED when no provider
 
 **Completion gate (PASSED on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80):** Phase 0.5 is complete because all of the following passed: `npm run test:global:gate`, `npm run verify:phase0.5`, 28 offline scenarios (21 strict-pass, 8 intentional regressions), and strict scorecard semantics, with no claim of specialist execution. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
 
-## Phase 2 — Typed Fact Protocol — OFFLINE COMPLETE / LIVE UNVERIFIED — gates passed at `45768e5` (branch `rector-0.3.0`)
+## Phase 2 — Typed Fact Protocol — OFFLINE COMPLETE / LIVE VERIFIED (Z.ai finalist only) — gates passed at `45768e5` (branch `rector-0.3.0`)
 
 Typed fact contracts, append-only ledger/replay/diff, adapters (Cartographer, ToolRegistry, capability evals, global harness, run events), validation gates, offline fact evals, and opt-in live shadow runner. **Status:** `phase2-complete-live-verified-zai-finalist` (Z.ai `glm-4-32b-0414-128k` gate PASS @ 2026-07-01); Regolo/other models unverified — see `docs/plans/2-0/phases/phase-2-completion-report.md`.
 
 - Core + adapters: `src/facts/**`; scripts `scripts/facts/{run-fact-evals,run-live-fact-shadow,replay-facts,validate-phase2}.ts`
 - npm: `eval:facts`, `eval:facts:live` (explicit `LIVE_FACT_EVALS=1`), `facts:replay`, `verify:phase2`
-- Offline reports: `.rector/evidence/phase2/fact-report.{json,md}`; live shadow: `.rector/evidence/phase2/live-fact-shadow-report.json` (skipped on gate VM — live unverified; no configured non-fake provider)
+- Offline reports: `.rector/evidence/phase2/fact-report.{json,md}`; live shadow: `.rector/evidence/phase2/live-fact-shadow-report.json` (gate VM skipped; **Z.ai finalist** shadow included in `verify:zai-live` PASS — other models unverified on first-pass strict wrapper)
 
 **Completion gate (PASSED offline at `45768e5`; re-hardened on `zai-evidence-live-integration` @ `75f4233`):** `npm run verify:phase2` (`check`, full `npm test`, `eval:facts` 10/10, `test:global` exit 0, `test:systems` 1/1). Post harness hardening: `npm test` 410 files / 2829 tests, `npm run build`, `npm audit` 0 vulns, `audit:no-fakes:check` 0 unallowed. **Live (scoped):** Z.ai finalist `glm-4-32b-0414-128k` `verify:zai-live` gate PASS @ 2026-07-01 — not a claim for all models/providers.
 
-**Z.ai live evidence track (finalist gate PASS; matrix discovery mostly fail):** Smoke + harness + gate (`npm run verify:zai-live`), strict harness knobs (structured-role caps, strict JSON cards, diagnostics) @ `4438205`–`75f4233` — `docs/operations/zai-live-verification.md`. **Official gate PASS:** `glm-4-32b-0414-128k` (3/3 harness, manifest updated). **Discovery matrix (2026-07-01):** still 0/10 full-chain passes for broad GLM compare — matrix ≠ live-verified.
+**Z.ai live evidence track (finalist gate PASS; matrix discovery mostly fail):** Smoke + harness + gate (`npm run verify:zai-live`), strict harness knobs @ `4438205`–`75f4233`, smoke integrity `d86d679` — `docs/operations/zai-live-verification.md`. **Official gate PASS:** `glm-4-32b-0414-128k` (3/3 harness, 46,695 tokens, ~$0.0441, manifest updated). **Discovery matrix:** 0/9 callable models full-chain (failed first-pass `eval:facts:live` before harness); partial shadow reruns ~2–3/5 on several variants — **first-pass bottleneck**, not final model verdict. **Next:** strict linter + bounded repair; evidence taxonomy first-pass / repair-pass / failed-after-repair. Matrix ≠ live-verified.
 
-**Regolo live evidence track (offline implementation done / live unverified):** `docs/operations/regolo-live-verification.md`. Discovery 0/10; post-hardening `gemma4-31b` provider smoke pass, harness timeout fail. No `verify:regolo-live` gate PASS.
+**Regolo live evidence track (offline implementation done / live unverified):** `docs/operations/regolo-live-verification.md`. Discovery 0/10; `gemma4-31b` provider smoke pass, harness **timeout** (300s, not schema-truncation proof). No `verify:regolo-live` gate PASS.
 
 **Next neuro-symbolic phases:** 2.1 / 2.2 Memory OS, then 2.4 Capability Contract Generator and 2.5 Capability-SLM Fabric; Phase 3 rule engine consumes facts.
 
