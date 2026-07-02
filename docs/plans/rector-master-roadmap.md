@@ -281,7 +281,7 @@ Offline-by-default with live opt-in: live scenarios are SKIPPED when no provider
 
 ## Phase 2 — Typed Fact Protocol — OFFLINE COMPLETE / LIVE VERIFIED (Z.ai per-model gates) — gates passed at `45768e5` (branch `rector-0.3.0`)
 
-Typed fact contracts, append-only ledger/replay/diff, adapters (Cartographer, ToolRegistry, capability evals, global harness, run events), validation gates, offline fact evals, and opt-in live shadow runner. **Status:** `phase2-complete-live-verified-zai-finalist` (Z.ai `glm-4-32b-0414-128k` + **`glm-5v-turbo`** `verify:zai-live` PASS @ 2026-07-01); Regolo/other models unverified — see `docs/plans/2-0/phases/phase-2-completion-report.md`.
+Typed fact contracts, append-only ledger/replay/diff, adapters (Cartographer, ToolRegistry, capability evals, global harness, run events), validation gates, offline fact evals, and opt-in live shadow runner. **Status:** `phase2-complete-live-verified-zai-finalist` (Z.ai `glm-4-32b-0414-128k` + **`glm-5v-turbo`** `verify:zai-live` PASS @ 2026-07-01); Regolo/other models unverified — see `docs/plans/2-0/phases/phase-2-completion-report.md` and `docs/reports/live-testing/zai-live-verification-conclusion-2026-07-01.md`.
 
 - Core + adapters: `src/facts/**`; scripts `scripts/facts/{run-fact-evals,run-live-fact-shadow,replay-facts,validate-phase2}.ts`
 - npm: `eval:facts`, `eval:facts:live` (explicit `LIVE_FACT_EVALS=1`), `facts:replay`, `verify:phase2`

@@ -6,6 +6,7 @@
 **Gate commit (post Phase 2F merge):** `45768e5`  
 **Completion label:** `phase2-complete-live-verified-zai-finalist` (Z.ai single-model `verify:zai-live` gate PASS documented for `glm-4-32b-0414-128k` @ 2026-07-01 post `75f4233` and **`glm-5v-turbo`** @ 2026-07-01 post `ff65580`–`07abf93`; Regolo and other models remain live-unverified)
 **Report date:** 2026-06-28 (live finalist gate documented 2026-07-01)
+**Live-test conclusion report:** `docs/reports/live-testing/zai-live-verification-conclusion-2026-07-01.md` (`.pdf` colocated)
 
 ---
 
