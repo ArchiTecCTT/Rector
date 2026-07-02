@@ -7,18 +7,21 @@ import { decomposeIntoTasks } from "../src/orchestration/taskDecomposer";
 import { DEFAULT_SPY_USAGE, SpyLLMProvider, generousBudget, makeExternalRun, arbPlannerInput } from "./support/byokArbitraries";
 
 describe("neuro local/provider-free invariants", () => {
-  it("keeps deep planning disabled path deterministic and provider-free", async () => {
+  it("keeps deep planning disabled path on live planner without manufacturing a local plan", async () => {
     await fc.assert(
       fc.asyncProperty(arbPlannerInput(), async (input) => {
-        const provider = new SpyLLMProvider({ estimate: DEFAULT_SPY_USAGE });
+        const provider = new SpyLLMProvider({
+          estimate: DEFAULT_SPY_USAGE,
+          responses: [{ content: JSON.stringify(createFakePlan(input)) }],
+        });
         const result = await runDeepPlanner(
           { ...input, deepPlanning: false },
           { provider, run: makeExternalRun(generousBudget()) },
         );
 
         expect(result.status).toBe("ok");
-        expect(result.attempts).toBe(0);
-        expect(provider.invokeCount).toBe(0);
+        expect(result.attempts).toBe(1);
+        expect(provider.invokeCount).toBe(1);
         expect(result.plan).toEqual(createFakePlan(input));
       }),
       { numRuns: 100 },

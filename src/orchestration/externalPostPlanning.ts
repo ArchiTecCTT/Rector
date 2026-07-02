@@ -43,6 +43,7 @@ import {
   runEvent,
   type ProviderCallMetadata,
 } from "./externalRunSupport";
+import { applyStructuredRoleLlmRequestFields } from "./structuredRoleOutputCaps";
 
 export interface ExternalPostPlanningParams {
   store: RectorStore;
@@ -148,6 +149,7 @@ export async function runExternalPostPlanningPhases(params: ExternalPostPlanning
     getRun: () => budgetRun,
     setRun: (next) => { budgetRun = next; },
     abortSignal: params.abortSignal,
+    structuredRoleOutputCaps: options.structuredRoleOutputCaps,
   });
 
   const executionPhase = await runExternalExecutionPhase({
@@ -370,6 +372,7 @@ function createExternalRepairAgent(input: {
   getRun(): Run;
   setRun(run: Run): void;
   abortSignal?: AbortSignal;
+  structuredRoleOutputCaps?: ChatRunOptions["structuredRoleOutputCaps"];
 }): LiveRepairAgent {
   const { store, deps, approvals, getRun, setRun } = input;
   const repairSelection: ModelSelection = deps.router.select({ capability: "flagship", task: "repair", run: getRun() });
@@ -382,6 +385,7 @@ function createExternalRepairAgent(input: {
       setRun(await addProviderUsageToRun(store, getRun(), usage, provider));
     },
     abortSignal: input.abortSignal,
+    structuredRoleOutputCaps: input.structuredRoleOutputCaps,
   });
 }
 
@@ -678,7 +682,13 @@ async function runExternalFlagshipSynthesis(input: {
   }
 
   const synthResult = await args.observability.recordSpan("SYNTHESIZING", () =>
-    runLiveSynthesizer(synthInput, { provider: synthSelection.provider, run: budgetRun, model: synthSelection.model, abortSignal: input.abortSignal })
+    runLiveSynthesizer(synthInput, {
+      provider: synthSelection.provider,
+      run: budgetRun,
+      model: synthSelection.model,
+      abortSignal: input.abortSignal,
+      structuredRoleOutputCaps: args.options?.structuredRoleOutputCaps,
+    })
   );
   const synthProviderCall = buildProviderCallMetadata(
     synthSelection,
@@ -973,6 +983,7 @@ function createLiveRepairAgent(deps: {
   getRun?: () => Run;
   commitUsage?: (usage: LLMUsage, provider: string) => Promise<void>;
   abortSignal?: AbortSignal;
+  structuredRoleOutputCaps?: ChatRunOptions["structuredRoleOutputCaps"];
 }): LiveRepairAgent {
   return async ({ failure, failedOutput, contextPack, run, symbolicHints, abortSignal }) => {
     try {
@@ -983,17 +994,17 @@ function createLiveRepairAgent(deps: {
         contextPack,
         symbolicHints,
       });
+      // Budget preflight BEFORE any provider call. Use the latest committed run usage so repeated
+      // repair attempts are counted cumulatively with planner/skeptic and prior repair calls.
+      const currentRun = deps.getRun?.() ?? run;
       const request: LLMRequest = {
         messages,
         modelRoute: "flagship",
         ...(deps.model ? { model: deps.model } : {}),
         responseFormat: { type: "json_object" },
         task: "repair",
+        ...applyStructuredRoleLlmRequestFields("repair", deps.structuredRoleOutputCaps, currentRun),
       };
-
-      // Budget preflight BEFORE any provider call. Use the latest committed run usage so repeated
-      // repair attempts are counted cumulatively with planner/skeptic and prior repair calls.
-      const currentRun = deps.getRun?.() ?? run;
       const estimate = deps.provider.estimateRequest(request);
       const decision = evaluateBudget(currentRun, buildRepairPreflightUsage(deps.provider, estimate, currentRun));
       // Req 3.4: layer the EXPLICIT per-run ceiling onto the existing preflight. `enforceMaxPerRunBudget`

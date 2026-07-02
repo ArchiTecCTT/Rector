@@ -7,9 +7,12 @@ import { describe, expect, it } from "vitest";
 import {
   LIVE_FACT_SHADOW_REPORT_SCHEMA_VERSION,
   LiveFactShadowReportSchema,
+  discoverLiveFactProviders,
   isAcceptableLiveShadowProvider,
   runLiveFactShadow,
+  shadowFailureReasonsFromDiagnostics,
 } from "../../scripts/facts/run-live-fact-shadow";
+import { createStrictOutputDiagnostic } from "../../src/orchestration/strictOutputDiagnostics";
 import {
   FakeLLMProvider,
   LLMResponseSchema,
@@ -109,6 +112,34 @@ describe("Phase 2F live fact shadow contract", () => {
     }
   });
 
+  it("uses shared Z.ai live discovery when RECTOR_LIVE_PROVIDER requests Z.ai", async () => {
+    const discovered = await discoverLiveFactProviders({
+      RECTOR_LIVE_PROVIDER: "zai",
+      OPENAI_COMPATIBLE_API_KEY: "sk-zai-secret-1234567890",
+      OPENAI_COMPATIBLE_BASE_URL: "https://api.z.ai/api/paas/v4",
+      OPENAI_COMPATIBLE_MODEL: "glm-4.5",
+    });
+
+    expect(discovered).toHaveLength(1);
+    expect(discovered[0]).toMatchObject({
+      providerId: "zai:env",
+      modelId: "glm-4.5",
+      route: "cheap",
+      liveEvidence: true,
+    });
+  });
+
+  it("rejects a requested Z.ai live shadow provider when the OpenAI-compatible host is not Z.ai", async () => {
+    const discovered = await discoverLiveFactProviders({
+      RECTOR_LIVE_PROVIDER: "zai",
+      OPENAI_COMPATIBLE_API_KEY: "sk-zai-secret-1234567890",
+      OPENAI_COMPATIBLE_BASE_URL: "https://example.com/v1/private",
+      OPENAI_COMPATIBLE_MODEL: "glm-4.5",
+    });
+
+    expect(discovered).toEqual([]);
+  });
+
   it("rejects FakeLLMProvider and SpyLLMProvider-shaped doubles as live evidence", async () => {
     expect(isAcceptableLiveShadowProvider(new FakeLLMProvider())).toBe(false);
     expect(isAcceptableLiveShadowProvider(new SpyLLMProvider())).toBe(false);
@@ -160,6 +191,11 @@ describe("Phase 2F live fact shadow contract", () => {
       expect(report.liveEvidenceStatus).toBe("test_only_injected");
       expect(report.caseCount).toBe(5);
       expect(report.failedCount).toBe(0);
+      expect(report.firstPassCases).toBe(5);
+      expect(report.repairPassCases).toBe(0);
+      expect(report.failedAfterRepairCases).toBe(0);
+      expect(report.cases.every((caseReport) => caseReport.passClassification === "first_pass")).toBe(true);
+      expect(report.cases.every((caseReport) => caseReport.attempts.length >= 1)).toBe(true);
       expect(report.cases.map((caseReport) => caseReport.caseId)).toEqual([
         "intent_extraction_stress",
         "rg_artifact_evidence_extraction",
@@ -176,9 +212,235 @@ describe("Phase 2F live fact shadow contract", () => {
       const markdown = await readFile(path.join(outputDir, "live-fact-shadow-report.md"), "utf8");
       expect(markdown).toContain("test_only_injected");
       expect(markdown).not.toContain("Partial incident note only");
+      const summary = JSON.parse(await readFile(path.join(outputDir, "live-fact-shadow-summary.json"), "utf8"));
+      expect(summary.reportJson).toBe("live-fact-shadow-report.json");
+      expect(summary.totalTokenUsage.totalTokens).toBe(375);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
+  });
+
+  it("classifies repair-pass outcomes when the first attempt returns invalid JSON", async () => {
+    const outputDir = await tempDir();
+
+    class RepairOnSecondAttemptProvider extends ContractLiveProvider {
+      private calls = 0;
+
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.calls += 1;
+        this.requests.push(request);
+        if (this.calls === 1) {
+          return LLMResponseSchema.parse({
+            provider: this.metadata.id,
+            model: request.model ?? this.metadata.models.fast,
+            content: "not-json",
+            finishReason: "stop",
+            usage: USAGE,
+          });
+        }
+        return super.invoke(request);
+      }
+    }
+
+    try {
+      const report = await runLiveFactShadow({
+        outputDir,
+        env: { LIVE_FACT_EVALS: "1" },
+        now: fixedNow,
+        providerDiscovery: () => [
+          {
+            provider: new RepairOnSecondAttemptProvider(),
+            route: "fast",
+            modelId: "contract-live-model",
+            liveEvidence: false,
+            discoveryLabel: "contract test injection",
+          },
+        ],
+      });
+
+      const intentCase = report.cases.find((caseReport) => caseReport.caseId === "intent_extraction_stress");
+      expect(intentCase?.passClassification).toBe("repair_pass");
+      expect(intentCase?.status).toBe("passed");
+      expect(intentCase?.attempts).toHaveLength(2);
+      expect(report.repairPassCases).toBeGreaterThanOrEqual(1);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts response content before writing raw shadow artifacts", async () => {
+    const outputDir = await tempDir();
+
+    class SecretEchoProvider extends ContractLiveProvider {
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.requests.push(request);
+        return LLMResponseSchema.parse({
+          provider: this.metadata.id,
+          model: request.model ?? this.metadata.models.fast,
+          content: JSON.stringify({
+            facts: [
+              {
+                kind: "capability_failure",
+                capabilityId: "live_shadow.secret",
+                reason: "api_key=sk-test-secret1234567890 leaked by model",
+                retryable: false,
+                evidence: [
+                  {
+                    refType: "insufficient_evidence",
+                    reason: "api_key=sk-test-secret1234567890",
+                    missing: ["safe artifact"],
+                    searched: [],
+                  },
+                ],
+              },
+            ],
+          }),
+          finishReason: "stop",
+          usage: USAGE,
+        });
+      }
+    }
+
+    try {
+      await runLiveFactShadow({
+        outputDir,
+        env: { LIVE_FACT_EVALS: "1" },
+        now: fixedNow,
+        providerDiscovery: () => [
+          {
+            provider: new SecretEchoProvider(),
+            route: "fast",
+            modelId: "contract-live-model",
+            liveEvidence: false,
+            discoveryLabel: "contract test injection",
+          },
+        ],
+      });
+
+      const artifact = await readFile(
+        path.join(outputDir, "live-fact-shadow-artifacts", "intent_extraction_stress.json"),
+        "utf8",
+      );
+      expect(artifact).not.toContain("sk-test-secret1234567890");
+      expect(artifact).toContain("[REDACTED]");
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports truncation-specific failureReasons when output hits length limit", async () => {
+    const outputDir = await tempDir();
+
+    class TruncatedOutputProvider extends ContractLiveProvider {
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.requests.push(request);
+        return LLMResponseSchema.parse({
+          provider: this.metadata.id,
+          model: request.model ?? this.metadata.models.fast,
+          content: '{"facts":[{"kind":"intent","intent":"incomplete',
+          finishReason: "length",
+          usage: USAGE,
+        });
+      }
+    }
+
+    try {
+      const report = await runLiveFactShadow({
+        outputDir,
+        env: { LIVE_FACT_EVALS: "1" },
+        now: fixedNow,
+        providerDiscovery: () => [
+          {
+            provider: new TruncatedOutputProvider(),
+            route: "fast",
+            modelId: "contract-live-model",
+            liveEvidence: false,
+            discoveryLabel: "truncation contract test",
+          },
+        ],
+      });
+
+      const intentCase = report.cases.find((caseReport) => caseReport.caseId === "intent_extraction_stress");
+      expect(intentCase?.status).toBe("failed");
+      expect(intentCase?.passClassification).toBe("failed_after_repair");
+      expect(intentCase?.failureReasons.some((reason) => reason.includes("truncated"))).toBe(true);
+      expect(intentCase?.failureReasons.some((reason) => reason.includes("valid JSON"))).toBe(true);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports hallucinated ref failureReasons for invalid stdout line refs", async () => {
+    const outputDir = await tempDir();
+
+    class HallucinatedRefProvider extends ContractLiveProvider {
+      override async invoke(request: LLMRequest): Promise<LLMResponse> {
+        this.requests.push(request);
+        const caseId = String(request.metadata?.caseId ?? "");
+        if (caseId === "test_log_diagnosis") {
+          return LLMResponseSchema.parse({
+            provider: this.metadata.id,
+            model: request.model ?? this.metadata.models.fast,
+            content: JSON.stringify({
+              facts: [
+                {
+                  kind: "capability_evidence",
+                  capabilityId: "live_shadow.vitest",
+                  summary: "claimed failure at stdout",
+                  evidence: [{ refType: "source_span", path: "stdout", startLine: 2, endLine: 2 }],
+                },
+              ],
+            }),
+            finishReason: "stop",
+            usage: USAGE,
+          });
+        }
+        return super.invoke(request);
+      }
+    }
+
+    try {
+      const report = await runLiveFactShadow({
+        outputDir,
+        env: { LIVE_FACT_EVALS: "1" },
+        now: fixedNow,
+        providerDiscovery: () => [
+          {
+            provider: new HallucinatedRefProvider(),
+            route: "fast",
+            modelId: "contract-live-model",
+            liveEvidence: false,
+            discoveryLabel: "hallucinated ref contract test",
+          },
+        ],
+      });
+
+      const vitestCase = report.cases.find((caseReport) => caseReport.caseId === "test_log_diagnosis");
+      expect(vitestCase?.status).toBe("failed");
+      expect(vitestCase?.hallucinatedRefs).toContain("stdout:2");
+      expect(vitestCase?.failureReasons.some((reason) => reason.includes("stdout:2"))).toBe(true);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("maps shadowFailureReasonsFromDiagnostics without echoing secrets", () => {
+    const reasons = shadowFailureReasonsFromDiagnostics([
+      createStrictOutputDiagnostic({
+        kind: "truncation",
+        code: "provider_output_truncated",
+        message: "Provider output was truncated",
+      }),
+      createStrictOutputDiagnostic({
+        kind: "json_syntax",
+        code: "json_syntax_error",
+        message: "not json",
+      }),
+    ]);
+    expect(reasons).toEqual([
+      "provider output truncated before a complete JSON object",
+      "model output was not valid JSON (syntax error)",
+    ]);
   });
 
   it("does not mutate source files while writing only evidence reports", async () => {

@@ -5,6 +5,7 @@ import { decomposeIntoTasks, type SubGoalGraph } from "../../orchestration/taskD
 import type { TriageResult } from "../../orchestration/triage";
 import type { ModelRouter, ModelSelection } from "../../providers/llm";
 import type { Run } from "../../store/schemas";
+import type { StructuredRoleOutputCapPolicy } from "../../orchestration/structuredRoleOutputCaps";
 import { PUBLIC_MODULE_API_VERSION, type ModuleManifest } from "../manifest";
 import type { RectorModule } from "../registry";
 import type { NeuroFeatureFlags } from "../featureFlags";
@@ -34,6 +35,7 @@ export interface PlanningPhaseInput {
   flags: NeuroFeatureFlags;
   abortSignal?: AbortSignal;
   recordSpan: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
+  structuredRoleOutputCaps?: StructuredRoleOutputCapPolicy;
 }
 
 export interface PlanningPhasePrep {
@@ -86,7 +88,13 @@ export async function executePlanningPhase(
             messageContent: input.effectiveMessageContent,
             deepPlanning: true,
           },
-          { provider: selection.provider, run: input.budgetRun, model: selection.model, abortSignal: input.abortSignal },
+          {
+            provider: selection.provider,
+            run: input.budgetRun,
+            model: selection.model,
+            abortSignal: input.abortSignal,
+            structuredRoleOutputCaps: input.structuredRoleOutputCaps,
+          },
         )
       : runLivePlanner(
           {
@@ -94,7 +102,13 @@ export async function executePlanningPhase(
             contextPack: prep.plannerContextPack,
             messageContent: input.effectiveMessageContent,
           },
-          { provider: selection.provider, run: input.budgetRun, model: selection.model, abortSignal: input.abortSignal },
+          {
+            provider: selection.provider,
+            run: input.budgetRun,
+            model: selection.model,
+            abortSignal: input.abortSignal,
+            structuredRoleOutputCaps: input.structuredRoleOutputCaps,
+          },
         ),
   );
 }

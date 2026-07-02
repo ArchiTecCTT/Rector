@@ -1,7 +1,6 @@
 import { WorkspaceSandboxAdapter, SandboxOperationSchema, type SandboxOperationInput } from "../sandbox";
-import { redactSecrets } from "../security/redaction";
 import { ToolRegistry } from "./registry";
-import { toolSuccess, type ToolHandlerContext, type ToolRegistryEntry } from "./types";
+import { toolError, toolSuccess, type ToolHandlerContext, type ToolRegistryEntry } from "./types";
 
 const SANDBOX_OPERATION_INPUT_SCHEMA = {
   type: "object",
@@ -106,28 +105,21 @@ export function builtinToolEntries(): ToolRegistryEntry[] {
         if (hasOperationLikeInput(args)) {
           return runSandboxOperation("workspace.validate", args, ctx, "RUN_COMMAND");
         }
-        return toolSuccess("workspace.validate", {
-          validation: {
-            passed: true,
-            nodeId: ctx.nodeId,
+        return toolError("workspace.validate", "VALIDATION_FAILED", "workspace.validate requires a validation command or artifact-backed validator input", {
+          halt: true,
+          details: {
+            validation: {
+              passed: false,
+              nodeId: ctx.nodeId,
+              reason: "insufficient_evidence",
+            },
           },
         });
       },
     },
-    {
-      definition: {
-        name: "simulator.echo",
-        description: "Deterministic simulator-only echo tool used by CI and executor simulation.",
-        inputSchema: { type: "object", additionalProperties: true },
-        risk: "low",
-        requiresApproval: false,
-        requiresSandbox: false,
-      },
-      source: "builtin",
-      handler: async (args) => toolSuccess("simulator.echo", { echo: redactSecrets(args) }),
-    },
   ];
 }
+
 
 async function runSandboxOperation(
   toolName: string,

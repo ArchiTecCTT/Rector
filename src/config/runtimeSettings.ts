@@ -7,6 +7,30 @@ import { redactString } from "../security/redaction";
 import { ensureRestrictedDir } from "../security/filePermissions";
 import { SandboxEnvironmentKindSchema } from "../sandbox";
 import { DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS } from "../orchestration/chatRunner";
+import {
+  MAX_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS,
+  MIN_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS,
+  normalizeProductOrchestrationMaxRuntimeMs,
+} from "./orchestrationMaxRuntime";
+
+export {
+  MAX_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS,
+  MIN_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS,
+  normalizeProductOrchestrationMaxRuntimeMs,
+} from "./orchestrationMaxRuntime";
+
+const OrchestrationMaxRuntimeMsSchema = z
+  .number()
+  .int()
+  .transform((value) => normalizeProductOrchestrationMaxRuntimeMs(value))
+  .pipe(
+    z
+      .number()
+      .int()
+      .min(MIN_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS)
+      .max(MAX_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS),
+  )
+  .default(DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS);
 
 /**
  * Runtime settings persisted under `.rector/runtime-settings.json`.
@@ -23,7 +47,7 @@ export type OrchestrationProfile = z.infer<typeof OrchestrationProfileSchema>;
 
 export const OrchestrationSettingsSchema = z.object({
   /** Maximum wall-clock time for an orchestrated run in milliseconds (M23). Defaults to 30 min. */
-  maxRuntimeMs: z.number().int().positive().default(DEFAULT_MAX_ORCHESTRATION_RUNTIME_MS),
+  maxRuntimeMs: OrchestrationMaxRuntimeMsSchema,
 });
 export type OrchestrationSettings = z.infer<typeof OrchestrationSettingsSchema>;
 
@@ -46,7 +70,15 @@ export const RuntimeSettingsPatchSchema = z
     orchestrationProfile: OrchestrationProfileSchema.optional(),
     sandboxEnvironment: SandboxEnvironmentKindSchema.optional(),
     providerResilienceEnabled: z.boolean().optional(),
-    orchestration: z.object({ maxRuntimeMs: z.number().int().positive() }).optional(),
+    orchestration: z
+      .object({
+        maxRuntimeMs: z
+          .number()
+          .int()
+          .min(MIN_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS)
+          .max(MAX_PRODUCT_ORCHESTRATION_MAX_RUNTIME_MS),
+      })
+      .optional(),
   })
   .strict();
 export type RuntimeSettingsPatch = z.infer<typeof RuntimeSettingsPatchSchema>;

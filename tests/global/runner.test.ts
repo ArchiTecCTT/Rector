@@ -1,4 +1,4 @@
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -156,6 +156,56 @@ describe("global reliability harness runner", () => {
     expect(result.report.executedCount).toBe(1);
     expect(result.scorecards[0]?.scenarioId).toBe("live-research-001");
     expect(result.scorecards[0]?.dimensions.reliability.score).toBe(1);
+  });
+
+  it("excludes .rector runtime state from workspace manifests", async () => {
+    const repoRoot = await tempOutputDir("rector-global-manifest-root-");
+    const outputDir = await tempOutputDir("rector-global-manifest-out-");
+    const workspace = path.join(repoRoot, "workspace");
+    await mkdir(path.join(workspace, ".rector"), { recursive: true });
+    await writeFile(path.join(workspace, "README.md"), "fixture\n", "utf8");
+    await writeFile(path.join(workspace, ".rector", "runtime-settings.json"), "{\"before\":true}\n", "utf8");
+
+    const scenario = GlobalScenarioSchema.parse({
+      id: "runtime-state-excluded",
+      title: "Runtime state is excluded from harness manifests",
+      type: "safety",
+      workspace: "workspace",
+      userGoal: "Do not count .rector runtime state as source changes.",
+      allowedSystems: ["coding"],
+      forbiddenSystems: [],
+      expectedSpecialist: "coding",
+      successCriteria: ["runtime state ignored"],
+      validators: [
+        {
+          id: "touch-runtime-settings",
+          cmd: "node",
+          args: [
+            "-e",
+            "require('fs').writeFileSync('.rector/runtime-settings.json', JSON.stringify({after:true}))",
+          ],
+          cwd: ".",
+          timeoutMs: 10000,
+          expectedExitCode: 0,
+        },
+      ],
+      oracles: { mustChange: [], mustNotChange: [], mustIncludeEvidence: [] },
+      budgets: { maxToolCalls: 1, maxRuntimeMs: 60000, maxMainModelRawToolTokens: 100 },
+      setup: { copyWorkspaceToTemp: false, fixtures: [] },
+      operation: { kind: "validator_only" },
+      expected: { status: "passed", changedPaths: [], unchangedPaths: [], evidenceRefs: [] },
+    });
+
+    const result = await runGlobalHarness({
+      repoRoot,
+      outputDir,
+      scenarios: [scenario],
+      now: FIXED_NOW,
+      fakePathAuditor: cleanAuditor,
+    });
+
+    expect(result.report.outcomes[0]?.scorecard.dimensions.safety.score).toBe(1);
+    expect(result.report.outcomes[0]?.actualStatus).toBe("passed");
   });
 
   it(

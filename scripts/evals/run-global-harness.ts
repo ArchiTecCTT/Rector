@@ -12,7 +12,7 @@ async function main(): Promise<void> {
   const result = await runGlobalHarness({
     fakePathAuditor: async () => {
       const audit = await auditNoProductionFakes({ repoRoot: REPO_ROOT });
-      return { findingCount: audit.findingCount };
+      return { findingCount: audit.findingCount, unallowedFindingCount: audit.unallowedFindingCount };
     },
   });
   const { report } = result;
@@ -21,7 +21,7 @@ async function main(): Promise<void> {
       "[global-harness] offline run complete (no model).",
       `  scenarios: ${report.scenarioCount} (executed ${report.executedCount}, skipped ${report.skippedCount})`,
       `  passed: ${report.passedCount}/${report.executedCount}`,
-      `  fake-path: ${report.fakePathStatus} (${report.fakeFindingCount} findings, report-only)`,
+      `  fake-path: ${report.fakePathStatus} (${report.fakeFindingCount} unallowed findings, report-only)`,
       result.jsonPath ? `  json: ${path.relative(REPO_ROOT, result.jsonPath)}` : "",
       result.markdownPath ? `  md:   ${path.relative(REPO_ROOT, result.markdownPath)}` : "",
     ]

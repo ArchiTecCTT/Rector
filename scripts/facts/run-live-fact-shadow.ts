@@ -2,8 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { z } from "zod";
-
 import {
   ArtifactRefSchema,
   RectorFactSchema,
@@ -17,7 +15,6 @@ import {
   validateFactSchema,
   validateFactScope,
   validateFactTrustTransition,
-  FactValidationErrorReportSchema,
   validationErrorsForReport,
   type ArtifactRef,
   type FactValidationError,
@@ -28,77 +25,71 @@ import {
   CloudflareWorkersAIProvider,
   OpenAICompatibleProvider,
   TogetherAIProvider,
-  isLiveLLMProvider,
   type LLMProvider,
   type LLMRequest,
   type LLMResponse,
   type LLMUsage,
   type ModelRoute,
 } from "../../src/providers";
+import { getEvidenceTrackDir, sanitizeEvidencePayload, sanitizeEvidenceStringLeaves } from "../../src/evidence";
+import {
+  aggregateFailureCategoryCounts,
+  attemptSummariesFromStrictJsonAttempts,
+  classifySkippedCasePassClassification,
+  diagnosticsFromShadowCaseEvaluation,
+  passClassificationFromRepairLoop,
+  rollupPassOutcomeCounts,
+  type LiveFactShadowCaseEvaluation,
+} from "../../src/facts/reports/liveFactShadowClassification";
+import {
+  LIVE_FACT_SHADOW_REPORT_SCHEMA_VERSION,
+  LIVE_FACT_SHADOW_SUMMARY_SCHEMA_VERSION,
+  LiveFactShadowCaseReportSchema,
+  LiveFactShadowReportSchema,
+  LiveFactShadowSummarySchema,
+  type LiveFactShadowCaseReport,
+  type LiveFactShadowReport,
+} from "../../src/facts/reports/liveFactShadowReport";
+import {
+  isAcceptableLiveEvidenceProvider,
+  normalizeRequestedLiveProvider,
+} from "../../src/live/liveProviderDiscovery";
+import { discoverLiveProviderFromRepo } from "../../src/live/repoLiveProviderDiscovery";
+import { renderStrictJsonRepairCards, STRICT_JSON_REPAIR_OUTPUT_RULES } from "../../src/orchestration/strictJsonRepairCards";
+import {
+  runBoundedStrictJsonRepairLoop,
+  type StrictJsonEvidenceStatus,
+  type StrictJsonValidationResult,
+} from "../../src/orchestration/strictJsonRepairLoop";
+import type { StrictOutputDiagnostic, StrictOutputRuntimeMetadata } from "../../src/orchestration/strictOutputDiagnostics";
+import {
+  buildLiveFactShadowScenarioGuidance,
+  buildLiveFactShadowSystemContract,
+  liveFactShadowAllowedSourceSpanRefs,
+} from "../../src/facts/liveFactShadowPrompt";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const DEFAULT_OUTPUT_DIR = path.join(REPO_ROOT, ".omo", "evidence");
+const DEFAULT_OUTPUT_DIR = getEvidenceTrackDir("phase2", REPO_ROOT);
 const REPORT_JSON = "live-fact-shadow-report.json";
 const REPORT_MD = "live-fact-shadow-report.md";
+const SUMMARY_JSON = "live-fact-shadow-summary.json";
 const RAW_MODEL_OUTPUT_DIR = "live-fact-shadow-artifacts";
 const CREATED_BY = "Phase 2F live fact shadow runner";
+const DEFAULT_LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS = 1200;
+const LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS_MIN = 256;
+const LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS_MAX = 4096;
 
-export const LIVE_FACT_SHADOW_REPORT_SCHEMA_VERSION = "rector.live-fact-shadow-report.v1";
+export { LIVE_FACT_SHADOW_REPORT_SCHEMA_VERSION, LiveFactShadowReportSchema };
 
-const LiveFactShadowTokenUsageSchema = z
-  .object({
-    inputTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
-    totalTokens: z.number().int().nonnegative(),
-    modelCalls: z.number().int().nonnegative(),
-  })
-  .strict();
-
-const LiveFactShadowCaseReportSchema = z
-  .object({
-    caseId: z.string().min(1),
-    title: z.string().min(1),
-    status: z.enum(["passed", "failed", "skipped"]),
-    providerId: z.string().min(1).nullable(),
-    modelId: z.string().min(1).nullable(),
-    route: z.string().min(1),
-    schemaValidity: z.boolean(),
-    provenanceCompleteness: z.boolean(),
-    hallucinatedRefs: z.array(z.string().min(1)),
-    insufficientEvidenceCorrect: z.boolean().nullable(),
-    tokenUsage: LiveFactShadowTokenUsageSchema,
-    estimatedCostUsd: z.number().nonnegative(),
-    latencyMs: z.number().int().nonnegative(),
-    rawArtifactRefs: z.array(z.string().min(1)),
-    factRefs: z.array(z.object({ factId: z.string().min(1), kind: z.string().min(1), trustLevel: z.string().min(1) }).strict()),
-    validationErrors: z.array(FactValidationErrorReportSchema),
-    failureReasons: z.array(z.string().min(1)),
-  })
-  .strict();
-
-export const LiveFactShadowReportSchema = z
-  .object({
-    schemaVersion: z.literal(LIVE_FACT_SHADOW_REPORT_SCHEMA_VERSION),
-    generatedAt: z.string().datetime(),
-    status: z.enum(["completed", "skipped"]),
-    liveEvidenceStatus: z.enum(["live_provider", "test_only_injected", "skipped"]),
-    skippedReason: z.string().min(1).optional(),
-    providerId: z.string().min(1).nullable(),
-    modelId: z.string().min(1).nullable(),
-    route: z.string().min(1).nullable(),
-    caseCount: z.number().int().nonnegative(),
-    passedCount: z.number().int().nonnegative(),
-    failedCount: z.number().int().nonnegative(),
-    skippedCount: z.number().int().nonnegative(),
-    cases: z.array(LiveFactShadowCaseReportSchema),
-    notes: z.array(z.string().min(1)),
-  })
-  .strict();
-
-export type LiveFactShadowReport = Readonly<z.infer<typeof LiveFactShadowReportSchema>>;
-export type LiveFactShadowCaseReport = Readonly<z.infer<typeof LiveFactShadowCaseReportSchema>>;
+export function resolveLiveFactShadowMaxOutputTokens(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS?.trim();
+  if (!raw) return DEFAULT_LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS;
+  return Math.min(LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS_MAX, Math.max(LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS_MIN, parsed));
+}
 
 export interface DiscoveredLiveFactProvider {
   readonly provider: LLMProvider;
@@ -112,6 +103,7 @@ export interface DiscoveredLiveFactProvider {
 
 export interface LiveFactShadowRunnerOptions {
   readonly outputDir?: string;
+  readonly repoRoot?: string;
   readonly write?: boolean;
   readonly env?: Record<string, string | undefined>;
   readonly now?: () => Date;
@@ -139,14 +131,7 @@ type RawShadowOutput = Readonly<{
   insufficient_evidence?: unknown;
 }>;
 
-type CaseEvaluation = Readonly<{
-  facts: readonly RectorFact[];
-  errors: readonly FactValidationError[];
-  schemaValidity: boolean;
-  provenanceCompleteness: boolean;
-  hallucinatedRefs: readonly string[];
-  insufficientEvidenceCorrect: boolean | null;
-}>;
+type CaseEvaluation = LiveFactShadowCaseEvaluation;
 
 const ZERO_USAGE: LLMUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedUsd: 0, modelCalls: 0 };
 
@@ -203,7 +188,24 @@ function envString(env: Record<string, string | undefined>, key: string): string
   return env[key] ?? "";
 }
 
-export async function discoverLiveFactProviders(env: Record<string, string | undefined> = process.env): Promise<DiscoveredLiveFactProvider[]> {
+export async function discoverLiveFactProviders(
+  env: Record<string, string | undefined> = process.env,
+  repoRoot?: string,
+): Promise<DiscoveredLiveFactProvider[]> {
+  const requested = normalizeRequestedLiveProvider(env.RECTOR_LIVE_PROVIDER);
+  if (requested === "zai" || requested === "regolo") {
+    const result = await discoverLiveProviderFromRepo(repoRoot, env);
+    if (!result.selected) return [];
+    return [{
+      provider: result.selected.provider,
+      route: result.selected.route,
+      modelId: result.selected.modelId,
+      providerId: result.selected.providerId,
+      liveEvidence: result.selected.liveEvidence,
+      discoveryLabel: result.selected.discoveryLabel,
+    }];
+  }
+
   const providers: DiscoveredLiveFactProvider[] = [];
   const candidates: Array<{ provider: LLMProvider; route: ModelRoute; label: string }> = [
     {
@@ -273,11 +275,7 @@ export async function discoverLiveFactProviders(env: Record<string, string | und
 }
 
 export function isAcceptableLiveShadowProvider(provider: LLMProvider): boolean {
-  if (!isLiveLLMProvider(provider)) return false;
-  const id = provider.metadata.id.toLowerCase();
-  const label = `${provider.metadata.displayName} ${provider.constructor.name}`.toLowerCase();
-  if (["fake", "deterministic", "spy"].includes(id)) return false;
-  return !/fake|deterministic|spy|mock|fixture|scripted|test-double/i.test(`${id} ${label}`);
+  return isAcceptableLiveEvidenceProvider({ provider });
 }
 
 export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {}): Promise<LiveFactShadowReport> {
@@ -293,8 +291,9 @@ export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {
     return writeReport(skippedReport(generatedAt, "LIVE_FACT_EVALS must equal 1; live fact shadow is opt-in."), { outputDir, write, mkdir, writeFile });
   }
 
+  const repoRoot = options.repoRoot ?? REPO_ROOT;
   const discoveryWasInjected = options.providerDiscovery !== undefined;
-  const discovery = options.providerDiscovery ?? discoverLiveFactProviders;
+  const discovery = options.providerDiscovery ?? ((currentEnv: Record<string, string | undefined>) => discoverLiveFactProviders(currentEnv, repoRoot));
   const discovered = (await discovery(env)).filter((candidate) => isAcceptableLiveShadowProvider(candidate.provider));
   const selected = discovered[0];
   if (!selected) {
@@ -305,13 +304,32 @@ export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {
   const route = selected.route ?? "fast";
   const modelId = selected.modelId ?? modelForRoute(selected.provider, route);
   const cases: LiveFactShadowCaseReport[] = [];
+  const strictEvidenceStatus: StrictJsonEvidenceStatus =
+    discoveryWasInjected || !selected.liveEvidence ? "test_only_injected" : "live_provider";
+  const maxOutputTokens = resolveLiveFactShadowMaxOutputTokens(env);
   for (const scenario of liveFactShadowScenarios()) {
-    cases.push(await runScenario(scenario, selected.provider, { providerId, modelId, route, outputDir, readFile: options.readFile ?? fs.readFile, writeFile, mkdir, write, now }));
+    cases.push(
+      await runScenario(scenario, selected.provider, {
+        providerId,
+        modelId,
+        route,
+        outputDir,
+        readFile: options.readFile ?? fs.readFile,
+        writeFile,
+        mkdir,
+        write,
+        now,
+        strictEvidenceStatus,
+        maxOutputTokens,
+      }),
+    );
   }
 
   const passedCount = cases.filter((caseReport) => caseReport.status === "passed").length;
   const failedCount = cases.filter((caseReport) => caseReport.status === "failed").length;
   const skippedCount = cases.filter((caseReport) => caseReport.status === "skipped").length;
+  const outcomeRollup = rollupPassOutcomeCounts(cases);
+  const failureCategoryCounts = aggregateFailureCategoryCounts(cases);
   const report = LiveFactShadowReportSchema.parse({
     schemaVersion: LIVE_FACT_SHADOW_REPORT_SCHEMA_VERSION,
     generatedAt,
@@ -324,9 +342,13 @@ export async function runLiveFactShadow(options: LiveFactShadowRunnerOptions = {
     passedCount,
     failedCount,
     skippedCount,
+    firstPassCases: outcomeRollup.firstPassCases,
+    repairPassCases: outcomeRollup.repairPassCases,
+    failedAfterRepairCases: outcomeRollup.failedAfterRepairCases,
+    failureCategoryCounts,
     cases,
     notes: [
-      "Phase 2F live shadow is opt-in, non-mutating, and writes only .omo/evidence report artifacts.",
+      "Phase 2F live shadow is opt-in, non-mutating, and writes only .rector/evidence/phase2 report artifacts.",
       discoveryWasInjected || !selected.liveEvidence
         ? "Provider was dependency-injected for deterministic contract tests and must not be counted as live verification."
         : "Provider was discovered through explicit live environment/configuration and is not a fake/spy/deterministic double.",
@@ -349,42 +371,138 @@ async function runScenario(
     readonly mkdir: typeof fs.mkdir;
     readonly write: boolean;
     readonly now: () => Date;
+    readonly strictEvidenceStatus: StrictJsonEvidenceStatus;
+    readonly maxOutputTokens: number;
   },
 ): Promise<LiveFactShadowCaseReport> {
   const started = Date.now();
   const rawArtifactRefs = scenario.fixtureArtifactUri ? [scenario.fixtureArtifactUri] : [];
   const artifactText = scenario.fixturePath ? await context.readFile(path.join(REPO_ROOT, scenario.fixturePath), "utf8") : "";
-  const outputArtifact = ArtifactRefSchema.parse({ refType: "artifact", uri: `artifact://live-fact-shadow/${scenario.id}-model-output.json`, contentType: "application/json" });
+  const outputArtifact = ArtifactRefSchema.parse({
+    refType: "artifact",
+    uri: `artifact://live-fact-shadow/${scenario.id}-model-output.json`,
+    contentType: "application/json",
+  });
   rawArtifactRefs.push(outputArtifact.uri);
 
-  let response: LLMResponse | undefined;
-  const failureReasons: string[] = [];
-  try {
-    response = await provider.invoke(buildRequest(scenario, context.modelId, context.route, artifactText), {});
-  } catch (error) {
-    failureReasons.push(`provider invocation failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  const attemptResponses: Array<LLMResponse | undefined> = [];
+  const loopResult = await runBoundedStrictJsonRepairLoop<CaseEvaluation>({
+    operation: `live-fact-shadow:${scenario.id}`,
+    maxAttempts: 2,
+    catchAttemptErrors: true,
+    call: async (attemptContext) => {
+      const repairAppendix =
+        attemptContext.attemptKind === "repair"
+          ? `\n\n${STRICT_JSON_REPAIR_OUTPUT_RULES}\n\n${renderStrictJsonRepairCards(attemptContext.priorDiagnostics)}`
+          : "";
+      let response: LLMResponse | undefined;
+      try {
+        response = await provider.invoke(
+          buildRequest(scenario, context.modelId, context.route, artifactText, repairAppendix, context.maxOutputTokens),
+          {},
+        );
+      } catch {
+        response = undefined;
+      }
+      attemptResponses.push(response);
+      const metadata: StrictOutputRuntimeMetadata | undefined = response
+        ? {
+            provider: response.provider,
+            model: response.model,
+            finishReason: response.finishReason,
+            outputChars: response.content.length,
+            maxOutputTokens: context.maxOutputTokens,
+          }
+        : {
+            provider: context.providerId,
+            model: context.modelId,
+            finishReason: "error",
+            errorCode: "provider_invocation_failed",
+            errorMessage: "Provider invocation failed during live fact shadow attempt",
+            maxOutputTokens: context.maxOutputTokens,
+          };
+      return {
+        content: response?.content ?? "",
+        metadata,
+        evidenceStatus: context.strictEvidenceStatus,
+      };
+    },
+    validate: (value, attemptContext) => validateShadowParsedOutput(value, scenario, {
+      outputArtifact,
+      fixtureArtifactUri: scenario.fixtureArtifactUri,
+      generatedAt: context.now().toISOString(),
+      providerId: context.providerId,
+      modelId: context.modelId,
+      attemptKind: attemptContext.attemptKind,
+    }),
+  });
+
   const latencyMs = Math.max(0, Date.now() - started);
+  const evaluation =
+    loopResult.status === "passed"
+      ? loopResult.value
+      : evaluateModelOutput({
+          scenario,
+          content: attemptResponses[attemptResponses.length - 1]?.content ?? "",
+          outputArtifact,
+          fixtureArtifactUri: scenario.fixtureArtifactUri,
+          generatedAt: context.now().toISOString(),
+          providerId: context.providerId,
+          modelId: context.modelId,
+        });
+
+  const failureReasons: string[] = [];
+  if (loopResult.status === "failed") {
+    const providerFailures = loopResult.diagnostics.filter((diagnostic) => diagnostic.kind === "provider_runtime");
+    if (providerFailures.length > 0 && attemptResponses.every((response) => response === undefined)) {
+      failureReasons.push(
+        `provider invocation failed: ${providerFailures[providerFailures.length - 1]?.message ?? "unknown provider error"}`,
+      );
+    }
+    failureReasons.push(...shadowFailureReasonsFromDiagnostics(loopResult.diagnostics));
+    failureReasons.push(...caseFailureReasons(scenario, evaluation));
+    const uniqueFailureReasons = [...new Set(failureReasons)];
+    failureReasons.length = 0;
+    failureReasons.push(...uniqueFailureReasons);
+    if (failureReasons.length === 0) {
+      failureReasons.push("strict JSON repair loop failed without case-specific failure reasons");
+    }
+  }
+
+  const usage = attemptResponses.reduce(
+    (total, response) => mergeUsage(total, response?.usage ?? ZERO_USAGE),
+    ZERO_USAGE,
+  );
+  const status = loopResult.status === "passed" ? "passed" : "failed";
+  const passClassification = passClassificationFromRepairLoop(loopResult.status, loopResult.classification);
+  const attempts = attemptSummariesFromStrictJsonAttempts(loopResult.attempts);
+  const lastResponse = attemptResponses[attemptResponses.length - 1];
 
   if (context.write) {
     const rawDir = path.join(context.outputDir, RAW_MODEL_OUTPUT_DIR);
     await context.mkdir(rawDir, { recursive: true });
-    await context.writeFile(path.join(rawDir, `${scenario.id}.json`), `${JSON.stringify({ caseId: scenario.id, response: response ? sanitizeResponse(response) : null, failureReasons }, null, 2)}\n`, "utf8");
+    const artifactPayload = sanitizeEvidencePayload({
+      caseId: scenario.id,
+      passClassification,
+      attempts: loopResult.attempts.map((attempt) => ({
+        attemptNumber: attempt.attemptNumber,
+        attemptKind: attempt.attemptKind,
+        jsonParsed: attempt.jsonParsed,
+        diagnosticSummary: attempt.diagnosticSummary,
+      })),
+      responses: attemptResponses.map((response) => (response ? sanitizeResponse(response) : null)),
+      failureReasons,
+    });
+    await context.writeFile(path.join(rawDir, `${scenario.id}.json`), `${JSON.stringify(artifactPayload, null, 2)}\n`, "utf8");
   }
-
-  const evaluation = response
-    ? evaluateModelOutput({ scenario, content: response.content, outputArtifact, fixtureArtifactUri: scenario.fixtureArtifactUri, generatedAt: context.now().toISOString(), providerId: context.providerId, modelId: context.modelId })
-    : emptyEvaluation();
-  failureReasons.push(...caseFailureReasons(scenario, evaluation));
-  const usage = response?.usage ?? ZERO_USAGE;
-  const status = failureReasons.length === 0 ? "passed" : "failed";
 
   return LiveFactShadowCaseReportSchema.parse({
     caseId: scenario.id,
     title: scenario.title,
     status,
+    passClassification,
     providerId: context.providerId,
-    modelId: response?.model ?? context.modelId,
+    modelId: lastResponse?.model ?? context.modelId,
     route: context.route,
     schemaValidity: evaluation.schemaValidity,
     provenanceCompleteness: evaluation.provenanceCompleteness,
@@ -402,35 +520,85 @@ async function runScenario(
     factRefs: evaluation.facts.map((fact) => ({ factId: fact.factId, kind: fact.kind, trustLevel: fact.trust.level })),
     validationErrors: validationErrorsForReport(evaluation.errors),
     failureReasons,
+    attempts,
   });
 }
 
-function buildRequest(scenario: LiveScenario, model: string, route: ModelRoute, artifactText: string): LLMRequest {
-  const contract = [
-    "Return only JSON. Do not use Markdown.",
-    "Shape: {\"facts\":[...]}.",
-    "Allowed fact objects:",
-    "{\"kind\":\"intent\",\"intent\":string,\"confidence\":number?}",
-    "{\"kind\":\"task_constraint\",\"constraint\":string}",
-    "{\"kind\":\"unknown_or_ambiguity\",\"question\":string,\"options\":string[]?}",
-    "{\"kind\":\"capability_evidence\",\"capabilityId\":string,\"summary\":string,\"evidence\":[{\"refType\":\"source_span\",\"path\":string,\"startLine\":number,\"endLine\":number}]}",
-    "{\"kind\":\"capability_warning\",\"capabilityId\":string,\"warning\":string,\"severity\":\"low\"|\"medium\"|\"high\"}",
-    "{\"kind\":\"capability_failure\",\"capabilityId\":string,\"reason\":string,\"retryable\":boolean,\"evidence\":[{\"refType\":\"insufficient_evidence\",\"reason\":string,\"missing\":string[],\"searched\":string[]}]}",
-    "Never invent files, line numbers, tests, fixes, or root causes. Use insufficient_evidence when unsupported.",
-  ].join("\n");
+function validateShadowParsedOutput(
+  value: unknown,
+  scenario: LiveScenario,
+  context: {
+    readonly outputArtifact: ArtifactRef;
+    readonly fixtureArtifactUri?: string;
+    readonly generatedAt: string;
+    readonly providerId: string;
+    readonly modelId: string;
+    readonly attemptKind: "first" | "repair";
+  },
+): StrictJsonValidationResult<CaseEvaluation> {
+  if (!isRecord(value)) {
+    return {
+      ok: false,
+      diagnostics: diagnosticsFromShadowCaseEvaluation(emptyEvaluation(), { expectInsufficientEvidence: scenario.expectInsufficientEvidence }),
+    };
+  }
+  const evaluation = evaluateParsedShadowOutput({
+    scenario,
+    parsed: value as RawShadowOutput,
+    outputArtifact: context.outputArtifact,
+    fixtureArtifactUri: context.fixtureArtifactUri,
+    generatedAt: context.generatedAt,
+    providerId: context.providerId,
+    modelId: context.modelId,
+  });
+  const diagnostics = diagnosticsFromShadowCaseEvaluation(evaluation, { expectInsufficientEvidence: scenario.expectInsufficientEvidence });
+  const caseReasons = caseFailureReasons(scenario, evaluation);
+  if (caseReasons.length === 0) {
+    return { ok: true, value: evaluation, diagnostics };
+  }
+  return { ok: false, diagnostics };
+}
+
+function mergeUsage(left: LLMUsage, right: LLMUsage): LLMUsage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+    estimatedUsd: left.estimatedUsd + right.estimatedUsd,
+    modelCalls: left.modelCalls + right.modelCalls,
+  };
+}
+
+function buildRequest(
+  scenario: LiveScenario,
+  model: string,
+  route: ModelRoute,
+  artifactText: string,
+  repairAppendix = "",
+  maxOutputTokens = DEFAULT_LIVE_FACT_SHADOW_MAX_OUTPUT_TOKENS,
+): LLMRequest {
+  const contract = buildLiveFactShadowSystemContract();
+  const scenarioGuidance = buildLiveFactShadowScenarioGuidance({
+    id: scenario.id,
+    expectedKinds: scenario.expectedKinds,
+  });
   const artifactBlock = artifactText ? `\n\nCommitted raw artifact:\n---\n${artifactText.slice(0, 12_000)}\n---` : "";
   return {
     task: `phase-2f-live-fact-shadow:${scenario.id}`,
     route: "FACT_SHADOW",
     modelRoute: route,
     model,
-    maxOutputTokens: 800,
+    maxOutputTokens,
     temperature: 0,
     responseFormat: { type: "json_object" },
-    metadata: { caseId: scenario.id, nonMutating: true, createdBy: CREATED_BY },
+    providerOptions: { strictJsonMinimizeReasoning: true },
+    metadata: { caseId: scenario.id, nonMutating: true, createdBy: CREATED_BY, maxOutputTokens },
     messages: [
       { role: "system", content: contract },
-      { role: "user", content: `${scenario.prompt}${artifactBlock}` },
+      {
+        role: "user",
+        content: `${scenario.prompt}\n\n${scenarioGuidance}${artifactBlock}${repairAppendix}`,
+      },
     ],
   };
 }
@@ -455,7 +623,19 @@ function evaluateModelOutput(input: {
       insufficientEvidenceCorrect: input.scenario.expectInsufficientEvidence ? false : null,
     };
   }
-  const proposedFacts = proposalFacts(parsed).map((draft, index) => normalizeFactDraft(draft, { ...input, index }));
+  return evaluateParsedShadowOutput({ ...input, parsed });
+}
+
+function evaluateParsedShadowOutput(input: {
+  readonly scenario: LiveScenario;
+  readonly parsed: RawShadowOutput;
+  readonly outputArtifact: ArtifactRef;
+  readonly fixtureArtifactUri?: string;
+  readonly generatedAt: string;
+  readonly providerId: string;
+  readonly modelId: string;
+}): CaseEvaluation {
+  const proposedFacts = proposalFacts(input.parsed).map((draft, index) => normalizeFactDraft(draft, { ...input, index }));
   const validFacts: RectorFact[] = [];
   const errors: FactValidationError[] = [];
   const hallucinatedRefs: string[] = [];
@@ -572,10 +752,40 @@ function detectHallucinatedRefs(fact: RectorFact, scenario: LiveScenario): strin
 }
 
 function allowedRefsForScenario(caseId: string): ReadonlySet<string> {
-  if (caseId === "rg_artifact_evidence_extraction") return new Set(["src/notes.md:1", "src/notes.md:3"]);
-  if (caseId === "test_log_diagnosis") return new Set(["/tmp/vitest-case/failing.test.ts:1", "tests/**/*.test.ts:1"]);
-  if (caseId === "tsc_diagnostic_grouping") return new Set(["src/index.ts:2"]);
-  return new Set<string>();
+  return new Set(liveFactShadowAllowedSourceSpanRefs(caseId));
+}
+
+export function shadowFailureReasonsFromDiagnostics(diagnostics: readonly StrictOutputDiagnostic[]): string[] {
+  const reasons: string[] = [];
+  const seenCodes = new Set<string>();
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.severity !== "error") continue;
+    if (seenCodes.has(diagnostic.code)) continue;
+    seenCodes.add(diagnostic.code);
+    const reason = shadowFailureReasonForDiagnostic(diagnostic);
+    if (reason) reasons.push(reason);
+  }
+  return reasons;
+}
+
+function shadowFailureReasonForDiagnostic(diagnostic: StrictOutputDiagnostic): string | undefined {
+  if (diagnostic.code === "provider_output_truncated") {
+    return "provider output truncated before a complete JSON object";
+  }
+  if (diagnostic.code === "json_syntax_error") {
+    return "model output was not valid JSON (syntax error)";
+  }
+  if (diagnostic.code === "shadow_hallucinated_reference") {
+    const refs = diagnostic.message.replace(/^Hallucinated references detected:\s*/i, "").trim();
+    return refs.length > 0 ? `hallucinated refs: ${refs}` : "hallucinated source_span references detected";
+  }
+  if (diagnostic.code === "provider_attempt_failed") {
+    return "provider attempt failed during strict JSON repair loop";
+  }
+  if (diagnostic.kind === "provider_runtime" && diagnostic.code !== "provider_output_truncated") {
+    return `provider runtime: ${diagnostic.code}`;
+  }
+  return undefined;
 }
 
 function collectSourceSpanRefs(value: unknown, refs: string[]): void {
@@ -602,6 +812,7 @@ function skippedReport(generatedAt: string, skippedReason: string): LiveFactShad
     caseId: scenario.id,
     title: scenario.title,
     status: "skipped",
+    passClassification: classifySkippedCasePassClassification(),
     providerId: null,
     modelId: null,
     route: scenario.route,
@@ -616,7 +827,9 @@ function skippedReport(generatedAt: string, skippedReason: string): LiveFactShad
     factRefs: [],
     validationErrors: [],
     failureReasons: [skippedReason],
+    attempts: [],
   }));
+  const failureCategoryCounts = aggregateFailureCategoryCounts(cases);
   return LiveFactShadowReportSchema.parse({
     schemaVersion: LIVE_FACT_SHADOW_REPORT_SCHEMA_VERSION,
     generatedAt,
@@ -630,20 +843,61 @@ function skippedReport(generatedAt: string, skippedReason: string): LiveFactShad
     passedCount: 0,
     failedCount: 0,
     skippedCount: cases.length,
+    firstPassCases: 0,
+    repairPassCases: 0,
+    failedAfterRepairCases: 0,
+    failureCategoryCounts,
     cases,
     notes: [
       "Live fact shadow did not run model calls; this is an honest skipped report.",
       "Set LIVE_FACT_EVALS=1 and configure a non-fake live provider to run the shadow suite.",
+      "Reports are written under .rector/evidence/phase2 by default.",
     ],
   });
 }
 
 async function writeReport(report: LiveFactShadowReport, io: { readonly outputDir: string; readonly write: boolean; readonly mkdir: typeof fs.mkdir; readonly writeFile: typeof fs.writeFile }): Promise<LiveFactShadowReport> {
-  if (!io.write) return report;
+  const safeReport = LiveFactShadowReportSchema.parse(sanitizeEvidenceStringLeaves(report));
+  if (!io.write) return safeReport;
   await io.mkdir(io.outputDir, { recursive: true });
-  await io.writeFile(path.join(io.outputDir, REPORT_JSON), `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  await io.writeFile(path.join(io.outputDir, REPORT_MD), renderLiveFactShadowMarkdown(report), "utf8");
-  return report;
+  await io.writeFile(path.join(io.outputDir, REPORT_JSON), `${JSON.stringify(safeReport, null, 2)}\n`, "utf8");
+  await io.writeFile(path.join(io.outputDir, REPORT_MD), renderLiveFactShadowMarkdown(safeReport), "utf8");
+  await io.writeFile(path.join(io.outputDir, SUMMARY_JSON), `${JSON.stringify(buildLiveFactShadowSummary(safeReport), null, 2)}\n`, "utf8");
+  return safeReport;
+}
+
+function buildLiveFactShadowSummary(report: LiveFactShadowReport): import("zod").infer<typeof LiveFactShadowSummarySchema> {
+  const totalTokenUsage = report.cases.reduce(
+    (total, caseReport) => ({
+      inputTokens: total.inputTokens + caseReport.tokenUsage.inputTokens,
+      outputTokens: total.outputTokens + caseReport.tokenUsage.outputTokens,
+      totalTokens: total.totalTokens + caseReport.tokenUsage.totalTokens,
+      modelCalls: total.modelCalls + caseReport.tokenUsage.modelCalls,
+    }),
+    { inputTokens: 0, outputTokens: 0, totalTokens: 0, modelCalls: 0 },
+  );
+  const totalEstimatedCostUsd = report.cases.reduce(
+    (total, caseReport) => total + caseReport.estimatedCostUsd,
+    0,
+  );
+  return LiveFactShadowSummarySchema.parse({
+    schemaVersion: LIVE_FACT_SHADOW_SUMMARY_SCHEMA_VERSION,
+    generatedAt: report.generatedAt,
+    status: report.status,
+    liveEvidenceStatus: report.liveEvidenceStatus,
+    caseCount: report.caseCount,
+    passedCount: report.passedCount,
+    failedCount: report.failedCount,
+    skippedCount: report.skippedCount,
+    firstPassCases: report.firstPassCases,
+    repairPassCases: report.repairPassCases,
+    failedAfterRepairCases: report.failedAfterRepairCases,
+    failureCategoryCounts: report.failureCategoryCounts,
+    totalTokenUsage,
+    totalEstimatedCostUsd: Math.round(totalEstimatedCostUsd * 1_000_000) / 1_000_000,
+    reportJson: REPORT_JSON,
+    reportMarkdown: REPORT_MD,
+  });
 }
 
 export function renderLiveFactShadowMarkdown(report: LiveFactShadowReport): string {
@@ -658,13 +912,19 @@ export function renderLiveFactShadowMarkdown(report: LiveFactShadowReport): stri
   lines.push(`- Model: ${report.modelId ?? "n/a"}`);
   lines.push(`- Route: ${report.route ?? "n/a"}`);
   lines.push(`- Cases: ${report.passedCount} passed / ${report.failedCount} failed / ${report.skippedCount} skipped`);
+  lines.push(
+    `- Outcomes: ${report.firstPassCases} first-pass / ${report.repairPassCases} repair-pass / ${report.failedAfterRepairCases} failed-after-repair`,
+  );
+  lines.push(
+    `- Failure categories (failed cases): schema/semantic=${report.failureCategoryCounts.semanticOrSchema}, grounding/provenance=${report.failureCategoryCounts.groundingOrProvenance}, provider/runtime=${report.failureCategoryCounts.providerOrRuntime}`,
+  );
   lines.push("", "## Safety Notes", "");
   for (const note of report.notes) lines.push(`> ${safeMarkdown(note)}`);
   lines.push("", "## Cases", "");
-  lines.push("| case | status | provider | model | route | schema valid | provenance complete | hallucinated refs | insufficient evidence correct | tokens | cost usd | latency ms | raw artifact refs |");
-  lines.push("| --- | --- | --- | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | --- |");
+  lines.push("| case | status | pass class | attempts | provider | model | route | schema valid | provenance complete | hallucinated refs | insufficient evidence correct | tokens | cost usd | latency ms | raw artifact refs |");
+  lines.push("| --- | --- | --- | ---: | --- | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | --- |");
   for (const caseReport of report.cases) {
-    lines.push(`| \`${safeMarkdown(caseReport.caseId)}\` | ${caseReport.status} | ${safeMarkdown(caseReport.providerId ?? "n/a")} | ${safeMarkdown(caseReport.modelId ?? "n/a")} | ${safeMarkdown(caseReport.route)} | ${caseReport.schemaValidity} | ${caseReport.provenanceCompleteness} | ${caseReport.hallucinatedRefs.length} | ${String(caseReport.insufficientEvidenceCorrect)} | ${caseReport.tokenUsage.totalTokens} | ${caseReport.estimatedCostUsd.toFixed(6)} | ${caseReport.latencyMs} | ${safeMarkdown(caseReport.rawArtifactRefs.join(", ") || "n/a")} |`);
+    lines.push(`| \`${safeMarkdown(caseReport.caseId)}\` | ${caseReport.status} | ${caseReport.passClassification} | ${caseReport.attempts.length} | ${safeMarkdown(caseReport.providerId ?? "n/a")} | ${safeMarkdown(caseReport.modelId ?? "n/a")} | ${safeMarkdown(caseReport.route)} | ${caseReport.schemaValidity} | ${caseReport.provenanceCompleteness} | ${caseReport.hallucinatedRefs.length} | ${String(caseReport.insufficientEvidenceCorrect)} | ${caseReport.tokenUsage.totalTokens} | ${caseReport.estimatedCostUsd.toFixed(6)} | ${caseReport.latencyMs} | ${safeMarkdown(caseReport.rawArtifactRefs.join(", ") || "n/a")} |`);
   }
   lines.push("", "## Failures", "");
   const failures = report.cases.filter((caseReport) => caseReport.status === "failed" && caseReport.failureReasons.length > 0);
@@ -714,7 +974,13 @@ function modelForRoute(provider: LLMProvider, route: ModelRoute): string {
 }
 
 function sanitizeResponse(response: LLMResponse): Record<string, unknown> {
-  return { provider: response.provider, model: response.model, finishReason: response.finishReason, usage: response.usage, content: response.content.slice(0, 20_000) };
+  return sanitizeEvidencePayload({
+    provider: response.provider,
+    model: response.model,
+    finishReason: response.finishReason,
+    usage: response.usage,
+    content: response.content.slice(0, 20_000),
+  });
 }
 
 function safeMarkdown(value: string): string {
@@ -752,6 +1018,7 @@ function severityField(value: unknown): "low" | "medium" | "high" {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runLiveFactShadow().then((report) => {
     console.log(JSON.stringify({ status: report.status, liveEvidenceStatus: report.liveEvidenceStatus, skippedReason: report.skippedReason, reportPath: path.join(DEFAULT_OUTPUT_DIR, REPORT_JSON) }));
+    if (report.status !== "completed" || report.liveEvidenceStatus !== "live_provider" || report.failedCount > 0) process.exitCode = 1;
   }).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

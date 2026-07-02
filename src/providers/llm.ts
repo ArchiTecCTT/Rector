@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { buildOpenAiCompatibleStrictJsonBodyExtensions } from "./openAiCompatibleStrictJson";
 import { evaluateBudget, type BudgetUsage } from "../security/budget";
 import { validateProviderUrl, BLOCKED_HOSTNAMES, isPrivateIp } from "../security/ssrfProtection.js";
 import { isIP } from "node:net";
@@ -70,6 +71,18 @@ export const LLMMessageSchema = z.object({
 });
 export type LLMMessage = z.infer<typeof LLMMessageSchema>;
 
+/**
+ * Narrow, zod-validated provider knobs for live harness / operator overrides only.
+ * Not a generic passthrough — unknown keys are rejected by `.strict()`.
+ */
+export const LLMProviderOptionsSchema = z
+  .object({
+    /** Request documented provider-specific reasoning minimization for strict `json_object` roles. */
+    strictJsonMinimizeReasoning: z.literal(true).optional(),
+  })
+  .strict();
+export type LLMProviderOptions = z.infer<typeof LLMProviderOptionsSchema>;
+
 export const LLMRequestSchema = z.object({
   messages: z.array(LLMMessageSchema).min(1),
   route: z.string().min(1).optional(),
@@ -79,6 +92,7 @@ export const LLMRequestSchema = z.object({
   maxOutputTokens: z.number().int().positive().max(128_000).optional(),
   temperature: z.number().min(0).max(2).optional(),
   responseFormat: z.object({ type: z.enum(["text", "json_object"]) }).optional(),
+  providerOptions: LLMProviderOptionsSchema.optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 export type LLMRequest = z.infer<typeof LLMRequestSchema>;
@@ -166,7 +180,46 @@ export interface LLMInvokeOptions {
 /** True when the router-selected provider should run live LLM steps (skeptic, synthesizer, etc.). */
 export function isLiveLLMProvider(provider: LLMProvider): boolean {
   const id = provider.metadata.id;
-  return id !== "fake" && id !== "deterministic";
+  return id !== "fake" && id !== "deterministic" && id !== "unavailable";
+}
+
+export class UnavailableLLMProvider implements LLMProvider {
+  readonly metadata = ProviderCapabilityMetadataSchema.parse({
+    id: "unavailable",
+    displayName: "Unavailable LLM Provider",
+    routes: ["cheap", "fast", "flagship", "research"],
+    models: {
+      cheap: "unavailable",
+      fast: "unavailable",
+      flagship: "unavailable",
+      research: "unavailable",
+    },
+    supportsJson: false,
+    supportsStreaming: false,
+    maxContextTokens: 1,
+    estimatedUsdPer1kInputTokens: 0,
+    estimatedUsdPer1kOutputTokens: 0,
+  });
+
+  validateConfig(): void {
+    throw new ProviderError({
+      code: "CONFIG_INVALID",
+      provider: this.metadata.id,
+      message: "No configured live provider is available for this model route",
+    });
+  }
+
+  estimateRequest(_request: LLMRequest): LLMUsage {
+    return LLMUsageSchema.parse({ inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedUsd: 0, modelCalls: 0 });
+  }
+
+  async invoke(_request: LLMRequest): Promise<LLMResponse> {
+    throw new ProviderError({
+      code: "CONFIG_INVALID",
+      provider: this.metadata.id,
+      message: "No configured live provider is available for invocation",
+    });
+  }
 }
 
 export class FakeLLMProvider implements LLMProvider {
@@ -831,6 +884,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
     if (parsed.temperature !== undefined) body.temperature = parsed.temperature;
     if (parsed.responseFormat !== undefined) body.response_format = parsed.responseFormat;
 
+    const strictExtensions = buildOpenAiCompatibleStrictJsonBodyExtensions(parsed, this.baseUrl);
+    for (const [key, value] of Object.entries(strictExtensions)) {
+      body[key] = value;
+    }
+
     return {
       url: `${this.baseUrl}/chat/completions`,
       init: {
@@ -871,6 +929,7 @@ export interface ModelRouterOptions {
   mode?: "local" | "external";
   providers?: LLMProvider[];
   env?: Record<string, string | undefined>;
+  allowFakeFallback?: boolean;
 }
 
 export interface ModelRouterInput {
@@ -901,8 +960,9 @@ export interface ModelRouter {
 export function buildModelRouter(options: ModelRouterOptions = {}): ModelRouter {
   const mode = options.mode ?? "local";
   const env = options.env ?? {};
+  const allowFakeFallback = options.allowFakeFallback ?? mode === "local";
   const providers = options.providers ?? [
-    new FakeLLMProvider(),
+    ...(allowFakeFallback ? [new FakeLLMProvider()] : []),
     new CloudflareWorkersAIProvider({
       accountId: env.CLOUDFLARE_ACCOUNT_ID,
       apiToken: env.CLOUDFLARE_API_TOKEN,
@@ -924,18 +984,30 @@ export function buildModelRouter(options: ModelRouterOptions = {}): ModelRouter 
       baseUrl: env.TOGETHER_BASE_URL,
     }),
   ];
-  const fake = providers.find((provider) => provider.metadata.id === "fake") ?? new FakeLLMProvider();
+  const unavailable = new UnavailableLLMProvider();
+  const fake = allowFakeFallback
+    ? providers.find((provider) => provider.metadata.id === "fake") ?? new FakeLLMProvider()
+    : undefined;
+  const fallbackProvider = fake ?? unavailable;
+
+  function unavailableSelection(reason: string): ModelSelection {
+    return selection(fallbackProvider, "fake", reason);
+  }
 
   return {
     select(input: ModelRouterInput = {}): ModelSelection {
       const targetRoute = input.capability ?? inferModelRoute(input);
 
       if (mode === "local") {
-        return selection(fake, "fake", "local mode default selects fake provider");
+        return unavailableSelection(
+          fake ? "local mode default selects fake provider" : "local mode has no deterministic test provider configured",
+        );
       }
 
       if (input.run && (input.run.budget.maxModelCalls <= 0 || input.run.budget.maxUsd <= 0)) {
-        return selection(fake, "fake", "budget does not allow paid provider calls; selecting fake provider");
+        return unavailableSelection(
+          fake ? "budget does not allow paid provider calls; selecting fake provider" : "budget does not allow paid provider calls; no live provider selected",
+        );
       }
 
       const allowedProviders = input.run?.budget.allowedProviders ?? [];
@@ -948,7 +1020,9 @@ export function buildModelRouter(options: ModelRouterOptions = {}): ModelRouter 
 
       const provider = prioritizeProvidersForRoute(candidates, targetRoute)[0];
       if (!provider) {
-        return selection(fake, "fake", `no configured provider supports ${targetRoute}; selecting fake provider`);
+        return unavailableSelection(
+          fake ? `no configured provider supports ${targetRoute}; selecting fake provider` : `no configured provider supports ${targetRoute}; no live provider selected`,
+        );
       }
 
       return selection(provider, targetRoute, `selected ${provider.metadata.id} for ${targetRoute} capability`);

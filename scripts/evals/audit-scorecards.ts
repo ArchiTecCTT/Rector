@@ -1,15 +1,19 @@
 #!/usr/bin/env tsx
 /**
  * audit:scorecards — summarizes the 8 scorecard dimensions across the latest global run.
- * Always exits 0 (report-only). Writes .omo/evidence/scorecard-audit.md
+ * Always exits 0 (report-only). Writes .rector/evidence/global/scorecard-audit.md
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promises as fs } from "node:fs";
+import { getEvidenceTrackDir, getLegacyEvidenceRoot } from "../../src/evidence";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const REPORT_PATH = path.join(REPO_ROOT, ".omo", "evidence", "global-report.json");
-const OUT_MD = path.join(REPO_ROOT, ".omo", "evidence", "scorecard-audit.md");
+const EVIDENCE_DIR = getEvidenceTrackDir("global", REPO_ROOT);
+const LEGACY_EVIDENCE_DIR = getLegacyEvidenceRoot(REPO_ROOT);
+const REPORT_PATH = path.join(EVIDENCE_DIR, "global-report.json");
+const LEGACY_REPORT_PATH = path.join(LEGACY_EVIDENCE_DIR, "global-report.json");
+const OUT_MD = path.join(EVIDENCE_DIR, "scorecard-audit.md");
 
 const DIMENSIONS = [
   "reliability",
@@ -23,7 +27,7 @@ const DIMENSIONS = [
 ] as const;
 
 async function main() {
-  const raw = await fs.readFile(REPORT_PATH, "utf8");
+  const raw = await fs.readFile(await existingReportPath(), "utf8");
   const report = JSON.parse(raw);
   const cards = report.outcomes.map((o: any) => o.scorecard);
 
@@ -34,8 +38,14 @@ async function main() {
     lines.push(`- ${dim}: avg=${avg.toFixed(3)} min=${Math.min(...scores).toFixed(3)} max=${Math.max(...scores).toFixed(3)}`);
   }
   lines.push("");
+  await fs.mkdir(EVIDENCE_DIR, { recursive: true });
   await fs.writeFile(OUT_MD, lines.join("\n"), "utf8");
   process.stdout.write(`[audit:scorecards] wrote ${path.relative(REPO_ROOT, OUT_MD)}\n`);
+}
+
+async function existingReportPath(): Promise<string> {
+  if (await fs.stat(REPORT_PATH).then((info) => info.isFile()).catch(() => false)) return REPORT_PATH;
+  return LEGACY_REPORT_PATH;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

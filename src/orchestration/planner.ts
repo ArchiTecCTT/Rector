@@ -2,6 +2,21 @@ import { z } from "zod";
 import { ContextPackSchema, summarize, type ContextPack } from "./contextBuilder";
 import { TRIAGE_ROUTES, TriageResultSchema, type TriageResult } from "./triage";
 import { buildPlannerPrompt, buildPlannerRepairPrompt } from "./prompts";
+import { extractTaskIdsFromPlannerJson } from "./strictJsonPromptCards";
+import {
+  runBoundedStrictJsonRepairLoop,
+  type BoundedStrictJsonRepairLoopResult,
+  type StrictJsonAttemptReport,
+  type StrictJsonEvidenceStatus,
+  type StrictJsonPassClassification,
+} from "./strictJsonRepairLoop";
+import {
+  diagnosticFromSemanticInvariant,
+  projectSafeStrictOutputDiagnostics,
+  summarizeStrictOutputDiagnostics,
+  zodDiagnostics,
+  type StrictOutputDiagnostic,
+} from "./strictOutputDiagnostics";
 import {
   invokeWithBudget,
   LLMUsageSchema,
@@ -14,6 +29,11 @@ import {
 import { enforceMaxPerRunBudget, evaluateBudget, type BudgetUsage } from "../security/budget";
 import { redactSecrets, redactString } from "../security/redaction";
 import type { Run } from "../store";
+import {
+  applyStructuredRoleLlmRequestFields,
+  type StructuredJsonRole,
+  type StructuredRoleOutputCapPolicy,
+} from "./structuredRoleOutputCaps";
 
 export const PlannerRiskLevelSchema = z.enum(["low", "medium", "high", "destructive"]);
 export type PlannerRiskLevel = z.infer<typeof PlannerRiskLevelSchema>;
@@ -544,6 +564,17 @@ export interface LivePlannerResult {
   pathsExplored?: string[];
   /** Structured deep-planning trace for observability; provider-free and redacted by callers before persistence. */
   deepPlanningTrace?: unknown[];
+  /** Strict JSON pass/fail classification for live planner output. */
+  strictJsonClassification?: StrictJsonPassClassification;
+  /** Per-attempt strict JSON diagnostics; redacted and safe for trace/report surfaces. */
+  strictJsonAttempts?: readonly StrictJsonAttemptReport[];
+  /** Aggregated strict JSON diagnostics (full messages; for in-process trace/repair only). */
+  strictJsonDiagnostics?: readonly StrictOutputDiagnostic[];
+  /**
+   * Whether strict JSON pass evidence came from a live provider or test-only injection.
+   * Downstream consumers must not treat `test_only_injected` as live verification evidence.
+   */
+  strictJsonEvidenceStatus?: StrictJsonEvidenceStatus;
 }
 
 /** Dependencies for {@link runLivePlanner}. The provider is mocked in tests. */
@@ -555,6 +586,10 @@ export interface LivePlannerDeps {
   abortSignal?: AbortSignal;
   buildPrompt?: typeof buildPlannerPrompt;
   buildRepairPrompt?: typeof buildPlannerRepairPrompt;
+  /** Test-only compatibility hook for callers that explicitly want a deterministic fallback plan on blockers. */
+  includeDeterministicFallback?: boolean;
+  /** Opt-in structured-role output caps (live harness); omitted in normal product chat. */
+  structuredRoleOutputCaps?: StructuredRoleOutputCapPolicy;
 }
 
 const ZERO_USAGE: LLMUsage = LLMUsageSchema.parse({
@@ -586,147 +621,185 @@ export async function runLivePlanner(input: PlannerInput, deps: LivePlannerDeps)
 
   let totalUsage = ZERO_USAGE;
   let messages = buildPrompt(parsedInput);
-  let lastFailure: ValidationFailure = { repairSummary: "Planner output was not produced", issuePaths: [] };
+  let lastResponseContent = "";
+  let lastResponseModel = model;
 
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    // Req 4.10: request a JSON object response format from the provider.
-    const request: LLMRequest = {
-      messages,
-      modelRoute: "flagship",
-      ...(deps.model ? { model: deps.model } : {}),
-      responseFormat: { type: "json_object" },
-      task: "planner",
-    };
+  let loopResult: BoundedStrictJsonRepairLoopResult<PlannerOutput>;
+  try {
+    loopResult = await runBoundedStrictJsonRepairLoop<PlannerOutput>({
+      operation: "live_planner",
+      catchAttemptErrors: false,
+      call: async (attemptContext) => {
+        if (attemptContext.attemptKind === "repair") {
+          const repairSummary = summarizeStrictOutputDiagnostics(attemptContext.priorDiagnostics, { maxChars: 1_200 });
+          messages = buildRepairPrompt(parsedInput, lastResponseContent, repairSummary, {
+            role: "planner",
+            diagnostics: attemptContext.priorDiagnostics,
+            issuePaths: issuePathsFromDiagnostics(attemptContext.priorDiagnostics),
+            allowedTaskIds: extractTaskIdsFromPlannerJson(parseJsonForRepairHints(lastResponseContent)),
+          });
+        }
 
-    // Req 4.5 / 4.7 / 4.8: budget preflight BEFORE any provider.invoke.
-    const estimate = provider.estimateRequest(request);
-    const decision = evaluateBudget(run, buildPreflightUsage(provider, estimate, run, totalUsage));
-    // Req 3.4: layer the EXPLICIT per-run ceiling onto the existing preflight. `enforceMaxPerRunBudget`
-    // projects the accumulated run cost so far (committed + usage already spent in this step) plus this
-    // call's estimate and denies BEFORE any provider.invoke when the projection would breach the run's
-    // per-run ceiling. Either gate denying blocks the call (no network I/O on denial).
-    const ceiling = enforceMaxPerRunBudget(run, accumulatedRunUsage(run, totalUsage), estimate);
-    if (decision.status !== "allowed" || ceiling.status !== "allowed") {
-      const reason =
-        [...decision.reasons, ...ceiling.reasons].join("; ") || "budget preflight denied the planner call";
-      return blockedResult(
-        makeBlocker("BUDGET_DENIED", `Planner call denied by budget preflight: ${reason}`),
-        totalUsage,
-        provider,
-        model,
-        attempt - 1,
-        "budget preflight denied live planner; deterministic fallback plan attached",
-        createFakePlan(parsedInput)
-      );
-    }
+        const attempt = attemptContext.attemptNumber;
+        const structuredRole: StructuredJsonRole = attemptContext.attemptKind === "first" ? "planner" : "repair";
+        // Req 4.10: request a JSON object response format from the provider.
+        const request: LLMRequest = {
+          messages,
+          modelRoute: "flagship",
+          ...(deps.model ? { model: deps.model } : {}),
+          responseFormat: { type: "json_object" },
+          task: "planner",
+          ...applyStructuredRoleLlmRequestFields(structuredRole, deps.structuredRoleOutputCaps, run),
+        };
 
-    let response: LLMResponse;
-    try {
-      // Double-gated: invokeWithBudget re-checks the budget before the network call.
-      response = await invokeWithBudget(provider, request, run, { abortSignal: deps.abortSignal });
-    } catch (error) {
-      // Req 4.11: map any provider error/exception to a redacted PROVIDER_ERROR blocker.
-      const rawMessage = error instanceof ProviderError || error instanceof Error ? error.message : String(error);
-      return blockedResult(
-        makeBlocker("PROVIDER_ERROR", `Provider call failed: ${rawMessage}`),
-        totalUsage,
-        provider,
-        model,
-        attempt,
-        "provider error during live planner; deterministic fallback plan attached",
-        createFakePlan(parsedInput)
-      );
-    }
+        // Req 4.5 / 4.7 / 4.8: budget preflight BEFORE any provider.invoke.
+        const estimate = provider.estimateRequest(request);
+        const decision = evaluateBudget(run, buildPreflightUsage(provider, estimate, run, totalUsage));
+        // Req 3.4: layer the EXPLICIT per-run ceiling onto the existing preflight. `enforceMaxPerRunBudget`
+        // projects the accumulated run cost so far (committed + usage already spent in this step) plus this
+        // call's estimate and denies BEFORE any provider.invoke when the projection would breach the run's
+        // per-run ceiling. Either gate denying blocks the call (no network I/O on denial).
+        const ceiling = enforceMaxPerRunBudget(run, accumulatedRunUsage(run, totalUsage), estimate);
+        if (decision.status !== "allowed" || ceiling.status !== "allowed") {
+          const reason =
+            [...decision.reasons, ...ceiling.reasons].join("; ") || "budget preflight denied the planner call";
+          throw new PlannerAttemptAbort(blockedResult(
+            makeBlocker("BUDGET_DENIED", `Planner call denied by budget preflight: ${reason}`),
+            totalUsage,
+            provider,
+            model,
+            attempt - 1,
+            deps.includeDeterministicFallback
+              ? "budget preflight denied live planner; deterministic fallback plan attached"
+              : "budget preflight denied live planner; no deterministic fallback attached",
+            deps.includeDeterministicFallback ? createFakePlan(parsedInput) : undefined,
+          ));
+        }
 
-    // Req 4.12: accumulate LLM usage across every provider call performed.
-    totalUsage = addUsage(totalUsage, response.usage);
+        let response: LLMResponse;
+        try {
+          // Double-gated: invokeWithBudget re-checks the budget before the network call.
+          response = await invokeWithBudget(provider, request, run, { abortSignal: deps.abortSignal });
+        } catch (error) {
+          // Req 4.11: map any provider error/exception to a redacted PROVIDER_ERROR blocker.
+          const rawMessage = error instanceof ProviderError || error instanceof Error ? error.message : String(error);
+          throw new PlannerAttemptAbort(blockedResult(
+            makeBlocker("PROVIDER_ERROR", `Provider call failed: ${rawMessage}`),
+            totalUsage,
+            provider,
+            model,
+            attempt,
+            deps.includeDeterministicFallback
+              ? "provider error during live planner; deterministic fallback plan attached"
+              : "provider error during live planner; no deterministic fallback attached",
+            deps.includeDeterministicFallback ? createFakePlan(parsedInput) : undefined,
+          ));
+        }
 
-    const parsed = tryParseJson(response.content);
-    if (parsed.ok) {
-      // Req 4.1: validate parsed JSON against schema + validatePlannerOutput invariants.
-      const validation = safeValidatePlannerOutput(parsed.value);
-      if (validation.ok) {
-        return okResult(validation.plan, totalUsage, provider, response.model, attempt);
-      }
-      lastFailure = validation;
-    } else {
-      lastFailure = {
-        repairSummary: `Response was not valid JSON: ${parsed.error}`,
-        issuePaths: [],
-      };
-    }
+        // Req 4.12: accumulate LLM usage across every provider call performed.
+        totalUsage = addUsage(totalUsage, response.usage);
+        lastResponseContent = response.content;
+        lastResponseModel = response.model;
 
-    // Req 4.2: issue exactly one repair prompt on the first failure, then stop.
-    if (attempt === 1) {
-      messages = buildRepairPrompt(parsedInput, response.content, lastFailure.repairSummary);
-    }
+        return {
+          content: response.content,
+          evidenceStatus: evidenceStatusForPlannerProvider(provider),
+          metadata: {
+            provider: response.provider,
+            model: response.model,
+            finishReason: response.finishReason,
+            outputChars: response.content.length,
+          },
+        };
+      },
+      validate: validatePlannerStrictOutput,
+    });
+  } catch (error) {
+    if (error instanceof PlannerAttemptAbort) return error.result;
+    throw error;
+  }
+
+  const evidenceStatus = summarizeStrictJsonEvidenceStatus(loopResult.attempts);
+
+  if (loopResult.status === "passed") {
+    return okResult(
+      loopResult.value,
+      totalUsage,
+      provider,
+      lastResponseModel,
+      loopResult.attempts.length,
+      loopResult.classification,
+      loopResult.attempts,
+      loopResult.diagnostics,
+      evidenceStatus,
+    );
   }
 
   // Req 4.3 / 4.4 / 4.6: still invalid after one repair -> redacted PLANNER_INVALID blocker.
+  const issuePaths = issuePathsFromDiagnostics(loopResult.diagnostics);
   return blockedResult(
-    makeBlocker("PLANNER_INVALID", plannerInvalidMessage(lastFailure.issuePaths), { issues: lastFailure.issuePaths }),
+    makeBlocker("PLANNER_INVALID", plannerInvalidMessage(issuePaths), {
+      issues: issuePaths,
+      classification: loopResult.classification,
+      diagnostics: projectSafeStrictOutputDiagnostics(loopResult.diagnostics),
+      evidenceStatus,
+    }),
     totalUsage,
     provider,
     model,
-    2,
-    "live planner invalid after one repair; deterministic fallback plan attached",
-    createFakePlan(parsedInput)
+    loopResult.attempts.length,
+    deps.includeDeterministicFallback
+      ? "live planner invalid after one repair; deterministic fallback plan attached"
+      : "live planner invalid after one repair; no deterministic fallback attached",
+    deps.includeDeterministicFallback ? createFakePlan(parsedInput) : undefined,
+    loopResult.classification,
+    loopResult.attempts,
+    loopResult.diagnostics,
+    evidenceStatus,
   );
 }
-
-interface ValidationFailure {
-  /** Rich, model-facing summary used only in the repair prompt (round-trips to the provider). */
-  repairSummary: string;
-  /** Safe schema-field identifiers (Zod issue paths) for the returned blocker details. */
-  issuePaths: string[];
-}
-
-type SafeValidation = { ok: true; plan: PlannerOutput } | ({ ok: false } & ValidationFailure);
 
 /**
  * Validates a parsed value to the same bar as {@link createFakePlan} but never
  * throws: returns the schema-field identifiers (Zod issue paths) on failure so
  * the blocker can report them without echoing raw model output.
  */
-function safeValidatePlannerOutput(value: unknown): SafeValidation {
+function validatePlannerStrictOutput(value: unknown): { ok: true; value: PlannerOutput } | { ok: false; diagnostics: readonly StrictOutputDiagnostic[] } {
   const schemaResult = PlannerOutputSchema.safeParse(value);
   if (!schemaResult.success) {
     return {
       ok: false,
-      repairSummary: schemaResult.error.issues
-        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
-        .join("; "),
-      issuePaths: uniqueIssuePaths(schemaResult.error.issues),
+      diagnostics: zodDiagnostics(schemaResult.error),
     };
   }
 
   try {
     const plan = validatePlannerOutput(schemaResult.data);
-    return { ok: true, plan };
+    return { ok: true, value: plan };
   } catch (error) {
     // Dependency / approval-gate invariant violations are thrown as plain Errors.
     const message = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
-      repairSummary: message,
-      issuePaths: invariantIssuePaths(message),
+      diagnostics: [
+        diagnosticFromSemanticInvariant({
+          code: "planner_invariant_failed",
+          message,
+          path: invariantIssuePaths(message),
+        }),
+      ],
     };
   }
-}
-
-function uniqueIssuePaths(issues: z.ZodIssue[]): string[] {
-  const paths = issues.map((issue) => issue.path.map((segment) => String(segment)).join(".") || "(root)");
-  return Array.from(new Set(paths));
 }
 
 /**
  * Maps an invariant-violation message to a safe schema-field identifier without
  * echoing the offending (model-provided) task ids in the returned blocker.
  */
-function invariantIssuePaths(message: string): string[] {
+function invariantIssuePaths(message: string): string | readonly string[] {
   if (/approval gate/i.test(message)) return ["approvalGates"];
   if (/dependency|dependencies/i.test(message)) return ["dependencies"];
-  return ["(invariant)"];
+  return "(invariant)";
 }
 
 function plannerInvalidMessage(issuePaths: string[]): string {
@@ -734,6 +807,40 @@ function plannerInvalidMessage(issuePaths: string[]): string {
     return "Planner output was invalid after one repair attempt";
   }
   return `Planner output failed validation after one repair attempt at fields: ${issuePaths.join(", ")}`;
+}
+
+function issuePathsFromDiagnostics(diagnostics: readonly StrictOutputDiagnostic[]): string[] {
+  return Array.from(new Set(diagnostics.map((diagnostic) => diagnostic.path).filter(Boolean)));
+}
+
+function summarizeStrictJsonEvidenceStatus(attempts: readonly StrictJsonAttemptReport[]): StrictJsonEvidenceStatus {
+  if (attempts.length === 0) return "unknown";
+  const statuses = attempts.map((attempt) => attempt.evidenceStatus);
+  if (statuses.includes("deterministic_fallback")) return "deterministic_fallback";
+  if (statuses.every((status) => status === "live_provider")) return "live_provider";
+  if (statuses.some((status) => status === "test_only_injected")) return "test_only_injected";
+  return "unknown";
+}
+
+function parseJsonForRepairHints(content: string): unknown {
+  try {
+    return JSON.parse(content) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function evidenceStatusForPlannerProvider(provider: LLMProvider): StrictJsonEvidenceStatus {
+  const id = provider.metadata.id;
+  return id === "fake" || id === "deterministic" || id === "unavailable" || id === "spy"
+    ? "test_only_injected"
+    : "live_provider";
+}
+
+class PlannerAttemptAbort extends Error {
+  constructor(readonly result: LivePlannerResult) {
+    super(result.blocker?.message ?? "Planner attempt aborted");
+  }
 }
 
 function plannerModel(provider: LLMProvider): string {
@@ -788,14 +895,6 @@ function addUsage(left: LLMUsage, right: LLMUsage): LLMUsage {
   });
 }
 
-function tryParseJson(content: string): { ok: true; value: unknown } | { ok: false; error: string } {
-  try {
-    return { ok: true, value: JSON.parse(content) as unknown };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
 /** Builds a redacted blocker. `message` runs through redactString; `details` through redactSecrets. */
 function makeBlocker(code: PlannerBlocker["code"], message: string, details?: unknown): PlannerBlocker {
   const redactedMessage = redactString(message).trim();
@@ -813,7 +912,11 @@ function blockedResult(
   model: string,
   attempts: number,
   fallbackReason?: string,
-  fallbackPlan?: PlannerOutput
+  fallbackPlan?: PlannerOutput,
+  strictJsonClassification?: StrictJsonPassClassification,
+  strictJsonAttempts?: readonly StrictJsonAttemptReport[],
+  strictJsonDiagnostics?: readonly StrictOutputDiagnostic[],
+  strictJsonEvidenceStatus?: StrictJsonEvidenceStatus,
 ): LivePlannerResult {
   return {
     status: "blocked",
@@ -824,6 +927,10 @@ function blockedResult(
     attempts,
     ...(fallbackReason ? { fallbackReason } : {}),
     ...(fallbackPlan ? { fallbackPlan } : {}),
+    ...(strictJsonClassification ? { strictJsonClassification } : {}),
+    ...(strictJsonAttempts ? { strictJsonAttempts } : {}),
+    ...(strictJsonDiagnostics ? { strictJsonDiagnostics } : {}),
+    ...(strictJsonEvidenceStatus ? { strictJsonEvidenceStatus } : {}),
   };
 }
 
@@ -832,7 +939,11 @@ function okResult(
   usage: LLMUsage,
   provider: LLMProvider,
   model: string,
-  attempts: number
+  attempts: number,
+  strictJsonClassification?: StrictJsonPassClassification,
+  strictJsonAttempts?: readonly StrictJsonAttemptReport[],
+  strictJsonDiagnostics?: readonly StrictOutputDiagnostic[],
+  strictJsonEvidenceStatus?: StrictJsonEvidenceStatus,
 ): LivePlannerResult {
   return {
     status: "ok",
@@ -841,6 +952,10 @@ function okResult(
     provider: provider.metadata.id,
     model,
     attempts,
+    ...(strictJsonClassification ? { strictJsonClassification } : {}),
+    ...(strictJsonAttempts ? { strictJsonAttempts } : {}),
+    ...(strictJsonDiagnostics ? { strictJsonDiagnostics } : {}),
+    ...(strictJsonEvidenceStatus ? { strictJsonEvidenceStatus } : {}),
   };
 }
 

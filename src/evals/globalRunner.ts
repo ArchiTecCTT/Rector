@@ -30,6 +30,7 @@ import { globalHarnessResultToFacts } from "../facts";
 import { RunEventSchema } from "../protocol/events";
 import { RunPhaseSchema } from "../protocol/phases";
 import { SpecialistTaskPacketSchema } from "../systems/contracts";
+import { getEvidenceTrackDir } from "../evidence";
 import {
   computeReliability as computeReliabilityReal,
   computeAccuracy as computeAccuracyReal,
@@ -46,11 +47,11 @@ import {
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const DEFAULT_SCENARIOS_DIR = path.join(REPO_ROOT, "tests", "global", "scenarios");
-const DEFAULT_OUTPUT_DIR = path.join(REPO_ROOT, ".omo", "evidence");
+const DEFAULT_OUTPUT_DIR = getEvidenceTrackDir("global", REPO_ROOT);
 const VALIDATOR_TIMEOUT_CEILING_MS = 120000;
 
 // Directories excluded from the full workspace hash manifest (per plan requirement).
-const MANIFEST_EXCLUDE_DIRS = new Set([".git", "node_modules", ".omo", "tmp", "temp", ".cache", "dist", "build"]);
+const MANIFEST_EXCLUDE_DIRS = new Set([".git", "node_modules", ".omo", ".rector", "tmp", "temp", ".cache", "dist", "build"]);
 
 /** Compute SHA-256 hex of a file's contents. */
 async function sha256File(absolutePath: string): Promise<string> {
@@ -210,6 +211,7 @@ export type GlobalHarnessReport = {
 
 export type FakePathAudit = {
   readonly findingCount: number;
+  readonly unallowedFindingCount?: number;
 };
 
 export type FakePathAuditor = () => Promise<FakePathAudit>;
@@ -599,7 +601,7 @@ function renderHarnessMarkdown(report: GlobalHarnessReport, scorecards: readonly
   lines.push(`- Generated: ${report.generatedAt}`);
   lines.push(`- Scenarios: ${report.scenarioCount} (executed ${report.executedCount}, skipped ${report.skippedCount})`);
   lines.push(`- Passed scenarios: ${report.passedCount}/${report.executedCount}`);
-  lines.push(`- Fake-path status: ${report.fakePathStatus} (${report.fakeFindingCount} findings, report-only)`);
+  lines.push(`- Fake-path status: ${report.fakePathStatus} (${report.fakeFindingCount} unallowed findings, report-only)`);
   lines.push("");
   lines.push("> Offline harness: it runs each scenario's REAL validator command against its fixture and");
   lines.push("> evaluates oracles deterministically. No specialist mutates files offline, so a `mustChange`");
@@ -657,9 +659,10 @@ export async function runGlobalHarness(options: RunGlobalHarnessOptions = {}): P
     : await loadScenarioFileMap(scenariosDir);
 
   const audit = options.fakePathAuditor ? await options.fakePathAuditor() : undefined;
+  const actionableFakeFindingCount = audit ? audit.unallowedFindingCount ?? audit.findingCount : 0;
   const fakePathStatus: FakePathStatus =
-    audit === undefined ? "audit_not_present" : audit.findingCount > 0 ? "fakes_present" : "clean";
-  const fakeFindingCount = audit?.findingCount ?? 0;
+    audit === undefined ? "audit_not_present" : actionableFakeFindingCount > 0 ? "fakes_present" : "clean";
+  const fakeFindingCount = actionableFakeFindingCount;
 
   const outcomes: GlobalScenarioOutcome[] = [];
   const skipped: SkippedScenario[] = [];

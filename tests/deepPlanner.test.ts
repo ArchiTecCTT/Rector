@@ -56,8 +56,11 @@ describe("deep planner", () => {
     expect(result.usage.modelCalls).toBeGreaterThanOrEqual(1);
   });
 
-  it("falls back to fake plan when deepPlanning is disabled", async () => {
-    const provider = new SpyLLMProvider({ estimate: DEFAULT_SPY_USAGE });
+  it("delegates to live planner when deepPlanning is disabled", async () => {
+    const provider = new SpyLLMProvider({
+      estimate: DEFAULT_SPY_USAGE,
+      responses: [{ content: planToJson(SAFE_PLAN) }],
+    });
     const triage = triageUserMessage("What is Rector?");
     const contextPack = makeContextPack(triage, "What is Rector?");
     const run = makeExternalRun(generousBudget());
@@ -68,8 +71,8 @@ describe("deep planner", () => {
     );
 
     expect(result.status).toBe("ok");
-    expect(result.plan).toBeDefined();
-    expect(result.attempts).toBe(0);
-    expect(provider.invokeCount).toBe(0);
+    expect(result.plan).toEqual(SAFE_PLAN);
+    expect(result.attempts).toBe(1);
+    expect(provider.invokeCount).toBe(1);
   });
 });

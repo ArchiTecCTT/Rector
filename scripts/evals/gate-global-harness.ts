@@ -20,11 +20,12 @@ import { promises as fs } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 import { runGlobalHarness } from "../../src/evals/globalRunner";
+import { getEvidenceTrackDir } from "../../src/evidence";
 import { auditNoProductionFakes } from "../audit/no-production-fakes";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCENARIOS_DIR = path.join(REPO_ROOT, "tests", "global", "scenarios");
-const OUTPUT_DIR = path.join(REPO_ROOT, ".omo", "evidence");
+const OUTPUT_DIR = getEvidenceTrackDir("global", REPO_ROOT);
 const REGRESSIONS_DIR = path.join(OUTPUT_DIR, "regressions");
 
 const args = process.argv.slice(2);

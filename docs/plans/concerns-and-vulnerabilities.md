@@ -5,14 +5,117 @@
 
 ## Open
 
-### Phase 2 — live fact shadow skipped (offline-complete only)
+### Regolo live verification gate — offline complete / live unverified
 
-- **Source:** Phase 2G gate run on worktree at `45768e5`; `npm run eval:facts:live` with `LIVE_FACT_EVALS=1`.
-- **Severity:** Low (measurement gap, not a product regression).
-- **Status:** Open until a configured non-fake live provider is available and shadow cases are captured.
-- **Observed:** `.omo/evidence/live-fact-shadow-report.json` records `status: skipped`, `liveEvidenceStatus: skipped`, reason: no configured non-fake live provider on the gate VM.
-- **Plan:** Complete UI provider setup (`runtime-settings.json`), re-run `LIVE_FACT_EVALS=1 npm run eval:facts:live`, then update completion label to `phase2-complete-live-verified` in `phase-2-completion-report.md`. Do not claim live-model fact reliability before that.
-- **Boundaries:** `FakeLLMProvider` and spy doubles remain test/CI-only; offline `verify:phase2` remains the default CI gate.
+- **Source:** branch `zai-evidence-live-integration` @ `75f4233` (Regolo track `2f56975`+; harness parity with Z.ai hardening `4438205`–`75f4233`). Entry points: `npm run evidence:regolo-live:gate`, `npm run verify:regolo-live`, `npm run verify:regolo-live:matrix`.
+- **Severity:** Low (measurement / operator workflow; not a configured-product fake-chat regression).
+- **Status:** Open until a real non-fake Regolo provider campaign passes the gate on operator hardware with credentials and budget.
+- **Observed:** Offline gates passed after harness hardening and strict-json repair slice (`check`, `npm test` **415** files / **2858** tests @ post-`a282128`, `build`, `npm audit`, `audit:no-fakes:check`). Discovery matrix **0/10** gate passes (2026-07-01). Post-hardening focused **`gemma4-31b`:** provider smoke pass, harness fail B1/B2/B3 with **timeout** bottleneck (300s runtime, 0 usage tokens) — not post-cap JSON/schema truncation. No `verify:regolo-live` gate PASS.
+- **Plan:** Tune `RECTOR_LIVE_HARNESS_MAX_RUNTIME_MS` and/or Regolo routing for `gemma4-31b`; avoid broad matrices until a finalist completes fact shadow + harness within gate budget; then single-model `npm run verify:regolo-live`. See `docs/operations/regolo-live-verification.md`.
+- **Boundaries:** Gate rejects spy/fake/`test_only_injected` for live-verified claims. **Do not weaken the harness** for demo labels.
+
+### Regolo models — typed-fact shadow failures and harness timeouts (discovery)
+
+- **Source:** First Regolo discovery matrix @ 2026-07-01; post-hardening focused smoke @ `75f4233`; artifacts under `.rector/evidence/live/regolo/` (local, gitignored).
+- **Severity:** Medium (live verification blocked until a model completes fact shadow + harness within gate budgets).
+- **Status:** Open — expect model selection, timeout tuning, prompt specialization, or smaller finalist sets before repeating full ten-model matrices.
+- **Observed:** 9/10 failed at Phase 2F live shadow in discovery. `gemma4-31b` remains deepest runner: after Z.ai-parity harness caps/strict JSON, failures are still **orchestration timeouts** (diagnostics: provider_timeout), not the schema-validation path Z.ai saw pre-hardening. Other Regolo models largely uncharacterized beyond probe callability.
+- **Plan:** Cap matrix breadth with `REGOLO_MATRIX_MAX_MODELS`; keep `REGOLO_MATRIX_RUNS_PER_MODEL=1` until a finalist shows A/B-grade steps; avoid claiming Regolo superiority over Z.ai without paired finalist gate PASS evidence.
+- **Boundaries:** Broad matrices are slow/costly operator spend — not default CI.
+
+### Live provider matrix — evidence env-name hygiene — RESOLVED (Z.ai + Regolo)
+
+- **Source:** `f3a58b5` — `src/live/harnessEvidence.ts` (`isMatrixStepReproEnvKey` / `isSensitiveMatrixEnvKeyName`), shared snapshot copy in `liveMatrixCampaignSnapshot.ts`.
+- **Severity:** Moderate if unfixed (matrix summaries could leak credential-related env key names or imply stale per-model snapshots).
+- **Status:** **RESOLVED** @ `f3a58b5` — **guard:** keep allowlist-only matrix step logging and model-matched snapshot copies in code review; do not revert to dumping full `process.env` key lists into `matrix-summary.json`.
+- **Resolution:** Matrix step repro env keys are allowlisted (prefixes `REGOLO_MATRIX_`, `ZAI_MATRIX_`, `RECTOR_LIVE_*`, etc.); sensitive name patterns and credential keys are excluded from summaries. Per-model snapshots copy incrementally and skip mismatched `modelId` rollups.
+- **Evidence:** `tests/live/regoloModelMatrix.test.ts` and Z.ai matrix tests; operator Regolo matrix post-hardening completed without summary env-name leakage (values never logged).
+
+### Z.ai live verification gate — two official model PASSes; matrix discovery still mostly fail
+
+- **Source:** branch `zai-evidence-live-integration` @ `75f4233` + fact-shadow/provider smoke `ff65580`–`07abf93`. Entry points: `npm run evidence:zai-live:gate`, `npm run verify:zai-live`.
+- **Severity:** Low (measurement / operator workflow; not a product fake-chat regression).
+- **Status:** **RESOLVED for official live claims on two models** — `glm-4-32b-0414-128k` @ 2026-07-01 (harness hardening, 3/3 harness, ~46,695 tokens); **`glm-5v-turbo`** @ 2026-07-01 (full chain PASS: shadow 5/5, provider smoke, harness 3/3, **43,911** tokens, ~$0.0392, manifest updated). **Open** for matrix-wide “all GLM pass” and remaining candidates.
+- **Observed:** Offline gates green in full verify (`npm test` **416** files / **2878** tests; `eval:facts` 10/10). Gate behavior unchanged: rejects spy/fake, enforces budgets and diagnostics. Manifest is last-writer-wins across per-model verify runs.
+- **Plan:** Repeat `verify:zai-live` per model before live-verified claims; see `docs/operations/zai-live-verification.md`.
+- **Boundaries:** `test_only_injected` and spy doubles remain test-only. **Do not weaken the harness** for demo labels.
+
+### Z.ai GLM models — strict harness / typed-fact schema mismatch (discovery)
+
+- **Source:** First foundation discovery matrix @ 2026-07-01; finalist gate PASS post-hardening; v2 fact-shadow broad rerun @ 2026-07-01; artifacts under `.rector/evidence/live/zai/` and `/tmp/rector-zai-v2-fact-shadow` (local, not committed).
+- **Severity:** Medium for non-finalist models; Low for documented finalist.
+- **Status:** **Partially resolved** — `glm-4-32b-0414-128k` passes full chain after structured-role caps, strict JSON cards, repair preflight, and diagnostics fixes (`75f4233`); v2 shadow reconfirmed **5/5** first-pass on finalist. **Open** for other models — v2 discovery shows repair uplift but most still fail shadow or downstream steps; **4.7-flash / 4.7-flashx** **0/5** with `provider_runtime` dominance.
+- **Observed:** Failure modes include `model_json_invalid`, missing schema-valid expected facts, `invalid_union_discriminator`, evidence extraction, `tsc_diagnostic_grouping`, HTTP 429, and post-v2 **`provider_runtime`** on several flash variants. Strict validators unchanged; repair loop improves convergence reporting, not gate rules.
+- **Plan:** **`glm-5v-turbo`** — **resolved** via provider smoke cap/strict JSON + shadow hardening (official `verify:zai-live` PASS). Prioritize **`glm-4.6v-flashx`** (shadow **4/5** — `test_log_diagnosis` hallucinated ref `stdout:2` after Slice B `tsc` prompt); **`glm-5-turbo`** (4/5, 1 failed-after-repair). Do **not** claim live-verified from shadow-only without full chain PASS.
+- **Boundaries:** Matrix and v2 shadow discovery ≠ official verification. Only per-model `verify:zai-live` updates manifest live claims.
+
+### Z.ai vision-turbo — shadow vs provider smoke split (`glm-5v-turbo`) — RESOLVED
+
+- **Source:** v2 fact-shadow rerun @ 2026-07-01; fix slice `ff65580`–`bff0a16` + shadow hardening `138d92e` / `07abf93`.
+- **Severity:** Was Medium; resolved for this model.
+- **Status:** **RESOLVED** @ 2026-07-01 — `RECTOR_LIVE_PROVIDER=zai ZAI_MODEL=glm-5v-turbo npm run verify:zai-live` gate PASS (`live_provider`, provider smoke `first_pass`, harness 3/3).
+- **Observed (historical):** Pre-fix, shadow **5/5** but provider smoke failed **`provider_json`** / truncation. Root cause class: **truncation** and strict JSON convergence — not relaxing validators. Earlier full verify also failed fact-shadow on `rg_artifact_evidence_extraction` until shadow caps/guidance.
+- **Plan:** None for `glm-5v-turbo` live claims; use per-model verify for any new model.
+
+### Z.ai `glm-4.6v-flashx` — promising partial finalist (shadow 4/5)
+
+- **Source:** v2 fact-shadow broad rerun + Slice B `tsc` prompt (`07abf93`) @ 2026-07-01.
+- **Severity:** Low (measurement / model selection).
+- **Status:** Open — candidate for next shadow + verify iteration.
+- **Observed:** Slice B improved `tsc` grouping cases; one live fact-shadow run still failed **`test_log_diagnosis`** with hallucinated grounding ref **`stdout:2`** (not officially verified). Prior v2 table: **4/5** shadow; provider + harness smoke **passed** when probed in isolation.
+- **Plan:** Triage log-diagnosis grounding (refs must cite artifact lines — not harness relaxation); repeat `verify:zai-live` only after **5/5** shadow with zero `failedCount`.
+- **Boundaries:** Promising ≠ verified; matrix/v2 tables are discovery grades only.
+
+### Live harness smoke — false pass with zero usage — RESOLVED
+
+- **Source:** Harness-only reruns @ 2026-07-01; commit `d86d679` (`src/live/liveHarnessIntegrity.ts`, `missing_live_usage`, Z.ai/Regolo harness report writers).
+- **Severity:** High if unfixed (live evidence could claim pass without real model usage).
+- **Status:** **RESOLVED** @ `d86d679`.
+- **Resolution:** Reconcile scenario status with provider-call failures and zero `modelCalls`; report-level integrity checks; regression tests for illusion-class failures (e.g. `glm-4.7-flash` pattern).
+- **Plan:** Operators discard pre-fix smoke JSON for pass claims; re-run smoke after `d86d679` on branch.
+
+### Live evidence documentation discipline — policy
+
+- **Source:** Commit `4b1be28` — `AGENTS.md` mandatory documentation bullet; user directive on live campaigns.
+- **Severity:** Low (process); prevents silent loss of operator findings.
+- **Status:** Open — enforce on every material slice (implementation, live run, investigation, limitation, footgun, follow-up).
+- **Plan:** Parent orchestrator runs `rector-librarian` after verify; update `docs/operations/*`, phase/chunk plans, concerns register, and roadmap nuance before claiming completion.
+- **Boundaries:** Do not commit raw `.rector/evidence` artifacts; document pointers and honest status only.
+
+### Live verify shell — `RECTOR_LIVE_HARNESS_*` env leaks into `verify:phase2` unit tests
+
+- **Source:** Operator rerun @ 2026-07-01; `structuredRoleOutputCaps` reads `process.env` during tests; `verify:zai-live` chains `verify:phase2` in the same shell.
+- **Severity:** Low (operator footgun; tests correctly detect env pollution).
+- **Status:** Open — document-only mitigation in ops docs; no product UX change.
+- **Observed:** Exporting `RECTOR_LIVE_HARNESS_*_MAX_OUTPUT_TOKENS=8192` then running `npm run verify:zai-live` caused `verify:phase2` unit tests to observe overrides and fail. Rerun without shell-persistent cap exports passed.
+- **Plan:** Operators unset cap overrides before full verify chains; use harness smoke scripts for cap experiments. Documented in `docs/operations/zai-live-verification.md` § Strict harness operator knobs.
+- **Boundaries:** Env overrides remain valid for live smoke; not a reason to disable strict env-sensitive tests.
+
+### Z.ai multi-model matrix — shared canonical rollup still overwritten
+
+- **Source:** `src/live/zaiModelMatrix.ts`, `src/live/zaiModelProbe.ts`, `scripts/live/run-zai-model-matrix.ts`, `npm run verify:zai-live:matrix`.
+- **Severity:** Low (operator workflow / reporting).
+- **Status:** Open — mitigated by per-model matrix snapshots; shared canonical rollups still last-writer-wins.
+- **Observed:** Each model campaign still reuses standard live writers (`.rector/evidence/live/zai/latest.json`, provider smoke, Phase 2 shadow). Matrix now copies campaign artifacts into `.rector/evidence/live/zai/matrix/<safe-model-id>/<run-index>/` and `matrix-summary.json` points at those snapshots. Optional `ZAI_MATRIX_PREFILTER_PROBE` skips non-callable models via cheap OpenAI-compatible probes (`src/live/zaiModelProbe.ts`). Matrix gate uses `--no-manifest-update`; matrix grades do not replace `live_provider` gate PASS for live-verified labels.
+- **Plan:** Use matrix summary + per-model snapshot pointers for comparisons; run single-model `verify:zai-live` on the finalist for manifest update. Deferred: campaign correlation ids across probe/matrix/gate.
+- **Budget:** Each model campaign consumes up to the 100k-token / ≤20 model-call gate budget; pre-filter probes are cheap (1–2 calls per model when JSON probe enabled). Cap candidates with `ZAI_MATRIX_MAX_MODELS` and keep `ZAI_MATRIX_RUNS_PER_MODEL=1` until finalists are chosen.
+
+### Z.ai evidence hardening wave — RESOLVED
+
+- **Source:** branch `zai-evidence-live-integration` hardening after Tickets 1–6.
+- **Severity:** Moderate if unfixed (file-based gate could read outside the Z.ai run directory or accept disagreeing Phase 2 summary evidence); now resolved.
+- **Status:** **RESOLVED**.
+- **Resolution:** Gate run artifacts through `getZaiLiveRunEvidenceDir()` safe run-id validation, reject manifest pointers containing traversal segments, require Phase 2 live fact shadow summary status/evidence fields to agree with the report, and make live smoke/shadow scripts exit nonzero unless they record real `live_provider` passed/completed evidence.
+- **Evidence:** Focused tests pass for `tests/live/gateZaiLiveEvidence.test.ts`, `tests/evidence/verifyPathsScript.test.ts`, and `tests/evidence/paths.test.ts`; no-credential live scripts now write honest skipped/failed artifacts and exit nonzero.
+
+### Phase 2 — live fact shadow (Z.ai finalist verified; Regolo and other models unverified)
+
+- **Source:** Phase 2G @ `45768e5`; Z.ai finalist gate @ 2026-07-01 post `75f4233` on `zai-evidence-live-integration`.
+- **Severity:** Low (measurement scope, not a product regression).
+- **Status:** **RESOLVED for documented Z.ai live-fact + harness chains** — `glm-4-32b-0414-128k` and **`glm-5v-turbo`** each passed `verify:zai-live` (Phase 2F shadow in chain). **Open** for Regolo and for claiming live fact reliability across all providers/models.
+- **Observed:** Label `phase2-complete-live-verified-zai-finalist` remains the Phase 2 completion marker; **two** Z.ai models now have manifest-backed single-model gate PASS (see `phase-2-completion-report.md`). Regolo lacks gate PASS.
+- **Plan:** Regolo `verify:regolo-live` when a finalist passes; avoid broad live claims from matrix grades alone.
+- **Boundaries:** `FakeLLMProvider` and spy doubles remain test/CI-only; offline `verify:phase2` remains default CI.
 
 ### 2026-06-27 OpenTelemetry baggage audit regression — RESOLVED
 
@@ -887,9 +990,12 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 - `compression` (>=10x) and `raw_token_reduction` (>=0.80) target large, noisy LIVE tool outputs. On tiny fixtures they are honestly low (aggregate compression ~1.24x), so the aggregate `passed` is truthfully `false`. We do **not** fabricate metric values to force a green report. The offline harness gate `npm run eval:capabilities` exits 0 on successful report PRODUCTION, not on aggregate threshold attainment.
 - **Deferred:** Live efficiency-threshold attainment (real compression/token-reduction against large tool outputs) is Phase 2.5 work, not Phase 0.
 
-### Report-only fake-seam audit is informational, not enforced
+### Report-only fake-seam audit now separates actionable from allowlisted seams
 
-- **Label:** DEFERRED — `npm run audit:no-fakes` reports 40 fake-system seams in `src/` (FakeLLMProvider, `createFakePlan`/`fallbackPlan`, `workspace.validate` `passed:true`, `simulator.echo`, `executorSimulator` imports). It is intentionally non-blocking (exits 0) during the v0.3.0 transition; nonzero exits are reserved for internal audit errors. Phase 0 only MEASURES these seams: purging/modifying them is deferred to Phase 3 and the fake-purge workstream, and the audit only becomes a CI-failing gate in Phase 13. Until then seam reintroduction is not gate-blocked. These seams must be retired before the configured-only product GA per `docs/architecture/configured-product-architecture.md`.
+- **Label:** PARTIALLY HARDENED — `npm run audit:no-fakes` now reports total findings, allowlisted findings, and unallowed findings. The current Z.ai hardening wave removed product `simulator.echo` registration, stopped `workspace.validate` from returning synthetic `passed: true`, prevented configured routers from registering/selecting `FakeLLMProvider` as fallback, and stopped live/deep planner paths from manufacturing deterministic plans as product success.
+- **Current status:** 20 findings are explicitly allowlisted with reasons (AST-backed scan; test/development provider class, explicit deterministic planner compatibility hook, legacy executor-simulator compatibility/type seams). `unallowedFindingCount` is 0; global harness fake-path status is based on unallowed findings, not total historical seams.
+- **Residual risk:** The allowlisted seams remain source-visible until the Phase 3 / fake-purge workstream extracts test doubles and simulator types out of production modules. They are not acceptable live-provider evidence and must not be used for configured product claims.
+- **Gate policy:** `npm run audit:no-fakes` remains report-only (exit 0) for compatibility; `npm run audit:no-fakes:check` adds `--fail-on-unallowed` strict mode (AST-backed detectors + exact-path allowlist) and exits nonzero on new unallowed seams. Default CI still uses report-only until Phase 13; strict mode is for pre-merge / hardening verification.
 
 ### gitignore negation carve-out for tracked benchmark mirror
 
@@ -918,7 +1024,7 @@ To successfully transition Rector to a cloud-ready commercial state, the followi
 ### Live-scenario posture and fake-path surfacing
 
 - **Label:** NOTE — Live scenarios are opt-in only: when no provider credentials are present the live path is SKIPPED (proven by a skipped-path test), never faked, and live scenarios are NOT added to default CI.
-- **Label:** DEFERRED — fake-path-status is surfaced as a scorecard dimension (`fakes_present`, 40 seams), report-only — the same seams the `audit:no-fakes` scanner reports. Purge remains deferred to Phase 3 + the fake-purge workstream; CI-gating to Phase 13.
+- **Label:** DEFERRED — fake-path-status is surfaced as a scorecard dimension (`fakes_present`), keyed off `unallowedFindingCount` from `audit:no-fakes` (0 unallowed / 20 allowlisted after Z.ai hardening on `zai-evidence-live-integration`; historical Phase 0 baselines cited 40 total seams). Purge remains deferred to Phase 3 + the fake-purge workstream; CI-gating to Phase 13.
 
 ### src-cannot-import-scripts → injected fakePathAuditor
 

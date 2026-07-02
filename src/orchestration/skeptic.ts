@@ -15,6 +15,11 @@ import {
 import { enforceMaxPerRunBudget, evaluateBudget, type BudgetUsage } from "../security/budget";
 import { redactSecrets, redactString } from "../security/redaction";
 import type { Run } from "../store";
+import {
+  applyStructuredRoleLlmRequestFields,
+  type StructuredJsonRole,
+  type StructuredRoleOutputCapPolicy,
+} from "./structuredRoleOutputCaps";
 
 export const SkepticFindingSeveritySchema = z.enum(["BLOCKER", "MAJOR", "MINOR", "INFO"]);
 export type SkepticFindingSeverity = z.infer<typeof SkepticFindingSeveritySchema>;
@@ -423,6 +428,8 @@ export interface LiveSkepticDeps {
    * timed-out invocation counts as one attempt within the two-attempt maximum.
    */
   timeoutMs?: number;
+  /** Opt-in structured-role output caps (live harness); omitted in normal product chat. */
+  structuredRoleOutputCaps?: StructuredRoleOutputCapPolicy;
 }
 
 /** Req 1.8: each single provider invocation is bounded to 60 seconds. */
@@ -473,6 +480,7 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
   };
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const structuredRole: StructuredJsonRole = attempt === 1 ? "skeptic" : "repair";
     // Req 1.5 (json_object) + Req 6.1/6.6 (budget preflight before EVERY call, incl. repair).
     const request: LLMRequest = {
       messages,
@@ -480,6 +488,7 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
       ...(deps.model ? { model: deps.model } : {}),
       responseFormat: { type: "json_object" },
       task: "skeptic",
+      ...applyStructuredRoleLlmRequestFields(structuredRole, deps.structuredRoleOutputCaps, run),
     };
 
     const estimate = provider.estimateRequest(request);
@@ -560,7 +569,10 @@ export async function runLiveSkeptic(input: LiveSkepticInput, deps: LiveSkepticD
 
     // Req 1.5: issue exactly one repair prompt on the first failure, then stop.
     if (attempt === 1) {
-      messages = buildRepairPrompt(promptInput, response.content, lastFailure.repairSummary);
+      messages = buildRepairPrompt(promptInput, response.content, lastFailure.repairSummary, {
+        role: "skeptic",
+        issuePaths: lastFailure.issuePaths,
+      });
     }
   }
 

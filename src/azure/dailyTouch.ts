@@ -50,7 +50,7 @@ async function touchBlobHarness(repoRoot: string, env: NodeJS.ProcessEnv): Promi
     : path.join(repoRoot, config.evidenceDir);
   const pending = await collectEvidenceFiles(evidenceDir);
   if (pending.length === 0) {
-    return { id: "blob-harness", status: "skipped", detail: "no harness reports in .omo/evidence" };
+    return { id: "blob-harness", status: "skipped", detail: "no harness reports in .rector/evidence" };
   }
   try {
     const client = await createAzureBlobUploadClient(config.accountName, config.containerName);

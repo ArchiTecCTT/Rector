@@ -14,4 +14,6 @@ export * from "./adapters/globalHarnessFacts";
 export * from "./adapters/runEventFacts";
 export * from "./validation";
 export * from "./reports/factReport";
+export * from "./reports/liveFactShadowClassification";
+export * from "./reports/liveFactShadowReport";
 export * from "./reports/markdown";

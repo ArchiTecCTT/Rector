@@ -1,8 +1,9 @@
 # Rector Evidence Directory Overhaul + Z.ai GLM Live Verification Plan
 
-**Status:** Approved plan, pending implementation.  
-**Target branch:** `rector-0.3.0`  
-**Primary branch under test:** `rector-0.3.0` after Phase 2A through Phase 2F implementation.  
+**Status:** **Implementation complete (Tickets 1–6 + opt-in multi-model matrix + post-Ticket hardening)** on branch `zai-evidence-live-integration` (integration HEAD `04800fb`; matrix `src/live/zaiModelMatrix.ts`, probe pre-filter `src/live/zaiModelProbe.ts`, harness diagnostics `src/live/liveHarnessDiagnostics.ts`). Offline gates passed (`npm test`, `npm run build`, `npm run verify:phase2`, `npm run check`, `npm run evidence:verify-paths`, `npm run audit:no-fakes` / `npm run audit:no-fakes:check` with 0 unallowed findings). **Live Z.ai verification remains unverified** — first foundation discovery (2026-07-01) ran real credentials with 0 full-chain gate passes; see §1.1 and `docs/operations/zai-live-verification.md`.
+**Target branch:** `rector-0.3.0` (merge target)  
+**Operator runbook:** `docs/operations/zai-live-verification.md`  
+**Primary branch under test:** `rector-0.3.0` after Phase 2A through Phase 2F implementation.
 **Provider:** Z.ai API through Rector's OpenAI-compatible provider.  
 **Primary models:** small / fast GLM models first; stronger GLM model only as fallback or comparison.  
 **Hard first-pass live-test budget:** less than **100,000 total model tokens** unless manually approved.  
@@ -83,6 +84,20 @@ zai-live-harness-smoke-verified
 Those labels require real provider calls, real model outputs, real budget accounting, real evidence files, and honest failure reporting.
 
 The evidence directory cleanup belongs before the live test because the first serious Z.ai proof artifacts should not land under `.omo`, a legacy development harness namespace. Rector needs its own proof directory.
+
+### 1.1 First foundation discovery run (2026-07-01) — fail, informative
+
+After Z.ai / no-fakes hardening, operators ran the recommended discovery workflow (preflight, `ZAI_MATRIX_PREFILTER_PROBE`, JSON capability probe, `ZAI_MATRIX_RUNS_PER_MODEL=1`, ten GLM candidates). **Outcome:** matrix `overallStatus: fail` (0 pass / 9 fail / 1 probe-skipped). **Not run:** 10-repeat matrix or finalist `verify:zai-live` (no model completed the full live chain).
+
+| Signal | Detail |
+| --- | --- |
+| Live infra | Auth OK; `live_provider` recorded where steps executed; matrix diagnostics showed no systemic rate-limit/quota class for executed campaigns |
+| Probe | 9/10 callable; `glm-4.6v-flash` 429 overload; only `glm-4-32b-0414-128k` JSON-capability **supported** |
+| Phase 2F | Most models failed `eval:facts:live` (`model_json_invalid`); finalist passed **5/5** shadow only |
+| Harness | Finalist failed B1–B3 on schema/validation (skeptic/planner JSON), not workspace mutation |
+| Next target | `glm-4-32b-0414-128k` for debug; likely model-specific training/prompting — harness strictness unchanged |
+
+Evidence pointers: `.rector/evidence/live/zai/model-probe/latest.json`, `matrix/matrix-summary.json`, `matrix/<model>/0/*`. Shared `latest.json` rollups are last-writer-wins during matrix — use per-model snapshots for truth per campaign.
 
 ---
 
@@ -399,13 +414,21 @@ to `OPENAI_COMPATIBLE_BASE_URL`.
 
 Therefore configure the base URL as the API base, not the full chat-completions URL.
 
-Expected environment shape:
+Expected environment shape (set `RECTOR_LIVE_PROVIDER=zai` for live scripts):
 
 ```bash
+# Recommended — shell-safe names (do not use Z.AI_API_KEY; the dot breaks POSIX export)
+export ZAI_API_KEY="<zai-api-key>"
+export ZAI_BASE_URL="https://api.z.ai/api/paas/v4"
+export ZAI_MODEL="<chosen-glm-model>"
+
+# Compatibility — per-field fallback when ZAI_* is unset; ZAI_* wins when both are set
 export OPENAI_COMPATIBLE_API_KEY="<zai-api-key>"
 export OPENAI_COMPATIBLE_BASE_URL="https://api.z.ai/api/paas/v4"
 export OPENAI_COMPATIBLE_MODEL="<chosen-glm-model>"
 ```
+
+UI `runtime-settings.json` OpenAI-compatible provider setup remains the configured-product path; env vars are operator/CI fallback for `npm run verify:zai-live`.
 
 The exact model should be chosen from the Z.ai account/model list. Use small/fast GLM models first. Use stronger models only for comparison or failure triage.
 
@@ -474,7 +497,7 @@ phase2-live-shadow-verified-with-zai
 ### 8.2 Command
 
 ```bash
-LIVE_FACT_EVALS=1 npm run eval:facts:live
+RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live
 ```
 
 After evidence path migration, output should go to:
@@ -600,14 +623,18 @@ Add:
 ```json
 {
   "scripts": {
-    "test:live:zai:harness": "LIVE_HARNESS_EVALS=1 vitest run tests/live/zaiHarness.live.test.ts --testTimeout=600000",
+    "test:live:zai:provider": "RECTOR_LIVE_PROVIDER=zai RECTOR_ZAI_PROVIDER_SMOKE=1 tsx scripts/live/run-zai-provider-smoke.ts",
+    "test:live:zai:harness": "RECTOR_LIVE_PROVIDER=zai LIVE_HARNESS_EVALS=1 tsx scripts/live/run-zai-harness-smoke.ts",
     "evidence:zai-live:gate": "tsx scripts/live/gate-zai-live-evidence.ts",
-    "verify:zai-live": "npm run verify:phase2 && npm run eval:facts:live && npm run test:live:zai:harness && npm run evidence:zai-live:gate"
+    "verify:zai-live": "npm run verify:phase2 && RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live && npm run test:live:zai:provider && npm run test:live:zai:harness && npm run evidence:zai-live:gate",
+    "verify:zai-live:matrix": "tsx scripts/live/run-zai-model-matrix.ts"
   }
 }
 ```
 
 `verify:zai-live` is mandatory for live-verified claims, but it must not replace ordinary offline `npm test`.
+
+`verify:zai-live:matrix` (implemented in `src/live/zaiModelMatrix.ts`, CLI `scripts/live/run-zai-model-matrix.ts`) runs the same live chain once per entry in `ZAI_MODELS` (or a single `ZAI_MODEL`), optionally preceded by offline `verify:phase2`, and writes `.rector/evidence/live/zai/matrix/matrix-summary.{json,md}` with per-model grades. Operator runbook: `docs/operations/zai-live-verification.md` (matrix section). Unit tests inject command runners; no live network in `npm test`.
 
 ### 9.4 Why not put this into default `npm test`?
 
@@ -633,7 +660,10 @@ npm run verify:phase2
   proves offline typed-fact substrate.
 
 npm run verify:zai-live
-  proves live Z.ai model + current harness behavior under evidence gates.
+  proves live Z.ai model + current harness behavior under evidence gates (manifest update on PASS).
+
+npm run verify:zai-live:matrix
+  opt-in per-model comparison; writes matrix-summary + per-model snapshots; shared latest rollups still last-writer-wins (see operator runbook).
 ```
 
 ---
@@ -1121,8 +1151,10 @@ tests/live/zaiProviderSmoke.contract.test.ts
 Exit gate:
 
 ```bash
-LIVE_ZAI_SMOKE=1 npm run test:live:zai:provider
+npm run test:live:zai:provider
 ```
+
+`test:live:zai:provider` sets `RECTOR_LIVE_PROVIDER=zai` and `RECTOR_ZAI_PROVIDER_SMOKE=1` before invoking the repo-root provider-smoke writer; it exits nonzero unless the run records `live_provider` + `passed`.
 
 ### PR / commit 5 — Z.ai harness smoke runner
 
@@ -1140,8 +1172,10 @@ tests/live/zaiHarness.live.test.ts
 Exit gate:
 
 ```bash
-LIVE_HARNESS_EVALS=1 npm run test:live:zai:harness
+npm run test:live:zai:harness
 ```
+
+`test:live:zai:harness` sets `RECTOR_LIVE_PROVIDER=zai` and `LIVE_HARNESS_EVALS=1` before invoking the repo-root harness writer; it exits nonzero unless the run records `live_provider` + `passed`.
 
 ### PR / commit 6 — Live evidence gate and docs
 
@@ -1173,13 +1207,13 @@ npm run verify:phase2
 Live fact shadow:
 
 ```bash
-LIVE_FACT_EVALS=1 npm run eval:facts:live
+RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live
 ```
 
 Live harness smoke:
 
 ```bash
-LIVE_HARNESS_EVALS=1 npm run test:live:zai:harness
+npm run test:live:zai:harness
 ```
 
 Full live verification:
@@ -1198,7 +1232,13 @@ npm run verify:zai-live
 
 ## 18. Acceptance criteria for this milestone
 
-This milestone is complete only when:
+### 18.1 Offline implementation (met at `9321116`)
+
+Tickets 1–6 landed: `src/evidence/**`, migrated eval/fact writers, `scripts/evidence/*`, Z.ai provider smoke + harness smoke + `gate-zai-live-evidence`, configured-product live provider discovery, campaign freshness/path containment, and operator docs. Default CI remains `npm test` / `verify:phase2` (no live provider spend).
+
+### 18.2 Live proof campaign (not met — do not claim live-verified)
+
+This milestone’s **live** acceptance is complete only when:
 
 ```text
 .rector/evidence is the default evidence directory for new outputs

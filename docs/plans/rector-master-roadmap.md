@@ -255,8 +255,8 @@ Offline-only measurement scaffolding for the capability/SLM-fabric workstream. S
 
 - Capability eval schemas + 8-metric scorer + raw artifact store: `src/capabilities/eval/{schemas,metrics,artifactStore}.ts`
 - Committed offline eval corpus (real `rg`/`tsc`/`git` artifacts + deterministic oracles): `tests/fixtures/eval-corpus/`
-- Offline model-free eval runner + report formatter: `scripts/evals/{run-capability-evals,score-capability-results}.ts` (writes `.omo/evidence/eval-report.{json,md}`); npm `eval:capabilities` / `eval:capabilities:report`
-- Report-only fake-seam audit: `scripts/audit/no-production-fakes.ts`; npm `audit:no-fakes` (non-blocking, measures only)
+- Offline model-free eval runner + report formatter: `scripts/evals/{run-capability-evals,score-capability-results}.ts` (writes `.rector/evidence/capabilities/eval-report.{json,md}`; legacy `.omo/evidence` is compatibility/history only); npm `eval:capabilities` / `eval:capabilities:report`
+- Fake-seam audit: `scripts/audit/no-production-fakes.ts` (AST-backed detectors); npm `audit:no-fakes` (report-only, non-blocking) and `audit:no-fakes:check` (strict, `--fail-on-unallowed`; not default CI until Phase 13)
 
 By design, the tiny offline fixtures do NOT meet the live efficiency thresholds (compression ≥10×, raw-token-reduction ≥0.80); the runner reports the real aggregate honestly (aggregate `passed: false`) while every committed case passes its oracle. Live efficiency-threshold attainment is Phase 2.5 work.
 
@@ -268,7 +268,7 @@ Offline-by-default reliability harness and specialist-system CONTRACTS proving t
 
 - Global scenario schema + YAML/JSON loading: `src/evals/globalScenarioSchema.ts`
 - 8-dimension scorecards (+ fake-path status) with JSON/Markdown reporters: `src/evals/scorecards.ts`
-- Offline global runner (one scorecard per scenario, deterministic oracles, report-only fake-path via injected auditor): `src/evals/globalRunner.ts` + `scripts/evals/run-global-harness.ts`; npm `test:global` (writes `.omo/evidence/global-report.{json,md}`)
+- Offline global runner (one scorecard per scenario, deterministic oracles, report-only fake-path via injected auditor): `src/evals/globalRunner.ts` + `scripts/evals/run-global-harness.ts`; npm `test:global` (writes `.rector/evidence/global/global-report.{json,md}`)
 - Specialist contract/task/result schemas + validator: `src/systems/contracts.ts`
 - SystemRegistry validation stub (validates + stores contracts, rejects duplicate systemIds — NO execution): `src/systems/registry.ts` + `scripts/evals/run-specialist-system-contracts.ts`; npm `test:systems`; first committed profile `src/systems/specialistProfiles/coding.profile.json`
 - 4 real-fixture global scenarios (coding-basic-fix, memory-boundary, fake-purge, delegation-routing) + the `tests/fixtures/repos/rector-mini-fix/` fixture repo: `tests/global/`
@@ -279,15 +279,19 @@ Offline-by-default with live opt-in: live scenarios are SKIPPED when no provider
 
 **Completion gate (PASSED on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80):** Phase 0.5 is complete because all of the following passed: `npm run test:global:gate`, `npm run verify:phase0.5`, 28 offline scenarios (21 strict-pass, 8 intentional regressions), and strict scorecard semantics, with no claim of specialist execution. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
 
-## Phase 2 — Typed Fact Protocol — OFFLINE COMPLETE / LIVE UNVERIFIED — gates passed at `45768e5` (branch `rector-0.3.0`)
+## Phase 2 — Typed Fact Protocol — OFFLINE COMPLETE / LIVE VERIFIED (Z.ai per-model gates) — gates passed at `45768e5` (branch `rector-0.3.0`)
 
-Typed fact contracts, append-only ledger/replay/diff, adapters (Cartographer, ToolRegistry, capability evals, global harness, run events), validation gates, offline fact evals, and opt-in live shadow runner. **Status:** `phase2-offline-complete-live-unverified` — see `docs/plans/2-0/phases/phase-2-completion-report.md`.
+Typed fact contracts, append-only ledger/replay/diff, adapters (Cartographer, ToolRegistry, capability evals, global harness, run events), validation gates, offline fact evals, and opt-in live shadow runner. **Status:** `phase2-complete-live-verified-zai-finalist` (Z.ai `glm-4-32b-0414-128k` + **`glm-5v-turbo`** `verify:zai-live` PASS @ 2026-07-01); Regolo/other models unverified — see `docs/plans/2-0/phases/phase-2-completion-report.md` and `docs/reports/live-testing/zai-live-verification-conclusion-2026-07-01.md`.
 
 - Core + adapters: `src/facts/**`; scripts `scripts/facts/{run-fact-evals,run-live-fact-shadow,replay-facts,validate-phase2}.ts`
 - npm: `eval:facts`, `eval:facts:live` (explicit `LIVE_FACT_EVALS=1`), `facts:replay`, `verify:phase2`
-- Offline reports: `.omo/evidence/fact-report.{json,md}`; live shadow: `.omo/evidence/live-fact-shadow-report.json` (skipped on gate VM — no configured non-fake provider)
+- Offline reports: `.rector/evidence/phase2/fact-report.{json,md}`; live shadow: `.rector/evidence/phase2/live-fact-shadow-report.json` (gate VM skipped; **Z.ai finalist** shadow included in `verify:zai-live` PASS — other models unverified on first-pass strict wrapper)
 
-**Completion gate (PASSED offline at `45768e5`):** `npm run verify:phase2` (`check`, full `npm test`, `eval:facts` 10/10, `test:global` exit 0 with mixed corpus 19/33 scenario passes, `test:systems` 1/1). Also verified: `npm run build`, `npm audit` 0 vulns, `npm run audit:no-fakes` exit 0 report-only (40 known seams). **Not claimed:** live-model fact reliability or investor/demo live verification until `phase2-complete-live-verified`.
+**Completion gate (PASSED offline at `45768e5`; re-hardened on `zai-evidence-live-integration` @ `75f4233`; strict-json repair @ `a282128`):** `npm run verify:phase2` (`check`, full `npm test`, `eval:facts` 10/10, `test:global` exit 0, `test:systems` 1/1). Post `glm-5v-turbo` verify: `npm test` **416** files / **2878** tests, `npm run build`, `npm audit` 0 vulns, `audit:no-fakes:check` 0 unallowed. **Live (scoped):** Z.ai **`glm-4-32b-0414-128k`** and **`glm-5v-turbo`** each passed `verify:zai-live` @ 2026-07-01 — not a claim for all models/providers.
+
+**Z.ai live evidence track:** Smoke + harness + gate (`npm run verify:zai-live`), strict harness knobs @ `4438205`–`75f4233`, fact-shadow/provider smoke hardening `ff65580`–`07abf93`, smoke integrity `d86d679`, strict JSON diagnostics + live-shadow v2 — `docs/operations/zai-live-verification.md`. **Next candidates:** `glm-4.6v-flashx` (shadow 4/5), `glm-5-turbo`. Raw evidence not committed; matrix/v2 tables ≠ live-verified.
+
+**Regolo live evidence track (offline implementation done / live unverified):** `docs/operations/regolo-live-verification.md`. Discovery 0/10; `gemma4-31b` provider smoke pass, harness **timeout** (300s, not schema-truncation proof). No `verify:regolo-live` gate PASS.
 
 **Next neuro-symbolic phases:** 2.1 / 2.2 Memory OS, then 2.4 Capability Contract Generator and 2.5 Capability-SLM Fabric; Phase 3 rule engine consumes facts.
 

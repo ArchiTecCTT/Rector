@@ -10,9 +10,9 @@ The product is **configured orchestration**, not a provider-free demo. Fresh ins
 
 ## Current Branch / Worktree
 
-- Active branch: `rector-0.3.0`
-- Worktree path: `/home/ornyx-opifex/projects/rector/.worktrees/rector-0.3.0-cartographer`
-- Primary goal: Kill local mode as default product. Ship v0.3.0 as a configured-only commercial product with UI-persisted `runtime-settings.json`, mandatory onboarding, and a single orchestration path (`runOrchestratedChatRun`).
+- Active branch: `zai-evidence-live-integration` (merge target: `rector-0.3.0`)
+- Worktree path: `/home/ornyx-opifex/projects/rector/.worktrees/zai-evidence-integration`
+- Primary goal: Z.ai live evidence + fake-purge hardening (`.rector/evidence`, `verify:zai-live`); **official gate PASS** documented for `glm-4-32b-0414-128k` (`75f4233`) and **`glm-5v-turbo`** (`ff65580`–`07abf93`); other models and Regolo remain unverified.
 
 ## Source of Truth
 
@@ -42,10 +42,12 @@ Stale/quarantined docs have warning banners. If stale docs conflict with source-
 - Build: `npm run build`
 - Dependency audit: `npm audit`
 - Dev server: `npm run dev`
-- Capability evals (offline, no model): `npm run eval:capabilities` (and `npm run eval:capabilities:report`) — runs the committed eval corpus and writes `.omo/evidence/eval-report.{json,md}`
-- Fake-seam audit (report-only, non-blocking): `npm run audit:no-fakes`
-- Global reliability harness (offline, one scorecard per scenario): `npm run test:global` — runs the committed scenarios against the fixture workspace and writes `.omo/evidence/global-report.{json,md}`; live scenarios are SKIPPED when no credentials are present
-- Typed fact evals (offline): `npm run eval:facts` → `.omo/evidence/fact-report.{json,md}`; opt-in live shadow: `npm run eval:facts:live` (`LIVE_FACT_EVALS=1`); Phase 2 gate: `npm run verify:phase2`
+- Capability evals (offline, no model): `npm run eval:capabilities` (and `npm run eval:capabilities:report`) — runs the committed eval corpus and writes `.rector/evidence/capabilities/eval-report.{json,md}` (legacy `.omo/evidence` is read/migrated for compatibility only)
+- Fake-seam audit: `npm run audit:no-fakes` (report-only, non-blocking) and `npm run audit:no-fakes:check` (strict, fails on unallowed seams); Z.ai hardening targets 0 unallowed (20 allowlisted compatibility seams until Phase 3/13 purge)
+- Global reliability harness (offline, one scorecard per scenario): `npm run test:global` — runs the committed scenarios against the fixture workspace and writes `.rector/evidence/global/global-report.{json,md}`; live scenarios are SKIPPED when no credentials are present
+- Typed fact evals (offline): `npm run eval:facts` → `.rector/evidence/phase2/fact-report.{json,md}`; opt-in live shadow: `RECTOR_LIVE_PROVIDER=zai npm run eval:facts:live` (`LIVE_FACT_EVALS=1`) → `.rector/evidence/phase2/live-fact-shadow-*` with v2 report (`first_pass` / `repair_pass` / `failed_after_repair` rollups; bounded strict JSON repair; exits nonzero without a live provider); Phase 2 gate: `npm run verify:phase2`
+- Evidence paths: `npm run evidence:verify-paths`, optional `npm run evidence:migrate-local` (legacy `.omo/evidence` → `.rector/evidence`)
+- Z.ai live verification (opt-in, credentials, not default CI): **single-model** `npm run verify:zai-live` chains `verify:phase2`, live fact shadow, `test:live:zai:provider`, `test:live:zai:harness`, `evidence:zai-live:gate` (may update manifest on PASS); **multi-model compare** `npm run verify:zai-live:matrix` repeats the live chain per `ZAI_MODELS` entry, writes `matrix-summary.*` only, gate uses `--no-manifest-update` — see `docs/operations/zai-live-verification.md`; env prefers `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` (shell-safe) with `OPENAI_COMPATIBLE_*` fallback — do **not** use `Z.AI_API_KEY` in shell exports; do **not** export `RECTOR_LIVE_HARNESS_*_MAX_OUTPUT_TOKENS` in the verify shell (pollutes `verify:phase2` unit tests); official gate PASS documented for `glm-4-32b-0414-128k` and `glm-5v-turbo` — other models still need single-model gate PASS for live claims
 - Specialist contract validation: `npm run test:systems` — validates committed specialist profiles against the contract schema (no execution)
 - Azure daily ritual (dev VM, opt-in): `npm run azure:daily-touch` — Key Vault list + Blob uploads + App Insights heartbeat
 - Harness Blob sync: `npm run evidence:sync` — when `RECTOR_EVIDENCE_SYNC=azure-blob`
@@ -106,7 +108,7 @@ Phase 0.5 added the Global Reliability Harness surfaces: `src/evals/*` (global s
 
 **Phase 0 / Phase 0.5 status — DONE — gates passed on 2026-06-24 at 65f6557d8c57a9bf8489e5d6bd881e300afefb80:** All six gates passed (`eval:capabilities:gate`, `baseline:phase0`, `verify:phase0`, `test:global:gate`, `verify:phase0.5`, `verify:foundation`). 10 eval cases (2 efficiencyRelevant cases meet >=10x compression / >=0.80 raw_token_reduction; aggregate efficiency is honestly not all-green but the gate uses designated-case efficiency). Global: 28 scenarios, 21 strict-pass, 8 intentional regressions, all actual==expected. The ExecutiveRouter and real specialist execution are NOT implemented (deferred to Phase 11/12); the harness emits dry-run task packets/traces only, never specialist-driven repository mutation. The fake-system purge is deferred (Phase 3 / fake-purge workstream); `npm run audit:no-fakes` remains report-only (non-blocking, never CI-failing) until Phase 13.
 
-**Phase 2 typed facts — OFFLINE DONE / LIVE UNVERIFIED — `verify:phase2` passed at `45768e5`:** Fact protocol in `src/facts/**` (PRs #21–#26). Completion report: `docs/plans/2-0/phases/phase-2-completion-report.md`. Label: `phase2-offline-complete-live-unverified` — `eval:facts:live` wrote skipped live shadow report (no configured non-fake provider on gate VM); do not claim live-model fact reliability until `phase2-complete-live-verified`. Next neuro-symbolic work per roadmap: Phase 2.1 / 2.2 Memory OS, then 2.4 / 2.5.
+**Phase 2 typed facts — OFFLINE DONE / Z.ai LIVE VERIFIED (per-model gates) — `verify:phase2` @ `45768e5`, live gates @ 2026-07-01:** Fact protocol in `src/facts/**` (PRs #21–#26). Completion report: `docs/plans/2-0/phases/phase-2-completion-report.md`; live-test conclusion: `docs/reports/live-testing/zai-live-verification-conclusion-2026-07-01.md`. Label: `phase2-complete-live-verified-zai-finalist`; `verify:zai-live` PASS for `glm-4-32b-0414-128k` and `glm-5v-turbo`. Regolo and other Z.ai models unverified. Next: Phase 2.1 / 2.2 Memory OS, then 2.4 / 2.5.
 
 Before claiming completion, run fresh:
 
@@ -121,6 +123,7 @@ npm audit
 - Work one chunk at a time.
 - Each chunk gets its own plan under `docs/plans/chunks/` before code.
 - Commit each completed chunk separately.
+- **Documentation is mandatory. Document every material implementation, live run, investigation result, evidence finding, limitation, operator footgun, and follow-up before claiming completion.** If a slice changes behavior or produces new evidence, run `rector-librarian` after verification and update the relevant operations docs, phase/chunk docs, roadmap, and concerns register. Do not leave important findings only in chat or terminal logs.
 - Keep `docs/plans/concerns-and-vulnerabilities.md` updated with concerns, vulnerabilities, limitations, and deferred fixes.
 - No background/async subagents; foreground only. Background subagents caused stale-run failures.
 - Parent orchestrator remains in charge: plan (optional) → coder → verify → librarian → commit → next chunk.
@@ -209,9 +212,9 @@ Completed through Chunk 52 (see `docs/plans/chunks/052-azure-dev-harness-stack.m
 
 Neuro-symbolic + cloud transition chunks (26–37) include SLM preprocessor, advanced memory, proactive layer, symbolic engines, MCTS, ponder swarm, task decomposition, stale-doc cleanup, pluggable memory providers (034), durable memory + neuro wiring (035), hassle-free UI + neuro observability (036), and vitest 4 + live memory tests + opt-in multi-user auth (037).
 
-Current test baseline after Phase 2 offline gate (branch `rector-0.3.0`, commit `45768e5`):
+Current test baseline (worktree `zai-evidence-live-integration`, post `glm-5v-turbo` verify slice):
 
-- `npm test`: 386 files passed / 1 skipped; 2642 tests passed / 5 skipped (live-memory skips only: `tests/memoryLive.integration.test.ts`, offline).
+- `npm test`: 416 files passed / 1 skipped; 2878 tests passed / 5 skipped (live-memory skips only: `tests/memoryLive.integration.test.ts`, offline).
 - `npm run build`: passing
 - `npm audit`: 0 vulnerabilities
 
@@ -235,7 +238,7 @@ Every new feature must be extensively tested. Architecture stays non-rigid and p
 
 - **Neuro-symbolic:** Phase 2.1 / 2.2 Memory OS (consume validation-linked facts); then Phase 2.4 Capability Contract Generator and Phase 2.5 Capability-SLM Fabric — see `docs/plans/2-0/phases/phase-2-completion-report.md` handoff.
 - **Configured product (v0.3.0):** onboarding gate, `runOrchestratedChatRun` consolidation, spy-only CI — `.kiro/specs/cloud-capable-transition/tasks.md`.
-- **Phase 2 follow-up:** capture live fact shadow after UI provider setup (`LIVE_FACT_EVALS=1 npm run eval:facts:live`).
+- **Phase 2 / Z.ai follow-up:** `glm-4-32b-0414-128k` and `glm-5v-turbo` gate PASS documented; next `glm-4.6v-flashx` / `glm-5-turbo`; Regolo `verify:regolo-live` still open (`gemma4-31b` harness timeouts post-hardening).
 
 ## Release Path
 
